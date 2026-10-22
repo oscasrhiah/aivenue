@@ -133,6 +133,19 @@ function checkExtraDirs(dirs: string[] | undefined, cwd: string): string[] {
   return out;
 }
 
+/** Agents don't always use the tool's kind names ("git push", "PR", "tag"): map them so cards and pre-approvals match. */
+function normalizeKind(raw: string): string {
+  const k = raw.trim().toLowerCase();
+  if (/pull[\s_-]*request|\bpr\b/.test(k)) return 'pull_request';
+  if (/merge/.test(k)) return 'merge';
+  if (/release|\btag\b/.test(k)) return 'release';
+  if (/push/.test(k)) return 'push';
+  if (/comment|review/.test(k)) return 'comment';
+  if (/issue/.test(k)) return 'issue';
+  if (/deploy|workflow|dispatch/.test(k)) return 'deploy';
+  return k ? k.slice(0, 30) : 'other';
+}
+
 /** Approval card text for confirm_external_action. */
 function externalLabel(input: unknown): { name: string; title: string } {
   const i = (input ?? {}) as { command?: string; target?: string };
@@ -219,7 +232,8 @@ export class Orchestrator {
       }
     }
     if (!config.plan.enabled && !config.implement.enabled) throw new Error(L('至少要啟用一個階段', 'Enable at least one stage'));
-    config = { ...config, extraDirs: checkExtraDirs(config.extraDirs, config.cwd) };
+    // A pre-approval is never inherited by follow-ups or edits; only continueDenied() sets one.
+    config = { ...config, extraDirs: checkExtraDirs(config.extraDirs, config.cwd), preApproved: undefined };
     const assignment = config.assignment?.mode === 'auto' ? this.autoAssignment(config) : undefined;
     if (assignment) config = this.applyAssignment(config, assignment);
     const id = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14) + '-' + randomUUID().slice(0, 6);
@@ -321,6 +335,40 @@ export class Orchestrator {
         : await this.invoke(run, info, prompt + extra, mode, resume, res.lastSeq);
     }
     return res;
+  }
+
+  /**
+   * The user changed their mind about a denied external action: start a follow-up (same settings and folder) that
+   * does it, plus whatever was skipped because of it, with that one action pre-approved.
+   */
+  continueDenied(id: string, deniedId: string): string {
+    const run = this.runs.get(id);
+    const denied = run?.deniedActions?.find((d) => d.id === deniedId);
+    if (!run || !denied) throw new Error(L('找不到這個被拒絕的動作', 'Denied action not found'));
+    if (['running', 'paused', 'waiting_human'].includes(run.status)) throw new Error(L('請等這段對話結束後再繼續', 'Wait until this conversation has finished'));
+    if (denied.continuedIn) return denied.continuedIn;
+    const kind = normalizeKind(denied.kind);
+    const label = externalLabel({ command: kind, target: denied.target }).title;
+    const prev = Object.values(run.agents)
+      .filter((a) => (a.role === 'executor' || a.role === 'planner') && a.finalText)
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]?.finalText;
+    const goal = [
+      L(`先前被我拒絕的對外動作，現在改成允許：${label}`, `I now allow the external action I denied before: ${label}`),
+      L(`內容：${denied.details}`, `Details: ${denied.details}`),
+      L('請完成這個動作，以及先前因為它被拒絕而略過的後續步驟，然後回報結果。執行前一樣呼叫 confirm_external_action（這一次會直接通過）；其他對外動作仍要另外核准。', 'Do it, plus the steps that were skipped because it was denied, then report. Still call confirm_external_action first (this one goes through directly); any other external action needs its own approval.'),
+    ].join('\n');
+    const next = this.start({
+      ...run.config,
+      cwd: run.worktree?.origCwd ?? run.config.cwd,
+      title: L(`改成允許並繼續：${label}`, `Allowed and continued: ${label}`).slice(0, 60),
+      goal: `${goal}\n\n(Context: this continues an earlier task in the same folder: "${run.config.goal.slice(0, 800)}". Its outcome: ${(prev ?? run.status).slice(0, 1500)})`,
+      replaces: undefined,
+    });
+    // Set after start() (which drops inherited ones), before any agent can ask.
+    next.config.preApproved = [{ kind, target: denied.target, details: denied.details }];
+    denied.continuedIn = next.id;
+    this.touch(run);
+    return next.id;
   }
 
   /** Running workflows, so an edit can wait until the old one really stopped. */
@@ -442,6 +490,18 @@ export class Orchestrator {
     // Aivenue's own tools and anything the user already allowed for this run go through.
     const key = alwaysKey(tool, input);
     if (/^mcp__aivenue__/.test(tool) || this.allowAlways.get(run.id)?.has(key)) return Promise.resolve({ allow: true });
+    if (tool === 'external_action') {
+      // "Allow and continue": the action the user approved after denying it goes through once, without asking again.
+      const kind = (input as { command?: string })?.command;
+      const left = run.config.preApproved ?? [];
+      const i = left.findIndex((p) => p.kind === kind);
+      if (i >= 0) {
+        const [p] = left.splice(i, 1);
+        this.log(run, L(`依你的「改成允許並繼續」執行：${externalLabel(input).title}`, `Done as you allowed afterwards: ${externalLabel(input).title}`), 'info', true);
+        this.touch(run);
+        return Promise.resolve({ allow: true, message: L(`使用者先前允許的動作：${p.details.slice(0, 300)}`, `The action the user allowed: ${p.details.slice(0, 300)}`) });
+      }
+    }
     const c = tool === 'external_action' ? externalLabel(input) : classifyTool(tool, input, run.config.cwd);
     const req: ApprovalRequest = { id: randomUUID().slice(0, 8), agentId: info.id, provider: info.provider, tool: c.name, summary: c.title, input: JSON.stringify(input ?? {}, null, 2).slice(0, 4000), ts: now() };
     run.approvals = [...(run.approvals ?? []), req];
@@ -548,9 +608,13 @@ export class Orchestrator {
         return this.askAdvisor(run, info, args);
       case 'confirm_external_action': {
         // Always asked, whatever the permission level: pushes, PRs and comments are visible to others and hard to take back.
-        const kind = String(args.kind ?? 'other').slice(0, 30);
+        const kind = normalizeKind(String(args.kind ?? 'other'));
         const input = { command: kind, target: String(args.target ?? '').slice(0, 300), details: String(args.details ?? '').slice(0, 4000) };
         const d = await this.requestApproval(run, info, 'external_action', input);
+        if (!d.allow && !this.aborted(run)) {
+          (run.deniedActions ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, kind: input.command, target: input.target, details: input.details, note: d.message, ts: now() });
+          this.touch(run);
+        }
         return d.allow
           ? `approved${d.message ? ` — the user added: ${d.message}` : ''}. Go ahead with exactly what you described.`
           : `denied${d.message ? `: ${d.message}` : ''}. Do not do it (nor a variant of it); say in your report that it was skipped.`;

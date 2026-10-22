@@ -302,6 +302,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.cancel': (p: { id: string }) => orchestrator.cancel(p.id),
     'workflows.pause': (p: { id: string }) => orchestrator.pause(p.id),
     'workflows.resume': (p: { id: string; note?: string }) => orchestrator.resume(p.id, p.note),
+    'workflows.continueDenied': (p: { id: string; deniedId: string }) => orchestrator.continueDenied(p.id, p.deniedId),
     'workflows.edit': (p: { id: string; goal: string; config?: WorkflowConfig }) => orchestrator.editAndResend(p.id, p.goal, p.config),
     'workflows.updateConfig': (p: { id: string; patch: Parameters<Orchestrator['updateConfig']>[1] }) => {
       orchestrator.updateConfig(p.id, p.patch);

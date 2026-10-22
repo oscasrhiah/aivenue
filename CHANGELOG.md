@@ -2,6 +2,11 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 未發布
+
+- **改成允許並繼續**：被拒絕的對外動作會列在結果卡片下方，按一下即可在接續的對話中完成該動作（只放行這一次）與因此略過的步驟。
+- 對外動作的類型會自動正規化（例如「git push」視為推送），核准卡片與預先核准都能正確對應。
+
 ## 0.1.4 - 2026-10-23
 
 第一個公開版本。

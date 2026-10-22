@@ -423,6 +423,20 @@ export interface AdvisorConfig {
   maxCalls?: number;
 }
 
+/** An external action (push, PR, release…) the user denied. */
+export interface DeniedAction {
+  id: string;
+  agentId: string;
+  kind: string;
+  target: string;
+  details: string;
+  /** What the user wrote when denying. */
+  note?: string;
+  ts: number;
+  /** The follow-up run started by "allow and continue". */
+  continuedIn?: string;
+}
+
 /** A note an agent shared with all later agents (`post_note`). */
 export interface SharedNote {
   id: string;
@@ -470,6 +484,8 @@ export interface WorkflowConfig {
   advisor?: AdvisorConfig;
   /** This message is an edited version of the one in that workflow. */
   replaces?: string;
+  /** External actions the user approved in advance ("allow and continue" after a denial); each is used once. */
+  preApproved?: { kind: string; target: string; details: string }[];
 }
 
 export interface Attachment {
@@ -620,6 +636,8 @@ export interface WorkflowRun {
   outputsTruncated?: boolean;
   /** Shared notes board (`post_note`), visible to every later agent and in the conversation. */
   notes?: SharedNote[];
+  /** External actions the user denied in this run (shown with "allow and continue"). */
+  deniedActions?: DeniedAction[];
   /** The message was edited and re-sent as that workflow. */
   replacedBy?: string;
   /** Screenshots agents took with `capture_screenshot` (PNG files under <cwd>/.aivenue/screenshots). */

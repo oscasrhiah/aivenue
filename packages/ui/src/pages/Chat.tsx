@@ -4,6 +4,7 @@ import { fileUrl, hub, useHostInfo, useProviders, useWorkflow } from '../api';
 import { readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
+import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { Outputs } from '../components/Outputs';
 import { Approvals, WorktreeCard } from '../components/Safety';
@@ -653,6 +654,7 @@ export function Chat({ id }: { id?: string }) {
                 return <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />;
               })}
               <FinalResult run={run} providers={providers} />
+              <DeniedActions run={run} providers={providers} />
               <Outputs run={run} onImage={setLightbox} />
               <Approvals run={run} providers={providers} />
               <WorktreeCard run={run} />
