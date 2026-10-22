@@ -116,6 +116,18 @@
 - 可設定最多巢狀層數與同時執行上限。
 - **Agent map**：開啟 sub agent 的對話，標題列會出現「Agent map」按鈕（數字是 sub agent 數量，執行中會有閃爍的點）。點開會看到所有 agent 的樹狀圖：誰派出誰、每個 agent 是哪一家哪個模型、花了多久、用了多少 token、現在正在做什麼。點任何一個 agent 可以看到它的任務、由誰派出、token 明細（輸入／快取／輸出）、派出的下一層 agent、結果全文、改動的檔案和完整的處理過程。
 
+## GitHub
+
+「設定 → 能力 → GitHub」三個步驟，全部一鍵完成：
+
+1. **安裝 Git 與 GitHub CLI**：按「一鍵安裝」（Windows 用 winget、macOS 用 Homebrew、Linux 用系統的套件管理員）。
+2. **登入 GitHub**：按「登入 GitHub」，會開啟 GitHub 官方的瀏覽器登入頁，輸入終端機顯示的一次性代碼即可；Aivenue 不經手你的密碼。登入後 git 推送也使用這個帳號。
+3. **GitHub 工具（選用）**：一鍵啟用 GitHub 官方的 MCP 工具，所有供應商的 agent 都能直接查 issue、PR、程式碼與 CI。沿用上面的登入，不用另外申請 token；預設唯讀。
+
+登入後，agent 會知道可以用 `gh` 指令操作 GitHub（開 PR、看 CI 失敗原因等）。
+
+**對外動作一律先問你**：推送、建立儲存庫、開 / 合併 Pull Request、留言、發布版本、部署等會改變外部的動作，agent 都必須先在對話中跳出核准卡片，你允許後才會執行，不論權限設定為何；你拒絕的話，agent 不會執行，也不會改用其他方式繞過。讀取（fetch、pull、查看 PR / issue / CI）不需要核准。
+
 ## 截圖預覽
 
 任何一家 agent 都能呼叫 Aivenue 內建的 `capture_screenshot`，把網頁、本機 HTML 檔或開發伺服器（例如 `http://localhost:5173`）拍成截圖：
