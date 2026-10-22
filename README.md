@@ -1,5 +1,10 @@
 # Aivenue
 
+<p align="center">
+  <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="下載最新版本" src="https://img.shields.io/badge/%E4%B8%8B%E8%BC%89-%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC-c96442?style=for-the-badge"></a>
+  <a href="https://github.com/oscasrhiah/aivenue/releases"><img alt="所有版本" src="https://img.shields.io/badge/%E6%89%80%E6%9C%89-%E7%89%88%E6%9C%AC-555555?style=for-the-badge"></a>
+</p>
+
 > **English summary** — Aivenue lets the subscription-based AI coding CLIs you already have (Claude Code, Codex, Antigravity, GitHub Copilot CLI, OpenCode, Qwen Code) work together in one workflow: one writes the plan and another reviews it, one implements and another verifies the code, looping until the reviewer approves. Any agent can hand sub-tasks to another vendor's CLI as a sub-agent. It runs locally as a desktop app (Windows, Linux) or a VS Code extension, uses your own accounts or API keys, and never handles your passwords. Licensed under MIT.
 
 讓多家訂閱制 AI coding CLI 在同一個工作流裡分工合作：一家寫計畫、另一家審查，來回修改直到通過；接著實作，再由審查者驗收程式碼，直到通過為止。任何 agent 在工作中都能透過 Aivenue 把子任務派給其他家的 agent 當 sub agent。全程即時顯示每個 agent 讀了什麼、改了什麼、跑了什麼指令。
@@ -54,12 +59,18 @@ Aivenue 把這些 CLI 串成一個工作流：
 
 所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.4`）：
 
+<p align="center">
+  <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="前往下載頁面" src="https://img.shields.io/badge/%E5%89%8D%E5%BE%80-%E4%B8%8B%E8%BC%89%E9%A0%81%E9%9D%A2-c96442?style=for-the-badge"></a>
+</p>
+
+> 在下載頁面最下方的 **Assets** 區塊點選檔案即可下載。這是私人儲存庫，需要先登入有權限的 GitHub 帳號。
+
 | 平台 | 檔案 | 安裝方式 |
 |---|---|---|
-| Windows 安裝版 | `Aivenue-Setup-<版本>.exe` | 執行安裝程式，可自選安裝資料夾 |
-| Windows 免安裝版 | `Aivenue-<版本>-portable.exe` | 直接執行，不需安裝 |
-| Linux x64 | `Aivenue-<版本>-linux-x64.tar.gz` | 解壓後執行 `./install.sh` |
-| VS Code 插件 | `aivenue-vscode-<版本>.vsix` | 在 VS Code 中「從 VSIX 安裝」 |
+| Windows 安裝版 | [`Aivenue-Setup-<版本>.exe`](https://github.com/oscasrhiah/aivenue/releases/latest) | 執行安裝程式，可自選安裝資料夾 |
+| Windows 免安裝版 | [`Aivenue-<版本>-portable.exe`](https://github.com/oscasrhiah/aivenue/releases/latest) | 直接執行，不需安裝 |
+| Linux x64 | [`Aivenue-<版本>-linux-x64.tar.gz`](https://github.com/oscasrhiah/aivenue/releases/latest) | 解壓後執行 `./install.sh` |
+| VS Code 插件 | [`aivenue-vscode-<版本>.vsix`](https://github.com/oscasrhiah/aivenue/releases/latest) | 在 VS Code 中「從 VSIX 安裝」 |
 
 ### Windows
 
