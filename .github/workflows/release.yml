@@ -1,0 +1,153 @@
+# Builds the Windows (NSIS + portable), Linux (tar.gz) and VS Code (.vsix) packages and publishes them as a
+# GitHub Release. Runs on a pushed v* tag, or by hand (workflow_dispatch) for a given tag.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release, e.g. v0.1.4 (empty = v + the version in package.json)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Resolve version from the tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="v$(node -p "require('./package.json').version")"
+          fi
+          version="${tag#v}"
+          pkg="$(node -p "require('./packages/desktop/package.json').version")"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::Tag $tag does not match packages/desktop/package.json version $pkg"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (version $version)"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/build.mjs
+      - name: Package (NSIS installer + portable)
+        working-directory: packages/desktop
+        env:
+          # No code-signing certificate: do not look for one.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: packages/desktop/release/*.exe
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Package Linux (release/Aivenue-<version>-linux-x64.tar.gz)
+        run: npm run package:linux
+      - name: Package VS Code extension (release/aivenue-vscode.vsix)
+        run: npm run package:vscode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            release/Aivenue-${{ needs.version.outputs.version }}-linux-x64.tar.gz
+            release/aivenue-vscode.vsix
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Rename to the published file names
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ls -R artifacts
+          mkdir -p dist
+          # electron-builder's default names: "Aivenue Setup <v>.exe" (NSIS) and "Aivenue <v>.exe" (portable).
+          cp "artifacts/windows/Aivenue Setup $VERSION.exe" "dist/Aivenue-Setup-$VERSION.exe"
+          cp "artifacts/windows/Aivenue $VERSION.exe" "dist/Aivenue-$VERSION-portable.exe"
+          cp "artifacts/linux/Aivenue-$VERSION-linux-x64.tar.gz" "dist/Aivenue-$VERSION-linux-x64.tar.gz"
+          cp "artifacts/linux/aivenue-vscode.vsix" "dist/aivenue-vscode-$VERSION.vsix"
+          ls -l dist
+      - name: Release notes from CHANGELOG.md
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # The section under "## <version>" (or "## [<version>]") up to the next "## " heading.
+          awk -v v="$VERSION" '
+            /^## / {
+              if (found) exit
+              h = $0; sub(/^## \[?/, "", h); split(h, a, /[] ]/)
+              if (a[1] == v) { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::No CHANGELOG.md section for $VERSION"
+            echo "Aivenue $VERSION" > notes.md
+          fi
+          cat notes.md
+      - name: Create or update the GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "Aivenue $VERSION" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/* --title "Aivenue $VERSION" --notes-file notes.md --target "$GITHUB_SHA"
+          fi
