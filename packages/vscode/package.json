@@ -1,0 +1,91 @@
+{
+  "name": "aivenue-vscode",
+  "displayName": "Aivenue",
+  "description": "讓 Claude Code、Codex、Antigravity、GitHub Copilot、OpenCode 等 AI 工具分工合作：一家規劃一家審查、一家實作一家驗收，還能跨家派 sub agent，全程即時顯示進度。",
+  "publisher": "aivenue-local",
+  "version": "0.1.4",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "main": "dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "Aivenue",
+      "properties": {
+        "aivenue.openOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "VS Code 啟動時自動開啟 Aivenue 面板"
+        }
+      }
+    },
+    "viewsContainers": {
+      "secondarySidebar": [
+        {
+          "id": "aivenue",
+          "title": "Aivenue",
+          "icon": "media/aivenue.svg"
+        }
+      ]
+    },
+    "views": {
+      "aivenue": [
+        {
+          "type": "webview",
+          "id": "aivenue.chat",
+          "name": "Aivenue",
+          "icon": "media/aivenue.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "aivenue.open",
+        "title": "開啟 Aivenue",
+        "category": "Aivenue",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "aivenue.openInEditor",
+        "title": "在編輯器分頁中開啟 Aivenue",
+        "category": "Aivenue",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "aivenue.openInBrowser",
+        "title": "在瀏覽器中開啟 Aivenue",
+        "category": "Aivenue",
+        "icon": "$(globe)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "aivenue.openInEditor",
+          "when": "view == aivenue.chat",
+          "group": "navigation"
+        },
+        {
+          "command": "aivenue.openInBrowser",
+          "when": "view == aivenue.chat"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "package": "vsce package --no-dependencies --allow-missing-repository -o ../../release/aivenue-vscode.vsix"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.6.0"
+  }
+}

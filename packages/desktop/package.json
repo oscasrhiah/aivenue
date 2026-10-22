@@ -1,0 +1,59 @@
+{
+  "name": "@aivenue/desktop",
+  "private": true,
+  "version": "0.1.4",
+  "description": "Aivenue desktop app",
+  "main": "dist/main.cjs",
+  "author": "Aivenue",
+  "scripts": {
+    "start": "electron .",
+    "package": "electron-builder --win --x64",
+    "package:linux": "electron-builder --linux --x64"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "dev.aivenue.desktop",
+    "electronVersion": "38.8.6",
+    "productName": "Aivenue",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "dist/bridge.cjs"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "executableName": "aivenue",
+      "artifactName": "Aivenue-${version}-linux-${arch}.${ext}",
+      "desktop": {
+        "entry": {
+          "StartupWMClass": "Aivenue"
+        }
+      },
+      "category": "Development",
+      "synopsis": "Run AI coding CLIs together: plan, review, implement, verify",
+      "target": [
+        "dir"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

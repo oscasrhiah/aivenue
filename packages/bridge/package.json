@@ -1,0 +1,10 @@
+{
+  "name": "@aivenue/bridge",
+  "private": true,
+  "version": "0.1.4",
+  "description": "stdio MCP server that exposes Aivenue tools (submit_plan, spawn_subagent, ...) to any agent CLI",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0"
+  }
+}

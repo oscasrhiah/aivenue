@@ -1,0 +1,247 @@
+import { useEffect, useState } from 'react';
+import type { AgentRunInfo, ProviderInfo, WorkflowRun } from '../../../core/src/types';
+import { useAgentEvents } from '../api';
+import { useT } from '../i18n';
+import { agentStatus, cx, elapsed, fmtTokens, modelLabel, providerColor, providerName, roleLabel } from '../util';
+import { Markdown } from './Markdown';
+import { Transcript, visible } from './Transcript';
+
+type T = ReturnType<typeof useT>;
+
+const isLive = (a: AgentRunInfo) => a.status === 'running' || a.status === 'queued' || a.status === 'paused';
+
+/** Re-render every second while something runs, so elapsed times tick. */
+function useTick(on: boolean) {
+  const [, set] = useState(0);
+  useEffect(() => {
+    if (!on) return;
+    const id = setInterval(() => set((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [on]);
+}
+
+/** What the agent is for: a sub-agent's task, or its role in the workflow. */
+function titleOf(t: T, a: AgentRunInfo): string {
+  if (a.role === 'subagent') return a.task || 'Sub agent';
+  if (a.role === 'advisor') return `❓ ${a.task || roleLabel(t, a.role)}`;
+  return `${roleLabel(t, a.role)}${a.round ? ` · ${t(`第 ${a.round} 輪`, `round ${a.round}`)}` : ''}`;
+}
+
+const tokensOf = (a: AgentRunInfo) => (a.tokens ? a.tokens.input + a.tokens.output : 0);
+
+function byStart(a: AgentRunInfo, b: AgentRunInfo) {
+  return (a.startedAt ?? Number.MAX_SAFE_INTEGER) - (b.startedAt ?? Number.MAX_SAFE_INTEGER);
+}
+
+/** "Agent map": every agent of the conversation as a tree (who started whom); click one for its details. */
+export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; providers: ProviderInfo[]; onClose: () => void }) {
+  const t = useT();
+  const [selected, setSelected] = useState<string | undefined>();
+  const agents = Object.values(run.agents).filter((a) => a.role !== 'test');
+  useTick(agents.some(isLive));
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (selected) setSelected(undefined);
+      else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, selected]);
+
+  const roots = agents.filter((a) => !a.parentId || !run.agents[a.parentId]).sort(byStart);
+  const childrenOf = (id: string) => agents.filter((a) => a.parentId === id).sort(byStart);
+  const subs = agents.filter((a) => a.role === 'subagent' || a.role === 'advisor').length;
+  const live = agents.filter(isLive).length;
+  const current = selected ? run.agents[selected] : undefined;
+
+  const branch = (a: AgentRunInfo) => {
+    const kids = childrenOf(a.id);
+    return (
+      <div className="am-branch" key={a.id}>
+        <Node t={t} agent={a} providers={providers} onOpen={() => setSelected(a.id)} />
+        {kids.length > 0 && <div className="am-kids">{kids.map(branch)}</div>}
+      </div>
+    );
+  };
+
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal am-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        {current ? (
+          <Detail t={t} run={run} agent={current} providers={providers} onBack={() => setSelected(undefined)} onOpen={setSelected} onClose={onClose} />
+        ) : (
+          <>
+            <div className="am-head">
+              <h3>Agent map</h3>
+              <button className="icon-btn" onClick={onClose} aria-label="close">
+                ✕
+              </button>
+            </div>
+            <div className="muted small">
+              {t(`${agents.length} 個 agent`, `${agents.length} agents`)}
+              {subs > 0 && t(`（${subs} 個 sub agent／顧問）`, ` (${subs} sub-agents / advisors)`)}
+              {live > 0 && t(` · ${live} 個執行中`, ` · ${live} running`)}
+              {' · '}
+              {t('點一下 agent 看詳細內容', 'click an agent for details')}
+            </div>
+            {agents.length === 0 ? (
+              <div className="muted">{t('還沒有 agent 開始工作。', 'No agent has started yet.')}</div>
+            ) : (
+              <div className="am-canvas">{roots.map(branch)}</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Dot({ t, agent }: { t: T; agent: AgentRunInfo }) {
+  const st = agentStatus(t, agent.status);
+  return <span className={cx('am-dot', st.cls, isLive(agent) && 'live')} title={st.label} />;
+}
+
+function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; providers: ProviderInfo[]; onOpen: () => void }) {
+  const tokens = tokensOf(agent);
+  const main = agent.role !== 'subagent' && agent.role !== 'advisor';
+  return (
+    <button className={cx('am-node', main && 'am-root', isLive(agent) && 'live')} onClick={onOpen} title={titleOf(t, agent)}>
+      <div className="am-node-title">
+        <Dot t={t} agent={agent} />
+        <span className="am-title-text">{titleOf(t, agent)}</span>
+      </div>
+      <div className="am-node-meta">
+        <span className="am-mark" style={{ background: providerColor(agent.provider) }} />
+        {providerName(providers, agent.provider)}
+        {' · '}
+        {agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}
+      </div>
+      <div className="am-node-meta muted">
+        {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : agentStatus(t, agent.status).label}
+        {tokens > 0 && ` · ${fmtTokens(tokens)} tokens`}
+        {agent.stats.tools > 0 && ` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
+      </div>
+      {isLive(agent) && agent.activity && <div className="am-node-doing">{agent.activity.replace(/^\S+\s/, '')}</div>}
+    </button>
+  );
+}
+
+function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; run: WorkflowRun; agent: AgentRunInfo; providers: ProviderInfo[]; onBack: () => void; onOpen: (id: string) => void; onClose: () => void }) {
+  const events = useAgentEvents(run.id, agent.id);
+  const [raw, setRaw] = useState(false);
+  const st = agentStatus(t, agent.status);
+  const parent = agent.parentId ? run.agents[agent.parentId] : undefined;
+  const kids = Object.values(run.agents)
+    .filter((a) => a.parentId === agent.id)
+    .sort(byStart);
+  const tokens = agent.tokens;
+  const steps = visible(events, raw);
+  const answer = agent.finalText?.trim();
+  return (
+    <>
+      <div className="am-head">
+        <button className="icon-btn" onClick={onBack} aria-label={t('返回', 'Back')}>
+          ←
+        </button>
+        <Dot t={t} agent={agent} />
+        <h3 className="am-detail-title">{titleOf(t, agent)}</h3>
+        <button className="icon-btn" onClick={onClose} aria-label="close">
+          ✕
+        </button>
+      </div>
+      <div className="am-facts">
+        <div>
+          <span className={cx('status', st.cls)}>{st.label}</span>
+          {' · '}
+          <span className="am-mark" style={{ background: providerColor(agent.provider) }} />
+          {providerName(providers, agent.provider)}
+          {' · '}
+          <b>{agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}</b>
+          {agent.effort && ` · ${t('推理', 'effort')} ${agent.effort}`}
+          {' · '}
+          {roleLabel(t, agent.role)}
+          {agent.readonly && ` · ${t('唯讀', 'read-only')}`}
+        </div>
+        <div className="muted">
+          {parent ? (
+            <>
+              {t('由 ', 'Spawned by ')}
+              <button className="link" onClick={() => onOpen(parent.id)}>
+                {providerName(providers, parent.provider)} · {titleOf(t, parent)}
+              </button>
+              {t(' 派出', '')}
+            </>
+          ) : (
+            t('工作流的主要 agent', 'A main agent of the workflow')
+          )}
+        </div>
+        <div className="muted">
+          {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : '—'}
+          {tokens && ` · ${fmtTokens(tokens.input + tokens.output)} tokens（${t('輸入', 'in')} ${fmtTokens(tokens.input)}${tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''} · ${t('輸出', 'out')} ${fmtTokens(tokens.output)}）`}
+          {` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
+          {agent.stats.commands > 0 && ` · ${agent.stats.commands} ${t('個指令', 'commands')}`}
+          {agent.stats.filesChanged.length > 0 && ` · ${agent.stats.filesChanged.length} ${t('個檔案', 'files')}`}
+        </div>
+      </div>
+
+      {(agent.role === 'subagent' || agent.role === 'advisor') && agent.task && (
+        <div className="am-section">
+          <div className="am-label">{agent.role === 'advisor' ? t('問題', 'Question') : t('任務', 'Task')}</div>
+          <div className="am-task">{agent.task}</div>
+        </div>
+      )}
+
+      {isLive(agent) && (
+        <div className="am-section">
+          <div className="am-label">{t('現在正在做', 'Doing now')}</div>
+          <div className="working">
+            <span className="spark">✻</span> {agent.activity?.replace(/^\S+\s/, '') ?? t('啟動中…', 'Starting…')}
+          </div>
+        </div>
+      )}
+
+      {kids.length > 0 && (
+        <div className="am-section">
+          <div className="am-label">{t(`派出的 agent（${kids.length}）`, `Agents it started (${kids.length})`)}</div>
+          <div className="am-kid-list">
+            {kids.map((k) => (
+              <button key={k.id} className="am-kid" onClick={() => onOpen(k.id)}>
+                <Dot t={t} agent={k} /> {providerName(providers, k.provider)} · {k.model ? modelLabel(k.model) : t('預設模型', 'default model')} — {titleOf(t, k)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!isLive(agent) && answer && (
+        <div className="am-section">
+          <div className="am-label">{t('結果', 'Result')}</div>
+          <Markdown className="am-answer" text={answer.length > 20000 ? answer.slice(0, 20000) + '\n…' : answer} />
+        </div>
+      )}
+      {agent.status === 'failed' && agent.error && <div className="tx-err">✕ {agent.error}</div>}
+
+      {agent.stats.filesChanged.length > 0 && (
+        <div className="am-section">
+          <div className="am-label">{t('改動的檔案', 'Files changed')}</div>
+          <div className="am-files mono small">
+            {agent.stats.filesChanged.map((f) => (
+              <div key={f}>{f}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="am-section">
+        <div className="am-label row gap">
+          <span className="grow">{t(`處理過程（${steps.length} 個步驟）`, `What it did (${steps.length} steps)`)}</span>
+          <label className="toggle">
+            <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> {t('原始紀錄', 'Raw log')}
+          </label>
+        </div>
+        {events.length ? <Transcript events={events} raw={raw} /> : <div className="muted small">{t('載入中…', 'Loading…')}</div>}
+      </div>
+    </>
+  );
+}
