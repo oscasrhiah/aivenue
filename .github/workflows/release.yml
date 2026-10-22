@@ -26,36 +26,52 @@ jobs:
     outputs:
       tag: ${{ steps.v.outputs.tag }}
       version: ${{ steps.v.outputs.version }}
+      sha: ${{ steps.v.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - id: v
-        name: Resolve version from the tag
+        name: Resolve the tag, its version and the commit to build
         shell: bash
         env:
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            tag="$GITHUB_REF_NAME"
-          elif [ -n "$INPUT_TAG" ]; then
+          set -euo pipefail
+          if [ -n "${INPUT_TAG:-}" ]; then
             tag="$INPUT_TAG"
+          elif [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
           else
             tag="v$(node -p "require('./package.json').version")"
           fi
+          case "$tag" in v*) ;; *) echo "::error::Tag $tag must start with v"; exit 1 ;; esac
+          # Every later job builds this one commit: the tag's commit when the tag exists, otherwise the
+          # commit this run was started from (gh release create then creates the tag there).
+          if sha="$(git rev-parse -q --verify "refs/tags/$tag^{commit}")"; then
+            echo "Tag $tag exists at $sha"
+          else
+            sha="$GITHUB_SHA"
+            echo "Tag $tag does not exist yet; it will be created at $sha"
+          fi
           version="${tag#v}"
-          pkg="$(node -p "require('./packages/desktop/package.json').version")"
+          pkg="$(git show "$sha:packages/desktop/package.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")"
           if [ "$version" != "$pkg" ]; then
-            echo "::error::Tag $tag does not match packages/desktop/package.json version $pkg"
+            echo "::error::Tag $tag does not match packages/desktop/package.json version $pkg at $sha"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $tag (version $version)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (version $version) from $sha"
 
   windows:
     needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -79,6 +95,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -101,6 +119,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -144,10 +164,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ needs.version.outputs.sha }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
             gh release edit "$TAG" --title "Aivenue $VERSION" --notes-file notes.md
           else
-            gh release create "$TAG" dist/* --title "Aivenue $VERSION" --notes-file notes.md --target "$GITHUB_SHA"
+            gh release create "$TAG" dist/* --title "Aivenue $VERSION" --notes-file notes.md --target "$SHA"
           fi
