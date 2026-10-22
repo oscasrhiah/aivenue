@@ -9,6 +9,14 @@
 
 讓多家訂閱制 AI coding CLI 在同一個工作流裡分工合作：一家寫計畫、另一家審查，來回修改直到通過；接著實作，再由審查者驗收程式碼，直到通過為止。任何 agent 在工作中都能透過 Aivenue 把子任務派給其他家的 agent 當 sub agent。全程即時顯示每個 agent 讀了什麼、改了什麼、跑了什麼指令。
 
+<p align="center"><img src="docs/images/home.png" alt="Aivenue 首頁：輸入任務、選資料夾、權限、顧問與角色"></p>
+
+### 示範影片
+
+<p align="center"><a href="docs/demo.mp4"><img src="docs/images/demo-cover.png" alt="觀看示範影片：從輸入任務到多家 agent 規劃、分工、審查完成" width="820"></a></p>
+
+<p align="center"><sub>點圖片開啟影片（約 1 分鐘，畫面加速播放）：輸入任務 → Antigravity 額度用完、自動改由 Claude 寫計畫 → Codex 審查退回 2 個問題 → 第二輪通過 → Claude 實作並平行派出 OpenCode、Antigravity 兩個 sub agent → 審查者失敗時自動換 Codex 驗收 → 完成。</sub></p>
+
 ---
 
 ## 目錄
@@ -17,6 +25,8 @@
 - [支援的 AI 工具](#支援的-ai-工具)
 - [下載與安裝](#下載與安裝)
 - [快速開始](#快速開始)
+- [實際範例：一個任務從頭到尾](#實際範例一個任務從頭到尾)
+- [範例任務](#範例任務)
 - [主要功能](#主要功能)
 - [從原始碼建置](#從原始碼建置)
 - [專案架構](#專案架構)
@@ -98,6 +108,14 @@ cd Aivenue-<版本>-linux-x64
 3. 需要 VS Code 1.143 以上才會顯示在右側次要側邊欄；舊版可用「Aivenue: 在編輯器分頁中開啟 Aivenue」。
 4. 插件自帶完整引擎，**不需要**另外安裝桌面 App 或 Node.js；Remote / WSL / SSH 也能用（AI 工具要裝在遠端那台機器上）。
 
+<table align="center"><tr>
+<td><img src="docs/images/vscode-panel.png" alt="VS Code 右側面板" width="300"></td>
+<td><img src="docs/images/vscode-advisor.png" alt="VS Code 中的顧問選單" width="300"></td>
+</tr><tr>
+<td align="center">VS Code 右側面板：📎、權限、💡 顧問、⚙ 角色</td>
+<td align="center">窄面板中直接切換顧問模式</td>
+</tr></table>
+
 插件的詳細說明見 [packages/vscode/README.md](packages/vscode/README.md)。
 
 ## 快速開始
@@ -108,6 +126,49 @@ cd Aivenue-<版本>-linux-x64
 4. **選權限**：輸入框的權限按鈕（例如「⚡ 完全 Auto」）→ 決定 agent 可以自己動手到什麼程度，需要時勾選「隔離模式」。
 5. **選工作資料夾**，輸入任務並送出（Enter 送出、Shift+Enter 換行）。VS Code 版預設是目前開啟的專案。
 6. 看著進度清單（撰寫計畫 → 審查計畫 → 實作 → 審查程式碼）一路走完；審查通過後，最終結果與「這次產生或修改的檔案」會顯示在對話最下方。對話結束後可以在同一個對話繼續下指令。
+
+## 實際範例：一個任務從頭到尾
+
+以下是在空資料夾裡實際跑的一次（沒有任何人工介入），任務是：
+
+> 建立一個 Node.js 命令列記帳工具 expense：add 新增支出、list 列出、summary 依分類加總並顯示百分比，資料存在 expenses.json，用 node:test 寫測試。請派 sub agent 平行分工：OpenCode 寫測試、Antigravity 寫 README，你負責主程式並整合。
+
+角色：計畫與實作由 **Claude Code（Opus）** 負責，計畫與程式碼都由 **Codex** 審查。總共約 7 分鐘。
+
+**① Claude 寫計畫，Codex 審查通過。** 計畫先訂出介面契約（函式名稱、資料格式、輸出格式、錯誤訊息），讓平行工作的 sub agent 照同一份規格做。
+
+<p align="center"><img src="docs/images/run-plan.png" alt="撰寫計畫"></p>
+
+**② 實作時派出兩個 sub agent 平行分工。** 點標題列的「Agent map」可以看到整個分工：Claude 實作時派出 OpenCode（DeepSeek）寫測試、Antigravity 寫 README，每個 agent 的模型、耗時、token 都一目了然。
+
+<p align="center"><img src="docs/images/agent-map.png" alt="Agent map"></p>
+
+點任何一個 agent，可以看到它的任務、由誰派出、token 明細、結果與完整處理過程：
+
+<p align="center"><img src="docs/images/agent-detail.png" alt="Sub agent 詳細內容"></p>
+
+**③ Codex 審查程式碼，抓到兩個問題退回。** 45 個測試雖然全部通過，Codex 另外實測發現 `1.005` 會被四捨五入成 `1.00`、極大金額會以 `null` 寫進檔案，要求修正並補測試。
+
+<p align="center"><img src="docs/images/run-review.png" alt="Codex 審查要求修改"></p>
+
+**④ Claude 修正後第二輪審查通過。** 最終結果、這次新增的檔案（可預覽、開啟）與進度清單都整理在對話最下方。
+
+<p align="center"><img src="docs/images/run-final.png" alt="最終結果與產生的檔案"></p>
+
+## 範例任務
+
+可以直接複製到輸入框試試看（工作資料夾選你的專案）：
+
+| 想做的事 | 範例任務 | 建議設定 |
+|---|---|---|
+| 修 bug | `npm test 有 3 個測試失敗，找出原因並修好，不要改測試` | 關掉「計畫」，直接實作 → 審查 |
+| 新功能 | `在設定頁加上深色模式切換，記住使用者的選擇，並補上測試` | 預設（計畫 ⇄ 審查 → 實作 ⇄ 審查） |
+| 平行分工 | `把 src/api 底下的 5 個模組都補上單元測試，每個模組派一個 sub agent` | 開啟 Sub agents，允許 2～3 家 |
+| 只要計畫 | `評估把資料庫從 SQLite 換成 PostgreSQL 要改哪些地方，列出步驟與風險` | 關掉「實作」，權限選「Plan 唯讀」 |
+| 看畫面 | `把首頁改成響應式排版，做完拍 390 寬與 1280 寬的截圖給我看` | 審查者也會看截圖驗收 |
+| 讀其他專案 | `參考額外資料夾裡的 api-docs，幫這個專案寫一個對應的 client` | 「工作流設定 → 額外資料夾」加入文件資料夾 |
+| 發布到 GitHub | `整理 README 與 CHANGELOG，commit 後推送並開一個 Pull Request` | 先在「能力 → GitHub」登入；推送與開 PR 會先問你 |
+| 卡住時請教 | `這個記憶體洩漏查了很久，找出原因並修好` | 開「💡 顧問 → 跨家顧問」，讓做事的 agent 卡住時請教更強的模型 |
 
 ## 主要功能
 
@@ -121,6 +182,8 @@ cd Aivenue-<版本>-linux-x64
 - **模型與推理強度**：每家可設定預設模型與推理強度（模型清單直接從 CLI 讀取）。
 - **常駐 CLI**：Claude Code 與 Antigravity 在同一段對話中沿用執行中的 CLI，閒置 5 分鐘才關閉；其他工具每輪用同一個 session 接續。
 
+<p align="center"><img src="docs/images/settings-roles.png" alt="工作流設定：自動／自訂指派、每個角色的供應商與模型" width="820"></p>
+
 ### 權限與安全
 
 | 等級 | 行為 |
@@ -131,6 +194,8 @@ cd Aivenue-<版本>-linux-x64
 | ⚡ 完全 Auto | 全部自動核准（Codex 仍保留工作資料夾沙箱） |
 
 - **對外動作要核准**：不論權限等級，agent 在做任何會改變這台電腦以外東西的動作前（git push、建立／合併／關閉 Pull Request、在 issue 留言或開關 issue、發布 release、觸發部署或 workflow 等），都必須先呼叫 `confirm_external_action`，在對話中跳出核准卡片，說明要做什麼、對象是哪裡；你允許才會執行，拒絕則 agent 不會做、並在報告中說明。讀取（git fetch/pull、看 PR、issue、CI）與本機 commit 不需要核准。被拒絕的動作會列在結果卡片下方；之後改變主意，按「改成允許並繼續」就會開一段接續的對話，完成這個動作（不會再問一次）以及因此略過的步驟。
+<p align="center"><img src="docs/images/denied-actions.jpg" alt="被拒絕的對外動作與「改成允許並繼續」按鈕" width="720"></p>
+
 - 目前只有 Claude Code 能在 headless 模式逐項詢問；其他工具選「手動核准」時會改用各自最接近的安全設定，設定視窗中會明確提示。
 - **隔離模式**：agent 在獨立的 git worktree 副本中工作，完成後你再決定「套用到我的專案」「保留為 git 分支」或「捨棄」。
 - **sub agent 不會比上層權限大**：唯讀的 agent 只能派出唯讀的 sub agent；「手動核准」時，派出 sub agent 也要先經你核准。
@@ -152,7 +217,9 @@ cd Aivenue-<版本>-linux-x64
 | Claude 原生 | 只對 Claude Code 的 agent 生效，使用 Claude 官方的 `--advisor`（可選顧問模型），由 Claude 自己決定何時請教 |
 | 跨家顧問 | 每一家的 agent 卡住時都能呼叫 `ask_advisor`，請教你指定的供應商與模型。顧問唯讀、只給建議；建議會顯示在對話中並記進共用筆記。可限制每次對話最多請教幾次（預設 5 次） |
 
-桌面版在輸入框的「💡 顧問」按鈕切換；VS Code 版在「工作流設定 → 顧問模式」。
+在輸入框的「💡 顧問」按鈕直接切換（VS Code 版只顯示 💡 圖示），也可以在「工作流設定 → 顧問模式」設定。
+
+<p align="center"><img src="docs/images/advisor-menu.png" alt="顧問模式選單" width="820"></p>
 
 ### 共用上下文
 
@@ -174,6 +241,8 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 1. **一鍵安裝 Git 與 GitHub CLI**：Windows 用 winget、macOS 用 Homebrew、Linux 依系統套件管理員（apt／dnf／pacman／zypper）安裝，會開一個終端機顯示過程。
 2. **登入 GitHub**：執行 `gh auth login --web`，在 GitHub 官方頁面輸入一次性代碼即可，並自動設定 `gh auth setup-git`，讓 git 推送使用同一個帳號；Aivenue 不經手你的密碼。
 3. **GitHub MCP（選用）**：一鍵加入 GitHub 官方的 MCP 伺服器，所有供應商的 agent 都能直接查 issue、PR、程式碼和 CI。沿用上面的登入，不用另外申請 token；預設唯讀，也可勾選允許透過工具修改 GitHub。
+
+<p align="center"><img src="docs/images/github.png" alt="能力頁的 GitHub 卡片" width="720"></p>
 
 登入後，agent 會被告知可以用 `gh` 處理 PR、issue、審查與 CI；推送、開 PR、留言等對外動作一律要先經你核准。
 
