@@ -3128,61 +3128,128 @@ textarea.code {
   gap: 14px;
 }
 
-.am-branch {
-  display: flex;
-  align-items: center;
-}
-
-/* Children to the right, joined to their parent by elbow lines. */
-.am-kids {
-  position: relative;
+/* Stages (plan, implement…) with a heading rule; each round is a row: label | author → reviewer. */
+.am-stage {
   display: flex;
   flex-direction: column;
-  padding-left: 32px;
 }
 
-.am-kids::before {
+.am-stage-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.am-stage-head::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line-strong);
+}
+
+.am-round {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.am-round + .am-round {
+  border-top: 1px dashed var(--line);
+}
+
+.am-round-label {
+  flex-shrink: 0;
+  width: 52px;
+  /* Lines up with the cards' title row (border 1 + padding 9 + half of a 20px line). */
+  padding-top: 10px;
+  line-height: 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.am-round-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px 0;
+  min-width: 0;
+}
+
+.am-step {
+  display: flex;
+  align-items: flex-start;
+}
+
+/* author → reviewer: a drawn arrow at the height of the cards' title row (border 1 + padding 9 + half of 20px). */
+.am-arrow {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 40px;
+}
+
+.am-arrow::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 6px;
+  top: 20px;
+  border-top: 1px solid var(--line-strong);
+}
+
+.am-arrow::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  top: 16.5px;
+  border-left: 6px solid var(--line-strong);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+/* Agents a node started hang below it, joined by elbow lines. */
+.am-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.am-sub {
+  display: flex;
+  flex-direction: column;
+  margin-left: 16px;
+}
+
+.am-sub > .am-tree {
+  position: relative;
+  padding: 8px 0 0 18px;
+}
+
+.am-sub > .am-tree::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 50%;
-  width: 16px;
-  border-top: 1px solid var(--line-strong);
-}
-
-.am-kids > .am-branch {
-  position: relative;
-  padding: 5px 0;
-}
-
-.am-kids > .am-branch::before {
-  content: '';
-  position: absolute;
-  left: -16px;
-  top: 50%;
-  width: 16px;
-  border-top: 1px solid var(--line-strong);
-}
-
-.am-kids > .am-branch::after {
-  content: '';
-  position: absolute;
-  left: -16px;
   top: 0;
   bottom: 0;
   border-left: 1px solid var(--line-strong);
 }
 
-.am-kids > .am-branch:first-child::after {
-  top: 50%;
+.am-sub > .am-tree:last-child::before {
+  bottom: auto;
+  height: 28px;
 }
 
-.am-kids > .am-branch:last-child::after {
-  bottom: 50%;
-}
-
-.am-kids > .am-branch:only-child::after {
-  display: none;
+.am-sub > .am-tree::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  /* padding-top 8 + border 1 + padding 9 + half of the 20px title row: the status dot's centre. */
+  top: 28px;
+  width: 18px;
+  border-top: 1px solid var(--line-strong);
 }
 
 .am-node {
@@ -3207,7 +3274,23 @@ textarea.code {
 }
 
 .am-node.am-root {
-  width: 250px;
+  width: 280px;
+}
+
+/* Each main agent is a fixed-width column; the agents it started fill that column under it (long titles end in …),
+   so the next card always sits right beside the main one. */
+.am-step > .am-tree {
+  width: 280px;
+}
+
+.am-sub,
+.am-sub > .am-tree {
+  min-width: 0;
+}
+
+.am-sub .am-node {
+  width: 100%;
+  min-width: 0;
 }
 
 .am-node.live {
@@ -3220,6 +3303,7 @@ textarea.code {
   gap: 8px;
   font-weight: 600;
   font-size: 13.5px;
+  line-height: 20px;
   min-width: 0;
 }
 
@@ -3366,8 +3450,27 @@ textarea.code {
 
 @media (max-width: 640px) {
   .am-node,
-  .am-node.am-root {
-    width: 220px;
+  .am-node.am-root,
+  .am-step > .am-tree {
+    width: 240px;
+  }
+
+  .am-round {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .am-round-label {
+    padding-top: 0;
+  }
+
+  /* Stacked: author above reviewer, no sideways arrow. */
+  .am-round-body {
+    flex-direction: column;
+  }
+
+  .am-arrow {
+    display: none;
   }
 }
 

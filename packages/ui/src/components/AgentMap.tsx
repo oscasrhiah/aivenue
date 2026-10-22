@@ -54,13 +54,16 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   const subs = agents.filter((a) => a.role === 'subagent' || a.role === 'advisor').length;
   const live = agents.filter(isLive).length;
   const current = selected ? run.agents[selected] : undefined;
+  const sections = groupRoots(roots);
+  const stageName = (s?: string) => (s === 'plan' ? t('計畫', 'Plan') : s === 'implement' ? t('實作與審查', 'Implement & review') : t('其他', 'Other'));
 
-  const branch = (a: AgentRunInfo) => {
+  // An agent with the agents it started hanging below it.
+  const tree = (a: AgentRunInfo) => {
     const kids = childrenOf(a.id);
     return (
-      <div className="am-branch" key={a.id}>
+      <div className="am-tree" key={a.id}>
         <Node t={t} agent={a} providers={providers} onOpen={() => setSelected(a.id)} />
-        {kids.length > 0 && <div className="am-kids">{kids.map(branch)}</div>}
+        {kids.length > 0 && <div className="am-sub">{kids.map(tree)}</div>}
       </div>
     );
   };
@@ -88,13 +91,59 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
             {agents.length === 0 ? (
               <div className="muted">{t('還沒有 agent 開始工作。', 'No agent has started yet.')}</div>
             ) : (
-              <div className="am-canvas">{roots.map(branch)}</div>
+              <div className="am-canvas">
+                {sections.map((sec, i) => (
+                  <section className="am-stage" key={i}>
+                    <div className="am-stage-head">
+                      <span>{stageName(sec.stage)}</span>
+                    </div>
+                    {sec.rows.map((row, j) => (
+                      <div className="am-round" key={j}>
+                        <div className="am-round-label">{row.round ? t(`第 ${row.round} 輪`, `Round ${row.round}`) : ''}</div>
+                        <div className="am-round-body">
+                          {row.agents.map((a, k) => (
+                            <div className="am-step" key={a.id}>
+                              {k > 0 && <span className="am-arrow" aria-hidden="true" />}
+                              {tree(a)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </section>
+                ))}
+              </div>
             )}
           </>
         )}
       </div>
     </div>
   );
+}
+
+type Section = { stage?: string; rows: { round?: number; agents: AgentRunInfo[] }[] };
+
+/**
+ * The main agents in start order, grouped into stages (plan, implement…) and rounds within a stage. A follow-up message
+ * that starts the stage over (its round goes back to 1) opens a new section, so each request reads top to bottom.
+ */
+function groupRoots(roots: AgentRunInfo[]): Section[] {
+  const out: Section[] = [];
+  let last: { stage?: string; round: number } | undefined;
+  for (const a of roots) {
+    const round = a.round ?? 0;
+    let sec = out[out.length - 1];
+    if (!sec || !last || sec.stage !== a.stage || (a.stage && round < last.round)) {
+      sec = { stage: a.stage, rows: [] };
+      out.push(sec);
+    }
+    // Agents with no round (direct answers, retries outside the loop) each get a row of their own.
+    let row = round ? sec.rows.find((r) => r.round === round) : undefined;
+    if (!row) sec.rows.push((row = { round: round || undefined, agents: [] }));
+    row.agents.push(a);
+    last = { stage: a.stage, round };
+  }
+  return out;
 }
 
 function Dot({ t, agent }: { t: T; agent: AgentRunInfo }) {
@@ -109,7 +158,8 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
     <button className={cx('am-node', main && 'am-root', isLive(agent) && 'live')} onClick={onOpen} title={titleOf(t, agent)}>
       <div className="am-node-title">
         <Dot t={t} agent={agent} />
-        <span className="am-title-text">{titleOf(t, agent)}</span>
+        {/* The round is on the row's label already. */}
+        <span className="am-title-text">{main ? roleLabel(t, agent.role) : titleOf(t, agent)}</span>
       </div>
       <div className="am-node-meta">
         <span className="am-mark" style={{ background: providerColor(agent.provider) }} />
