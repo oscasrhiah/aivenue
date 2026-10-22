@@ -58,7 +58,11 @@ export function autoAssign(input: AssignInput): AssignmentResult {
   }
 
   const quotaPenalty = (id: string): number => {
-    const used = Math.max(0, ...(input.usage.find((u) => u.providerId === id)?.official?.windows.map((x) => x.usedPercent) ?? [0]));
+    const windows = input.usage.find((u) => u.providerId === id)?.official?.windows ?? [];
+    // Time windows (5 hours, a week…) all apply at once; per-model quotas (minutes 0) only bite when every model is spent.
+    const timed = windows.filter((x) => x.minutes > 0).map((x) => x.usedPercent);
+    const perModel = windows.filter((x) => x.minutes === 0).map((x) => x.usedPercent);
+    const used = Math.max(0, ...timed, perModel.length ? Math.min(...perModel) : 0);
     if (used >= 90) {
       notes.push(L(`${name(id)} 官方額度已用 ${used.toFixed(0)}%，降低優先順序`, `${name(id)} has used ${used.toFixed(0)}% of its plan quota; lowered priority`));
       return 3;

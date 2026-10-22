@@ -128,7 +128,7 @@ export interface ProviderSpec {
   /** Set for providers added from the catalog (run through OpenCode). */
   catalog?: { providerId: string; kind: CatalogProvider['kind'] };
   /** Built-in reader for the official plan quota the CLI stores locally. */
-  quota?: { reader: 'codex-sessions' };
+  quota?: { reader: 'codex-sessions' | 'antigravity' | 'copilot' | 'claude' };
   /**
    * Per-MCP-server args for CLIs that take servers as flags instead of {mcpConfigFile} (Codex).
    * Rendered once per server with {mcpName} {mcpCommandToml} {mcpArgsToml} {mcpEnvToml} {mcpEnvVarsToml}
@@ -328,13 +328,18 @@ export interface ProviderUsage {
   /** Official plan quota: read live from the CLI (codex-live) or from its local logs (codex-sessions, as of its last run). */
   official?: {
     plan?: string;
-    windows: { minutes: number; usedPercent: number; resetsAt?: number }[];
+    /** minutes: the window length (0 = per model); label: shown instead of a window name (e.g. a model). */
+    windows: { minutes: number; usedPercent: number; resetsAt?: number; label?: string; /** A second line under the meter (the models in a shared pool, request counts…). */ detail?: string }[];
     updatedAt: number;
-    source: 'codex-sessions' | 'codex-live';
+    source: 'codex-sessions' | 'codex-live' | 'antigravity-live' | 'copilot-live' | 'claude-live';
+    /** The account the numbers belong to (when known). */
+    account?: string;
     limitReached?: boolean;
     /** Free "reset my limits" credits the account still has. */
     resetCredits?: number;
   };
+  /** Why the official quota could not be read (e.g. a sign-in that expired). */
+  officialError?: string;
   /** When these numbers were computed. */
   checkedAt?: number;
 }

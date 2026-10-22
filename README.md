@@ -268,7 +268,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 
 - **附件**：拖曳、貼上（Ctrl+V 截圖）或 📎 選擇檔案。程式碼與文字檔所有 agent 都能讀；圖片交給能看圖的 agent；PDF、Word、Excel、PowerPoint、OpenDocument、Jupyter 由 Aivenue 轉成文字；ZIP 自動解壓（有數量與大小上限）。讀不到的檔案會明確告知 agent，送出前輸入框也會提醒。
 - **能力（設定 → 能力）**：共用 MCP 伺服器（秘密值加密保存）、共用 Skills（Agent Skills 格式）、各角色的自訂指示。
-- **用量**：設定 → 用量可看每家的使用紀錄，Codex 會即時讀取官方額度（5 小時與每週上限）。
+- **用量**：設定 → 用量可看每家的使用紀錄與官方剩餘額度（和官方 App 一樣顯示「剩餘 %」）：Claude Code、Codex 的 5 小時與每週上限直接沿用 CLI 的登入；GitHub Copilot 的每月進階請求沿用已登入的 GitHub 帳號；Antigravity 連接一次 Google 帳號後顯示 Claude／GPT-OSS、Gemini Pro、Gemini Flash 各組額度。
 
 ## 從原始碼建置
 
@@ -325,7 +325,7 @@ scripts/
 不用。VS Code 插件可以單獨使用，只要這台電腦有安裝並登入你要用的 AI 工具即可。
 
 **額度怎麼算？**
-每家工具都用你自己的帳號或金鑰，額度照各家規則計算。設定 → 用量可以看每家的使用紀錄。
+每家工具都用你自己的帳號或金鑰，額度照各家規則計算。設定 → 用量可以看每家的使用紀錄，以及 Claude Code、Codex、GitHub Copilot、Antigravity 的官方剩餘額度與重置時間。
 
 **為什麼選了「手動核准」，某家還是自己做了？**
 除了 Claude Code，各家的 headless 模式無法逐項詢問，Aivenue 會改用最接近的安全設定（例如只允許編輯、禁止執行指令），設定視窗會標示。需要完全掌控時，請搭配隔離模式。

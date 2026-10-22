@@ -47,6 +47,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     approvals: { type: 'prompt-tool' },
     output: 'claude-stream',
     accounts: { env: 'CLAUDE_CONFIG_DIR', home: '~/.claude' },
+    // The 5-hour and weekly plan limits, read with Claude Code's own sign-in.
+    quota: { reader: 'claude' },
     apiKey: { env: 'ANTHROPIC_API_KEY', baseUrlEnv: 'ANTHROPIC_BASE_URL', note: 'Anthropic API 金鑰；Base URL 可填其他 Anthropic 相容端點' },
     capabilities: { resume: true, mcp: true },
     profile: { plan: 5, review: 5, code: 5, speed: 3, vision: true, pdf: true },
@@ -113,6 +115,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     install: 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
     installOn: { win32: 'winget install --id Google.AntigravityCLI -e' },
     commandPaths: ['~/.local/bin/agy'],
+    // Per-model remaining share from Google, after connecting a Google account on the Usage page.
+    quota: { reader: 'antigravity' },
     docsUrl: 'https://antigravity.google/docs/cli/headless/',
     login: { args: [], note: '在開啟的終端機中依提示用 Google 帳號登入（會開啟瀏覽器）；完成後輸入 /quit 離開' },
     // Credentials live in the OS keyring; signing in creates the default project file.
@@ -246,6 +250,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     output: 'copilot-json',
     mcpServerExtra: { tools: ['*'] },
     accounts: { env: 'COPILOT_HOME', home: '~/.copilot' },
+    // Monthly premium requests, read with the GitHub sign-in (gh).
+    quota: { reader: 'copilot' },
     apiKey: {
       env: 'COPILOT_PROVIDER_API_KEY',
       baseUrlEnv: 'COPILOT_PROVIDER_BASE_URL',

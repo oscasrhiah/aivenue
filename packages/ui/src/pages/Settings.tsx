@@ -66,18 +66,70 @@ function GeneralPane() {
   );
 }
 
-function Meter({ value, label, sub }: { value: number; label: string; sub?: string }) {
-  const v = Math.max(0, Math.min(100, value));
+/** A quota window shown the way the vendors' own apps do: the share that is LEFT, with the used share as detail. */
+function Meter({ used, label, sub, detail }: { used: number; label: string; sub?: string; detail?: string }) {
+  const t = useT();
+  const left = Math.max(0, Math.min(100, 100 - used));
+  const level = left <= 10 ? 'err' : left <= 30 ? 'warn' : '';
   return (
     <div className="meter">
-      <div className="row between small">
+      <div className="row between small gap">
         <span>{label}</span>
-        <span className={cx(v >= 90 ? 'err-text' : v >= 70 ? 'warn-text' : 'muted')}>{v.toFixed(0)}%</span>
+        <span className={cx('nowrap', level === 'err' ? 'err-text' : level === 'warn' ? 'warn-text' : 'muted')}>{t(`剩餘 ${left.toFixed(0)}%`, `${left.toFixed(0)}% left`)}</span>
       </div>
       <div className="meter-track">
-        <div className={cx('meter-fill', v >= 90 ? 'err' : v >= 70 ? 'warn' : '')} style={{ width: `${v}%` }} />
+        <div className={cx('meter-fill', level)} style={{ width: `${left}%` }} />
       </div>
-      {sub && <div className="muted tiny">{sub}</div>}
+      <div className="muted tiny">
+        {t(`已用 ${Math.max(0, Math.min(100, used)).toFixed(0)}%`, `${Math.max(0, Math.min(100, used)).toFixed(0)}% used`)}
+        {sub ? ` · ${sub}` : ''}
+      </div>
+      {detail && <div className="muted tiny">{detail}</div>}
+    </div>
+  );
+}
+
+/** Antigravity's quota needs a Google sign-in of its own; this connects or disconnects it. */
+function AntigravityConnect({ connected, error }: { connected: boolean; error?: string }) {
+  const t = useT();
+  const [waiting, setWaiting] = useState(false);
+  const [authUrl, setAuthUrl] = useState<string>();
+  const [fail, setFail] = useState<string>();
+  const connect = () => {
+    setFail(undefined);
+    hub
+      .call<{ authUrl: string; opened: boolean }>('quota.antigravity.connect')
+      .then((r) => {
+        // Browsers may block the pop-up; the link below always works.
+        if (!r.opened) window.open(r.authUrl, '_blank', 'noopener');
+        setAuthUrl(r.authUrl);
+        setWaiting(true);
+      })
+      .catch((e) => setFail((e as Error).message));
+  };
+  if (connected)
+    return (
+      <button className="link tiny" onClick={() => hub.call('quota.antigravity.disconnect')}>
+        {t('中斷 Google 連線', 'Disconnect Google')}
+      </button>
+    );
+  return (
+    <div className="stack">
+      <div className="muted tiny">
+        {t('Antigravity 的額度要向 Google 查詢。連接一次 Google 帳號（官方登入頁，Aivenue 不經手密碼）後，這裡會顯示每個模型的剩餘額度與重置時間。', "Antigravity's quota comes from Google. Connect your Google account once (Google's own sign-in page; Aivenue never sees your password) to see each model's remaining share and reset time here.")}
+      </div>
+      {(error || fail) && <div className="note warn small">{fail ?? error}</div>}
+      <div className="row gap">
+        <button className="btn small" onClick={connect}>
+          {t('連接 Google 帳號', 'Connect Google account')}
+        </button>
+        {waiting && <span className="muted tiny">{t('請在瀏覽器完成登入，完成後這裡會自動更新。', 'Finish signing in in the browser; this updates by itself.')}</span>}
+        {authUrl && (
+          <a className="link tiny" href={authUrl} target="_blank" rel="noopener noreferrer">
+            {t('沒有跳出登入頁？點這裡開啟 Google 登入頁', 'No sign-in page? Open Google sign-in')}
+          </a>
+        )}
+      </div>
     </div>
   );
 }
@@ -85,7 +137,7 @@ function Meter({ value, label, sub }: { value: number; label: string; sub?: stri
 function UsageCard({ u, name }: { u: ProviderUsage; name: string }) {
   const t = useT();
   const max = Math.max(1, ...u.daily.map((d) => d.input + d.output + d.cached));
-  const windowLabel = (m: number) => (m >= 10080 ? t('每週', 'Weekly') : m >= 1440 ? t(`${Math.round(m / 1440)} 天`, `${Math.round(m / 1440)}-day`) : t(`${Math.round(m / 60)} 小時`, `${Math.round(m / 60)}-hour`));
+  const windowLabel = (m: number) => (m >= 43200 ? t('每月', 'Monthly') : m >= 10080 ? t('每週', 'Weekly') : m >= 1440 ? t(`${Math.round(m / 1440)} 天`, `${Math.round(m / 1440)}-day`) : t(`${Math.round(m / 60)} 小時`, `${Math.round(m / 60)}-hour`));
   const resets = (ts?: number) => (ts ? t(`重置於 ${new Date(ts).toLocaleString()}`, `Resets ${new Date(ts).toLocaleString()}`) : undefined);
   return (
     <div className="ucard">
@@ -98,16 +150,27 @@ function UsageCard({ u, name }: { u: ProviderUsage; name: string }) {
       {u.official ? (
         <div className="stack">
           {u.official.windows.map((w) => (
-            <Meter key={w.minutes} value={w.usedPercent} label={t(`${windowLabel(w.minutes)}額度`, `${windowLabel(w.minutes)} limit`)} sub={resets(w.resetsAt)} />
+            <Meter key={`${w.minutes}-${w.label ?? ''}`} used={w.usedPercent} label={w.label ?? t(`${windowLabel(w.minutes)}額度`, `${windowLabel(w.minutes)} limit`)} sub={resets(w.resetsAt)} detail={w.detail} />
           ))}
           {u.official.limitReached && <div className="note warn small">{t('目前已達用量上限，要等上面的重置時間。', 'The plan limit is reached right now; wait for the reset time above.')}</div>}
           {!!u.official.resetCredits && <div className="muted tiny">{t(`帳號還有 ${u.official.resetCredits} 次免費「額度重置」可用（在 Codex 裡使用）。`, `The account has ${u.official.resetCredits} free limit reset(s) left (use them in Codex).`)}</div>}
           <div className="muted tiny">
-            {u.official.source === 'codex-live'
+            {u.official.source === 'antigravity-live'
+              ? t(`來源：Google 即時查詢${u.official.account ? `（${u.official.account}）` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Google${u.official.account ? ` (${u.official.account})` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              : u.official.source === 'claude-live'
+              ? t(`來源：Claude 即時查詢（與 Claude Code 的 /usage 相同），${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Claude (same as /usage in Claude Code), ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              : u.official.source === 'copilot-live'
+              ? t(`來源：GitHub 即時查詢${u.official.account ? `（${u.official.account}）` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from GitHub${u.official.account ? ` (${u.official.account})` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              : u.official.source === 'codex-live'
               ? t(`來源：Codex 即時查詢（${new Date(u.official.updatedAt).toLocaleTimeString()}）`, `Source: live from Codex (${new Date(u.official.updatedAt).toLocaleTimeString()})`)
               : t(`來源：Codex 本機紀錄，最後一次執行時的狀態（${new Date(u.official.updatedAt).toLocaleString()}）`, `Source: Codex local log, as of its last run (${new Date(u.official.updatedAt).toLocaleString()})`)}
           </div>
+          {u.providerId === 'antigravity' && <AntigravityConnect connected />}
         </div>
+      ) : u.providerId === 'antigravity' ? (
+        <AntigravityConnect connected={false} error={u.officialError} />
+      ) : u.officialError ? (
+        <div className="note warn small">{u.officialError}</div>
       ) : (
         <div className="muted tiny">{t('此 CLI 沒有在本機提供官方剩餘額度，以下為 Aivenue 統計的用量。', 'This CLI does not expose its plan quota locally; below is usage tracked by Aivenue.')}</div>
       )}
@@ -178,8 +241,8 @@ function UsagePane() {
           <h2>{t('用量', 'Usage')}</h2>
           <p className="muted">
             {t(
-              'Codex 的方案額度是直接向 Codex 即時查詢；其他家沒有公開的剩餘額度查詢方式，顯示的是 Aivenue 統計的每次執行 tokens 與費用。開啟這頁時會立即更新，之後每分鐘自動更新。',
-              'Codex plan limits are read live from Codex; other vendors have no public quota lookup, so their numbers are the tokens and cost Aivenue tracked per run. Refreshed when you open this page and every minute after.',
+              '額度和官方 App 一樣顯示「剩餘」百分比。Claude Code 用它自己的登入查詢 5 小時與每週額度；Codex 直接向 Codex 即時查詢；Antigravity 連接 Google 帳號後向 Google 查詢各組模型的額度；GitHub Copilot 用已登入的 GitHub 帳號查詢每月進階請求；其他家沒有公開的查詢方式，顯示的是 Aivenue 統計的每次執行 tokens 與費用。開啟這頁時會立即更新，之後每分鐘自動更新。',
+              "Quotas show the share LEFT, like the vendors' own apps. Claude Code's 5-hour and weekly limits are read with its own sign-in; Codex is read live from Codex; Antigravity per model group from Google once you connect a Google account; GitHub Copilot's monthly premium requests with your GitHub sign-in; other vendors have no public lookup, so their numbers are the tokens and cost Aivenue tracked per run. Refreshed when you open this page and every minute after.",
             )}
           </p>
         </div>

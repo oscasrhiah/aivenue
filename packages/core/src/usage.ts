@@ -4,6 +4,9 @@ import * as path from 'node:path';
 import type { ProviderSpec, ProviderUsage, TokenUsage, UsageTotals } from './types';
 import { childEnv, resolveCommand, spawnResolved, specCommand } from './proc';
 import { accountEnv } from './providers/registry';
+import type { AntigravityQuota } from './antigravityQuota';
+import { readClaudeQuota } from './claudeQuota';
+import { readCopilotQuota } from './copilotQuota';
 
 interface Stored {
   /** providerId -> YYYY-MM-DD -> totals */
@@ -30,7 +33,11 @@ export class UsageTracker {
   private file: string;
   private data: Stored = { days: {}, limits: {} };
   private timer?: NodeJS.Timeout;
-  private official = new Map<string, { value: ProviderUsage['official']; readAt: number }>();
+  private official = new Map<string, { value: ProviderUsage['official']; readAt: number; error?: string }>();
+  /** Reads Antigravity's quota from Google once the user connected an account. */
+  antigravity?: AntigravityQuota;
+  /** The GitHub sign-in token (gh), for Copilot's quota. */
+  githubToken?: () => Promise<string | undefined>;
 
   constructor(dataDir: string, private onChange: () => void) {
     this.file = path.join(dataDir, 'usage.json');
@@ -108,6 +115,7 @@ export class UsageTracker {
         // A limit hit older than a week is no longer interesting.
         limitHit: limit && Date.now() - limit.at < 7 * 86400000 ? limit : undefined,
         official: official[i],
+        officialError: this.official.get(spec.id)?.error,
         checkedAt: Date.now(),
       };
     });
@@ -117,11 +125,19 @@ export class UsageTracker {
     const cached = this.official.get(spec.id);
     if (!refresh && cached && Date.now() - cached.readAt < 120000) return cached.value;
     let value: ProviderUsage['official'];
-    if (spec.quota?.reader === 'codex-sessions') {
+    let error: string | undefined;
+    if (spec.quota?.reader === 'antigravity') {
+      value = await (this.antigravity?.read() ?? Promise.resolve(undefined)).catch((e) => ((error = (e as Error).message), undefined));
+    } else if (spec.quota?.reader === 'claude') {
+      value = await readClaudeQuota(accountEnv(spec).CLAUDE_CONFIG_DIR).catch((e) => ((error = (e as Error).message), undefined));
+    } else if (spec.quota?.reader === 'copilot') {
+      // The gh sign-in belongs to the main account; extra Copilot accounts have no token Aivenue can read.
+      value = spec.accountOf ? undefined : await readCopilotQuota(await this.githubToken?.()).catch((e) => ((error = (e as Error).message), undefined));
+    } else if (spec.quota?.reader === 'codex-sessions') {
       // Ask Codex for the live numbers; its session logs only change when Codex runs.
       value = (await readCodexQuotaLive(spec).catch(() => undefined)) ?? safe(() => readCodexQuota(accountEnv(spec).CODEX_HOME));
     }
-    this.official.set(spec.id, { value, readAt: Date.now() });
+    this.official.set(spec.id, { value, readAt: Date.now(), error });
     return value;
   }
 }

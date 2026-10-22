@@ -9,6 +9,7 @@ import { AttachmentStore } from './attachments';
 import type { AppSettings, Attachment, CapabilitiesConfig, HostInfo, InstructionRole, McpServerConfig, ProviderSpec, PushMessage, RpcRequest, RpcResponse, WorkflowConfig, WorkflowPreset } from './types';
 import { CapabilityStore } from './capabilities';
 import { GithubService } from './github';
+import { AntigravityQuota } from './antigravityQuota';
 import { probeMcpServer } from './mcpProbe';
 import { MCP_PRESETS } from './mcpPresets';
 import { loadCatalog } from './catalog';
@@ -122,6 +123,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       .then((data) => push({ topic: 'usage', data }))
       .catch(() => undefined);
   const usage = new UsageTracker(dataDir, () => void pushUsage());
+  usage.antigravity = new AntigravityQuota(secrets, () => void pushUsage(true));
   // Official quotas change even when nothing runs here (other devices, the CLI itself): re-read every 5 minutes.
   const usageTimer = setInterval(() => void pushUsage(true), 5 * 60 * 1000);
   usageTimer.unref();
@@ -137,6 +139,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   };
   // GitHub: the CLI's browser sign-in serves git push, `gh` and the GitHub MCP server alike.
   const github = new GithubService(registry, (data) => push({ topic: 'github', data }));
+  usage.githubToken = () => github.getToken();
   capabilities.ghToken = () => github.getToken();
   void github.check().catch(() => undefined);
   const githubMcpOn = () => capabilities.get().mcpServers.some((s) => s.id === GITHUB_MCP_ID && s.enabled);
@@ -175,6 +178,13 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return v;
     },
     'usage.get': (p?: { refresh?: boolean }) => usage.summary(registry.specs(), { refresh: p?.refresh }),
+    // Antigravity's quota needs a Google sign-in of its own (the CLI's stays in the OS keyring).
+    'quota.antigravity.status': () => usage.antigravity!.status(),
+    'quota.antigravity.connect': () => usage.antigravity!.connect(opts.hooks.openExternal),
+    'quota.antigravity.disconnect': async () => {
+      await usage.antigravity!.disconnect();
+      void pushUsage(true);
+    },
     'attachments.upload': (p: { name: string; mime: string; data: string }) => attachments.saveUpload(p.name, p.mime, p.data),
     'attachments.pick': async () => {
       const files = await opts.hooks.pickFiles?.();

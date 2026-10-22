@@ -8,6 +8,7 @@
 - 對外動作的類型會自動正規化（例如「git push」視為推送），核准卡片與預先核准都能正確對應。
 - **VS Code 顧問按鈕**：VS Code 的輸入框也能直接切換顧問模式（只顯示 💡 圖示，選單在窄面板中會自動對齊）。
 - **Claude 原生顧問看得見**：Claude Code 請教顧問的過程會顯示在對話中（「請教顧問（Claude 原生）」），顧問用掉的 token 也會算進統計。
+- **官方額度即時查詢**：用量頁和官方 App 一樣顯示「剩餘 %」（修正 Codex 顯示成已用、數字對不上的問題）。新增 Claude Code（5 小時、每週，沿用 Claude Code 的登入）、GitHub Copilot（每月進階請求，沿用 GitHub 登入）與 Antigravity（連接 Google 帳號後顯示 Claude／GPT-OSS、Gemini Pro、Gemini Flash 各組額度，已用完的模型也會正確顯示 0%）。自動指派會參考這些額度。
 - **說明頁**：README 加上下載按鈕、實際範例的截圖與示範影片、可直接複製的範例任務。
 
 ## 0.1.4 - 2026-10-23
