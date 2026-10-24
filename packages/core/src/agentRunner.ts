@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import type { AgentEvent, ArgGroup, ModeKey, PermissionLevel, ProviderSpec } from './types';
-import { childEnv, killTree, resolveCommand, spawnResolved, specCommand } from './proc';
+import { childEnv, killTree, resolveCommand, spawnResolved, specCommand, takesEffort } from './proc';
 import { createParser, type EventDraft } from './providers/parsers';
 import { L } from './i18n';
 import type { ResolvedMcpServer } from './capabilities';
@@ -191,7 +191,8 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
   const tokens: Record<string, string | undefined> = {
     cwd: o.cwd,
     model: o.model,
-    effort: o.effort,
+    // Left out for models that refuse it (e.g. Claude through Antigravity), whatever was saved or assigned.
+    effort: takesEffort(spec, o.model) ? o.effort : undefined,
     sessionId: canResume ? o.resumeSessionId : undefined,
     newSessionId: canResume ? undefined : randomUUID(),
     prompt: spec.run.prompt === 'arg' ? o.prompt : undefined,

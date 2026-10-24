@@ -165,6 +165,16 @@ export function specCommand(spec: { command: string; commandPaths?: string[] }):
   return spec.command;
 }
 
+/** Whether the CLI accepts a reasoning effort for this model (some models behind one CLI refuse the flag). */
+export function takesEffort(spec: { noEffortModels?: string }, model?: string): boolean {
+  if (!spec.noEffortModels || !model) return true;
+  try {
+    return !new RegExp(spec.noEffortModels, 'i').test(model);
+  } catch {
+    return true;
+  }
+}
+
 function readHead(file: string): string {
   try {
     const fd = fs.openSync(file, 'r');

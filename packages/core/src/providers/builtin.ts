@@ -145,6 +145,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     mcpRegistration: { file: '~/.gemini/config/mcp_config.json', permissions: { file: '~/.gemini/antigravity-cli/settings.json', allow: ['mcp(aivenue/*)'] } },
     modelSource: { type: 'command', args: ['models'] },
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    // Claude and GPT-OSS through Antigravity refuse --effort (Gemini's level is part of its model name).
+    noEffortModels: '^(claude|gpt-oss)',
     capabilities: { resume: true, mcp: true },
     profile: { plan: 5, review: 5, code: 5, speed: 4, vision: true, pdf: true },
   },

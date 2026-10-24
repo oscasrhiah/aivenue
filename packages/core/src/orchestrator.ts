@@ -168,6 +168,12 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 /** Most sub-agents one conversation may start in total. */
 const MAX_SUBAGENTS = 40;
 
+/** Rounds of sub-agent fact-finding an advisor goes through before it may read the code itself (the user can change it). */
+const ADVISOR_FACT_ROUNDS = 3;
+
+/** The advisor's round limit from its settings; 0 means it never reads the code itself. */
+const factRoundsOf = (cfg?: { factRounds?: number }) => (cfg?.factRounds === 0 ? 0 : Math.min(50, Math.max(1, Math.round(cfg?.factRounds ?? ADVISOR_FACT_ROUNDS))));
+
 export class Orchestrator {
   readonly runs = new Map<string, WorkflowRun>();
   private aborts = new Map<string, AbortController>();
@@ -175,6 +181,9 @@ export class Orchestrator {
   private sessions = new Map<string, Session>();
   private submissions = new Map<string, Submission>();
   private agentDone = new Map<string, Promise<void>>();
+  /** Fact-finding rounds per advisor, and which round each of its sub-agents belongs to. */
+  private factRounds = new Map<string, { round: number; lastSpawnAt: number }>();
+  private factRoundOf = new Map<string, number>();
   private decisionWaiters = new Map<string, (d: { optionId: string; text?: string }) => void>();
   private pushTimers = new Map<string, NodeJS.Timeout>();
 
@@ -1187,9 +1196,9 @@ export class Orchestrator {
         info.role === 'advisor' || resume
           ? ''
           : this.crossAdvisor(run)
-            ? P.advisorHint(`${this.providerName(adv!.provider!)}${adv!.model ? ` (${adv!.model})` : ''}`, Math.max(1, adv!.maxCalls ?? 5))
+            ? P.advisorHint(`${this.providerName(adv!.provider!)}${adv!.model ? ` (${adv!.model})` : ''}`, Math.max(1, adv!.maxCalls ?? 5), this.canSpawn(run, info))
             : nativeAdvisor
-              ? '\nADVISOR: Your built-in advisor tool is enabled. Consult it before locking in a plan, when the same error shows up twice, and before declaring uncertain work done.'
+              ? '\nADVISOR: Your built-in advisor tool is enabled. It runs a more expensive model, so use it only when you are genuinely stuck after investigating and trying yourself, or for a high-stakes decision the facts do not settle.'
               : '';
       // Extra folders are named every turn: they can be added while the conversation runs.
       const extraDirs = (run.config.extraDirs ?? []).filter((d) => fs.existsSync(d));
@@ -1361,7 +1370,8 @@ export class Orchestrator {
         this.updateOutputs(run);
       });
     this.agentDone.set(child.id, done);
-    return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default' });
+    const round = parent.role === 'advisor' ? this.nextFactRound(run, parent, child) : undefined;
+    return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default', ...(round ? { fact_finding_round: round } : {}) });
   }
 
   private async waitSubagent(run: WorkflowRun, args: Record<string, unknown>): Promise<string> {
@@ -1378,10 +1388,40 @@ export class Orchestrator {
       status: child.status,
       ...(finished ? { result: (child.finalText ?? '').slice(0, 20000), error: child.error } : { activity: child.activity, hint: 'Still running; call wait_subagent again.' }),
       files_changed: child.stats.filesChanged,
+      ...(finished ? this.factRoundNote(run, child) : {}),
     });
   }
 
   // ---------- advisor ----------
+
+  /**
+   * An advisor's sub-agents come in rounds: a spawn after one of its earlier sub-agents reported back starts a new round
+   * (the advisor read the results and digs again); spawns in a row before that are one parallel round.
+   */
+  private nextFactRound(run: WorkflowRun, advisor: AgentRunInfo, child: AgentRunInfo): number {
+    const st = this.factRounds.get(advisor.id) ?? { round: 0, lastSpawnAt: 0 };
+    const reported = Object.values(run.agents).some((a) => a.parentId === advisor.id && a.id !== child.id && a.endedAt && a.endedAt > st.lastSpawnAt);
+    if (!st.round || reported) st.round++;
+    st.lastSpawnAt = now();
+    this.factRounds.set(advisor.id, st);
+    this.factRoundOf.set(child.id, st.round);
+    return st.round;
+  }
+
+  /** Told to the advisor with each finished sub-agent report: which round it was, and whether it may look itself now. */
+  private factRoundNote(run: WorkflowRun, child: AgentRunInfo): Record<string, unknown> {
+    const round = this.factRoundOf.get(child.id);
+    if (!round) return {};
+    const limit = factRoundsOf(run.config.advisor);
+    return {
+      fact_finding_round: round,
+      advisor_note: !limit
+        ? `Round ${round}: if this report is incomplete, vague or doubtful, send a sub-agent again with a sharper task; you do not read the code yourself.`
+        : round >= limit
+          ? `This was fact-finding round ${round}. If the reports still do not give you the fact you need, you may now read those specific files yourself (read-only, only what is missing).`
+          : `Round ${round} of ${limit}: if this report is incomplete, vague or doubtful, send a sub-agent again with a sharper task instead of reading the code yourself.`,
+    };
+  }
 
   /** Cross-vendor advisor mode is on and has someone to ask. */
   private crossAdvisor(run: WorkflowRun): boolean {
@@ -1397,6 +1437,7 @@ export class Orchestrator {
     const cfg = run.config.advisor!;
     const question = String(args.question ?? '').trim();
     if (!question) throw new Error('question is required');
+    const context = String(args.context ?? '').trim().slice(0, 30000);
     const used = Object.values(run.agents).filter((a) => a.role === 'advisor').length;
     const max = Math.max(1, cfg.maxCalls ?? 5);
     if (used >= max) throw new Error(`The advisor was already consulted ${used} times in this conversation (limit ${max}). Continue on your own.`);
@@ -1407,13 +1448,16 @@ export class Orchestrator {
       model: cfg.model || def.model,
       effort: cfg.effort || def.effort,
       parentId: asker.id,
-      depth: asker.depth + 1,
+      // Same level as the asker: the advisor works on its behalf, so it may send helpers just as the asker could.
+      depth: asker.depth,
       stage: asker.stage,
       round: asker.round,
       task: question.slice(0, 400),
     });
     this.log(run, L(`${this.label(asker)} 請教顧問 ${this.providerName(cfg.provider!)}`, `${this.label(asker)} consulted the advisor ${this.providerName(cfg.provider!)}`));
-    const prompt = P.advisorPrompt(run.config, agentLabel(asker), question, overview(run), formatTranscript(this.events(run.id, asker.id), { budget: 200000 }));
+    // Only the latest part of the asker's transcript: the question and context carry the rest, and the advisor is the priciest reader.
+    const recent = formatTranscript(this.events(run.id, asker.id), { budget: context ? 12000 : 30000 });
+    const prompt = P.advisorPrompt(run.config, agentLabel(asker), question, context, overview(run), recent, this.subBlock(run, child.depth), factRoundsOf(cfg));
     const done = this.invokePausable(run, child, prompt, 'readonly')
       .then((res) => {
         child.status = this.aborted(run) ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';

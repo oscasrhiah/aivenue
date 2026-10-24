@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { ProviderInfo } from '../../../core/src/types';
+import type { ModelInfo, ProviderInfo } from '../../../core/src/types';
 import { useModels } from '../api';
 import { useT } from '../i18n';
 
@@ -33,7 +33,11 @@ export function ModelPicker({
   const known = models.some((m) => m.id === model);
   const [custom, setCustom] = useState(!!model && !known && models.length > 0);
   const current = models.find((m) => m.id === (model || provider?.defaultModel));
-  const efforts = current?.efforts?.length ? current.efforts : provider?.spec.efforts ?? [];
+  // A listed model's own levels win, even none (e.g. Claude through Antigravity takes no effort); a typed-in model gets the CLI's.
+  const effortsOf = (m?: ModelInfo) => (m ? m.efforts ?? provider?.spec.efforts ?? [] : provider?.spec.efforts ?? []);
+  const efforts = effortsOf(current);
+  // Picking a model that takes no effort drops the one chosen before.
+  const pick = (next?: string) => onChange({ model: next, effort: effortsOf(models.find((m) => m.id === (next || provider?.defaultModel))).length ? effort : undefined });
   const showCustom = custom || (!!model && !known && models.length > 0) || models.length === 0;
   return (
     <div className="model-picker">
@@ -51,7 +55,7 @@ export function ModelPicker({
           value={model ?? ''}
           onChange={(e) => {
             if (e.target.value === CUSTOM) return setCustom(true);
-            onChange({ model: e.target.value || undefined, effort });
+            pick(e.target.value || undefined);
           }}
         >
           <option value="">{inheritLabel ?? t('預設模型', 'Default model')}</option>

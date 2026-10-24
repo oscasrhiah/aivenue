@@ -188,30 +188,55 @@ export function resumeAfterPause(): string {
 
 // ---------- Advisor ----------
 
-export function advisorPrompt(cfg: WorkflowConfig, askerLabel: string, question: string, overview: string, transcript: string): string {
+/**
+ * The advisor is a consultant: a stronger (pricier) model that judges from what the asker tells it. Exploring the code
+ * is the cheap agents' job, so when facts are missing it sends sub-agents to fetch them instead of reading files itself.
+ */
+export function advisorPrompt(cfg: WorkflowConfig, askerLabel: string, question: string, context: string, overview: string, recent: string, sub: string, factRounds: number): string {
   return [
-    'You are the ADVISOR in an Aivenue multi-agent workflow: a stronger model that another agent consults when it is stuck.',
+    'You are the ADVISOR in an Aivenue multi-agent workflow: a senior consultant that another agent asks when it is stuck. You are the most expensive model here, so spend your effort on judgment, not on legwork.',
     `Working directory: ${cfg.cwd}`,
-    'Do NOT modify any files. You may read files or run read-only commands to check facts.',
-    'Give concrete, prioritized advice the asking agent can act on right away: what is wrong, what to do next, what to avoid. Say so plainly if its approach is fine.',
+    '',
+    'HOW TO WORK:',
+    '- Answer from what you are given: the question, the context the asker wrote, the workflow so far and the latest part of its transcript. That is usually enough.',
+    sub
+      ? factRounds > 0
+        ? `- Do NOT browse the code yourself (no reading files, searching or running commands) while sub-agents can fetch the facts. The one exception: after ${factRounds} round${factRounds > 1 ? 's' : ''} of sub-agents still have not given you a fact you cannot do without, you may read those specific files yourself, read-only and only what is missing; say in your advice which fact the sub-agents could not deliver. Aivenue tells you the round number in each spawn/wait result. Never modify anything.`
+        : '- Do NOT browse the code yourself (no reading files, searching or running commands), however many rounds it takes: the facts always come from sub-agents. Never modify anything.'
+      : '- Do NOT browse the code yourself: no reading files, searching or running commands. Never modify anything.',
+    sub
+      ? [
+          '- If the context is empty or not enough to answer, that is exactly when to use sub-agents: do not send the asker away to look things up itself. Only if a fact you cannot do without is missing, delegate the legwork: start read-only sub-agents with `spawn_subagent` (mode "readonly"), each with one narrow fact-finding task (what to look at, what to find out, and to reply briefly with findings, quoting the code with file:line; no fixes). Run independent questions in parallel and collect them with `wait_subagent`.',
+          '- Check every report before you rely on it: does it answer exactly what you asked, quote the code, and agree with the other facts you have? If it is incomplete, vague, contradicts something or looks wrong, send a sub-agent again with a sharper task that says what was missing or doubtful. Repeat until the facts are solid, then answer; do not keep digging once you can answer.',
+        ].join('\n')
+      : '- If a fact you need is missing, do not go looking for it: answer with what you have, state your assumption, and name exactly what the asker should check (which file or command) to confirm it.',
+    '- Then give concrete, prioritized advice the asking agent can act on right away: what is wrong, what to do next, what to avoid. Say so plainly if its approach is fine.',
     LANG,
+    sub,
     '',
     `QUESTION FROM ${askerLabel}:`,
     question,
     '',
+    `CONTEXT FROM ${askerLabel}:`,
+    context || '(none given; rely on its latest transcript below)',
+    '',
     'WORKFLOW SO FAR:',
     overview,
     '',
-    `FULL TRANSCRIPT OF ${askerLabel}:`,
-    transcript,
+    `LATEST PART OF ${askerLabel}'S TRANSCRIPT:`,
+    recent,
     '',
     'Reply with your advice only.',
   ].join('\n');
 }
 
 /** Told to every agent when an advisor is available. */
-export function advisorHint(who: string, max: number): string {
-  return `\nADVISOR: ${who} is available as an advisor. Call the Aivenue tool \`ask_advisor\` {question} before locking in a plan, when the same error shows up twice, or before declaring uncertain work done. At most ${max} consultations per conversation, so ask focused questions.`;
+export function advisorHint(who: string, max: number, canSpawn: boolean): string {
+  return [
+    '',
+    `ADVISOR: ${who} is available as an advisor through the Aivenue tool \`ask_advisor\` {question, context}. It is the most expensive model in this workflow, so it is a last resort: ask only when you are genuinely stuck, i.e. you investigated${canSpawn ? ' (yourself or with read-only sub-agents fetching the facts)' : ''} and tried fixes and still cannot resolve it, or you face a high-stakes decision you cannot settle from the facts. Do not ask it for routine work or for things you can find out by reading the code.`,
+    `${canSpawn ? 'Do the legwork before asking: send read-only sub-agents to look things up and check their reports. ' : ''}The advisor does not explore the code itself, so in \`context\` say where you are, what you tried and what happened (exact errors), and the relevant code or file:line. At most ${max} consultations per conversation.`,
+  ].join('\n');
 }
 
 export function subagentPrompt(cwd: string, task: string, parentLabel: string, sub: string): string {

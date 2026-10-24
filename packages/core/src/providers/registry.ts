@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ArgGroup, AuthMode, CatalogProvider, ModelInfo, ProviderInfo, ProviderSpec } from '../types';
-import { capture, childPath, openTerminal, resolveCommand, specCommand, terminalLine, type TerminalRequest } from '../proc';
+import { capture, childPath, openTerminal, resolveCommand, specCommand, takesEffort, terminalLine, type TerminalRequest } from '../proc';
 import type { SecretStore } from '../secrets';
 import { L } from '../i18n';
 import { BUILTIN_PROVIDERS, RETIRED_BUILTINS } from './builtin';
@@ -301,6 +301,8 @@ export class ProviderRegistry {
       // fall back to the preset list
     }
     if (!models.length) models = fallback;
+    // Models that refuse a reasoning effort offer none, so the UI shows no effort choice for them.
+    models = models.map((m) => (takesEffort(spec, m.id) ? m : { ...m, efforts: [], defaultEffort: undefined }));
     this.modelCache.set(id, { at: Date.now(), models });
     return models;
   }

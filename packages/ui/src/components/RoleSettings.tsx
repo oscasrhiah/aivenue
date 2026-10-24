@@ -193,7 +193,7 @@ const advisorModeHint = (t: ReturnType<typeof useT>, m: AdvisorConfig['mode']) =
   ({
     off: t('不使用顧問。', 'No advisor.'),
     claude: t('只對 Claude Code 的 agent 生效：使用 Claude 官方的 advisor，由 Claude 自己決定何時請教更強的模型。建議內容是加密的，看不到。', "Only for Claude Code agents: Claude's official advisor, which decides on its own when to consult a stronger model. The advice is encrypted and not shown."),
-    cross: t('每一家的 agent 卡住時都能呼叫 ask_advisor，請教你指定的模型（可以跨家，例如 Codex 做事、Claude Opus 當顧問）。建議會顯示在對話中並記進共用筆記。每次請教都會把整段過程交給顧問，比較耗額度。', "Any vendor's agent can call ask_advisor when stuck and consult the model you pick (cross-vendor, e.g. Codex works while Claude Opus advises). The advice shows in the conversation and becomes a shared note. Each consultation sends the whole transcript to the advisor, so it uses more quota."),
+    cross: t('agent 真的卡住時才呼叫 ask_advisor，請教你指定的模型（可以跨家，例如 Codex 做事、Claude Opus 當顧問）。顧問只負責判斷：查資料交給 sub agent，建議會顯示在對話中並記進共用筆記。', "Agents call ask_advisor only when truly stuck, consulting the model you pick (cross-vendor, e.g. Codex works while Claude Opus advises). The advisor only judges: sub-agents fetch the facts. The advice shows in the conversation and becomes a shared note."),
   })[m];
 
 /** Picking a mode fills in sensible defaults (Opus for Claude's advisor; a signed-in provider, Claude first, for cross mode). */
@@ -234,9 +234,55 @@ function AdvisorOptions({ value, onChange, providers, disabled }: { value: Advis
           <input disabled={disabled} type="number" min={1} max={20} value={value.maxCalls ?? 5} onChange={(e) => onChange({ ...value, maxCalls: Math.max(1, Number(e.target.value) || 1) })} />
         </div>
         <div className="muted tiny">{t('每段對話的請教次數上限。', 'Consultations allowed per conversation.')}</div>
+        <FactRounds value={value} onChange={onChange} disabled={disabled} />
       </>
     );
   return null;
+}
+
+/**
+ * How many rounds of sub-agent fact-finding the advisor goes through before it may read the code itself:
+ * the default (3), a number of the user's own, or unlimited (sub-agents only).
+ */
+function FactRounds({ value, onChange, disabled }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; disabled?: boolean }) {
+  const t = useT();
+  const kind = value.factRounds === undefined ? 'default' : value.factRounds === 0 ? 'unlimited' : 'custom';
+  return (
+    <>
+      <div className="kv">
+        <label>{t('查證輪數', 'Fact-finding rounds')}</label>
+        <div className="row gap">
+          <select
+            disabled={disabled}
+            value={kind}
+            onChange={(e) => onChange({ ...value, factRounds: e.target.value === 'default' ? undefined : e.target.value === 'unlimited' ? 0 : value.factRounds || 5 })}
+          >
+            <option value="default">{t('預設（3 輪）', 'Default (3 rounds)')}</option>
+            <option value="custom">{t('自訂輪數', 'Custom')}</option>
+            <option value="unlimited">{t('無限', 'Unlimited')}</option>
+          </select>
+          {kind === 'custom' && (
+            <input
+              disabled={disabled}
+              type="number"
+              min={1}
+              max={50}
+              value={value.factRounds}
+              onChange={(e) => onChange({ ...value, factRounds: Math.min(50, Math.max(1, Math.round(Number(e.target.value)) || 1)) })}
+            />
+          )}
+        </div>
+      </div>
+      <div className="muted tiny">
+        {kind === 'unlimited'
+          ? t('顧問永遠不自己讀檔，資料一律由 sub agent 查，回報不夠就一直派到查清楚為止。', 'The advisor never reads the code itself: sub-agents fetch every fact, sent again until the facts are solid.')
+          : t(
+              `顧問先派 sub agent 查資料，回報不夠就再派；連續 ${value.factRounds || 3} 輪都查不到需要的資訊時，才自己讀那幾個檔案。`,
+              `The advisor sends sub-agents to fetch facts and sends them again when a report falls short; only after ${value.factRounds || 3} rounds without the fact it needs does it read those files itself.`,
+            )}
+      </div>
+    </>
+  );
 }
 
 /** Advisor switch right in the composer, so it is seen without opening the settings window. */

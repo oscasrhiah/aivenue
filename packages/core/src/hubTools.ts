@@ -137,10 +137,13 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   ask_advisor: {
     name: 'ask_advisor',
     description:
-      'Consult a stronger advisor model when you are stuck: before locking in a plan, when the same error shows up twice, or before declaring uncertain work done. The advisor sees the goal, the plan, the reviews and your full transcript, and replies with advice (it does not change files). Returns the advice, or an advisor_id to pass to wait_subagent if it needs more time. Calls per conversation are limited, so ask focused questions.',
+      'Consult the advisor, the most expensive model in the workflow, only as a last resort: when you investigated (yourself or with sub-agents) and tried, and are still genuinely stuck, or face a high-stakes decision the facts do not settle. The advisor is a consultant, not a second worker: it does not explore the code itself, so put what it needs in `context` (where you are, what you tried, the exact error, the relevant code or file:line). It sees the goal, the plan, the reviews and only the latest part of your transcript, and replies with advice (it does not change files). Returns the advice, or an advisor_id to pass to wait_subagent if it needs more time. Calls per conversation are limited, so ask focused questions.',
     inputSchema: {
       type: 'object',
-      properties: { question: { type: 'string', description: 'What you need advice on, with the relevant details.' } },
+      properties: {
+        question: { type: 'string', description: 'The one decision or problem you need advice on.' },
+        context: { type: 'string', description: 'What you are working on, what you already tried and what happened (exact error messages), and the relevant code snippets or file:line references.' },
+      },
       required: ['question'],
     },
   },

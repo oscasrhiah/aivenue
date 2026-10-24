@@ -123,6 +123,8 @@ export interface ProviderSpec {
   defaultModel?: string;
   /** Reasoning-effort levels the CLI accepts ({effort}). */
   efforts?: string[];
+  /** Models (regex on the model id) that take no reasoning effort: {effort} is left out of their command line. */
+  noEffortModels?: string;
   /** Where to discover the available models: Codex's local cache, a CLI command that prints them, or the provider catalog. */
   modelSource?: { type: 'codex-cache' } | { type: 'command'; args: string[] } | { type: 'catalog'; providerId: string };
   /** Set for providers added from the catalog (run through OpenCode). */
@@ -426,6 +428,8 @@ export interface AdvisorConfig {
   effort?: string;
   /** cross mode: consultations allowed per conversation (default 5). */
   maxCalls?: number;
+  /** cross mode: rounds of sub-agent fact-finding before the advisor may read the code itself (default 3; 0 = never, sub-agents only). */
+  factRounds?: number;
 }
 
 /** An external action (push, PR, release…) the user denied. */
