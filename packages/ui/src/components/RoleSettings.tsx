@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextSharing, PermissionLevel, ProviderInfo, RoleConfig, StageConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
 import { ModelPicker } from './ModelPicker';
 import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } from './Safety';
-import { hub } from '../api';
+import { hub, useModels } from '../api';
+import { advisorPairing } from '../../../core/src/advisorPairing';
 import { useT } from '../i18n';
 import { cx, providerColor, providerName } from '../util';
 
@@ -95,7 +96,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
         📁 {folder}
       </button>
       <PermissionButton permission={permission} isolation={draft.isolation === 'worktree'} onChange={onSafety} onOpen={onOpen} />
-      <AdvisorButton value={draft.advisor ?? { mode: 'off' }} providers={providers} onChange={onAdvisor} onOpen={onOpen} />
+      <AdvisorButton value={draft.advisor ?? { mode: 'off' }} providers={providers} onChange={onAdvisor} onOpen={onOpen} mains={claudeMains(t, draft, providers, preview)} />
       <button className="pill-btn wf-btn" onClick={onOpen} title={details.join('\n')}>
         <span className="wf-gear">⚙</span>
         <span className="wf-hint wf-long">{long}</span>
@@ -204,18 +205,14 @@ function withMode(value: AdvisorConfig, m: AdvisorConfig['mode'], providers: Pro
 }
 
 /** Mode-specific options: Claude's advisor model, or who advises and how often. */
-function AdvisorOptions({ value, onChange, providers, disabled }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; providers: ProviderInfo[]; disabled?: boolean }) {
+function AdvisorOptions({ value, onChange, providers, disabled, mains }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; providers: ProviderInfo[]; disabled?: boolean; mains?: ClaudeMain[] }) {
   const t = useT();
   if (value.mode === 'claude')
     return (
-      <div className="kv">
-        <label>{t('顧問模型', 'Advisor model')}</label>
-        <select disabled={disabled} value={value.claudeModel ?? 'opus'} onChange={(e) => onChange({ ...value, claudeModel: e.target.value })}>
-          <option value="opus">Opus</option>
-          <option value="fable">Fable</option>
-          <option value="sonnet">Sonnet</option>
-        </select>
-      </div>
+      <>
+        <ClaudeAdvisorModel value={value} onChange={onChange} disabled={disabled} />
+        <AdvisorPairingNote advisor={value.claudeModel || 'opus'} mains={mains ?? []} />
+      </>
     );
   if (value.mode === 'cross')
     return (
@@ -238,6 +235,124 @@ function AdvisorOptions({ value, onChange, providers, disabled }: { value: Advis
       </>
     );
   return null;
+}
+
+const CUSTOM_ADVISOR = '__custom__';
+const ADVISOR_ALIASES = ['opus', 'fable', 'sonnet'];
+
+/**
+ * Claude's advisor model: an alias (follows Claude Code's newest version of that family), a full version from Claude
+ * Code's model list, or one typed in. Models that can never advise (Haiku 4.5) are left out.
+ */
+function ClaudeAdvisorModel({ value, onChange, disabled }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; disabled?: boolean }) {
+  const t = useT();
+  const { models } = useModels('claude');
+  const versions = models
+    .map((m) => m.id)
+    .filter((id) => /^claude-/i.test(id) && advisorPairing('claude-haiku-4-5', id) !== 'not-advisor' && advisorPairing('claude-haiku-4-5', id) !== 'unknown');
+  const current = value.claudeModel || 'opus';
+  const [custom, setCustom] = useState(!ADVISOR_ALIASES.includes(current) && !versions.includes(current));
+  const showCustom = custom || (!ADVISOR_ALIASES.includes(current) && !versions.includes(current) && versions.length > 0);
+  const alias = (a: string) => t(`${a[0].toUpperCase()}${a.slice(1)}（最新版）`, `${a[0].toUpperCase()}${a.slice(1)} (latest)`);
+  return (
+    <div className="kv">
+      <label>{t('顧問模型', 'Advisor model')}</label>
+      {showCustom ? (
+        <div className="row gap">
+          <input disabled={disabled} placeholder="claude-opus-5-5" value={value.claudeModel ?? ''} onChange={(e) => onChange({ ...value, claudeModel: e.target.value.trim() || undefined })} />
+          <button className="link tiny" disabled={disabled} onClick={() => (setCustom(false), onChange({ ...value, claudeModel: 'opus' }))}>
+            {t('改用清單', 'Pick from list')}
+          </button>
+        </div>
+      ) : (
+        <select
+          disabled={disabled}
+          value={current}
+          onChange={(e) => (e.target.value === CUSTOM_ADVISOR ? setCustom(true) : onChange({ ...value, claudeModel: e.target.value }))}
+        >
+          <optgroup label={t('別名（跟著 Claude Code 更新）', 'Aliases (follow Claude Code updates)')}>
+            {ADVISOR_ALIASES.map((a) => (
+              <option key={a} value={a}>
+                {alias(a)}
+              </option>
+            ))}
+          </optgroup>
+          {versions.length > 0 && (
+            <optgroup label={t('固定版本', 'Fixed versions')}>
+              {versions.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <option value={CUSTOM_ADVISOR}>{t('自行輸入…', 'Other…')}</option>
+        </select>
+      )}
+    </div>
+  );
+}
+
+/** A Claude Code model that will run in this workflow, and who runs it. */
+export interface ClaudeMain {
+  who: string;
+  model?: string;
+}
+
+/** The Claude Code models a workflow will run (roles, Claude sub-agents), for checking the native advisor against them. */
+export function claudeMains(t: ReturnType<typeof useT>, draft: RoleDraft, providers: ProviderInfo[], preview?: AssignmentResult): ClaudeMain[] {
+  const info = (id?: string) => providers.find((p) => p.spec.id === id);
+  const isClaude = (id?: string) => !!id && (id === 'claude' || info(id)?.spec.accountOf === 'claude');
+  const out: ClaudeMain[] = [];
+  const add = (who: string, role?: { provider: string; model?: string }, picked?: string) => {
+    const provider = picked ?? role?.provider;
+    if (!isClaude(provider)) return;
+    // In auto assignment the provider default model is used.
+    out.push({ who, model: (picked ? undefined : role?.model) || info(provider)?.defaultModel });
+  };
+  const auto = isAuto(draft);
+  if (draft.plan.enabled) {
+    add(t('撰寫計畫', 'Planner'), draft.plan.author, auto ? preview?.plan.author : undefined);
+    add(t('審查計畫', 'Plan reviewer'), draft.plan.reviewer ?? undefined, auto ? preview?.plan.reviewer : undefined);
+  }
+  if (draft.implement.enabled) {
+    add(t('實作', 'Implementer'), draft.implement.author, auto ? preview?.implement.author : undefined);
+    add(t('審查程式碼', 'Code reviewer'), draft.implement.reviewer ?? undefined, auto ? preview?.implement.reviewer : undefined);
+  }
+  if (draft.subagents.enabled)
+    for (const id of auto ? preview?.subagents ?? draft.subagents.allowed : draft.subagents.allowed)
+      if (isClaude(id)) out.push({ who: 'Sub agent', model: draft.subagents.models?.[id]?.model || info(id)?.defaultModel });
+  return out;
+}
+
+/** Warns when Claude Code would ignore the advisor (weaker than an agent's model) or refuse it. */
+function AdvisorPairingNote({ advisor, mains }: { advisor: string; mains: ClaudeMain[] }) {
+  const t = useT();
+  const bad = new Map<string, { pairing: ReturnType<typeof advisorPairing>; who: string[] }>();
+  for (const m of mains) {
+    const pairing = advisorPairing(m.model, advisor);
+    if (pairing === 'ok' || pairing === 'unknown') continue;
+    const e = bad.get(m.model!) ?? { pairing, who: [] };
+    if (!e.who.includes(m.who)) e.who.push(m.who);
+    bad.set(m.model!, e);
+  }
+  if (!bad.size) return null;
+  return (
+    <div className="note warn small">
+      {[...bad].map(([model, e]) => (
+        <div key={model}>
+          {e.pairing === 'weaker'
+            ? t(
+                `顧問 ${advisor} 比 ${e.who.join('、')} 使用的 ${model} 弱，Claude Code 會忽略它（這些 agent 不會有顧問）。請改選同級或更強的模型。`,
+                `The advisor ${advisor} is weaker than ${model} used by ${e.who.join(', ')}, so Claude Code ignores it (those agents get no advisor). Pick an equal or stronger model.`,
+              )
+            : e.pairing === 'not-advisor'
+              ? t(`${advisor} 不能當顧問，請改選其他模型。`, `${advisor} cannot act as an advisor; pick another model.`)
+              : t(`${e.who.join('、')} 使用的 ${model} 不支援 Claude 顧問。`, `${model} used by ${e.who.join(', ')} does not support the Claude advisor.`)}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -286,7 +401,7 @@ function FactRounds({ value, onChange, disabled }: { value: AdvisorConfig; onCha
 }
 
 /** Advisor switch right in the composer, so it is seen without opening the settings window. */
-export function AdvisorButton({ value, providers, onChange, onOpen }: { value: AdvisorConfig; providers: ProviderInfo[]; onChange?: (v: AdvisorConfig) => void; onOpen: () => void }) {
+export function AdvisorButton({ value, providers, onChange, onOpen, mains }: { value: AdvisorConfig; providers: ProviderInfo[]; onChange?: (v: AdvisorConfig) => void; onOpen: () => void; mains?: ClaudeMain[] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
@@ -336,7 +451,7 @@ export function AdvisorButton({ value, providers, onChange, onOpen }: { value: A
           ))}
           {value.mode !== 'off' && (
             <div className="adv-options">
-              <AdvisorOptions value={value} onChange={onChange} providers={providers} />
+              <AdvisorOptions value={value} onChange={onChange} providers={providers} mains={mains} />
             </div>
           )}
         </div>
@@ -346,7 +461,7 @@ export function AdvisorButton({ value, providers, onChange, onOpen }: { value: A
 }
 
 /** Advisor mode: off, Claude Code's own advisor, or Aivenue's cross-vendor ask_advisor. */
-function AdvisorSection({ value, onChange, providers, disabled }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; providers: ProviderInfo[]; disabled?: boolean }) {
+function AdvisorSection({ value, onChange, providers, disabled, mains }: { value: AdvisorConfig; onChange: (v: AdvisorConfig) => void; providers: ProviderInfo[]; disabled?: boolean; mains?: ClaudeMain[] }) {
   const t = useT();
   return (
     <section className="sect">
@@ -359,7 +474,7 @@ function AdvisorSection({ value, onChange, providers, disabled }: { value: Advis
         ))}
       </div>
       <div className="muted small">{advisorModeHint(t, value.mode)}</div>
-      <AdvisorOptions value={value} onChange={onChange} providers={providers} disabled={disabled} />
+      <AdvisorOptions value={value} onChange={onChange} providers={providers} disabled={disabled} mains={mains} />
     </section>
   );
 }
@@ -640,7 +755,7 @@ export function RoleSettings({
           </div>
         </section>
 
-        <AdvisorSection disabled={readOnly} providers={providers} value={draft.advisor ?? { mode: 'off' }} onChange={(advisor) => set({ advisor })} />
+        <AdvisorSection disabled={readOnly} providers={providers} value={draft.advisor ?? { mode: 'off' }} onChange={(advisor) => set({ advisor })} mains={claudeMains(t, draft, providers, preview.result)} />
 
         {!readOnly && (
           <div className="row gap">

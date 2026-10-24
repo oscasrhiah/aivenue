@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
+  AdvisorConfig,
   AgentEvent,
   AgentRole,
   ApprovalRequest,
@@ -37,6 +38,7 @@ import { CliPool } from './cliPool';
 import { agentLabel, contextBlock, formatTranscript, overview, sharingOf } from './context';
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
+import { advisorPairing } from './advisorPairing';
 
 export interface OrchestratorDeps {
   registry: ProviderRegistry;
@@ -181,6 +183,8 @@ export class Orchestrator {
   private sessions = new Map<string, Session>();
   private submissions = new Map<string, Submission>();
   private agentDone = new Map<string, Promise<void>>();
+  /** Native-advisor pairings already reported as unusable (run|main|advisor). */
+  private advisorWarned = new Set<string>();
   /** Fact-finding rounds per advisor, and which round each of its sub-agents belongs to. */
   private factRounds = new Map<string, { round: number; lastSpawnAt: number }>();
   private factRoundOf = new Map<string, number>();
@@ -1191,7 +1195,7 @@ export class Orchestrator {
       const shared = contextBlock(run, info, (id) => this.events(run.id, id));
       // Advisor mode: Claude's own advisor (a CLI flag) or Aivenue's cross-vendor ask_advisor tool.
       const adv = run.config.advisor;
-      const nativeAdvisor = adv?.mode === 'claude' && spec.run.advisor && info.role !== 'advisor' ? adv.claudeModel || 'opus' : undefined;
+      const nativeAdvisor = this.nativeAdvisorFor(run, info, spec.run.advisor ? adv : undefined);
       const advisorText =
         info.role === 'advisor' || resume
           ? ''
@@ -1393,6 +1397,30 @@ export class Orchestrator {
   }
 
   // ---------- advisor ----------
+
+  /**
+   * Claude's own advisor model for this agent, or undefined. Claude Code ignores an advisor weaker than the agent's
+   * model, and refuses to start for a model that can't advise or a main model that can't take one; in those cases the
+   * agent runs without the flag and the conversation says why (once per pairing).
+   */
+  private nativeAdvisorFor(run: WorkflowRun, info: AgentRunInfo, adv?: AdvisorConfig): string | undefined {
+    if (adv?.mode !== 'claude' || info.role === 'advisor') return undefined;
+    const advisor = adv.claudeModel || 'opus';
+    const main = info.model || this.d.registry.defaults(info.provider).model;
+    const pairing = advisorPairing(main, advisor);
+    if (pairing === 'ok' || pairing === 'unknown') return advisor;
+    const key = `${run.id}|${main}|${advisor}`;
+    if (!this.advisorWarned.has(key)) {
+      this.advisorWarned.add(key);
+      const msg = {
+        weaker: L(`Claude 顧問 ${advisor} 比 ${this.label(info)} 的模型 ${main} 弱，Claude Code 不會使用它；用這個模型的 agent 這次沒有顧問。請在顧問設定改選更強的模型。`, `The Claude advisor ${advisor} is weaker than ${main} used by ${this.label(info)}, so Claude Code would not use it; agents on this model run without an advisor. Pick a stronger advisor model.`),
+        'not-advisor': L(`${advisor} 不能當 Claude 顧問（例如 Haiku 4.5），這次不使用顧問。請在顧問設定改選其他模型。`, `${advisor} cannot act as a Claude advisor (e.g. Haiku 4.5); running without an advisor. Pick another advisor model.`),
+        'main-unsupported': L(`${this.label(info)} 的模型 ${main} 不支援 Claude 顧問，這次不使用顧問。`, `${main} used by ${this.label(info)} does not support the Claude advisor; running without one.`),
+      }[pairing];
+      this.log(run, msg, 'warn', true);
+    }
+    return undefined;
+  }
 
   /**
    * An advisor's sub-agents come in rounds: a spawn after one of its earlier sub-agents reported back starts a new round
