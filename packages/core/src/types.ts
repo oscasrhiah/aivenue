@@ -83,7 +83,7 @@ export interface ProviderSpec {
    * Extra args per permission mode. write = full auto, readonly = reviewers in full auto;
    * plan / ask / edit = the user's permission levels (missing ones fall back to safer/looser ones).
    */
-  modes?: { write?: ArgGroup[]; readonly?: ArgGroup[]; plan?: ArgGroup[]; ask?: ArgGroup[]; edit?: ArgGroup[] };
+  modes?: { write?: ArgGroup[]; readonly?: ArgGroup[]; plan?: ArgGroup[]; ask?: ArgGroup[]; edit?: ArgGroup[]; full?: ArgGroup[] };
   /** Extra environment per permission mode. */
   modeEnv?: Partial<Record<ModeKey, Record<string, string>>>;
   /**
@@ -156,8 +156,9 @@ export interface ProviderSpec {
   accountHome?: string;
 }
 
-export type PermissionLevel = 'plan' | 'ask' | 'edit' | 'auto';
-export type ModeKey = 'write' | 'readonly' | 'plan' | 'ask' | 'edit';
+/** full = whole-computer access: like auto, and the CLIs that keep a folder sandbox (Codex) or a workspace limit (Qwen) drop it. */
+export type PermissionLevel = 'plan' | 'ask' | 'edit' | 'auto' | 'full';
+export type ModeKey = 'write' | 'readonly' | 'plan' | 'ask' | 'edit' | 'full';
 
 export interface ApprovalRequest {
   id: string;
@@ -647,6 +648,8 @@ export interface WorkflowRun {
   notes?: SharedNote[];
   /** External actions the user denied in this run (shown with "allow and continue"). */
   deniedActions?: DeniedAction[];
+  /** Files agents changed outside the working folder and the extra folders (absolute paths, from their file tools). */
+  outsideChanges?: string[];
   /** The message was edited and re-sent as that workflow. */
   replacedBy?: string;
   /** Screenshots agents took with `capture_screenshot` (PNG files under <cwd>/.aivenue/screenshots). */

@@ -1208,7 +1208,8 @@ export class Orchestrator {
       const extraDirs = (run.config.extraDirs ?? []).filter((d) => fs.existsSync(d));
       const res = await runAgent({
         spec,
-        prompt: prompt + P.extraDirsBlock(extraDirs) + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + shared + advisorText + files + skills,
+        // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
+        prompt: prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + shared + advisorText + files + skills,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers,
@@ -1279,8 +1280,17 @@ export class Orchestrator {
       if (e.tool?.category === 'command') info.stats.commands++;
     }
     for (const f of e.files ?? []) {
-      const rel = path.isAbsolute(f) ? path.relative(run.config.cwd, f) || f : f;
+      const abs = path.resolve(run.config.cwd, f);
+      // Inside the working folder: relative; outside it: the full path, not a long ..\..\ chain.
+      const fromCwd = path.relative(run.config.cwd, abs);
+      const rel = fromCwd && !fromCwd.startsWith('..') && !path.isAbsolute(fromCwd) ? fromCwd : abs;
       if (!info.stats.filesChanged.includes(rel)) info.stats.filesChanged.push(rel);
+      // Changes outside the working folder and the extra folders are listed for the user (whole-computer access).
+      const inside = [run.config.cwd, ...(run.config.extraDirs ?? [])].some((root) => {
+        const r = path.relative(root, abs);
+        return !r.startsWith('..') && !path.isAbsolute(r);
+      });
+      if (!inside && !(run.outsideChanges ??= []).includes(abs) && run.outsideChanges.length < 500) run.outsideChanges.push(abs);
     }
     const act = activityOf(e);
     if (act && !(isUpdate && e.tool?.status !== 'running')) info.activity = act;

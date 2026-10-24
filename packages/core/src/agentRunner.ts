@@ -64,6 +64,8 @@ export function modeKeyFor(level: PermissionLevel | undefined, mode: 'write' | '
   if (level === 'ask') return 'ask';
   // Planners and reviewers must not edit; at this level they don't run commands either.
   if (level === 'edit') return mode === 'readonly' ? 'plan' : 'edit';
+  // Read-only roles (planners, reviewers, advisors) stay read-only with whole-computer access too.
+  if (level === 'full') return mode === 'readonly' ? 'readonly' : 'full';
   return mode === 'readonly' ? 'readonly' : 'write';
 }
 
@@ -73,6 +75,7 @@ const FALLBACK: Record<ModeKey, ModeKey[]> = {
   edit: ['edit', 'write'],
   readonly: ['readonly', 'write'],
   write: ['write'],
+  full: ['full', 'write'],
 };
 
 function pickMode<T>(table: Partial<Record<ModeKey, T>> | undefined, key: ModeKey): T | undefined {
@@ -190,6 +193,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
   const canResume = !!(o.resumeSessionId && spec.run.resume && spec.capabilities?.resume !== false);
   const tokens: Record<string, string | undefined> = {
     cwd: o.cwd,
+    homeDir: os.homedir(),
     model: o.model,
     // Left out for models that refuse it (e.g. Claude through Antigravity), whatever was saved or assigned.
     effort: takesEffort(spec, o.model) ? o.effort : undefined,

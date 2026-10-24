@@ -7,7 +7,7 @@ import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { Outputs } from '../components/Outputs';
-import { Approvals, WorktreeCard } from '../components/Safety';
+import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
@@ -442,7 +442,8 @@ export function Chat({ id }: { id?: string }) {
 
   const updateDraft = (d: RoleDraft) => {
     setDraft(d);
-    void saveSettings({ draft: d });
+    // Whole-computer access is for one conversation: the saved default for new ones stays at Full auto.
+    void saveSettings({ draft: d.permission === 'full' ? { ...d, permission: 'auto' } : d });
   };
 
   const active = !!run && (run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human');
@@ -491,6 +492,8 @@ export function Chat({ id }: { id?: string }) {
     try {
       const newId = await hub.call<string>('workflows.start', { config });
       follow.current = true;
+      // The next new conversation starts at Full auto again; this one keeps whole-computer access in its own config.
+      if (draft?.permission === 'full') setDraft({ ...draft, permission: 'auto' });
       navigate(`run/${newId}`);
       return true;
     } catch (e) {
@@ -612,6 +615,7 @@ export function Chat({ id }: { id?: string }) {
             }}
           >
             <div className="column">
+              <FullAccessBanner run={run} />
               {items.map((it) => {
                 if (it.type === 'user')
                   return (
@@ -655,6 +659,7 @@ export function Chat({ id }: { id?: string }) {
               })}
               <FinalResult run={run} providers={providers} />
               <DeniedActions run={run} providers={providers} />
+              <OutsideChanges run={run} />
               <Outputs run={run} onImage={setLightbox} />
               <Approvals run={run} providers={providers} />
               <WorktreeCard run={run} />

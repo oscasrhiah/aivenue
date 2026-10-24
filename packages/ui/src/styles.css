@@ -3627,3 +3627,60 @@ textarea.code {
   border-radius: 8px;
   background: var(--sunken, var(--surface));
 }
+
+/* ---- whole-computer access ---- */
+.pill-btn.perm-btn.danger-on {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 55%, var(--line));
+  background: color-mix(in srgb, var(--err) 8%, var(--surface));
+}
+
+.perm-item.danger .perm-item-title,
+.seg button.danger {
+  color: var(--err);
+}
+
+.seg button.danger.on {
+  color: #fff;
+  background: var(--err);
+}
+
+.full-banner {
+  margin: 4px 0 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--err) 45%, var(--line));
+  background: color-mix(in srgb, var(--err) 9%, var(--surface));
+  color: var(--err);
+  font-size: 13px;
+}
+
+.modal.full-confirm {
+  width: min(520px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal.full-confirm h3 {
+  margin: 0;
+  color: var(--err);
+}
+
+.modal.full-confirm p,
+.modal.full-confirm ul {
+  margin: 0;
+}
+
+.modal.full-confirm ul {
+  padding-left: 20px;
+  line-height: 1.6;
+}
+
+.row.end {
+  justify-content: flex-end;
+}
+
+.outside-changes .mono {
+  word-break: break-all;
+}

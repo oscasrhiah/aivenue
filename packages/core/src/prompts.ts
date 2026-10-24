@@ -159,6 +159,17 @@ export function fixPrompt(review: Review | undefined, userFeedback?: string): st
  * Every agent: outside-world writes need the user's OK (any permission level), plus what GitHub access this
  * computer has, so agents use it instead of guessing.
  */
+/** Told to writing agents when the user granted whole-computer access. Prompt rules only: nothing enforces them. */
+export function fullAccessRule(cwd: string): string {
+  return [
+    '',
+    `WHOLE-COMPUTER ACCESS: the user allowed you to read and change files anywhere on this computer and to run any command, not only in ${cwd}. Use it only when the task needs it, and stay in the working folder otherwise.`,
+    '- Before you delete, move or overwrite a file outside the working folder, make sure the task requires it, and list every such file (full path) in your final report.',
+    '- Never read, copy or change credentials or secrets: SSH keys (~/.ssh), browser profiles and cookies, password managers, cloud and API credentials, the sign-in files of AI CLIs (~/.claude, ~/.codex, ~/.gemini, ~/.copilot…).',
+    '- Do not change system settings, security settings, the registry, services, scheduled tasks or startup items, and do not install system-wide software unless the task explicitly asks for it.',
+  ].join('\n');
+}
+
 export function externalRule(github?: { gh: boolean; user?: string; mcp: boolean }): string {
   const lines = [
     '',

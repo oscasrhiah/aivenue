@@ -94,6 +94,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
       readonly: [['-c', 'sandbox_mode="workspace-write"'], ['-c', 'approval_policy="never"']],
       plan: [['-c', 'sandbox_mode="read-only"'], ['-c', 'approval_policy="never"']],
       edit: [['-c', 'sandbox_mode="workspace-write"'], ['-c', 'approval_policy="never"']],
+      // Whole-computer access: no sandbox at all.
+      full: [['-c', 'sandbox_mode="danger-full-access"'], ['-c', 'approval_policy="never"']],
     },
     approvals: { type: 'fallback', zh: 'Codex 的 headless 模式無法逐項詢問：改為沙箱內自動執行（只能寫入工作資料夾）', en: "Codex headless can't ask per action: runs inside its sandbox instead (writes limited to the working folder)" },
     output: 'codex-jsonl',
@@ -174,7 +176,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     },
     modes: { write: [['--auto']], readonly: [['--auto']], plan: [['--agent', 'plan']], edit: [['--auto']] },
     // "edit": file edits are auto-approved, shell commands are denied.
-    modeEnv: { edit: { OPENCODE_PERMISSION: '{"bash":"deny"}' }, ask: { OPENCODE_PERMISSION: '{"bash":"deny"}' } },
+    modeEnv: { edit: { OPENCODE_PERMISSION: '{"bash":"deny"}' }, ask: { OPENCODE_PERMISSION: '{"bash":"deny"}' }, full: { OPENCODE_PERMISSION: '{"external_directory":"allow"}' } },
     approvals: { type: 'fallback', zh: 'OpenCode 的 headless 模式無法逐項詢問：允許編輯檔案，禁止執行指令', en: "OpenCode headless can't ask per action: file edits allowed, shell commands denied" },
     output: 'opencode-json',
     mcpConfigFormat: 'opencode',
@@ -206,7 +208,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
       env: { QWEN_CODE_SUPPRESS_YOLO_WARNING: '1' },
       prompt: 'stdin',
     },
-    modes: { write: [['--approval-mode', 'yolo']], readonly: [['--approval-mode', 'yolo']], plan: [['--approval-mode', 'plan']], edit: [['--approval-mode', 'auto-edit']] },
+    // Whole-computer access: its file tools also reach the user's home folder (commands are not limited either way).
+    modes: { write: [['--approval-mode', 'yolo']], readonly: [['--approval-mode', 'yolo']], plan: [['--approval-mode', 'plan']], edit: [['--approval-mode', 'auto-edit']], full: [['--approval-mode', 'yolo'], ['--include-directories', '{homeDir}']] },
     approvals: { type: 'fallback', zh: 'Qwen Code 的 headless 模式無法逐項詢問：自動核准編輯，需要核准的指令會失敗', en: "Qwen Code headless can't ask per action: edits auto-approved, commands needing approval fail" },
     output: 'claude-stream',
     mcpServerExtra: { trust: true, timeout: 600000 },
