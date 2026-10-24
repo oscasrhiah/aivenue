@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useConnection, useWorkflows } from './api';
+import { useConnection, useThreads } from './api';
 import logo from './assets/logo.svg';
 import { SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
@@ -48,7 +48,7 @@ function CompactBar({ route, onMenu }: { route: Route; onMenu: () => void }) {
 function Sidebar({ route, open }: { route: Route; open: boolean }) {
   const t = useT();
   const conn = useConnection();
-  const workflows = useWorkflows();
+  const workflows = useThreads();
   let lastGroup = '';
   return (
     <aside className={cx('sidebar', open && 'open')}>
@@ -67,7 +67,7 @@ function Sidebar({ route, open }: { route: Route; open: boolean }) {
           return (
             <div key={w.id}>
               {header}
-              <a href={`#/run/${w.id}`} className={cx('side-item', route.page === 'run' && route.id === w.id && 'active')} title={`${w.title}\n${st.label}`}>
+              <a href={`#/run/${w.id}`} className={cx('side-item', route.page === 'run' && w.ids.includes(route.id) && 'active')} title={`${w.title}\n${st.label}${w.messages > 1 ? `\n${t(`${w.messages} 則訊息`, `${w.messages} messages`)}` : ''}`}>
                 <span className="side-item-title">{w.title}</span>
                 {(w.status === 'running' || w.status === 'paused' || w.status === 'waiting_human' || w.status === 'failed') && <span className={cx('dot', st.cls)} />}
               </a>

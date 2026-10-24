@@ -55,6 +55,8 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   const live = agents.filter(isLive).length;
   const current = selected ? run.agents[selected] : undefined;
   const sections = groupRoots(roots);
+  // A conversation of several messages: number them in the section titles.
+  const messages = [...new Set(sections.map((s) => s.workflowId))];
   const stageName = (s?: string) => (s === 'plan' ? t('計畫', 'Plan') : s === 'implement' ? t('實作與審查', 'Implement & review') : t('其他', 'Other'));
 
   // An agent with the agents it started hanging below it.
@@ -95,7 +97,7 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
                 {sections.map((sec, i) => (
                   <section className="am-stage" key={i}>
                     <div className="am-stage-head">
-                      <span>{stageName(sec.stage)}</span>
+                      <span>{messages.length > 1 ? t(`第 ${messages.indexOf(sec.workflowId) + 1} 則訊息 · `, `Message ${messages.indexOf(sec.workflowId) + 1} · `) : ''}{stageName(sec.stage)}</span>
                     </div>
                     {sec.rows.map((row, j) => (
                       <div className="am-round" key={j}>
@@ -121,7 +123,7 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   );
 }
 
-type Section = { stage?: string; rows: { round?: number; agents: AgentRunInfo[] }[] };
+type Section = { stage?: string; workflowId: string; rows: { round?: number; agents: AgentRunInfo[] }[] };
 
 /**
  * The main agents in start order, grouped into stages (plan, implement…) and rounds within a stage. A follow-up message
@@ -129,19 +131,20 @@ type Section = { stage?: string; rows: { round?: number; agents: AgentRunInfo[] 
  */
 function groupRoots(roots: AgentRunInfo[]): Section[] {
   const out: Section[] = [];
-  let last: { stage?: string; round: number } | undefined;
+  let last: { stage?: string; round: number; workflowId: string } | undefined;
   for (const a of roots) {
     const round = a.round ?? 0;
     let sec = out[out.length - 1];
-    if (!sec || !last || sec.stage !== a.stage || (a.stage && round < last.round)) {
-      sec = { stage: a.stage, rows: [] };
+    // Each message of a conversation (its own workflow) gets its own sections.
+    if (!sec || !last || sec.stage !== a.stage || sec.workflowId !== a.workflowId || (a.stage && round < last.round)) {
+      sec = { stage: a.stage, workflowId: a.workflowId, rows: [] };
       out.push(sec);
     }
     // Agents with no round (direct answers, retries outside the loop) each get a row of their own.
     let row = round ? sec.rows.find((r) => r.round === round) : undefined;
     if (!row) sec.rows.push((row = { round: round || undefined, agents: [] }));
     row.agents.push(a);
-    last = { stage: a.stage, round };
+    last = { stage: a.stage, round, workflowId: a.workflowId };
   }
   return out;
 }
@@ -178,7 +181,8 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
 }
 
 function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; run: WorkflowRun; agent: AgentRunInfo; providers: ProviderInfo[]; onBack: () => void; onOpen: (id: string) => void; onClose: () => void }) {
-  const events = useAgentEvents(run.id, agent.id);
+  // In a conversation's map the agent may belong to an earlier message (its own workflow).
+  const events = useAgentEvents(agent.workflowId ?? run.id, agent.id);
   const [raw, setRaw] = useState(false);
   const st = agentStatus(t, agent.status);
   const parent = agent.parentId ? run.agents[agent.parentId] : undefined;

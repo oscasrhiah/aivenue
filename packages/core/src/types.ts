@@ -486,6 +486,8 @@ export interface SharedNote {
   agentId: string;
   text: string;
   ts: number;
+  /** Who wrote it, kept when the note carries over to a follow-up message (its agent is in the earlier workflow). */
+  by?: string;
 }
 
 export interface SubagentConfig {
@@ -529,6 +531,10 @@ export interface WorkflowConfig {
   advisor?: AdvisorConfig;
   /** This message is an edited version of the one in that workflow. */
   replaces?: string;
+  /** A follow-up message: the workflow it continues (its notes, shared memory and agent conversations carry over). */
+  continueFrom?: string;
+  /** The conversation this message belongs to (the id of its first workflow); one entry in the sidebar. */
+  threadId?: string;
   /** External actions the user approved in advance ("allow and continue" after a denial); each is used once. */
   preApproved?: { kind: string; target: string; details: string }[];
 }
@@ -705,6 +711,8 @@ export interface WorkflowRun {
   outsideChanges?: string[];
   /** The message was edited and re-sent as that workflow. */
   replacedBy?: string;
+  /** Agent conversations continued from the previous message (session ids); a fresh one replaces any that cannot be resumed. */
+  carriedSessions?: string[];
   /** Screenshots agents took with `capture_screenshot` (PNG files under <cwd>/.aivenue/screenshots). */
   screenshots?: { path: string; url: string; agentId: string; width: number; height: number; ts: number }[];
   /** Actions waiting for the user's approval ("ask" permission level). */
@@ -717,6 +725,10 @@ export interface WorkflowRun {
 
 export interface WorkflowSummary {
   id: string;
+  /** The conversation it belongs to (its own id for a conversation's first message). */
+  threadId: string;
+  /** Set when the message was edited and re-sent as another workflow. */
+  replacedBy?: string;
   title: string;
   status: WorkflowStatus;
   createdAt: number;

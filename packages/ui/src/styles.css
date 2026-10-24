@@ -3834,3 +3834,8 @@ textarea.code {
 .modal.ctx-ask p {
   margin: 0;
 }
+
+/* An earlier message of the conversation flows like the latest one. */
+.earlier-msg {
+  display: contents;
+}

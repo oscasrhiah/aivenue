@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus } from '../../core/src/types';
 
 type Listener = (data: any) => void;
@@ -163,6 +163,36 @@ export function useProviders(): ProviderInfo[] {
 
 export function useWorkflows(): WorkflowSummary[] {
   return useSynced<WorkflowSummary[]>('workflows.list', undefined, 'workflows', [])[0];
+}
+
+/** A conversation in the sidebar: its latest message, titled after its first one. */
+export interface ThreadSummary extends WorkflowSummary {
+  /** Every workflow in the conversation, oldest first (edited-away versions included). */
+  ids: string[];
+  /** Messages in it, not counting versions replaced by an edit. */
+  messages: number;
+}
+
+export function groupThreads(all: WorkflowSummary[]): ThreadSummary[] {
+  const groups = new Map<string, WorkflowSummary[]>();
+  for (const w of all) {
+    const key = w.threadId ?? w.id;
+    groups.set(key, [...(groups.get(key) ?? []), w]);
+  }
+  return [...groups.values()]
+    .map((list) => {
+      const sorted = [...list].sort((a, b) => a.createdAt - b.createdAt);
+      const live = sorted.filter((w) => !w.replacedBy);
+      const latest = (live.length ? live : sorted)[(live.length ? live : sorted).length - 1];
+      return { ...latest, title: sorted[0].title, ids: sorted.map((w) => w.id), messages: live.length || sorted.length };
+    })
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** One entry per conversation, newest activity first. */
+export function useThreads(): ThreadSummary[] {
+  const all = useWorkflows();
+  return useMemo(() => groupThreads(all), [all]);
 }
 
 export function useWorkflow(id: string | undefined): WorkflowRun | null {

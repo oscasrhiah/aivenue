@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, PermissionLevel, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
-import { fileUrl, hub, useHostInfo, useProviders, useWorkflow } from '../api';
+import { fileUrl, hub, useHostInfo, useProviders, useThreads, useWorkflow, useWorkflows } from '../api';
 import { readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
@@ -26,6 +26,41 @@ function timeline(run: WorkflowRun): Item[] {
   });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
+}
+
+/** An earlier message of the same conversation, read-only above the latest one. */
+function EarlierMessage({ run, providers, onImage }: { run: WorkflowRun; providers: ProviderInfo[]; onImage: (src: string) => void }) {
+  const items = useMemo(() => timeline(run), [run]);
+  return (
+    <div className="earlier-msg">
+      {items.map((it) =>
+        it.type === 'user' ? (
+          <div key={it.key} className="user-block">
+            {!!run.config.attachments?.length && (
+              <div className="atts right">
+                {run.config.attachments.map((a) => (
+                  <AttachmentChip key={a.path} name={a.name} size={a.size} src={fileUrl(a.path)} onOpen={() => onImage(fileUrl(a.path))} />
+                ))}
+              </div>
+            )}
+            <div className="user-msg-wrap">
+              <div className="user-msg">{it.text}</div>
+            </div>
+          </div>
+        ) : it.type === 'divider' ? (
+          <div key={it.key} className={cx('divider', it.level)}>
+            <span>{it.text}</span>
+          </div>
+        ) : (
+          <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />
+        ),
+      )}
+      <FinalResult run={run} providers={providers} />
+      <DeniedActions run={run} providers={providers} />
+      <OutsideChanges run={run} />
+      <Outputs run={run} onImage={onImage} />
+    </div>
+  );
 }
 
 function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
@@ -416,6 +451,24 @@ export function Chat({ id }: { id?: string }) {
   const providers = useProviders();
   const host = useHostInfo();
   const run = useWorkflow(id);
+  // The conversation this message belongs to, and its earlier messages (shown above it, oldest first).
+  const summaries = useWorkflows();
+  const thread = useThreads().find((th) => !!run && th.ids.includes(run.id));
+  const threadKey = run ? run.config.threadId ?? run.id : '';
+  const earlierIds = run
+    ? summaries
+        .filter((s) => (s.threadId ?? s.id) === threadKey && s.createdAt < run.createdAt && !s.replacedBy)
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((s) => s.id)
+    : [];
+  const [earlier, setEarlier] = useState<WorkflowRun[]>([]);
+  useEffect(() => {
+    let live = true;
+    Promise.all(earlierIds.map((eid) => hub.call<WorkflowRun>('workflows.get', { id: eid }).catch(() => null))).then((list) => live && setEarlier(list.filter((r): r is WorkflowRun => !!r)));
+    return () => {
+      live = false;
+    };
+  }, [earlierIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   const [draft, setDraft] = useState<RoleDraft | null>(null);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [error, setError] = useState<string>();
@@ -482,6 +535,7 @@ export function Chat({ id }: { id?: string }) {
         cwd: runDraft && runDraft.cwd !== run.config.cwd ? runDraft.cwd : (run.worktree?.origCwd ?? run.config.cwd),
         title: goal.split('\n')[0].slice(0, 60),
         goal: `${goal}\n\n(Context: this continues an earlier task in the same folder: "${run.config.goal.slice(0, 800)}". Its outcome: ${(prev ?? run.status).slice(0, 1500)})`,
+        continueFrom: run.id,
       };
     } else {
       config = { ...draft, title: goal.split('\n')[0].slice(0, 60), goal };
@@ -569,7 +623,7 @@ export function Chat({ id }: { id?: string }) {
       {run && (
         <header className="topbar">
           <div className="topbar-title">
-            <span className="title-text">{run.config.title}</span>
+            <span className="title-text">{thread?.title ?? run.config.title}</span>
             <span className={cx('status', st!.cls)}>
               {(run.status === 'running' || run.status === 'waiting_human') && <span className="pulse" />}
               {st!.label}
@@ -577,7 +631,7 @@ export function Chat({ id }: { id?: string }) {
             <span className="muted small">{elapsed(run.createdAt, run.endedAt)}</span>
           </div>
           <div className="row gap">
-            <AgentMapButton run={run} onOpen={() => setAgentMap(true)} />
+            <AgentMapButton run={run} thread={earlier.length > 0} onOpen={() => setAgentMap(true)} />
             <button className="icon-btn" title={t('開啟資料夾', 'Open folder')} onClick={() => hub.call('host.openPath', { path: run.config.cwd })}>
               📁
             </button>
@@ -586,7 +640,11 @@ export function Chat({ id }: { id?: string }) {
                 {t('停止', 'Stop')}
               </button>
             ) : (
-              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} onClick={() => confirm(t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)')) && hub.call('workflows.delete', { id: run.id }).then(() => navigate('new'))}>
+              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} onClick={() => {
+                  const ids = thread?.ids ?? [run.id];
+                  if (!confirm(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息與紀錄？（不會動到專案檔案）`, `Delete this chat's ${ids.length} messages and logs? (project files are not touched)`) : t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)'))) return;
+                  void ids.reduce((p, rid) => p.then(() => hub.call('workflows.delete', { id: rid })), Promise.resolve<unknown>(undefined)).then(() => navigate('new'));
+                }}>
                 🗑
               </button>
             )}
@@ -622,6 +680,9 @@ export function Chat({ id }: { id?: string }) {
           >
             <div className="column">
               <FullAccessBanner run={run} />
+              {earlier.map((r) => (
+                <EarlierMessage key={r.id} run={r} providers={providers} onImage={setLightbox} />
+              ))}
               {items.map((it) => {
                 if (it.type === 'user')
                   return (
@@ -685,7 +746,7 @@ export function Chat({ id }: { id?: string }) {
       )}
 
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(undefined)} />}
-      {agentMap && run && <AgentMap run={run} providers={providers} onClose={() => setAgentMap(false)} />}
+      {agentMap && run && <AgentMap run={earlier.length ? { ...run, agents: Object.assign({}, ...earlier.map((r) => r.agents), run.agents) } : run} providers={providers} onClose={() => setAgentMap(false)} />}
       {rolesOpen && (
         <RoleSettings
           draft={shown}
@@ -713,11 +774,12 @@ export function Chat({ id }: { id?: string }) {
 }
 
 /** Opens the agent map; shown when sub-agents are on or anyone was spawned. Counts helpers and shows a pulse while some run. */
-function AgentMapButton({ run, onOpen }: { run: WorkflowRun; onOpen: () => void }) {
+function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () => void; thread?: boolean }) {
   const t = useT();
   const all = Object.values(run.agents);
   const helpers = all.filter((a) => a.role === 'subagent' || a.role === 'advisor');
-  if (!run.config.subagents?.enabled && helpers.length === 0) return null;
+  // Also for a conversation of several messages: the map shows every message's agents.
+  if (!thread && !run.config.subagents?.enabled && helpers.length === 0) return null;
   const running = helpers.filter((a) => a.status === 'running' || a.status === 'queued').length;
   return (
     <button className="btn small am-open" onClick={onOpen} title={t('查看所有 agent 與 sub agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing')}>

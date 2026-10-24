@@ -274,10 +274,15 @@ export class Orchestrator {
     if (assignment) config = this.applyAssignment(config, assignment);
     const id = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14) + '-' + randomUUID().slice(0, 6);
     const attachments = this.d.attachments.adopt(id, config.attachments);
+    // A follow-up stays in its conversation (one sidebar entry) and goes on from the message it continues.
+    const prev = config.continueFrom ? this.runs.get(config.continueFrom) : undefined;
+    // An edited message stays in the conversation of the one it replaces.
+    const replaced = config.replaces ? this.runs.get(config.replaces) : undefined;
+    const threadId = prev ? prev.config.threadId ?? prev.id : replaced ? replaced.config.threadId ?? replaced.id : config.threadId;
     const run: WorkflowRun = {
       id,
       assignment,
-      config: { ...config, attachments, title: config.title?.trim() || config.goal.trim().split('\n')[0].slice(0, 60) },
+      config: { ...config, threadId, attachments, title: config.title?.trim() || config.goal.trim().split('\n')[0].slice(0, 60) },
       status: 'running',
       createdAt: now(),
       updatedAt: now(),
@@ -289,6 +294,7 @@ export class Orchestrator {
       agents: {},
       log: [],
     };
+    if (prev) this.carryOver(prev, run);
     this.runs.set(id, run);
     this.aborts.set(id, new AbortController());
     this.log(run, L(`工作流開始：${run.config.title}`, `Workflow started: ${run.config.title}`));
@@ -399,12 +405,46 @@ export class Orchestrator {
       title: L(`改成允許並繼續：${label}`, `Allowed and continued: ${label}`).slice(0, 60),
       goal: `${goal}\n\n(Context: this continues an earlier task in the same folder: "${run.config.goal.slice(0, 800)}". Its outcome: ${(prev ?? run.status).slice(0, 1500)})`,
       replaces: undefined,
+      continueFrom: run.id,
     });
     // Set after start() (which drops inherited ones), before any agent can ask.
     next.config.preApproved = [{ kind, target: denied.target, details: denied.details }];
     denied.continuedIn = next.id;
     this.touch(run);
     return next.id;
+  }
+
+  /**
+   * A follow-up message goes on from the previous one: its shared notes and shared memory, and each role's agent
+   * conversation when the same CLI fills it in the same folder (not across an isolated worktree).
+   */
+  private carryOver(prev: WorkflowRun, run: WorkflowRun) {
+    const label = (agentId: string) => {
+      const a = prev.agents[agentId];
+      return a ? `${roleLabel(a.role)} ${a.provider}` : undefined;
+    };
+    run.notes = (prev.notes ?? []).map((n) => ({ ...n, by: n.by ?? label(n.agentId) }));
+    if (prev.memory) run.memory = { ...prev.memory };
+    if (prev.contextMuted) run.contextMuted = [...prev.contextMuted];
+    if (prev.contextAsked) run.contextAsked = { ...prev.contextAsked };
+    const sameFolder = !prev.worktree && run.config.isolation !== 'worktree' && path.resolve(prev.config.cwd) === path.resolve(run.config.cwd);
+    if (!sameFolder) return;
+    const carried: string[] = [];
+    for (const key of ['plan', 'implement'] as StageKey[]) {
+      const from = prev.stages[key];
+      const to = run.stages[key];
+      const was = prev.config[key];
+      const now = run.config[key];
+      if (from.authorSessionId && was.author.provider === now.author.provider) carried.push((to.authorSessionId = from.authorSessionId));
+      else if (from.authorHandoff && was.author.provider === now.author.provider) to.authorHandoff = from.authorHandoff;
+      if (from.reviewerSessionId && was.reviewer && now.reviewer && was.reviewer.provider === now.reviewer.provider) carried.push((to.reviewerSessionId = from.reviewerSessionId));
+    }
+    // They already have what the previous message gave them.
+    for (const sid of carried) {
+      const seen = this.sharedSeen.get(`${prev.id}|${sid}`);
+      if (seen) this.sharedSeen.set(`${run.id}|${sid}`, seen);
+    }
+    if (carried.length) run.carriedSessions = carried;
   }
 
   /** Running workflows, so an edit can wait until the old one really stopped. */
@@ -1128,6 +1168,13 @@ export class Orchestrator {
     const def = this.d.registry.defaults(o.roleCfg.provider);
     const info = this.newAgent(run, { role: o.role, provider: o.roleCfg.provider, model: o.roleCfg.model || def.model, effort: o.roleCfg.effort || def.effort, stage: o.stage, round: o.round, depth: 0, task: o.task });
     let res = await this.invokePausable(run, info, o.prompt, o.mode, o.resume);
+    // A conversation carried over from the previous message that the CLI no longer has: start a fresh one.
+    if (o.resume && run.carriedSessions?.includes(o.resume) && res.error && !res.finalText.trim() && !this.aborted(run)) {
+      this.log(run, L(`${this.label(info)} 無法接續上一則訊息的對話，改開新的對話`, `${this.label(info)} could not continue the previous message's conversation; starting a fresh one`), 'warn', true);
+      run.carriedSessions = run.carriedSessions.filter((s) => s !== o.resume);
+      info.sessionId = undefined;
+      res = await this.invokePausable(run, info, o.prompt, o.mode, undefined, res.lastSeq);
+    }
     let sub = this.collect(info.id, o.expect, res);
     const spec = this.d.registry.get(info.provider);
     if (!sub && !res.error && res.sessionId && spec?.run.resume && spec.capabilities?.resume !== false && !this.aborted(run)) {

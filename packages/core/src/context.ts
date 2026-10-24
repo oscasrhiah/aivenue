@@ -48,7 +48,8 @@ function others(run: WorkflowRun, selfId?: string): AgentRunInfo[] {
 }
 
 function noteLine(run: WorkflowRun, n: SharedNote): string {
-  return `- [${run.agents[n.agentId] ? `${ROLE[run.agents[n.agentId].role]} ${run.agents[n.agentId].provider}` : 'agent'}] ${n.text}`;
+  const a = run.agents[n.agentId];
+  return `- [${a ? `${ROLE[a.role]} ${a.provider}` : n.by ?? 'agent'}] ${n.text}`;
 }
 
 /** Notes not yet folded into the shared memory (or all of them with `all`), newer than `since`. */

@@ -119,7 +119,7 @@ export class RunStore {
   }
 
   static summary(run: WorkflowRun): WorkflowSummary {
-    return { id: run.id, title: run.config.title, status: run.status, createdAt: run.createdAt, updatedAt: run.updatedAt, cwd: run.config.cwd };
+    return { id: run.id, threadId: run.config.threadId ?? run.id, replacedBy: run.replacedBy, title: run.config.title, status: run.status, createdAt: run.createdAt, updatedAt: run.updatedAt, cwd: run.config.cwd };
   }
 
   loadPresets(): WorkflowPreset[] {
