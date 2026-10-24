@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, PermissionLevel, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useHostInfo, useProviders, useWorkflow } from '../api';
 import { readability, type Reason } from '../../../core/src/readability';
@@ -8,6 +8,7 @@ import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
+import { ContextAsk, ContextPie } from '../components/ContextPie';
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
@@ -132,6 +133,7 @@ function Composer({
   runState,
   onPause,
   onResume,
+  extra,
 }: {
   draft: RoleDraft;
   providers: ProviderInfo[];
@@ -148,6 +150,8 @@ function Composer({
   onAdvisor?: (v: AdvisorConfig) => void;
   /** The send button becomes pause while agents work, and resume while paused. */
   runState?: 'running' | 'paused';
+  /** Shown after the role pills (the shared-context pie). */
+  extra?: ReactNode;
   onPause?: () => void;
   /** Resume; what the user typed meanwhile is passed to the agents. */
   onResume?: (note: string) => void;
@@ -272,6 +276,7 @@ function Composer({
           }}
         />
         <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} />
+        {extra}
         {runState === 'running' ? (
           <button className="send pause" onClick={onPause} title={t('暫停：停下正在工作的 agent，之後可以繼續', 'Pause: stop the working agents; you can resume later')} aria-label={t('暫停', 'Pause')}>
             ❚❚
@@ -457,8 +462,8 @@ export function Chat({ id }: { id?: string }) {
     if (!run) return updateDraft(d);
     setRunDraft(d);
     if (active) {
-      const { plan, implement, subagents, permission, contextSharing, assignment, advisor, extraDirs } = d;
-      hub.call('workflows.updateConfig', { id: run.id, patch: { plan, implement, subagents, permission, contextSharing, assignment, advisor, extraDirs: extraDirs ?? [] } }).catch((e) => setError((e as Error).message));
+      const { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs } = d;
+      hub.call('workflows.updateConfig', { id: run.id, patch: { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs: extraDirs ?? [] } }).catch((e) => setError((e as Error).message));
     }
   };
 
@@ -542,6 +547,7 @@ export function Chat({ id }: { id?: string }) {
         // VS Code keeps the composer minimal: attach, permission, roles.
         compact={host?.host === 'vscode'}
         onAdvisor={(advisor) => changeSettings({ ...shown, advisor })}
+        extra={run ? <ContextPie run={run} providers={providers} /> : undefined}
         onSafety={(v) => changeSettings({ ...shown, ...(v.permission ? { permission: v.permission } : {}), ...(v.isolation !== undefined && !active ? { isolation: v.isolation ? 'worktree' : 'none' } : {}) })}
         placeholder={
           active
@@ -663,6 +669,7 @@ export function Chat({ id }: { id?: string }) {
               <Outputs run={run} onImage={setLightbox} />
               <Approvals run={run} providers={providers} />
               <WorktreeCard run={run} />
+              <ContextAsk run={run} providers={providers} />
               {run.pending && <Decision run={run} d={run.pending} />}
               {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
               {run.status === 'interrupted' && <div className="note warn">{t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}</div>}

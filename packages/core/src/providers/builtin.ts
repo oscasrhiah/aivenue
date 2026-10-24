@@ -30,6 +30,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
       prompt: 'stdin',
       // Claude Code's built-in advisor (a stronger model it consults on its own).
       advisor: [['--advisor', '{advisorModel}']],
+      noTools: [['--tools', '']],
       // Stays running between turns: one user message per stdin line, each turn ends with a "result" event.
       persistent: {
         args: [['--input-format', 'stream-json']],

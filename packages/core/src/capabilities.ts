@@ -161,7 +161,7 @@ export class CapabilityStore {
   }
 
   instructionsFor(role: AgentRole): string | undefined {
-    if (role === 'test') return undefined;
+    if (role === 'test' || role === 'compactor') return undefined;
     const parts = [this.cfg.instructions.all, this.cfg.instructions[role as InstructionRole]].filter((x): x is string => !!x?.trim());
     return parts.length ? parts.join('\n\n') : undefined;
   }

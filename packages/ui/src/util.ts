@@ -9,6 +9,7 @@ export const roleLabel = (t: T, r: AgentRole): string =>
     code_reviewer: t('審查程式碼', 'Code review'),
     subagent: 'Sub agent',
     advisor: t('顧問', 'Advisor'),
+    compactor: t('上下文壓縮', 'Compaction'),
     test: t('連線測試', 'Test'),
   })[r];
 

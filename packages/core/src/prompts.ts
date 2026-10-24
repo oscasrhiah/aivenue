@@ -197,6 +197,56 @@ export function resumeAfterPause(): string {
   return 'The user paused you in the middle of your work and has now resumed. Continue the task exactly where you left off (check the working directory if unsure what was already done), and finish it as instructed before (including calling the Aivenue submit tool if you were asked to).';
 }
 
+// ---------- Context compaction ----------
+
+const COMPACT_SECTIONS = ['## Decisions', '## Known problems and open questions', '## Where things are (files, commands, settings)', '## Done so far', '## Still to do'].join('\n');
+
+/**
+ * Condense the shared notes and agent results of a workflow. The facts kept verbatim elsewhere (goal, plan, open review
+ * issues, user instructions) are given for orientation only, so the summary does not spend room on them.
+ */
+export function compactSharedPrompt(material: string, keptVerbatim: string, targetTokens: number, missing?: string[]): string {
+  return [
+    'You condense the shared context of an Aivenue multi-agent workflow so later agents can keep working with a short version of it.',
+    'Do not use any tools, do not read files, do not run commands: work only from the text below, and reply with the summary only.',
+    '',
+    'RULES:',
+    '- Keep every decision and its reason, every unresolved problem or error (with its exact message), every file path, command, setting name and identifier that later work may need, and every instruction the user gave.',
+    '- Drop chatter, repetition, step-by-step narration and anything already settled that no later step depends on.',
+    '- Write facts, not a story. Be specific: names, paths and numbers exactly as written in the material.',
+    `- Aim for at most about ${targetTokens} tokens. Use these sections (leave one out if it has nothing):`,
+    COMPACT_SECTIONS,
+    LANG,
+    missing?.length ? `\nYOUR PREVIOUS SUMMARY LEFT THESE OUT. Include each of them this time:\n${missing.map((m) => `- ${m}`).join('\n')}` : '',
+    '',
+    'ALREADY KEPT VERBATIM (for orientation; do not repeat it):',
+    keptVerbatim || '(nothing)',
+    '',
+    'MATERIAL TO CONDENSE:',
+    material,
+  ].join('\n');
+}
+
+/** Hand-off summary of one agent's conversation, for a CLI whose conversation cannot be compacted from outside. */
+export function handoffSummaryPrompt(label: string, transcript: string, targetTokens: number): string {
+  return [
+    `You condense the conversation of ${label} in an Aivenue multi-agent workflow. It will continue in a fresh conversation that starts from your summary instead of the full history.`,
+    'Do not use any tools, do not read files, do not run commands: work only from the transcript below, and reply with the summary only.',
+    'Keep what the agent needs to carry on: its task, what it already did (files changed, commands run and their outcome), decisions and reasons, errors still open (exact messages), and what is left to do. Keep paths, names and numbers exactly.',
+    `Aim for at most about ${targetTokens} tokens, in these sections:`,
+    COMPACT_SECTIONS,
+    LANG,
+    '',
+    'TRANSCRIPT:',
+    transcript,
+  ].join('\n');
+}
+
+/** Prepended to the first prompt of a conversation that replaced a compacted one. */
+export function handoffBlock(summary: string): string {
+  return `\n\nYOUR EARLIER WORK IN THIS WORKFLOW (your previous conversation was compacted into this summary; the files on disk are current):\n${summary}`;
+}
+
 // ---------- Advisor ----------
 
 /**

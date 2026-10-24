@@ -154,7 +154,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     inputSchema: {
       type: 'object',
       properties: {
-        agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview.' },
+        agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
       },
     },
@@ -202,6 +202,8 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   if (role === 'plan_reviewer' || role === 'code_reviewer') names.push('submit_review');
   if (role === 'executor') names.push('report_progress', 'submit_work');
   if (role === 'subagent') names.push('report_progress');
+  // The compactor only reads the material in its prompt.
+  if (role === 'compactor') return [];
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');
   // Anything that changes GitHub or another outside service needs the user's OK first (the advisor only advises).

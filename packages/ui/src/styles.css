@@ -3684,3 +3684,153 @@ textarea.code {
 .outside-changes .mono {
   word-break: break-all;
 }
+
+/* ---- shared-context pie (composer) ---- */
+.ctx-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.pill-btn.ctx-pie {
+  gap: 5px;
+  padding-left: 7px;
+  padding-right: 9px;
+}
+
+.ctx-pie .ctx-track {
+  fill: none;
+  stroke: var(--sunken);
+  stroke-width: 3;
+}
+
+.ctx-pie .ctx-fill {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.4s ease;
+}
+
+.ctx-pie.warn .ctx-fill {
+  stroke: var(--warn, #b54708);
+}
+
+.ctx-pie.err .ctx-fill {
+  stroke: var(--err);
+}
+
+.ctx-pie.busy .ctx-fill {
+  animation: ctx-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ctx-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.ctx-pct {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(340px, calc(100vw - 32px));
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  text-align: left;
+}
+
+/* Bridge the gap so moving the mouse from the pie to the popover keeps it open. */
+.ctx-pop::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 8px;
+}
+
+.ctx-head {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.ctx-head.sub {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.ctx-big {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ctx-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sunken);
+}
+
+.ctx-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.ctx-bar-fill.warn {
+  background: var(--warn, #b54708);
+}
+
+.ctx-bar-fill.err {
+  background: var(--err);
+}
+
+.ctx-bar-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--line-strong);
+}
+
+.ctx-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ctx-agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.btn.tiny {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.modal.ctx-ask {
+  width: min(480px, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal.ctx-ask h3,
+.modal.ctx-ask p {
+  margin: 0;
+}

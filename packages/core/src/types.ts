@@ -63,6 +63,8 @@ export interface ProviderSpec {
     stdinTemplate?: string;
     /** Args for the CLI's own advisor model ({advisorModel}), used in Claude-native advisor mode. */
     advisor?: ArgGroup[];
+    /** Args that turn off every built-in tool, for text-only calls such as the context compactor. */
+    noTools?: ArgGroup[];
     /**
      * The CLI can stay running and take one message per stdin line (each turn ends with a result event).
      * Aivenue then keeps it open between turns of the same session instead of restarting it.
@@ -300,6 +302,8 @@ export interface AgentEvent {
   sessionId?: string;
   /** Token/cost usage reported by the CLI (usually on the final event). */
   usage?: TokenUsage;
+  /** How full the agent's own conversation is (tokens of its latest model call) and its model's limit, when the CLI says. */
+  context?: { used?: number; window?: number };
 }
 
 export interface TokenUsage {
@@ -419,6 +423,35 @@ export type ContextSharing = 'summary' | 'on_demand' | 'full';
  * - claude: Claude Code's own advisor (`--advisor`), Claude agents only.
  * - cross: Aivenue's `ask_advisor` tool for every vendor; the advice is visible and kept as a shared note.
  */
+/**
+ * Aivenue's shared context: how big it may grow (the pie's 100%), when it is compacted automatically, who compacts it,
+ * and when to ask about compacting an agent's own conversation.
+ */
+export interface ContextConfig {
+  /** Tokens (default 256K). */
+  capacity?: number;
+  /** Share of the capacity that triggers automatic compaction (default 0.8). */
+  compactAt?: number;
+  /** Who condenses it; empty = automatic (a mid-priced signed-in model). */
+  compactor?: { provider: string; model?: string; effort?: string };
+  /** Share of an agent's own window that asks the user about compacting it (default 0.8; 0 = never ask). */
+  agentAskAt?: number;
+}
+
+export interface SharedMemory {
+  summary: string;
+  /** Notes and agent results up to this time are represented by the summary. */
+  upto: number;
+  updatedAt: number;
+  /** Who wrote it (provider · model). */
+  by?: string;
+  /** Tokens before → after the last compaction. */
+  before?: number;
+  after?: number;
+  /** Items the validation found missing and appended verbatim. */
+  kept?: string[];
+}
+
 export interface AdvisorConfig {
   mode: 'off' | 'claude' | 'cross';
   /** claude mode: the advisor model (e.g. opus, fable). */
@@ -490,6 +523,8 @@ export interface WorkflowConfig {
    * on demand (default); or the previous agent's full transcript inlined in the prompt.
    */
   contextSharing?: ContextSharing;
+  /** Size and compaction of the shared context (Aivenue's own, not the models' windows). */
+  context?: ContextConfig;
   /** Advisor mode (off by default). */
   advisor?: AdvisorConfig;
   /** This message is an edited version of the one in that workflow. */
@@ -527,7 +562,7 @@ export interface WorkflowPreset {
 
 // ---------- Workflow run state ----------
 
-export type AgentRole = 'planner' | 'plan_reviewer' | 'executor' | 'code_reviewer' | 'subagent' | 'advisor' | 'test';
+export type AgentRole = 'planner' | 'plan_reviewer' | 'executor' | 'code_reviewer' | 'subagent' | 'advisor' | 'compactor' | 'test';
 export type AgentStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentRunInfo {
@@ -557,6 +592,10 @@ export interface AgentRunInfo {
   /** Tokens the CLI reported for this agent (all its turns). */
   tokens?: { input: number; output: number; cached: number };
   stats: { events: number; tools: number; commands: number; filesChanged: string[] };
+  /** Its own conversation: tokens in use now and the model's limit (when the CLI reports them). */
+  context?: { used?: number; window?: number; estimated?: boolean; compactedAt?: number };
+  /** Shared notes / agent results it has already been given (time), so later turns only get what is new. */
+  sharedSeenAt?: number;
 }
 
 export interface PlanStep {
@@ -612,6 +651,9 @@ export interface StageRun {
   rounds: Round[];
   authorSessionId?: string;
   reviewerSessionId?: string;
+  /** A compacted conversation that could not be compacted in place: its next turn starts fresh from this summary. */
+  authorHandoff?: string;
+  reviewerHandoff?: string;
   /** Rounds allowed (grows when the user grants more). */
   roundLimit: number;
 }
@@ -646,6 +688,17 @@ export interface WorkflowRun {
   outputsTruncated?: boolean;
   /** Shared notes board (`post_note`), visible to every later agent and in the conversation. */
   notes?: SharedNote[];
+  /** The compacted shared memory: what notes and agent results up to `upto` were condensed into. */
+  memory?: SharedMemory;
+  /** Estimated size of the shared context (tokens), refreshed as it changes. */
+  sharedTokens?: number;
+  /** An agent whose own conversation passed the ask threshold: the user decides whether to compact it. */
+  contextAsk?: { agentId: string; used: number; window: number; level: number };
+  /** Highest ask level already shown per agent conversation (session id), and conversations the user muted. */
+  contextAsked?: Record<string, number>;
+  contextMuted?: string[];
+  /** A compaction in progress (shared context or an agent), for the conversation view. */
+  compacting?: { target: 'shared' | string; by?: string; startedAt: number };
   /** External actions the user denied in this run (shown with "allow and continue"). */
   deniedActions?: DeniedAction[];
   /** Files agents changed outside the working folder and the extra folders (absolute paths, from their file tools). */

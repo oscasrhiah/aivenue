@@ -54,6 +54,8 @@ export interface RunAgentOptions {
    * `onClose` when a kept process finally closes.
    */
   keepAlive?: { pool: CliPool; secret: string; onReuse: (secret: string) => void; onClose: (secret: string) => void };
+  /** A text-only call (the context compactor): no built-in tools, where the CLI can turn them off (spec.run.noTools). */
+  noTools?: boolean;
   /** The CLI's own advisor model ({advisorModel}, spec.run.advisor), e.g. Claude Code's --advisor. */
   advisorModel?: string;
 }
@@ -323,6 +325,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     ...renderGroups(spec.run.common, tokens),
     ...extraDirArgs,
     ...renderGroups(spec.run.advisor, tokens),
+    ...(o.noTools ? renderGroups(spec.run.noTools, tokens) : []),
     ...mcpArgs,
     ...renderGroups(pickMode(spec.modes, modeKey), tokens),
     ...renderGroups(o.auth?.args, tokens),

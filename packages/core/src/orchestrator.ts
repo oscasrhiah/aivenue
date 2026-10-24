@@ -8,6 +8,7 @@ import type {
   ApprovalRequest,
   AssignmentResult,
   PermissionLevel,
+  ProviderSpec,
   AgentRunInfo,
   IssueResponse,
   PlanDoc,
@@ -35,7 +36,8 @@ import { autoAssign, DEFAULT_AUTO } from './assign';
 import { diffSnapshots, snapshot, type Snapshot } from './outputs';
 import { captureScreenshot, isLoopbackUrl, resolveTarget } from './screenshot';
 import { CliPool } from './cliPool';
-import { agentLabel, contextBlock, formatTranscript, overview, sharingOf } from './context';
+import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf } from './context';
+import { codexContext, compactCodexThread, estimateTokens } from './agentContext';
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
 import { advisorPairing } from './advisorPairing';
@@ -88,6 +90,7 @@ const roleLabel = (r: AgentRole): string =>
     code_reviewer: L('程式審查', 'Code reviewer'),
     subagent: 'Sub agent',
     advisor: L('顧問', 'Advisor'),
+    compactor: L('上下文壓縮', 'Context compactor'),
     test: L('連線測試', 'Connectivity test'),
   })[r];
 
@@ -170,6 +173,18 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 /** Most sub-agents one conversation may start in total. */
 const MAX_SUBAGENTS = 40;
 
+/** Shared context capacity when the user picks none (tokens), and the share of an agent's model it may fill in a prompt. */
+const DEFAULT_CAPACITY = 256_000;
+const SHARE_OF_WINDOW = 0.2;
+/** Below this (tokens of material) a summary is not worth it. */
+const MIN_COMPACT_TOKENS = 1000;
+
+/** Automatic compactor: the first signed-in of these (mid-priced models, not the tiniest free ones). */
+const AUTO_COMPACTORS: { provider: string; model?: string }[] = [{ provider: 'claude', model: 'haiku' }, { provider: 'codex' }, { provider: 'antigravity' }, { provider: 'copilot' }, { provider: 'qwen' }, { provider: 'opencode' }];
+
+/** 158000 → "158K". */
+const fmtK = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+
 /** Rounds of sub-agent fact-finding an advisor goes through before it may read the code itself (the user can change it). */
 const ADVISOR_FACT_ROUNDS = 3;
 
@@ -183,6 +198,14 @@ export class Orchestrator {
   private sessions = new Map<string, Session>();
   private submissions = new Map<string, Submission>();
   private agentDone = new Map<string, Promise<void>>();
+  /** Shared context a conversation (run|session id) was already given, compactions in flight, and catalog limits. */
+  private sharedSeen = new Map<string, number>();
+  private compactingShared = new Map<string, Promise<void>>();
+  private agentCompactions = new Map<string, Promise<void>>();
+  private queuedAgentCompact = new Map<string, string>();
+  private catalogWindows = new Map<string, number | undefined>();
+  /** Shared size at the last automatic compaction that did not shrink it: no new try until it grows by a fifth. */
+  private noGainAt = new Map<string, number>();
   /** Native-advisor pairings already reported as unusable (run|main|advisor). */
   private advisorWarned = new Set<string>();
   /** Fact-finding rounds per advisor, and which round each of its sub-agents belongs to. */
@@ -417,7 +440,7 @@ export class Orchestrator {
    * Change settings of a conversation while it runs. Applies to agents started from now on;
    * running agents keep theirs. The working folder and isolation are fixed once a run started.
    */
-  updateConfig(id: string, patch: Partial<Pick<WorkflowConfig, 'plan' | 'implement' | 'subagents' | 'permission' | 'contextSharing' | 'assignment' | 'advisor' | 'extraDirs'>>): WorkflowRun {
+  updateConfig(id: string, patch: Partial<Pick<WorkflowConfig, 'plan' | 'implement' | 'subagents' | 'permission' | 'contextSharing' | 'context' | 'assignment' | 'advisor' | 'extraDirs'>>): WorkflowRun {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
     for (const key of ['plan', 'implement'] as StageKey[]) {
@@ -435,6 +458,7 @@ export class Orchestrator {
     if (patch.subagents) Object.assign(run.config.subagents, patch.subagents);
     if (patch.permission) run.config.permission = patch.permission;
     if (patch.contextSharing) run.config.contextSharing = patch.contextSharing;
+    if (patch.context) run.config.context = patch.context;
     if (patch.assignment) run.config.assignment = patch.assignment;
     if (patch.advisor) run.config.advisor = patch.advisor;
     if (patch.extraDirs) run.config.extraDirs = checkExtraDirs(patch.extraDirs, run.worktree?.origCwd ?? run.config.cwd);
@@ -605,6 +629,7 @@ export class Orchestrator {
       case 'read_context': {
         const id = String(args.agent_id ?? '').trim();
         if (!id) return overview(run);
+        if (id === 'notes') return allNotes(run);
         const target = run.agents[id] ?? Object.values(run.agents).find((a) => a.id.startsWith(id));
         if (!target) throw new Error(`Unknown agent_id ${id}. Call read_context {} to list agents.`);
         return `TRANSCRIPT OF ${agentLabel(target)} [${target.status}]\n\n${formatTranscript(this.events(run.id, target.id), { budget: 40000, prompts: args.include_prompts === true })}`;
@@ -614,6 +639,7 @@ export class Orchestrator {
         if (!text) throw new Error('text is required');
         if ((run.notes?.length ?? 0) >= 200) throw new Error('This conversation already has 200 shared notes, the limit');
         (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, ts: now() });
+        this.refreshShared(run);
         this.touch(run);
         return 'Note shared with all later agents.';
       }
@@ -934,13 +960,15 @@ export class Orchestrator {
           roleCfg: cfg.author,
           stage: key,
           round: n,
-          prompt: prompt + note,
+          // A conversation compacted into a summary goes on in a fresh one that starts from it.
+          prompt: prompt + note + (!resume && stage.authorHandoff ? P.handoffBlock(stage.authorHandoff) : ''),
           mode: isPlan ? 'readonly' : 'write',
           resume: resume ? stage.authorSessionId : undefined,
           expect: isPlan ? 'submit_plan' : 'submit_work',
           task: isPlan ? (n === 1 ? L('撰寫計畫草稿', 'Draft the plan') : L('依審查意見修改計畫', 'Revise the plan')) : n === 1 ? L('依計畫實作', 'Implement the plan') : L('依審查意見修正', 'Fix review issues'),
         });
         round.authorAgentId = a.info.id;
+        if (!resume) stage.authorHandoff = undefined;
         if (a.info.sessionId) stage.authorSessionId = a.info.sessionId;
         if (a.sub) {
           authorResult = a.sub;
@@ -1009,13 +1037,14 @@ export class Orchestrator {
           roleCfg: cfg.reviewer,
           stage: key,
           round: n,
-          prompt: rprompt,
+          prompt: rprompt + (!reviewerResume && stage.reviewerHandoff ? P.handoffBlock(stage.reviewerHandoff) : ''),
           mode: 'readonly',
           resume: reviewerResume ? stage.reviewerSessionId : undefined,
           expect: 'submit_review',
           task: isPlan ? L('審查計畫', 'Review the plan') : L('審查程式碼', 'Review the code'),
         });
         round.reviewerAgentId = r.info.id;
+        if (!reviewerResume) stage.reviewerHandoff = undefined;
         if (r.info.sessionId) stage.reviewerSessionId = r.info.sessionId;
         review = r.sub?.review;
         if (review) break;
@@ -1112,6 +1141,14 @@ export class Orchestrator {
     info.activity = undefined;
     this.cancelChildren(run, info.id);
     this.updateOutputs(run);
+    this.refreshShared(run);
+    this.checkContextAsk(run, info);
+    // A compaction the user asked for while this agent was working runs now that its turn is over.
+    const queued = info.sessionId ? this.queuedAgentCompact.get(info.sessionId) : undefined;
+    if (queued) {
+      this.queuedAgentCompact.delete(info.sessionId!);
+      await this.startAgentCompaction(run, info);
+    }
     this.checkCancelled(run);
     return { info, res, sub };
   }
@@ -1156,6 +1193,12 @@ export class Orchestrator {
   private async invoke(run: WorkflowRun, info: AgentRunInfo, prompt: string, mode: 'write' | 'readonly', resume?: string, seqStart?: number): Promise<RunAgentResult> {
     const spec = this.d.registry.get(info.provider);
     if (!spec) throw new Error(L(`未知的供應商：${info.provider}`, `Unknown provider: ${info.provider}`));
+    // The compactor gets its prompt and nothing else; everyone else may first wait for a compaction.
+    const plain = info.role === 'compactor';
+    if (!plain) {
+      await this.maybeAutoCompact(run);
+      if (resume) await this.agentCompactions.get(resume);
+    }
     const ac = new AbortController();
     this.agentAborts.set(info.id, ac);
     const wf = this.aborts.get(run.id);
@@ -1192,10 +1235,14 @@ export class Orchestrator {
       // Per provider: which version of each file to read, and an explicit note for what it cannot read.
       const files = resume ? '' : attachmentsBlock(attached, spec.profile);
       // What the other agents did so far (empty in "summary" mode).
-      const shared = contextBlock(run, info, (id) => this.events(run.id, id));
+      // A resumed conversation already has what it was given before: only what is new, within this model's share.
+      const seenKey = resume ? `${run.id}|${resume}` : undefined;
+      const window = plain ? undefined : await this.windowFor(run, info, resume);
+      const sharedAt = now();
+      const shared = plain ? '' : contextBlock(run, info, (id) => this.events(run.id, id), { since: seenKey ? this.sharedSeen.get(seenKey) : undefined, maxChars: window ? Math.floor(window * SHARE_OF_WINDOW * 4) : undefined });
       // Advisor mode: Claude's own advisor (a CLI flag) or Aivenue's cross-vendor ask_advisor tool.
       const adv = run.config.advisor;
-      const nativeAdvisor = this.nativeAdvisorFor(run, info, spec.run.advisor ? adv : undefined);
+      const nativeAdvisor = plain ? undefined : this.nativeAdvisorFor(run, info, spec.run.advisor ? adv : undefined);
       const advisorText =
         info.role === 'advisor' || resume
           ? ''
@@ -1209,12 +1256,12 @@ export class Orchestrator {
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + shared + advisorText + files + skills,
+        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + shared + advisorText + files + skills,
         extraDirs,
         advisorModel: nativeAdvisor,
-        mcpServers,
+        mcpServers: plain ? [] : mcpServers,
         systemPrompt: caps.instructionsFor(info.role),
-        skillsDir: skills ? caps.skillsDir : undefined,
+        skillsDir: skills && !plain ? caps.skillsDir : undefined,
         permission: run.config.permission,
         attachDir: attached.length ? this.d.attachments.runDir(run.id) : undefined,
         images: spec.profile?.vision === false ? [] : attached.filter(isImage).map((a) => a.path),
@@ -1224,7 +1271,9 @@ export class Orchestrator {
         model: this.requestedModel.has(info.id) ? this.requestedModel.get(info.id) : info.model,
         effort: info.effort,
         resumeSessionId: resume,
-        bridge: this.bridgeLaunch(secret),
+        // The compactor works from its prompt alone: no Aivenue tools, no built-in tools where the CLI can turn them off.
+        bridge: plain ? undefined : this.bridgeLaunch(secret),
+        noTools: plain,
         tmpDir: path.join(this.d.dataDir, 'tmp'),
         signal: ac.signal,
         seqStart,
@@ -1244,6 +1293,8 @@ export class Orchestrator {
       });
       keptAlive = !!res.keptAlive;
       if (res.sessionId) info.sessionId = res.sessionId;
+      if (res.sessionId && !plain && !res.error) this.sharedSeen.set(`${run.id}|${res.sessionId}`, sharedAt);
+      await this.readAgentContext(info, spec, res.sessionId);
       info.resumed = info.resumed || res.resumed;
       info.exitCode = res.exitCode;
       info.finalText = res.finalText;
@@ -1268,6 +1319,8 @@ export class Orchestrator {
     this.trackUsage(info.provider, e, isUpdate);
     // The model the CLI reports it is actually using (an alias like "opus" resolves to the full id).
     if (e.kind === 'session' && e.text?.trim() && !/\s/.test(e.text.trim())) info.model = e.text.trim();
+    // How full its own conversation is (and the model's limit), as the CLI reports it.
+    if (!isUpdate && e.context && (e.context.used || e.context.window)) info.context = { ...info.context, ...(e.context.used ? { used: e.context.used } : {}), ...(e.context.window ? { window: e.context.window } : {}) };
     if (!isUpdate && e.usage) {
       const t = (info.tokens ??= { input: 0, output: 0, cached: 0 });
       t.input += e.usage.input ?? 0;
@@ -1404,6 +1457,301 @@ export class Orchestrator {
       files_changed: child.stats.filesChanged,
       ...(finished ? this.factRoundNote(run, child) : {}),
     });
+  }
+
+  // ---------- context: size, compaction ----------
+
+  /** Re-estimate the shared context (what read_context {} returns), the pie's numerator. */
+  private refreshShared(run: WorkflowRun) {
+    run.sharedTokens = sharingOf(run) === 'summary' ? 0 : estimateTokens(overview(run));
+  }
+
+  /** Over the auto-compaction threshold: compact before the next agent reads the shared context. */
+  private async maybeAutoCompact(run: WorkflowRun) {
+    if (sharingOf(run) === 'summary') return;
+    const cfg = run.config.context ?? {};
+    this.refreshShared(run);
+    const size = run.sharedTokens ?? 0;
+    if (size < (cfg.capacity ?? DEFAULT_CAPACITY) * (cfg.compactAt ?? 0.8)) return;
+    // The last try did not shrink it: wait until there is clearly more to condense.
+    const noGain = this.noGainAt.get(run.id);
+    if (noGain && size < noGain * 1.2) return;
+    await this.compactShared(run, 'auto').catch((e) => this.log(run, L(`共用上下文自動壓縮失敗：${(e as Error).message}`, `Automatic compaction of the shared context failed: ${(e as Error).message}`), 'warn', true));
+  }
+
+  /** Who condenses: the user's pick, else a mid-priced model of a signed-in CLI. */
+  private compactorFor(run: WorkflowRun): { provider: string; model?: string; effort?: string } | undefined {
+    const ready = new Set(this.d.registry.list().filter((p) => p.installed && p.auth.state === 'logged_in').map((p) => p.spec.id));
+    const pick = run.config.context?.compactor;
+    if (pick?.provider && ready.has(pick.provider)) return pick;
+    for (const c of AUTO_COMPACTORS) if (ready.has(c.provider)) return c;
+    const any = [...ready][0];
+    return any ? { provider: any } : undefined;
+  }
+
+  private compactorLabel(c: { provider: string; model?: string }) {
+    return `${this.providerName(c.provider)}${c.model ? ` · ${c.model}` : ''}`;
+  }
+
+  /** Run the compactor (no tools, nothing but the prompt) and return its text. */
+  private async runCompactor(run: WorkflowRun, who: { provider: string; model?: string; effort?: string }, prompt: string, task: string): Promise<string> {
+    const def = this.d.registry.defaults(who.provider);
+    const info = this.newAgent(run, { role: 'compactor', provider: who.provider, model: who.model || def.model, effort: who.effort || def.effort, depth: 0, task });
+    const res = await this.invoke(run, info, prompt, 'readonly');
+    info.status = res.error && !res.finalText.trim() ? 'failed' : 'completed';
+    info.error = res.error;
+    info.endedAt = now();
+    info.activity = undefined;
+    this.touch(run);
+    if (!res.finalText.trim()) throw new Error(res.error ?? L('壓縮者沒有回覆內容', 'The compactor returned nothing'));
+    return res.finalText.trim();
+  }
+
+  /** Facts kept verbatim outside the shared memory (structured data): orientation for the compactor. */
+  private keptVerbatim(run: WorkflowRun): string {
+    const parts = [`Goal: ${run.config.goal.slice(0, 2000)}`];
+    if (run.plan) parts.push(`Plan: ${run.plan.summary}\n${run.plan.steps.map((s) => `${s.id}. ${s.title}`).join('\n')}`);
+    for (const key of ['plan', 'implement'] as StageKey[]) {
+      const last = [...run.stages[key].rounds].reverse().find((r) => r.review);
+      if (last?.review?.verdict === 'revise') parts.push(`Open ${key} review issues:\n${last.review.issues.map((i) => `${i.id} ${i.title}`).join('\n')}`);
+      for (const r of run.stages[key].rounds) if (r.userFeedback) parts.push(`User feedback: ${r.userFeedback}`);
+    }
+    return parts.join('\n\n');
+  }
+
+  /** What a summary must still mention: file paths and review issue ids found in the material. */
+  private mustKeep(run: WorkflowRun, material: string): string[] {
+    // Paths with a known file extension only ("require/module.exports" is not a file).
+    const paths = material.match(/(?:[A-Za-z]:)?(?:[\w.-]+[\\/])*[\w-][\w.-]*\.(?:tsx?|jsx?|mjs|cjs|json|md|py|go|rs|java|kt|cs|cpp|h|css|scss|html|vue|svelte|ya?ml|toml|ini|sh|ps1|bat|sql|txt|csv|lock)\b/g) ?? [];
+    const ids = Object.values(run.stages).flatMap((s) => s.rounds.flatMap((r) => r.review?.issues.map((i) => i.id) ?? []));
+    const issueIds = ids.filter((id) => new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(material));
+    return [...new Set([...paths, ...issueIds])].slice(0, 60);
+  }
+
+  /** Compact the shared context now (one at a time per conversation). */
+  compactSharedNow(id: string): void {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (sharingOf(run) === 'summary') throw new Error(L('這段對話的共用上下文是「只交摘要」，沒有需要壓縮的內容', 'This conversation shares summaries only; there is nothing to compact'));
+    void this.compactShared(run, 'manual').catch((e) => this.log(run, L(`壓縮共用上下文失敗：${(e as Error).message}`, `Compacting the shared context failed: ${(e as Error).message}`), 'warn', true));
+  }
+
+  private compactShared(run: WorkflowRun, reason: 'auto' | 'manual'): Promise<void> {
+    const busy = this.compactingShared.get(run.id);
+    if (busy) return busy;
+    const p = this.doCompactShared(run, reason).finally(() => {
+      this.compactingShared.delete(run.id);
+      if (run.compacting?.target === 'shared') run.compacting = undefined;
+      this.touch(run);
+    });
+    this.compactingShared.set(run.id, p);
+    return p;
+  }
+
+  private async doCompactShared(run: WorkflowRun, reason: 'auto' | 'manual') {
+    const upto = now();
+    const prev = run.memory?.upto ?? 0;
+    const notes = (run.notes ?? []).filter((n) => n.ts > prev && n.ts <= upto);
+    const agents = Object.values(run.agents).filter((a) => a.role !== 'test' && a.role !== 'compactor' && a.endedAt && a.endedAt > prev && a.endedAt <= upto);
+    const material = [
+      run.memory?.summary ? `PREVIOUS SHARED MEMORY:\n${run.memory.summary}` : '',
+      notes.length ? `SHARED NOTES:\n${notes.map((n) => `- [${run.agents[n.agentId] ? `${roleLabel(run.agents[n.agentId].role)} ${run.agents[n.agentId].provider}` : 'agent'}] ${n.text}`).join('\n')}` : '',
+      agents.length ? `AGENT RESULTS:\n${agents.map((a) => `- ${agentLabel(a)}: ${(agentResult(run, a) || a.finalText || '').trim().slice(0, 1500) || '—'}`).join('\n')}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    if (!notes.length && !agents.length) {
+      if (reason === 'manual') throw new Error(L('上次壓縮後還沒有新的內容可以壓縮', 'Nothing new to compact since the last compaction'));
+      return;
+    }
+    // A summary of very little is not shorter than the original.
+    const size = estimateTokens(material);
+    if (size < MIN_COMPACT_TOKENS) {
+      if (reason === 'manual') throw new Error(L(`目前可以壓縮的內容只有約 ${fmtK(size)} token，壓縮也不會變小`, `Only about ${fmtK(size)} tokens could be compacted; a summary would not be smaller`));
+      return;
+    }
+    const who = this.compactorFor(run);
+    if (!who) throw new Error(L('沒有已登入的 CLI 可以壓縮', 'No signed-in CLI can compact'));
+    const label = this.compactorLabel(who);
+    this.refreshShared(run);
+    const before = run.sharedTokens ?? 0;
+    run.compacting = { target: 'shared', by: label, startedAt: now() };
+    this.log(run, L(`${reason === 'auto' ? '共用上下文快滿了，' : ''}正在由 ${label} 壓縮共用上下文…`, `${reason === 'auto' ? 'The shared context is nearly full; ' : ''}${label} is compacting it…`), 'info', true);
+    this.touch(run);
+    const kept = this.keptVerbatim(run);
+    const target = Math.max(300, Math.min(8000, Math.round(estimateTokens(material) * 0.25)));
+    const required = this.mustKeep(run, material);
+    const task = L('壓縮共用上下文', 'Compact the shared context');
+    let summary = await this.runCompactor(run, who, P.compactSharedPrompt(material, kept, target), task);
+    let missing = required.filter((r) => !summary.includes(r));
+    // One more try with the list of what it dropped; whatever is still missing is kept word for word.
+    if (missing.length) {
+      summary = await this.runCompactor(run, who, P.compactSharedPrompt(material, kept, target, missing), task);
+      missing = required.filter((r) => !summary.includes(r));
+    }
+    if (missing.length) summary += `\n\n## Kept verbatim\n${missing.map((m) => `- ${m}`).join('\n')}`;
+    const previous = run.memory;
+    run.memory = { summary, upto, updatedAt: now(), by: label, before, kept: missing.length ? missing : undefined };
+    this.refreshShared(run);
+    // Not smaller: keep what was there.
+    if ((run.sharedTokens ?? 0) >= before) {
+      run.memory = previous;
+      this.refreshShared(run);
+      this.noGainAt.set(run.id, before);
+      this.log(run, L(`壓縮後沒有變小（${label}），保留原本的共用上下文`, `The summary was not smaller (${label}); the shared context stays as it was`), 'info', true);
+      return;
+    }
+    run.memory.after = run.sharedTokens;
+    this.log(
+      run,
+      L(`已壓縮共用上下文：約 ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}（${label}）${missing.length ? `，另外逐字保留 ${missing.length} 項摘要漏掉的內容` : ''}。原文仍可用 read_context 讀取。`, `Shared context compacted: about ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)} (${label})${missing.length ? `; ${missing.length} item(s) the summary dropped were kept word for word` : ''}. The originals stay readable with read_context.`),
+      'info',
+      true,
+    );
+  }
+
+  /** An agent's conversation passed the ask threshold (80% by default, again at 90%): let the user decide. */
+  private checkContextAsk(run: WorkflowRun, info: AgentRunInfo) {
+    const sid = info.sessionId;
+    const c = info.context;
+    if (!sid || !c?.used || !c.window || info.role === 'compactor') return;
+    const askAt = run.config.context?.agentAskAt ?? 0.8;
+    if (!askAt) return;
+    const ratio = c.used / c.window;
+    if (ratio < askAt || (run.contextMuted ?? []).includes(sid)) return;
+    const level = ratio >= 0.9 && askAt < 0.9 ? 0.9 : askAt;
+    if (((run.contextAsked ??= {})[sid] ?? 0) >= level) return;
+    run.contextAsked[sid] = level;
+    run.contextAsk = { agentId: info.id, used: c.used, window: c.window, level };
+    this.log(run, L(`${this.label(info)} 的對話已用 ${Math.round(ratio * 100)}%（${fmtK(c.used)} / ${fmtK(c.window)}）`, `${this.label(info)}'s conversation is ${Math.round(ratio * 100)}% full (${fmtK(c.used)} / ${fmtK(c.window)})`), 'warn', true);
+    this.touch(run);
+  }
+
+  /** The user's answer to the ask: compact now, later (asked again at 90%), or never for this conversation. */
+  answerContextAsk(id: string, action: 'compact' | 'later' | 'mute'): void {
+    const run = this.runs.get(id);
+    if (!run?.contextAsk) return;
+    const agentId = run.contextAsk.agentId;
+    const sid = run.agents[agentId]?.sessionId;
+    run.contextAsk = undefined;
+    if (action === 'mute' && sid) (run.contextMuted ??= []).push(sid);
+    if (action === 'compact') this.compactAgentNow(id, agentId);
+    this.touch(run);
+  }
+
+  /** Compact one agent's own conversation: right away, or before its next turn when it is working right now. */
+  compactAgentNow(id: string, agentId: string): void {
+    const run = this.runs.get(id);
+    const info = run?.agents[agentId];
+    if (!run || !info?.sessionId) throw new Error(L('這個 agent 沒有可以壓縮的對話', 'This agent has no conversation to compact'));
+    const sid = info.sessionId;
+    if (this.agentCompactions.has(sid)) return;
+    if (Object.values(run.agents).some((a) => a.sessionId === sid && a.status === 'running')) {
+      this.queuedAgentCompact.set(sid, agentId);
+      this.log(run, L(`${this.label(info)} 正在工作，這一輪結束後再壓縮它的對話`, `${this.label(info)} is working; its conversation is compacted after this turn`), 'info', true);
+      return;
+    }
+    this.startAgentCompaction(run, info);
+  }
+
+  private startAgentCompaction(run: WorkflowRun, info: AgentRunInfo): Promise<void> {
+    const sid = info.sessionId!;
+    const p = this.doCompactAgent(run, info)
+      .catch((e) => this.log(run, L(`壓縮 ${this.label(info)} 的對話失敗：${(e as Error).message}`, `Compacting ${this.label(info)}'s conversation failed: ${(e as Error).message}`), 'warn', true))
+      .finally(() => {
+        this.agentCompactions.delete(sid);
+        if (run.compacting?.target === info.id) run.compacting = undefined;
+        this.touch(run);
+      });
+    this.agentCompactions.set(sid, p);
+    return p;
+  }
+
+  private async doCompactAgent(run: WorkflowRun, info: AgentRunInfo) {
+    const sid = info.sessionId!;
+    const spec = this.d.registry.get(info.provider);
+    if (!spec) throw new Error(L(`未知的供應商：${info.provider}`, `Unknown provider: ${info.provider}`));
+    const before = info.context?.used;
+    const native = spec.output === 'codex-jsonl' ? 'codex' : spec.output === 'claude-stream' || spec.output === 'agy-stream' ? 'slash' : undefined;
+    const who = native ? undefined : this.compactorFor(run);
+    run.compacting = { target: info.id, by: native ? this.providerName(info.provider) : who && this.compactorLabel(who), startedAt: now() };
+    this.log(run, L(`正在壓縮 ${this.label(info)} 的對話…`, `Compacting ${this.label(info)}'s conversation…`), 'info', true);
+    this.touch(run);
+    // A kept-alive CLI on this conversation would race the compaction.
+    await this.pool.closeSessions([sid]);
+    let after: number | undefined;
+    if (native === 'codex') {
+      await compactCodexThread(spec, sid);
+      // Right after compacting Codex reports 0; the real size comes with the next turn.
+      const c = codexContext(spec, sid);
+      after = c?.used || undefined;
+      info.context = { ...info.context, window: c?.window ?? info.context?.window, used: after, compactedAt: now() };
+    } else if (native === 'slash') {
+      // The CLI's own /compact, sent into its conversation.
+      const helper = this.newAgent(run, { role: 'compactor', provider: info.provider, model: this.requestedModel.get(info.id) ?? info.model, depth: 0, task: L(`壓縮 ${this.label(info)} 的對話`, `Compact ${this.label(info)}'s conversation`) });
+      const res = await this.invoke(run, helper, '/compact', 'readonly', sid);
+      helper.status = res.error ? 'failed' : 'completed';
+      helper.error = res.error;
+      helper.endedAt = now();
+      helper.activity = undefined;
+      await this.pool.closeSessions([sid]);
+      if (res.error) throw new Error(res.error);
+      info.context = { ...info.context, used: undefined, compactedAt: now() };
+    } else {
+      // Not compactable from outside: a hand-off summary, and the next turn starts a fresh conversation from it.
+      if (!who) throw new Error(L('沒有已登入的 CLI 可以整理交接摘要', 'No signed-in CLI can write the hand-off summary'));
+      const turns = Object.values(run.agents).filter((a) => a.sessionId === sid).sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
+      const transcript = turns.map((a) => formatTranscript(this.events(run.id, a.id), { budget: 120000 })).join('\n\n---\n\n');
+      const summary = await this.runCompactor(run, who, P.handoffSummaryPrompt(agentLabel(info), transcript, 3000), L(`整理 ${this.label(info)} 的交接摘要`, `Hand-off summary of ${this.label(info)}`));
+      // The slot this conversation fills (its stage's author or reviewer) starts fresh next turn, from the summary.
+      const stage = info.stage ? run.stages[info.stage] : undefined;
+      const reviewer = info.role === 'plan_reviewer' || info.role === 'code_reviewer';
+      if (stage && reviewer) (stage.reviewerSessionId = undefined), (stage.reviewerHandoff = summary);
+      else if (stage) (stage.authorSessionId = undefined), (stage.authorHandoff = summary);
+      for (const a of turns) a.sessionId = undefined;
+      after = estimateTokens(summary);
+      info.context = { ...info.context, used: after, compactedAt: now() };
+    }
+    this.log(
+      run,
+      L(`已壓縮 ${this.label(info)} 的對話${before ? `：約 ${fmtK(before)} → ${after ? fmtK(after) : '下一輪更新'}` : ''}`, `Compacted ${this.label(info)}'s conversation${before ? `: about ${fmtK(before)} → ${after ? fmtK(after) : 'updated next turn'}` : ''}`),
+      'info',
+      true,
+    );
+  }
+
+  /** The model limit to size the shared context for: this agent's, or its conversation's earlier reading, or the catalog's. */
+  private async windowFor(run: WorkflowRun, info: AgentRunInfo, resume?: string): Promise<number | undefined> {
+    if (info.context?.window) return info.context.window;
+    const earlier = resume ? Object.values(run.agents).filter((a) => a.sessionId === resume && a.context?.window).pop() : undefined;
+    return earlier?.context?.window ?? (await this.catalogWindow(this.requestedModel.get(info.id) ?? info.model));
+  }
+
+  /** A catalog model's context size ("provider/model", e.g. OpenCode's models). */
+  private async catalogWindow(model?: string): Promise<number | undefined> {
+    if (!model || !model.includes('/')) return undefined;
+    if (this.catalogWindows.has(model)) return this.catalogWindows.get(model);
+    const [pid, ...rest] = model.split('/');
+    const found = (await this.d.registry.catalogLoader?.().catch(() => undefined))?.find((p) => p.id === pid)?.models.find((m) => m.id === rest.join('/'));
+    const w = found?.context || undefined;
+    this.catalogWindows.set(model, w);
+    return w;
+  }
+
+  /** After a turn: Codex's reading from its rollout file, and a catalog limit when the CLI gave none. */
+  private async readAgentContext(info: AgentRunInfo, spec: ProviderSpec, sessionId?: string) {
+    if (spec.output === 'codex-jsonl' && sessionId) {
+      try {
+        const c = codexContext(spec, sessionId);
+        if (c) info.context = { ...info.context, ...c };
+      } catch {
+        // no reading this time
+      }
+    }
+    if (info.context?.used && !info.context.window) {
+      const w = await this.catalogWindow(this.requestedModel.get(info.id) ?? info.model);
+      if (w) info.context = { ...info.context, window: w };
+    }
   }
 
   // ---------- advisor ----------

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextSharing, PermissionLevel, ProviderInfo, RoleConfig, StageConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
+import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, PermissionLevel, ProviderInfo, RoleConfig, StageConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
 import { ModelPicker } from './ModelPicker';
 import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
@@ -352,6 +352,87 @@ function AdvisorPairingNote({ advisor, mains }: { advisor: string; mains: Claude
         </div>
       ))}
     </div>
+  );
+}
+
+const CAPACITIES = [256_000, 512_000, 1_000_000, 2_000_000];
+
+/** The preset choices plus the current value when it is not one of them (so the select shows what is set). */
+const withCurrent = (choices: number[], current: number) => (choices.includes(current) ? choices : [...choices, current].sort((a, b) => a - b));
+
+/** Shared-context size, when it compacts by itself, who compacts it, and when to ask about an agent's own conversation. */
+function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly }: { value: ContextConfig; onChange: (v: ContextConfig) => void; providers: ProviderInfo[]; disabled?: boolean; summaryOnly: boolean }) {
+  const t = useT();
+  const cap = value.capacity ?? CAPACITIES[0];
+  const custom = !CAPACITIES.includes(cap);
+  const label = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
+  const pct = (n: number) => `${Math.round(n * 100)}%`;
+  return (
+    <section className="sect">
+      <div className="sect-title">{t('共用上下文的容量與壓縮', 'Shared context size & compaction')}</div>
+      <div className="muted small">
+        {t(
+          'Aivenue 共用上下文（筆記、各 agent 的結果與交接）最多累積多少，以及何時壓縮。輸入框旁的圓餅圖顯示目前用量。容量越大越少壓縮，但 agent 讀完整內容時花的 token 也越多。',
+          "How much Aivenue's shared context (notes, agents' results and hand-offs) may hold, and when it is compacted. The pie next to the message box shows how full it is. A bigger size compacts less often, but agents reading all of it spend more tokens.",
+        )}
+      </div>
+      {summaryOnly && <div className="note small">{t('目前設為「只交摘要」，沒有共用上下文，這些設定暫時不會用到。', 'Sharing is set to summaries only, so these settings are not used right now.')}</div>}
+      <div className="kv">
+        <label>{t('容量', 'Size')}</label>
+        <div className="row gap">
+          <select disabled={disabled} value={custom ? 'custom' : String(cap)} onChange={(e) => onChange({ ...value, capacity: e.target.value === 'custom' ? 300_000 : Number(e.target.value) })}>
+            {CAPACITIES.map((c) => (
+              <option key={c} value={c}>
+                {label(c)}
+                {c === CAPACITIES[0] ? t('（預設）', ' (default)') : ''}
+              </option>
+            ))}
+            <option value="custom">{t('自訂…', 'Custom…')}</option>
+          </select>
+          {custom && (
+            <input disabled={disabled} type="number" min={8} max={10000} value={Math.round(cap / 1000)} onChange={(e) => onChange({ ...value, capacity: Math.min(10_000, Math.max(8, Number(e.target.value) || 8)) * 1000 })} />
+          )}
+          {custom && <span className="muted small">K tokens</span>}
+        </div>
+      </div>
+      <div className="kv">
+        <label>{t('自動壓縮', 'Auto-compact at')}</label>
+        <select disabled={disabled} value={value.compactAt ?? 0.8} onChange={(e) => onChange({ ...value, compactAt: Number(e.target.value) })}>
+          {withCurrent([0.7, 0.8, 0.9], value.compactAt ?? 0.8).map((n) => (
+            <option key={n} value={n}>
+              {t(`用到 ${pct(n)} 時`, `${pct(n)} full`)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="kv">
+        <label>{t('壓縮者', 'Compactor')}</label>
+        <div className="stack">
+          <select disabled={disabled} value={value.compactor ? 'pick' : 'auto'} onChange={(e) => onChange({ ...value, compactor: e.target.value === 'pick' ? { provider: providers.find((p) => p.auth.state === 'logged_in')?.spec.id ?? providers[0]?.spec.id ?? 'claude' } : undefined })}>
+            <option value="auto">{t('自動（已登入中的中價位模型，例如 Claude Haiku）', 'Automatic (a mid-priced signed-in model, e.g. Claude Haiku)')}</option>
+            <option value="pick">{t('指定…', 'Choose…')}</option>
+          </select>
+          {value.compactor && <ProviderSelect disabled={disabled} value={value.compactor} providers={providers} onChange={(v) => v && onChange({ ...value, compactor: v })} />}
+        </div>
+      </div>
+      <div className="muted tiny">
+        {t(
+          '較弱的模型可能漏掉細節：目標、計畫、未解決的審查問題與你的指示一律逐字保留，壓縮後也會檢查檔案路徑與問題編號是否都還在，原文仍可讀取。',
+          'Weaker models may drop details: the goal, plan, open review issues and your instructions are always kept word for word, the summary is checked for every file path and issue id, and the originals stay readable.',
+        )}
+      </div>
+      <div className="kv">
+        <label>{t('agent 對話詢問', 'Ask about agents')}</label>
+        <select disabled={disabled} value={value.agentAskAt ?? 0.8} onChange={(e) => onChange({ ...value, agentAskAt: Number(e.target.value) })}>
+          {withCurrent([0.7, 0.8, 0.9], value.agentAskAt ?? 0.8).filter((n) => n > 0).map((n) => (
+            <option key={n} value={n}>
+              {t(`對話用到 ${pct(n)} 時詢問是否壓縮`, `Ask to compact at ${pct(n)}`)}
+            </option>
+          ))}
+          <option value={0}>{t('不詢問（交給各家 CLI 自己壓縮）', "Never ask (the CLIs compact on their own)")}</option>
+        </select>
+      </div>
+    </section>
   );
 }
 
@@ -754,6 +835,8 @@ export function RoleSettings({
             }
           </div>
         </section>
+
+        <ContextSizeSection disabled={readOnly} providers={providers} value={draft.context ?? {}} onChange={(context) => set({ context })} summaryOnly={(draft.contextSharing ?? 'on_demand') === 'summary'} />
 
         <AdvisorSection disabled={readOnly} providers={providers} value={draft.advisor ?? { mode: 'off' }} onChange={(advisor) => set({ advisor })} mains={claudeMains(t, draft, providers, preview.result)} />
 

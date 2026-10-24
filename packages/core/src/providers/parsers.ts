@@ -144,6 +144,8 @@ class ClaudeStreamParser implements StreamParser {
 
   /** Claude's built-in advisor calls still waiting for their result. */
   private advisorPending = new Set<string>();
+  /** Tokens of the latest model call (the conversation size now). */
+  private contextUsed = 0;
 
   /** Mark one advisor call (or all pending ones) as answered. */
   private finishAdvisor(id?: string) {
@@ -167,6 +169,9 @@ class ClaudeStreamParser implements StreamParser {
         }
         break;
       case 'assistant': {
+        // Each model call's own usage is how full the conversation is now (sub-agents of the CLI excluded).
+        const mu = ev.message?.usage;
+        if (mu && !ev.parent_tool_use_id) this.contextUsed = (mu.input_tokens ?? 0) + (mu.cache_creation_input_tokens ?? 0) + (mu.cache_read_input_tokens ?? 0);
         for (const block of ev.message?.content ?? []) {
           // The CLI doesn't always print the advisor's (encrypted) result: once the agent moves on, the consultation is over.
           if (block.type !== 'advisor_tool_result' && !(block.type === 'server_tool_use' && block.name === 'advisor')) this.finishAdvisor();
@@ -223,7 +228,10 @@ class ClaudeStreamParser implements StreamParser {
           cached: (u.cache_read_input_tokens ?? 0) + sum('cache_read_input_tokens'),
           costUsd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : undefined,
         };
-        this.sink.emit({ kind: isError ? 'error' : 'result', text: this.result ?? ev.subtype ?? '', usage });
+        // The main model's context limit (the largest one listed; the advisor's own entry may be there too).
+        const windows = Object.values((ev.modelUsage ?? {}) as Record<string, { contextWindow?: number }>).map((m) => m?.contextWindow ?? 0);
+        const window = Math.max(0, ...windows) || undefined;
+        this.sink.emit({ kind: isError ? 'error' : 'result', text: this.result ?? ev.subtype ?? '', usage, context: this.contextUsed || window ? { used: this.contextUsed, window } : undefined });
         break;
       }
     }
@@ -601,7 +609,9 @@ class OpenCodeParser implements StreamParser {
       }
       case 'step_finish': {
         const tk = part.tokens ?? {};
-        this.sink.emit({ kind: 'info', usage: { input: tk.input ?? 0, output: (tk.output ?? 0) + (tk.reasoning ?? 0), cached: tk.cache?.read ?? 0, costUsd: typeof part.cost === 'number' ? part.cost : undefined } });
+        // A step is one model call: its whole input is how full the conversation is now.
+        const used = (tk.input ?? 0) + (tk.cache?.read ?? 0) + (tk.cache?.write ?? 0);
+        this.sink.emit({ kind: 'info', usage: { input: tk.input ?? 0, output: (tk.output ?? 0) + (tk.reasoning ?? 0), cached: tk.cache?.read ?? 0, costUsd: typeof part.cost === 'number' ? part.cost : undefined }, context: used ? { used } : undefined });
         break;
       }
       case 'error': {
