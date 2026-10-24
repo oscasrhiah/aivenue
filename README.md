@@ -13,7 +13,7 @@
 
 ### 示範影片
 
-https://github.com/user-attachments/assets/79ea06a8-e697-43fa-b7f3-5c8199dd7ecb
+https://github.com/user-attachments/assets/52121552-f158-4b92-a55a-004743efcdad
 
 <p align="center"><sub>影片約 1 分鐘，畫面加速播放：輸入任務 → Antigravity 額度用完、自動改由 Claude 寫計畫 → Codex 審查退回 2 個問題 → 第二輪通過 → Claude 實作並平行派出 OpenCode、Antigravity 兩個 sub agent → 審查者失敗時自動換 Codex 驗收 → 完成。</sub></p>
 
