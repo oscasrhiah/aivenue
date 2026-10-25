@@ -3998,3 +3998,47 @@ textarea.code {
 .ext-guide-item .tag {
   margin-left: 6px;
 }
+
+/* OmniRoute: connect free providers with the user's own keys. */
+.omni-providers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.omni-prov {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.omni-prov.on {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+
+.omni-prov-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.omni-prov-key input {
+  min-width: 0;
+}
+
+.omni-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.omni-conn-msg {
+  flex-basis: 100%;
+}

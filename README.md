@@ -68,7 +68,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 
 ## 下載與安裝
 
-所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.7`）：
+所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.8`）：
 
 <p align="center">
   <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="前往下載頁面" src="https://img.shields.io/badge/%E5%89%8D%E5%BE%80-%E4%B8%8B%E8%BC%89%E9%A0%81%E9%9D%A2-c96442?style=for-the-badge"></a>
@@ -259,9 +259,12 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 | [Ponytail](https://github.com/DietrichGebert/ponytail)（MIT） | 「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計 | 撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能，審查程式碼套用 ponytail-review；強度可選 lite／full／ultra。指示直接放進 agent 的提示詞，不靠 agent 自己去讀 |
 | [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 25 個工程技能：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能、上線… | 依角色提供（例如規劃者拿到計畫拆解、審查者拿到程式碼審查），每個技能可單獨開關；需要和使用者問答的技能預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
 | [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。資料夾有 `graphify-out/` 時每個 agent 先用 `graphify query` 查圖；沒有的話，可寫檔的 agent 會在需要時用 `graphify update .` 建立 |
-| [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。到它的管理頁用自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）後，供應商清單會出現「OmniRoute」 |
+| [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。在卡片裡的「連接免費供應商」接上至少一家（例如 Gemini、OpenRouter）後，就能當 agent 使用 |
 
 OmniRoute 的細節：
+
+- **連接免費供應商**：卡片裡列出推薦的 5 家（Google Gemini、OpenRouter、NVIDIA NIM、Mistral、Groq），另外 3 家收在「更多」（Ollama Cloud；Logfare 會記錄每一次請求；Cerebras 要綁卡）。按「取得金鑰」到官方網站自己註冊並建立 API 金鑰，貼回來按「連接」，Aivenue 會交給 OmniRoute（加密保存在它的資料庫）。接上後自動測試一次：送出和 agent 開頭差不多長的請求並要求呼叫工具，通過才顯示「可以跑 agent」，沒通過會寫出原因（金鑰無效、上下文太短、每分鐘上限太低、不支援工具）。
+- **免登入的免費模型跑不動 agent**：OmniRoute 內建、不用登入的免費來源每次最多約 6,000 字元，coding agent 光是指示與工具說明就超過，所以組合清單會標成「免登入，長度太短不能跑 agent」，一定要接上至少一家供應商。
 
 - **模型清單與推理強度**：從 OmniRoute 讀取，每個模型標示上下文上限與是否免費；支援推理的模型可選 low／medium／high（經 OpenCode 的模型變體傳給 OmniRoute）。
 - **組合裡有哪些模型**：選了 `auto/best-free` 這類組合，模型選單下方會列出它依序會挑的模型與目前狀態（可用／冷卻中／無法使用）；點其中一個就只用那個模型，不再自動切換。
@@ -286,7 +289,7 @@ OmniRoute 的細節：
 
 1. **一鍵安裝 Git 與 GitHub CLI**：Windows 用 winget、macOS 用 Homebrew、Linux 依系統套件管理員（apt／dnf／pacman／zypper）安裝，會開一個終端機顯示過程。
 2. **登入 GitHub**：執行 `gh auth login --web`，在 GitHub 官方頁面輸入一次性代碼即可，並自動設定 `gh auth setup-git`，讓 git 推送使用同一個帳號；Aivenue 不經手你的密碼。
-3. **GitHub MCP（選用）**：一鍵加入 GitHub 官方的 MCP 伺服器，所有供應商的 agent 都能直接查 issue、PR、程式碼和 CI。沿用上面的登入，不用另外申請 token；預設唯讀，也可勾選允許透過工具修改 GitHub。
+3. **GitHub MCP（選用）**：一鍵加入 GitHub 官方的 MCP 伺服器，所有供應商的 agent 都能直接查 issue、PR、程式碼和 CI。沿用上面的登入，不用另外申請 token；預設唯讀，啟用後隨時可在卡片上切換「唯讀／可讀寫」（可讀寫時 agent 能透過工具開 PR、留言、建立 issue）。
 
 <p align="center"><img src="docs/images/github.png" alt="能力頁的 GitHub 卡片" width="720"></p>
 
@@ -309,7 +312,7 @@ OmniRoute 的細節：
 - **Agent map 看整段對話**：依「第 1 則訊息」「第 2 則訊息」…分區顯示每則訊息的 agent。
 - 編輯過的訊息與「改成允許並繼續」也留在同一段對話；刪除對話會連同其中每一則訊息一起刪除（會先確認）。
 
-### 暫停／繼續與編輯已送出的訊息
+### 暫停／繼續、追加訊息與編輯已送出的訊息
 
 | 動作 | 怎麼做 | 效果 |
 |---|---|---|
@@ -317,6 +320,7 @@ OmniRoute 的細節：
 | 繼續 | 暫停後按 **▶** | 從原本的進度接著做；暫停時在輸入框打的文字會一起交給 agent，可用來補充或修正方向 |
 | 停止 | 標題列的「停止」 | 結束整個工作流 |
 | 編輯已送出的訊息 | 在自己的訊息上按「編輯」 | 如果工作流還在跑，會先立即中斷，再用修改後的內容以相同設定重跑；舊的對話留在紀錄中 |
+| 執行中追加訊息 | agent 工作時直接在輸入框打字送出 | 正在工作的 agent 會先停下、在原本的對話裡讀到這則訊息再接著做；訊息也會記成共用筆記，之後才開始的 agent 一樣看得到 |
 | 調整設定 | 工作中也能按 ⚙ 角色／權限 | 角色、模型、階段開關、sub agent、權限、上下文分享與壓縮、顧問等設定套用到接下來開始的 agent |
 
 ### 其他

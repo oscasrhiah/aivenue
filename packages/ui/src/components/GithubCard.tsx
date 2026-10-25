@@ -94,6 +94,19 @@ export function GithubCard() {
                   : t('已停用（在下方清單啟用）', 'Off (turn it on in the list below)')
                 : t('GitHub 官方的 MCP 工具，所有供應商的 agent 都能直接查 issue、PR、程式碼和 CI。不用另外申請 token，沿用上面的登入。', "GitHub's official MCP tools: every provider's agents can look up issues, PRs, code and CI directly. No token to create; it uses the sign-in above.")}
             </div>
+            {mcp && gh.auth.loggedIn && (
+              <div className="row gap wrap gh-mcp-mode">
+                <span className="muted tiny">{t('GitHub 工具權限', 'GitHub tools')}</span>
+                <div className="seg small">
+                  {[false, true].map((w) => (
+                    <button key={String(w)} className={cx(!('X-MCP-Readonly' in (mcp.headers ?? {})) === w && 'on')} disabled={!!busy} onClick={() => act('mcp', 'github.enableMcp', { write: w })}>
+                      {w ? t('可讀寫', 'Read & write') : t('唯讀', 'Read-only')}
+                    </button>
+                  ))}
+                </div>
+                <span className="muted tiny">{t('可讀寫：agent 能透過工具開 PR、留言、建立 issue 等（對外動作仍會先問你）。', 'Read & write: agents can open PRs, comment, create issues and so on through the tools (external actions still ask you first).')}</span>
+              </div>
+            )}
             {!mcp && gh.auth.loggedIn && (
               <label className="check small">
                 <input type="checkbox" checked={write} onChange={(e) => setWrite(e.target.checked)} />

@@ -15,7 +15,7 @@ import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 
-type Item = { ts: number; key: string } & ({ type: 'user'; text: string } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
+type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
 function timeline(run: WorkflowRun): Item[] {
   // A follow-up's goal carries the earlier task as context; show only what the user wrote.
@@ -24,8 +24,20 @@ function timeline(run: WorkflowRun): Item[] {
   run.log.forEach((l, i) => {
     if (l.chat) items.push({ type: 'divider', text: l.text, level: l.level, ts: l.ts, key: `log${i}` });
   });
+  (run.userMessages ?? []).forEach((m, i) => items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true }));
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
+}
+
+/** A message sent while the agents were working: handed to them right away. */
+function MidRunMessage({ text }: { text: string }) {
+  const t = useT();
+  return (
+    <div className="user-msg-wrap">
+      <div className="user-msg">{text}</div>
+      <div className="muted tiny mid-run-tag">{t('執行中追加 · 已交給正在工作的 agent', 'Sent while working · handed to the working agents')}</div>
+    </div>
+  );
 }
 
 /** An earlier message of the same conversation, read-only above the latest one. */
@@ -34,7 +46,9 @@ function EarlierMessage({ run, providers, onImage }: { run: WorkflowRun; provide
   return (
     <div className="earlier-msg">
       {items.map((it) =>
-        it.type === 'user' ? (
+        it.type === 'user' && it.midRun ? (
+          <MidRunMessage key={it.key} text={it.text} />
+        ) : it.type === 'user' ? (
           <div key={it.key} className="user-block">
             {!!run.config.attachments?.length && (
               <div className="atts right">
@@ -168,6 +182,7 @@ function Composer({
   runState,
   onPause,
   onResume,
+  onSay,
   extra,
 }: {
   draft: RoleDraft;
@@ -190,6 +205,8 @@ function Composer({
   onPause?: () => void;
   /** Resume; what the user typed meanwhile is passed to the agents. */
   onResume?: (note: string) => void;
+  /** While agents work: hand a message to them right away. */
+  onSay?: (text: string) => Promise<boolean>;
 }) {
   const t = useT();
   const [text, setText] = useState('');
@@ -231,6 +248,10 @@ function Composer({
 
   const uploading = files.some((f) => f.status === 'uploading');
   const send = async () => {
+    if (runState === 'running' && onSay) {
+      if (text.trim() && (await onSay(text.trim()))) setText('');
+      return;
+    }
     if (!text.trim() || disabled || busy || uploading) return;
     const ready = files.filter((f) => f.status === 'ready' && f.att).map((f) => f.att!);
     if (await onSend(text.trim(), ready)) {
@@ -312,7 +333,11 @@ function Composer({
         />
         <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} />
         {extra}
-        {runState === 'running' ? (
+        {runState === 'running' && text.trim() ? (
+          <button className="send" onClick={send} title={t('交給正在工作的 agent：它們會停下來看這則訊息，再接著做', 'Hand it to the working agents: they stop, read it and carry on')} aria-label={t('送出', 'Send')}>
+            ↑
+          </button>
+        ) : runState === 'running' ? (
           <button className="send pause" onClick={onPause} title={t('暫停：停下正在工作的 agent，之後可以繼續', 'Pause: stop the working agents; you can resume later')} aria-label={t('暫停', 'Pause')}>
             ❚❚
           </button>
@@ -592,11 +617,19 @@ export function Chat({ id }: { id?: string }) {
         roleProviders={roleProviders}
         canPickFiles={!!host?.canPickFiles}
         busy={sending}
-        disabled={active && !paused}
+        disabled={active && !paused && run?.status !== 'running'}
         onSend={send}
         runState={run?.status === 'running' ? 'running' : paused ? 'paused' : undefined}
         onPause={() => run && hub.call('workflows.pause', { id: run.id }).catch((e) => setError((e as Error).message))}
         onResume={(note) => run && hub.call('workflows.resume', { id: run.id, note }).catch((e) => setError((e as Error).message))}
+        onSay={(text) =>
+          run
+            ? hub.call('workflows.say', { id: run.id, text }).then(
+                () => true,
+                (e) => (setError((e as Error).message), false),
+              )
+            : Promise.resolve(false)
+        }
         onOpenRoles={() => setRolesOpen(true)}
         // VS Code keeps the composer minimal: attach, permission, roles.
         compact={host?.host === 'vscode'}
@@ -609,7 +642,7 @@ export function Chat({ id }: { id?: string }) {
               ? t('請先回應上方的問題', 'Answer the question above first')
               : paused
                 ? t('已暫停：可以輸入補充說明，按 ▶ 繼續', 'Paused: type extra guidance if you like, then press ▶ to resume')
-                : t('agent 正在工作…（可按 ❚❚ 暫停）', 'Agents are working… (press ❚❚ to pause)')
+                : t('agent 正在工作…輸入訊息會立刻交給它們（或按 ❚❚ 暫停）', 'Agents are working… a message goes to them right away (or press ❚❚ to pause)')
             : run
               ? t('接著要做什麼？（沿用相同角色與資料夾）', 'What next? (same roles and folder)')
               : t('描述要完成的任務…', 'Describe the task…')
@@ -684,6 +717,7 @@ export function Chat({ id }: { id?: string }) {
                 <EarlierMessage key={r.id} run={r} providers={providers} onImage={setLightbox} />
               ))}
               {items.map((it) => {
+                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} />;
                 if (it.type === 'user')
                   return (
                     <div key={it.key} className="user-block">

@@ -146,7 +146,7 @@ function OmniPool({ pool, disabled, onPick }: { pool: string; disabled?: boolean
   if (!list) return <div className="muted tiny">{t('讀取這個組合的模型…', 'Reading the models of this pool…')}</div>;
   if (!list.length) return <div className="muted tiny">{t('這個組合目前沒有可用的模型：到 OmniRoute 管理頁連接免費供應商。', 'No model in this pool right now: connect free providers in the OmniRoute dashboard.')}</div>;
   const ok = list.filter((c) => c.state === 'ok').length;
-  const label = (s: OmniCandidate['state']) => (s === 'ok' ? t('可用', 'ready') : s === 'cooldown' ? t('冷卻中', 'cooling down') : t('無法使用', 'unavailable'));
+  const label = (s: OmniCandidate['state']) => (s === 'ok' ? t('可用', 'ready') : s === 'cooldown' ? t('冷卻中', 'cooling down') : s === 'limited' ? t('免登入，長度太短不能跑 agent', 'no sign-in, too short for agents') : t('無法使用', 'unavailable'));
   return (
     <div className="omni-pool">
       <button className="link tiny" onClick={() => setOpen(!open)}>
@@ -156,7 +156,7 @@ function OmniPool({ pool, disabled, onPick }: { pool: string; disabled?: boolean
         <div className="omni-pool-list">
           <div className="muted tiny">{t('點一個模型就只用它，不再自動切換。', 'Click a model to use only that one, without automatic switching.')}</div>
           {list.map((c, i) => (
-            <button key={c.id} className={cx('omni-cand', c.state)} disabled={disabled || c.state === 'excluded'} onClick={() => onPick(c.id)} title={c.provider}>
+            <button key={c.id} className={cx('omni-cand', c.state)} disabled={disabled || c.state === 'excluded' || c.state === 'limited'} onClick={() => onPick(c.id)} title={c.provider}>
               <span className="muted tiny">{i + 1}</span>
               <span className="mono small">{c.id.replace(/^omniroute\//, '')}</span>
               <span className={cx('tiny', c.state === 'ok' ? 'ok-text' : 'muted')}>{label(c.state)}</span>

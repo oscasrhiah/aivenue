@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
-import type { AgentRole, OmniCandidate, ExtensionId, ExtensionsConfig, ExtensionSkill, ExtensionStatus, InstructionRole, ModelInfo, PonytailLevel, ProviderInfo, ProviderSpec } from './types';
+import type { AgentRole, OmniCandidate, OmniTest, ExtensionId, ExtensionsConfig, ExtensionSkill, ExtensionStatus, InstructionRole, ModelInfo, PonytailLevel, ProviderInfo, ProviderSpec } from './types';
 import { type CapabilityStore, type ExtraSkill, parseFrontmatter } from './capabilities';
 import { capture, childEnv, findNode, killTree, refreshPathCache } from './proc';
 import type { ProviderRegistry } from './providers/registry';
@@ -90,6 +90,8 @@ export class ExtensionService {
   private graphifyVersion?: string;
   private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string> };
   private omniStarting?: Promise<void>;
+  /** Result of the agent check per OmniRoute connection. */
+  private omniTests = new Map<string, OmniTest>();
 
   constructor(
     private o: {
@@ -155,7 +157,14 @@ export class ExtensionService {
       st('omniroute', !!omni?.ready, {
         version: this.omniVersion(),
         omniroute: omni?.ready
-          ? { url: `${omni.url}/v1`, dashboardUrl: omni.url, connections: omni.connections.length, models: this.usableOmniModels().length, free: this.usableOmniModels().filter((m) => this.omniFree(m)).length }
+          ? {
+              url: `${omni.url}/v1`,
+              dashboardUrl: omni.url,
+              connections: omni.connections.length,
+              models: this.usableOmniModels().length,
+              free: this.usableOmniModels().filter((m) => this.omniFree(m)).length,
+              connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined })),
+            }
           : undefined,
       }),
     ];
@@ -247,7 +256,8 @@ export class ExtensionService {
 
   private async checkGraphify(): Promise<boolean> {
     refreshPathCache();
-    const r = await capture('graphify', ['--version'], { timeoutMs: 30000 });
+    // The first run after an install compiles Python files (slow with antivirus scanning).
+    const r = await capture('graphify', ['--version'], { timeoutMs: 120000 });
     this.graphifyVersion = r.code === 0 ? (/(\d+\.\d+(?:\.\d+)?)/.exec(r.stdout + r.stderr)?.[1] ?? 'installed') : undefined;
     return !!this.graphifyVersion;
   }
@@ -270,7 +280,8 @@ export class ExtensionService {
       }
       step(L('用 uv 安裝 graphify（會一併下載 Python，約 1–3 分鐘）…', 'Installing graphify with uv (downloads Python too, 1–3 minutes)…'));
       // tree-sitter 0.25.2 沒有 Python 3.15 wheel，指定已有預編譯套件的版本。
-      const r = await capture('uv', ['tool', 'install', '--upgrade', '--python', '3.12', 'graphifyy'], { timeoutMs: 15 * 60000 });
+      // --force: take over graphify.exe left by an earlier or half-finished install.
+      const r = await capture('uv', ['tool', 'install', '--force', '--upgrade', '--python', '3.12', 'graphifyy'], { timeoutMs: 15 * 60000 });
       if (!(await this.checkGraphify())) {
         const detail = (r.stderr || r.stdout || r.error || L('沒有輸出', 'no output')).trim().slice(0, 3000);
         throw new Error(L(`graphify 安裝失敗：${detail}`, `Could not install graphify: ${detail}`));
@@ -415,11 +426,89 @@ export class ExtensionService {
     if (remove && this.o.registry.get(OMNI_PROVIDER)) this.o.registry.remove(OMNI_PROVIDER);
   }
 
-  private async omniFetch<T>(p: string): Promise<T> {
+  private async omniFetch<T>(p: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
     if (!this.omni) throw new Error('OmniRoute is not running');
-    const res = await fetch(this.omni.url + p, { headers: { Authorization: `Bearer ${await this.omniSecret('apiKey')}` }, signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`OmniRoute ${p}: HTTP ${res.status}`);
-    return (await res.json()) as T;
+    const res = await fetch(this.omni.url + p, {
+      method: init.method ?? 'GET',
+      headers: { Authorization: `Bearer ${await this.omniSecret('apiKey')}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+      body: init.body ? JSON.stringify(init.body) : undefined,
+      signal: AbortSignal.timeout(init.timeoutMs ?? 15000),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(omniError(text) || `OmniRoute ${p}: HTTP ${res.status}`);
+    return (text ? JSON.parse(text) : null) as T;
+  }
+
+  // ---------- free providers (the user signs up and pastes a key) ----------
+
+  /** Connect an upstream provider with the user's own key, then check it can run an agent. */
+  async omniConnect(p: { provider: string; apiKey: string }): Promise<ExtensionStatus[]> {
+    const key = p.apiKey.trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(p.provider) || !key) throw new Error(L('請貼上 API 金鑰', 'Paste an API key'));
+    if (!this.omni?.ready) await this.startOmni();
+    const r = await this.omniFetch<{ connection?: { id: string } }>('/api/providers', { method: 'POST', body: { provider: p.provider, apiKey: key, name: `${p.provider} (Aivenue)` } });
+    await this.refreshOmni(true);
+    const id = r?.connection?.id ?? this.omni?.connections.find((c) => c.provider === p.provider)?.id;
+    if (id) await this.omniTest(id);
+    return this.list();
+  }
+
+  async omniDisconnect(id: string): Promise<ExtensionStatus[]> {
+    await this.omniFetch(`/api/providers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    this.omniTests.delete(id);
+    await this.refreshOmni(true);
+    return this.list();
+  }
+
+  /**
+   * Can this connection run an agent? One request the size of an agent's opening prompt (about 24,000 characters)
+   * that must come back as a tool call: catches bad keys, short context, low per-minute token caps and no tool support.
+   */
+  async omniTest(id: string): Promise<ExtensionStatus[]> {
+    const conn = this.omni?.connections.find((c) => c.id === id);
+    if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
+    const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
+    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
+    // A free model first: that is what the user connected it for.
+    const model = models.find((m) => this.omniFree(m)) ?? models[0];
+    this.omniTests.set(id, { state: 'testing', at: Date.now() });
+    this.changed();
+    // OmniRoute's own check first: it tells a wrong key apart from everything else.
+    const own = await this.omniFetch<{ valid?: boolean; error?: string }>(`/api/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: {}, timeoutMs: 60000 }).catch((e) => ({ valid: false, error: (e as Error).message }));
+    if (own?.valid === false) {
+      const why = /invalid api key|unauthor|401/i.test(own.error ?? '') ? L('金鑰無效：請確認貼上的是完整的 API 金鑰', 'The key was rejected: check you pasted the whole API key') : (own.error ?? L('連線失敗', 'Connection failed'));
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), message: why });
+      this.changed();
+      return this.list();
+    }
+    if (!model) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), message: L('OmniRoute 沒有列出這家可以呼叫工具的模型', 'OmniRoute lists no tool-calling model for this provider') });
+      this.changed();
+      return this.list();
+    }
+    const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
+    try {
+      const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
+        method: 'POST',
+        timeoutMs: 120000,
+        body: {
+          model: model.id,
+          max_tokens: 200,
+          messages: [
+            { role: 'system', content: filler },
+            { role: 'user', content: 'Call the ping tool with ok=true. Do not answer in text.' },
+          ],
+          tools: [{ type: 'function', function: { name: 'ping', description: 'Reply to a connectivity check.', parameters: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } }],
+          tool_choice: 'required',
+        },
+      });
+      const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
+      this.omniTests.set(id, called ? { state: 'ok', at: Date.now(), model: model.id } : { state: 'fail', at: Date.now(), model: model.id, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') });
+    } catch (e) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: (e as Error).message.slice(0, 400) });
+    }
+    this.changed();
+    return this.list();
   }
 
   /** Read OmniRoute's connected providers and models again, and update the provider agents use. */
@@ -437,7 +526,7 @@ export class ExtensionService {
     this.omni.connections = providers.connections ?? [];
     // What the free pools can route to right now: those models go in the menus too.
     const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p)));
-    this.omni.candidates = new Set(pools.flat().filter((c) => c.state !== 'excluded').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
+    this.omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
     this.omni.at = Date.now();
     this.o.registry.forgetModels(OMNI_PROVIDER);
     this.syncOmniProvider();
@@ -477,7 +566,9 @@ export class ExtensionService {
       if (!id || seen.has(id)) continue;
       seen.add(id);
       const cooling = c.connectionCooldown || c.modelLocked || (c.breakerState && c.breakerState !== 'CLOSED');
-      out.push({ id: `${OMNI_PROVIDER}/${id}`, provider: c.provider ?? '', state: c.excluded || c.reachable === false ? 'excluded' : cooling ? 'cooldown' : 'ok' });
+      // No-sign-in pools (Cloudflare Playground…) cap a request at about 6,000 characters: far too little for a coding agent.
+      const state = c.excluded || c.reachable === false ? 'excluded' : c.connectionId === 'noauth' ? 'limited' : cooling ? 'cooldown' : 'ok';
+      out.push({ id: `${OMNI_PROVIDER}/${id}`, provider: c.provider ?? '', state });
     }
     return out;
   }
@@ -511,7 +602,7 @@ export class ExtensionService {
   private async omniAuth(): Promise<ProviderInfo['auth']> {
     if (!this.cfg().omniroute?.enabled) return { state: 'logged_out', detail: L('在「能力 → 內建擴充」開啟 OmniRoute', 'Turn OmniRoute on under Capabilities → Built-in extensions') };
     if (!this.omni?.ready) return { state: 'logged_out', detail: this.work.get('omniroute')?.error ?? L('OmniRoute 尚未啟動', 'OmniRoute is not running') };
-    if (!this.omni.connections.length) return { state: 'logged_out', detail: L('還沒有連接任何供應商：到 OmniRoute 管理頁連接免費供應商（例如 Gemini、Groq、OpenRouter）', 'No provider connected yet: connect free providers (e.g. Gemini, Groq, OpenRouter) in the OmniRoute dashboard') };
+    if (!this.omni.connections.length) return { state: 'logged_out', detail: L('還沒有連接任何供應商：OmniRoute 內建的免登入免費模型每次最多約 6,000 字元，跑不動 coding agent。請到 OmniRoute 管理頁用自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）。', 'No provider connected yet: OmniRoute’s built-in no-sign-in free models take about 6,000 characters per request, too little for a coding agent. Connect free providers with your own accounts (e.g. Gemini, Groq, OpenRouter) in the OmniRoute dashboard.') };
     return { state: 'logged_in', detail: L(`已連接 ${this.omni.connections.length} 個供應商`, `${this.omni.connections.length} providers connected`) };
   }
 
@@ -584,10 +675,11 @@ export class ExtensionService {
 
 interface OmniConnection {
   id?: string;
+  name?: string;
   provider?: string;
   providerId?: string;
   isActive?: boolean;
-  providerSpecificData?: { prefix?: string };
+  providerSpecificData?: { prefix?: string; nodeName?: string };
 }
 
 interface OmniPoolEntry {
@@ -599,6 +691,7 @@ interface OmniPoolEntry {
   breakerState?: string;
   connectionCooldown?: boolean;
   modelLocked?: boolean;
+  connectionId?: string;
 }
 
 interface OmniCall {
@@ -650,6 +743,17 @@ function bundleStamp(dir: string): string {
   };
   walk(dir);
   return parts.join('\n');
+}
+
+/** OmniRoute's error body ({error: {message}} or {error: "..."}) as one line. */
+function omniError(body: string): string {
+  try {
+    const j = JSON.parse(body);
+    const e = j?.error;
+    return String((typeof e === 'string' ? e : (e?.message ?? j?.message)) ?? '').slice(0, 400);
+  } catch {
+    return body.slice(0, 200);
+  }
 }
 
 /** A SKILL.md without its frontmatter. */

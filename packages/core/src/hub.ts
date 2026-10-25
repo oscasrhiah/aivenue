@@ -235,6 +235,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.omniPassword': () => extensions.omniPassword(),
     'extensions.omniCandidates': (p: { model: string }) => extensions.omniCandidates(p.model),
     'extensions.omniPin': (p: { model: string }) => extensions.omniPin(p.model),
+    'extensions.omniConnect': (p: { provider: string; apiKey: string }) => extensions.omniConnect(p),
+    'extensions.omniDisconnect': (p: { id: string }) => extensions.omniDisconnect(p.id),
+    'extensions.omniTest': (p: { id: string }) => extensions.omniTest(p.id),
     'capabilities.presets': () => MCP_PRESETS.map(({ id, name, zh, en, docsUrl }) => ({ id, name, zh, en, docsUrl })),
     'capabilities.addPreset': async (p: { id: string; headed?: boolean }) => {
       const preset = MCP_PRESETS.find((x) => x.id === p.id);
@@ -339,6 +342,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.cancel': (p: { id: string }) => orchestrator.cancel(p.id),
     'workflows.pause': (p: { id: string }) => orchestrator.pause(p.id),
     'workflows.resume': (p: { id: string; note?: string }) => orchestrator.resume(p.id, p.note),
+    'workflows.say': (p: { id: string; text: string }) => orchestrator.interject(p.id, p.text),
     'workflows.continueDenied': (p: { id: string; deniedId: string }) => orchestrator.continueDenied(p.id, p.deniedId),
     'workflows.edit': (p: { id: string; goal: string; config?: WorkflowConfig }) => orchestrator.editAndResend(p.id, p.goal, p.config),
     'workflows.updateConfig': (p: { id: string; patch: Parameters<Orchestrator['updateConfig']>[1] }) => {

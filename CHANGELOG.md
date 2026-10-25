@@ -2,6 +2,14 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 0.1.8 - 2026-10-25
+
+- **執行中追加訊息**：agent 工作時可以直接在輸入框打字送出（有文字時按鈕變成 ↑，空白時仍是 ❚❚ 暫停）。正在工作的 agent 會停下、在原本的對話裡讀到訊息後接著做；訊息同時記成共用筆記，之後才開始的 agent 也看得到。對話中以「執行中追加」標示。
+- **OmniRoute 連接免費供應商**：卡片裡列出推薦的 5 家（Gemini、OpenRouter、NVIDIA NIM、Mistral、Groq）與「更多」3 家，附官方取得金鑰的連結；貼上金鑰即可連接，不用進 OmniRoute 管理頁。接上後自動測試能不能跑 agent（長提示＋工具呼叫），並可重新測試或移除。
+- **OmniRoute 免登入模型**：內建免登入的免費模型每次最多約 6,000 字元，跑不動 agent；組合清單改標「免登入，長度太短不能跑 agent」且不能選，沒有連接供應商時會說明原因。
+- **GitHub 工具權限**：啟用後也能隨時切換「唯讀／可讀寫」。
+- **Graphify 安裝**：先前安裝留下的 graphify.exe 不再導致「Executables already exist」失敗；第一次檢查的等待時間放寬到 2 分鐘。
+
 ## 0.1.7 - 2026-10-25
 
 - 修正 Graphify 自動安裝遇到 Python 3.15 時，因 tree-sitter 缺少對應預編譯套件而失敗：改用 Python 3.12（缺少時由 uv 下載）。安裝錯誤保留開頭最多 3,000 字元，避免只顯示最後的通用提示。

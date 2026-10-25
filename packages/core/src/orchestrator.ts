@@ -317,7 +317,10 @@ export class Orchestrator {
   // ---------- pause / resume ----------
 
   /** Paused workflows: agents wait on `gate` before starting; `note` is what the user typed when resuming. */
-  private pauses = new Map<string, { gate: Promise<void>; release: () => void; note?: string }>();
+  /** pending: messages sent while paused, handed over on resume. */
+  private pauses = new Map<string, { gate: Promise<void>; release: () => void; note?: string; pending?: string }>();
+  /** Messages the user sent to a working agent, handed over when it continues. */
+  private agentNotes = new Map<string, string>();
   /** Agents stopped by a pause (not a cancel), to be continued on resume. */
   private pausedAgents = new Set<string>();
 
@@ -348,8 +351,35 @@ export class Orchestrator {
     run.status = 'running';
     this.log(run, note?.trim() ? L(`繼續執行，並告訴 agent：${note.trim()}`, `Resumed, telling the agents: ${note.trim()}`) : L('繼續執行', 'Resumed'), 'info', true);
     this.touch(run);
-    p.note = note?.trim() || undefined;
+    p.note = [p.pending, note?.trim()].filter(Boolean).join('\n') || undefined;
     p.release();
+  }
+
+  /**
+   * A message sent while the workflow runs: working agents stop and continue their own conversation with it right
+   * away; it also becomes a shared note, so every agent that starts later sees it.
+   */
+  interject(id: string, text: string): void {
+    const run = this.runs.get(id);
+    const msg = text.trim().slice(0, 8000);
+    if (!run || !msg) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (!['running', 'paused', 'waiting_human'].includes(run.status)) throw new Error(L('這段對話已經結束，請直接送出新訊息', 'This conversation has finished; send a new message instead'));
+    (run.userMessages ??= []).push({ ts: now(), text: msg });
+    (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: 'user', by: 'USER (sent while you were working — follow it)', text: msg, ts: now() });
+    const p = this.pauses.get(id);
+    if (run.status === 'paused' && p) {
+      // Paused: handed over together with whatever the user adds on resume.
+      p.pending = [p.pending, msg].filter(Boolean).join('\n');
+    } else if (run.status === 'running') {
+      // Stop each working agent; invokePausable continues its own conversation with the message.
+      for (const a of Object.values(run.agents)) {
+        if (a.status !== 'running' || a.role === 'compactor') continue;
+        this.agentNotes.set(a.id, [this.agentNotes.get(a.id), msg].filter(Boolean).join('\n'));
+        this.pausedAgents.add(a.id);
+        this.agentAborts.get(a.id)?.abort();
+      }
+    }
+    this.touch(run);
   }
 
   /** Wait while the workflow is paused; returns what the user typed on resume. */
@@ -371,7 +401,9 @@ export class Orchestrator {
     while (this.pausedAgents.delete(info.id) && !this.aborted(run)) {
       info.status = 'paused';
       this.touch(run);
-      const note = await this.waitIfPaused(run);
+      const said = this.agentNotes.get(info.id);
+      this.agentNotes.delete(info.id);
+      const note = [said, await this.waitIfPaused(run)].filter(Boolean).join('\n') || undefined;
       const session = res.sessionId ?? info.sessionId;
       const spec = this.d.registry.get(info.provider);
       const canResume = !!(session && spec?.run.resume && spec.capabilities?.resume !== false);

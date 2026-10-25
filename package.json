@@ -1,7 +1,7 @@
 {
   "name": "aivenue",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Orchestrate subscription-based AI coding CLIs (Claude Code, Codex, Gemini, Qwen, ...) as planners, executors, reviewers and sub-agents.",
   "workspaces": [
     "packages/*"

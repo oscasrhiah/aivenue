@@ -283,8 +283,16 @@ export interface OmniCandidate {
   /** Model id agents use ("omniroute/groq/llama-4-scout"). */
   id: string;
   provider: string;
-  /** ok: can be picked now · cooldown: resting after errors or a quota · excluded: not reachable / not allowed. */
-  state: 'ok' | 'cooldown' | 'excluded';
+  /** ok: can be picked now · cooldown: resting after errors or a quota · limited: no-sign-in, too short for agents · excluded: not reachable / not allowed. */
+  state: 'ok' | 'cooldown' | 'limited' | 'excluded';
+}
+
+/** Can an OmniRoute connection run an agent (a long prompt that must come back as a tool call)? */
+export interface OmniTest {
+  state: 'testing' | 'ok' | 'fail';
+  at: number;
+  model?: string;
+  message?: string;
 }
 
 export interface ExtensionStatus {
@@ -298,7 +306,15 @@ export interface ExtensionStatus {
   skills?: ExtensionSkill[];
   level?: PonytailLevel;
   /** OmniRoute: where it runs, which upstream providers are connected, how many models agents can use. */
-  omniroute?: { url: string; dashboardUrl: string; connections: number; models: number; free: number };
+  omniroute?: {
+    url: string;
+    dashboardUrl: string;
+    connections: number;
+    models: number;
+    free: number;
+    /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */
+    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest }[];
+  };
 }
 
 export interface SkillInfo {
@@ -779,6 +795,8 @@ export interface WorkflowRun {
   worktree?: { path: string; branch: string; baseCommit: string; repo: string; origCwd: string; cwd: string; state: 'active' | 'applied' | 'discarded' | 'kept'; note?: string };
   /** `chat` entries are shown as divider lines in the conversation. */
   log: { ts: number; text: string; level: 'info' | 'warn' | 'error'; chat?: boolean }[];
+  /** Messages the user sent while the workflow was running (handed to the working agents and every later one). */
+  userMessages?: { ts: number; text: string }[];
 }
 
 export interface WorkflowSummary {

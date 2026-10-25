@@ -5,6 +5,7 @@ import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
 import { ExtensionGuide } from '../components/ExtensionGuide';
+import { OmniProviders } from '../components/OmniProviders';
 
 const ROLES: InstructionRole[] = ['all', 'planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent'];
 
@@ -781,10 +782,11 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
           )}
           <div className="muted tiny">
             {s.omniroute && !s.omniroute.connections
-              ? t('下一步：在管理頁用你自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）。連好後按「重新讀取」，供應商清單就會出現 OmniRoute。', 'Next: connect free providers (e.g. Gemini, Groq, OpenRouter) with your own accounts in the dashboard, then press Reload; OmniRoute then shows up as a provider.')
+              ? t('下一步：在下方連接至少一家免費供應商。OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: connect at least one free provider below. OmniRoute’s built-in no-sign-in models are too short to run an agent.')
               : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型；自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')}{' '}
-            {t('只在這台電腦上執行（127.0.0.1），管理密碼是自動產生的亂數。注意：部分免費供應商會記錄你送出的內容，私人或公司的程式碼請小心。', 'Runs on this computer only (127.0.0.1) with a generated dashboard password. Some free providers log what you send: be careful with private or company code.')}
+            {t('只在這台電腦上執行（127.0.0.1），管理密碼是自動產生的亂數。', 'Runs on this computer only (127.0.0.1) with a generated dashboard password.')}
           </div>
+          {s.omniroute && <OmniProviders s={s} />}
         </>
       )}
 
