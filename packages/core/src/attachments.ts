@@ -118,11 +118,12 @@ export class AttachmentStore {
   }
 
   /** Move a run's attachments into its folder; attachments of earlier runs (follow-ups) are copied. */
-  adopt(runId: string, list: Attachment[] | undefined): Attachment[] {
+  adopt(runId: string, list: Attachment[] | undefined, taken: Attachment[] = []): Attachment[] {
     if (!list?.length) return [];
     const dir = this.runDir(runId);
     fs.mkdirSync(dir, { recursive: true });
-    const used = new Set<string>();
+    // Names already in the run's folder (files added while it runs must not overwrite them).
+    const used = new Set<string>(taken.map((a) => path.basename(a.path).toLowerCase()));
     return list.map((a) => {
       if (!this.servable(a.path) || !fs.existsSync(a.path)) throw new Error(L(`找不到附件：${a.name}`, `Attachment not found: ${a.name}`));
       let name = safeName(a.name);

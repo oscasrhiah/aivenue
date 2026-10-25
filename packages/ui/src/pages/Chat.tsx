@@ -15,7 +15,7 @@ import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 
-type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
+type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[] } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
 function timeline(run: WorkflowRun): Item[] {
   // A follow-up's goal carries the earlier task as context; show only what the user wrote.
@@ -24,35 +24,56 @@ function timeline(run: WorkflowRun): Item[] {
   run.log.forEach((l, i) => {
     if (l.chat) items.push({ type: 'divider', text: l.text, level: l.level, ts: l.ts, key: `log${i}` });
   });
-  (run.userMessages ?? []).forEach((m, i) => items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true }));
+  (run.userMessages ?? []).forEach((m, i) => items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments }));
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
 }
 
 /** A message sent while the agents were working: handed to them right away. */
-function MidRunMessage({ text }: { text: string }) {
+function MidRunMessage({ text, files, onImage }: { text: string; files?: Attachment[]; onImage: (src: string) => void }) {
   const t = useT();
   return (
     <div className="user-msg-wrap">
-      <div className="user-msg">{text}</div>
+      {!!files?.length && (
+        <div className="atts right">
+          {files.map((a) => (
+            <AttachmentChip key={a.path} name={a.name} size={a.size} src={fileUrl(a.path)} onOpen={() => onImage(fileUrl(a.path))} />
+          ))}
+        </div>
+      )}
+      {text && <div className="user-msg">{text}</div>}
       <div className="muted tiny mid-run-tag">{t('執行中追加 · 已交給正在工作的 agent', 'Sent while working · handed to the working agents')}</div>
     </div>
   );
 }
 
+const attKey = (a: Attachment) => `${a.name}|${a.size}`;
+
+/**
+ * The files this message itself added. Follow-ups carry the earlier files along (marked "earlier"); messages
+ * saved before that mark existed are matched by name and size against the conversation's earlier messages.
+ */
+function ownAttachments(run: WorkflowRun, before: WorkflowRun[]): Attachment[] {
+  const list = run.config.attachments ?? [];
+  if (list.some((a) => a.earlier !== undefined)) return list.filter((a) => !a.earlier);
+  const seen = new Set(before.flatMap((r) => r.config.attachments ?? []).map(attKey));
+  return list.filter((a) => !seen.has(attKey(a)));
+}
+
 /** An earlier message of the same conversation, read-only above the latest one. */
-function EarlierMessage({ run, providers, onImage }: { run: WorkflowRun; providers: ProviderInfo[]; onImage: (src: string) => void }) {
+function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun; before: WorkflowRun[]; providers: ProviderInfo[]; onImage: (src: string) => void }) {
   const items = useMemo(() => timeline(run), [run]);
+  const own = ownAttachments(run, before);
   return (
     <div className="earlier-msg">
       {items.map((it) =>
         it.type === 'user' && it.midRun ? (
-          <MidRunMessage key={it.key} text={it.text} />
+          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} />
         ) : it.type === 'user' ? (
           <div key={it.key} className="user-block">
-            {!!run.config.attachments?.length && (
+            {own.length > 0 && (
               <div className="atts right">
-                {run.config.attachments.map((a) => (
+                {own.map((a) => (
                   <AttachmentChip key={a.path} name={a.name} size={a.size} src={fileUrl(a.path)} onOpen={() => onImage(fileUrl(a.path))} />
                 ))}
               </div>
@@ -205,8 +226,8 @@ function Composer({
   onPause?: () => void;
   /** Resume; what the user typed meanwhile is passed to the agents. */
   onResume?: (note: string) => void;
-  /** While agents work: hand a message to them right away. */
-  onSay?: (text: string) => Promise<boolean>;
+  /** While agents work: hand a message (and files) to them right away. */
+  onSay?: (text: string, attachments: Attachment[]) => Promise<boolean>;
 }) {
   const t = useT();
   const [text, setText] = useState('');
@@ -248,12 +269,17 @@ function Composer({
 
   const uploading = files.some((f) => f.status === 'uploading');
   const send = async () => {
+    const ready = files.filter((f) => f.status === 'ready' && f.att).map((f) => f.att!);
     if (runState === 'running' && onSay) {
-      if (text.trim() && (await onSay(text.trim()))) setText('');
+      if (uploading || (!text.trim() && !ready.length)) return;
+      if (await onSay(text.trim(), ready)) {
+        files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
+        setText('');
+        setFiles([]);
+      }
       return;
     }
     if (!text.trim() || disabled || busy || uploading) return;
-    const ready = files.filter((f) => f.status === 'ready' && f.att).map((f) => f.att!);
     if (await onSend(text.trim(), ready)) {
       files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
       setText('');
@@ -333,7 +359,7 @@ function Composer({
         />
         <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} />
         {extra}
-        {runState === 'running' && text.trim() ? (
+        {runState === 'running' && (text.trim() || files.some((f) => f.status === 'ready')) ? (
           <button className="send" onClick={send} title={t('交給正在工作的 agent：它們會停下來看這則訊息，再接著做', 'Hand it to the working agents: they stop, read it and carry on')} aria-label={t('送出', 'Send')}>
             ↑
           </button>
@@ -565,8 +591,8 @@ export function Chat({ id }: { id?: string }) {
     } else {
       config = { ...draft, title: goal.split('\n')[0].slice(0, 60), goal };
     }
-    // Follow-ups keep the earlier files available (they are copied into the new run).
-    config.attachments = [...(run?.config.attachments ?? []), ...attachments];
+    // Follow-ups keep the earlier files available to agents (copied into the new run), marked so this message does not show them.
+    config.attachments = [...(run?.config.attachments ?? []).map((a) => ({ ...a, earlier: true })), ...attachments.map((a) => ({ ...a, earlier: false }))];
     if (!config.cwd) {
       setRolesOpen(true);
       setError(t('請先選擇工作資料夾', 'Choose a working folder first'));
@@ -622,9 +648,9 @@ export function Chat({ id }: { id?: string }) {
         runState={run?.status === 'running' ? 'running' : paused ? 'paused' : undefined}
         onPause={() => run && hub.call('workflows.pause', { id: run.id }).catch((e) => setError((e as Error).message))}
         onResume={(note) => run && hub.call('workflows.resume', { id: run.id, note }).catch((e) => setError((e as Error).message))}
-        onSay={(text) =>
+        onSay={(text, attachments) =>
           run
-            ? hub.call('workflows.say', { id: run.id, text }).then(
+            ? hub.call('workflows.say', { id: run.id, text, attachments }).then(
                 () => true,
                 (e) => (setError((e as Error).message), false),
               )
@@ -713,17 +739,17 @@ export function Chat({ id }: { id?: string }) {
           >
             <div className="column">
               <FullAccessBanner run={run} />
-              {earlier.map((r) => (
-                <EarlierMessage key={r.id} run={r} providers={providers} onImage={setLightbox} />
+              {earlier.map((r, i) => (
+                <EarlierMessage key={r.id} run={r} before={earlier.slice(0, i)} providers={providers} onImage={setLightbox} />
               ))}
               {items.map((it) => {
-                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} />;
+                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} />;
                 if (it.type === 'user')
                   return (
                     <div key={it.key} className="user-block">
-                      {!!run.config.attachments?.length && (
+                      {ownAttachments(run, earlier).length > 0 && (
                         <div className="atts right">
-                          {run.config.attachments.map((a) => (
+                          {ownAttachments(run, earlier).map((a) => (
                             <AttachmentChip key={a.path} name={a.name} size={a.size} src={fileUrl(a.path)} onOpen={() => setLightbox(fileUrl(a.path))} />
                           ))}
                         </div>

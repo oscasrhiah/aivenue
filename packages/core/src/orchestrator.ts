@@ -6,6 +6,7 @@ import type {
   AgentEvent,
   AgentRole,
   ApprovalRequest,
+  Attachment,
   AssignmentResult,
   PermissionLevel,
   ProviderSpec,
@@ -359,12 +360,21 @@ export class Orchestrator {
    * A message sent while the workflow runs: working agents stop and continue their own conversation with it right
    * away; it also becomes a shared note, so every agent that starts later sees it.
    */
-  interject(id: string, text: string): void {
+  async interject(id: string, text: string, files: Attachment[] = []): Promise<void> {
     const run = this.runs.get(id);
-    const msg = text.trim().slice(0, 8000);
-    if (!run || !msg) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (!text.trim() && !files.length) throw new Error(L('訊息是空的', 'The message is empty'));
     if (!['running', 'paused', 'waiting_human'].includes(run.status)) throw new Error(L('這段對話已經結束，請直接送出新訊息', 'This conversation has finished; send a new message instead'));
-    (run.userMessages ??= []).push({ ts: now(), text: msg });
+    // Files sent with the message join the run's attachments (converted like the first message's) and are named in it.
+    let added: Attachment[] = [];
+    if (files.length) {
+      const adopted = this.d.attachments.adopt(run.id, files, run.config.attachments ?? []);
+      added = (await this.d.attachments.prepare(adopted)).attachments;
+      run.config.attachments = [...(run.config.attachments ?? []), ...added];
+    }
+    const listed = added.map((a) => `- ${a.name}: ${a.companion?.path ?? a.path}${a.companion ? ` (Aivenue's readable version of ${a.path})` : ''}`);
+    const msg = [text.trim().slice(0, 8000), listed.length ? `The user attached these files; read them:\n${listed.join('\n')}` : ''].filter(Boolean).join('\n\n');
+    (run.userMessages ??= []).push({ ts: now(), text: text.trim().slice(0, 8000), attachments: added.length ? added : undefined });
     (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: 'user', by: 'USER (sent while you were working — follow it)', text: msg, ts: now() });
     const p = this.pauses.get(id);
     if (run.status === 'paused' && p) {

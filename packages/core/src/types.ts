@@ -620,6 +620,8 @@ export interface Attachment {
   kind?: AttachmentKind;
   /** Agent-readable version made by Aivenue (extracted text, or an unpacked folder). */
   companion?: { path: string; type: 'text' | 'folder'; note?: string };
+  /** Carried over from an earlier message of the conversation: agents still get it, this message does not show it. */
+  earlier?: boolean;
 }
 
 export interface OutputFile {
@@ -796,7 +798,7 @@ export interface WorkflowRun {
   /** `chat` entries are shown as divider lines in the conversation. */
   log: { ts: number; text: string; level: 'info' | 'warn' | 'error'; chat?: boolean }[];
   /** Messages the user sent while the workflow was running (handed to the working agents and every later one). */
-  userMessages?: { ts: number; text: string }[];
+  userMessages?: { ts: number; text: string; attachments?: Attachment[] }[];
 }
 
 export interface WorkflowSummary {
