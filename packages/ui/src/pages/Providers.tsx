@@ -326,6 +326,18 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
               </button>
             )}
             <span className="grow" />
+            {p.installed && p.uninstallCommand && (
+              <button
+                className="btn ghost"
+                title={p.uninstallCommand}
+                onClick={() =>
+                  confirm(t(`解除安裝 ${s.name}？\n\n會在終端機執行：${p.uninstallCommand}\n登入資料與設定不會刪除，之後重新安裝即可再用。`, `Uninstall ${s.name}?\n\nThis runs in a terminal: ${p.uninstallCommand}\nSign-in data and settings are kept, so reinstalling brings it back.`)) &&
+                  call('uninstall', 'providers.uninstall', { id: s.id })
+                }
+              >
+                {t('解除安裝', 'Uninstall')}
+              </button>
+            )}
             {p.customized && (
               <button className="btn ghost" onClick={() => call('reset', 'providers.reset', { id: s.id })}>
                 {t('還原預設', 'Reset')}

@@ -111,6 +111,18 @@ function findOnPath(name: string): string | undefined {
       }
     }
   }
+  // winget "portable" packages that got no command alias in WinGet\Links (e.g. GitHub Copilot CLI): look in the package folders.
+  if (isWin && process.env.LOCALAPPDATA && !path.extname(name)) {
+    const pkgs = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      for (const d of fs.readdirSync(pkgs)) {
+        const candidate = path.join(pkgs, d, `${name}.exe`);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    } catch {
+      // no winget packages
+    }
+  }
   return undefined;
 }
 

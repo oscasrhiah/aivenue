@@ -335,6 +335,8 @@ export interface ProviderInfo {
   resolvedPath?: string;
   /** The install command for the hub's OS. */
   installCommand?: string;
+  /** Undoes installCommand (winget / npm / Homebrew), when the CLI found is the one it installed. */
+  uninstallCommand?: string;
   auth: { state: 'logged_in' | 'logged_out' | 'unknown' | 'checking'; detail?: string; checkedAt?: number };
   /** Subscription = the CLI's own login; api = API key stored by Aivenue. */
   authMode: AuthMode;

@@ -64,6 +64,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 - Antigravity 是 Google 的訂閱版本，取代已停止個人登入的 Gemini CLI。需要 Google AI Studio 金鑰的話，可在「新增 → 按量 API」加入 Google。
 - 也可以在「設定 → 供應商與帳號 → 新增」從清單加入其他 API／訂閱方案，或自訂任何有命令列模式的 CLI（例如 Kimi、Grok 等）。
 - 用 npm 安裝的工具需要 Node.js。
+- 不用的工具可以在同一處按「解除安裝」：用當初安裝的 npm／winget／Homebrew 移除，登入資料與設定會保留。
 - 想用免費模型：在「設定 → 能力 → 內建擴充」打開 **OmniRoute**，它會變成一家供應商，見[內建擴充](#內建擴充)。
 
 ## 下載與安裝

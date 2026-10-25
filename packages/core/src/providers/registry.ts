@@ -85,6 +85,36 @@ export function installCommand(spec: Pick<ProviderSpec, 'install' | 'installOn'>
   return spec.installOn?.[process.platform as 'win32' | 'darwin' | 'linux'] ?? spec.install;
 }
 
+/**
+ * How to remove what the install command put there: winget, npm and Homebrew installs can be undone by the same tool.
+ * Install scripts (curl … | sh) have no matching uninstall, so none is offered.
+ */
+export function uninstallCommand(spec: Pick<ProviderSpec, 'install' | 'installOn'>): string | undefined {
+  const cmd = installCommand(spec)?.trim();
+  if (!cmd || /[|;&]/.test(cmd)) return undefined;
+  let m = /^winget\s+install\s+(?:--id\s+)?(\S+)/.exec(cmd);
+  if (m) return `winget uninstall --id ${m[1]} -e`;
+  m = /^npm(?:\.cmd)?\s+(?:i|install)\s+(?:-g|--global)\s+(\S+)$/.exec(cmd);
+  if (m) return `npm uninstall -g ${m[1].replace(/(.)@[^/@]*$/, '$1')}`;
+  m = /^brew\s+install\s+(\S+)$/.exec(cmd);
+  if (m) return `brew uninstall ${m[1]}`;
+  return undefined;
+}
+
+/** The uninstall command, only when the CLI found was put there by that tool (not, say, a native installer). */
+function installedBy(cmd: string | undefined, found: string): string | undefined {
+  if (!cmd) return undefined;
+  const tool = cmd.split(/\s+/)[0];
+  // npm's bin links on Linux/macOS point into node_modules.
+  try {
+    found = `${found} ${fs.realpathSync(found)}`;
+  } catch {
+    // keep the path as found
+  }
+  const ok = tool === 'winget' ? /[\\/]WinGet[\\/]/i.test(found) : tool === 'npm' ? /[\\/]npm[\\/]|node_modules|npm-global|[\\/]\.?nvm[\\/]/i.test(found) : tool === 'brew' ? /homebrew|Cellar|linuxbrew/i.test(found) : false;
+  return ok ? cmd : undefined;
+}
+
 export function installLine(name: string, cmd: string): string {
   const isNpm = /^npm(\.cmd)?\s+(i|install)\b/.test(cmd.trim());
   const run = isNpm ? `${cmd} --loglevel=http --foreground-scripts` : cmd;
@@ -487,6 +517,8 @@ export class ProviderRegistry {
         installed: !!resolved,
         resolvedPath: resolved?.display,
         installCommand: installCommand(spec),
+        // Only when the CLI found is the one that command installed (not, say, the CLI inside OpenCode Desktop).
+        uninstallCommand: resolved && specCommand(spec) === spec.command ? installedBy(uninstallCommand(spec), resolved.display) : undefined,
         auth: this.auth.get(spec.id) ?? { state: 'unknown' },
         authMode: this.authMode(spec.id),
         hasApiKey: this.keyed.has(spec.id),
@@ -625,6 +657,20 @@ export class ProviderRegistry {
     const cmd = resolveCommand(specCommand(spec));
     if (!cmd) throw new Error(L(`尚未安裝 ${spec.name}`, `${spec.name} is not installed`));
     this.terminal({ title: `${L('登出', 'Sign out')} ${spec.name}`, command: cmd, args: spec.logout.args, env: accountEnv(spec) }, [specCommand(spec), ...spec.logout.args].join(' '));
+    this.pollAuth(id);
+  }
+
+  /** Remove the CLI with the tool that installed it (in a terminal, so the user sees what happens). */
+  uninstall(id: string): void {
+    const spec = this.get(id);
+    const cmd = spec && uninstallCommand(spec);
+    if (!spec || !cmd) throw new Error(L('此供應商沒有可用的解除安裝指令', 'This provider has no uninstall command'));
+    const start = L(`正在解除安裝 ${spec.name}：${cmd}`, `Uninstalling ${spec.name}: ${cmd}`);
+    const ok = L('✓ 已解除安裝，可以關閉這個視窗。登入資料與設定沒有刪除。', '✓ Uninstalled; you can close this window. Sign-in data and settings were kept.');
+    const fail = L('✗ 解除安裝失敗，請看上面的錯誤訊息。', '✗ Uninstall failed; see the error above.');
+    const e = (t: string) => t.replace(/[&|<>^%!"()\r\n]/g, ' ');
+    const raw = process.platform === 'win32' ? `echo ${e(start)} & echo. & ${cmd} && (echo. & echo ${e(ok)}) || (echo. & echo ${e(fail)})` : `echo '${start}'; echo; if ${cmd}; then echo; echo '${ok}'; else echo; echo '${fail}'; fi`;
+    this.terminal({ title: `${L('解除安裝', 'Uninstall')} ${spec.name}`, raw }, cmd);
     this.pollAuth(id);
   }
 

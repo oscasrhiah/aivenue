@@ -301,6 +301,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'providers.login': (p: { id: string }) => registry.login(p.id),
     'providers.logout': (p: { id: string }) => registry.logout(p.id),
     'providers.install': (p: { id: string }) => registry.install(p.id),
+    'providers.uninstall': (p: { id: string }) => registry.uninstall(p.id),
     'providers.save': (p: { spec: ProviderSpec }) => {
       registry.upsert(p.spec);
       void registry.checkAuth(p.spec.id);
