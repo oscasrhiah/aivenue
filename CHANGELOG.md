@@ -2,6 +2,17 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 0.1.7 - 2026-10-25
+
+- **內建擴充**（設定 → 能力，預設全部關閉，打開就能用；每張卡片的「ⓘ 說明」介紹用途，Agent Skills 逐一介紹 25 個技能）：
+  - **Ponytail**：「最懶的資深工程師」，最小但完整的改動。撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能，審查程式碼套用 ponytail-review；強度 lite／full／ultra。指示直接放進提示詞。
+  - **Agent Skills**（Addy Osmani）：25 個工程技能依角色提供，可逐一開關；需要問答或很耗 token 的技能預設關閉。技能說明只取前一兩句，減少 token。
+  - **Graphify**：自動安裝 uv 與 graphify；資料夾有知識圖譜時 agent 先查圖再讀檔，沒有時可寫檔的 agent 會在需要時建立。
+  - **OmniRoute**：自動安裝並在背景啟動本機 AI 閘道（只在 127.0.0.1，管理密碼自動產生、可一鍵複製），變成一家供應商。模型清單、上下文上限與推理強度（low／medium／high）從 OmniRoute 讀取；選了 auto/best-free 這類組合時，可展開看它會依序挑哪些模型並改成只用其中一個；agent 跑完後顯示實際回答的模型。自動指派只把它用在 sub agent 與共用上下文壓縮。
+- **模型的上下文上限**：所有選模型的地方都標出最大上下文（例如「1M」「272K」），來源依序為 CLI 執行時回報、CLI 自己的模型清單、models.dev 模型目錄；同一模型在不同工具的上限分開顯示。
+- 外部擴充管理的供應商（OmniRoute）不再顯示訂閱／API 切換與移除按鈕，改為連到「內建擴充」。
+- SKILL.md 的多行 description（YAML `>`／`|`）可以正確讀取。
+
 ## 0.1.6 - 2026-10-25
 
 - **共用上下文的容量與壓縮**：可選 256K（預設）、512K、1M、2M 或自訂容量；用到門檻（預設 80%）時，下一個 agent 開始前自動壓縮，也能隨時手動壓縮。壓縮者可選「自動」（已登入中的中價位模型，例如 Claude Haiku）或指定任何一家與模型，壓縮時不掛任何工具。

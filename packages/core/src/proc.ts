@@ -27,6 +27,8 @@ export function childPath(): string {
       extra.push(path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links'));
       extra.push(path.join(process.env.LOCALAPPDATA, 'agy', 'bin'));
     }
+    // uv and the tools it installs (e.g. graphify).
+    extra.push(path.join(os.homedir(), '.local', 'bin'));
     // Freshly installed tools are in the registry PATH but not in an already-running app's env.
     extra.push(...readWindowsRegistryPath());
   } else {

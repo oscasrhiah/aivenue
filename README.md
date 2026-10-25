@@ -64,10 +64,11 @@ Aivenue 把這些 CLI 串成一個工作流：
 - Antigravity 是 Google 的訂閱版本，取代已停止個人登入的 Gemini CLI。需要 Google AI Studio 金鑰的話，可在「新增 → 按量 API」加入 Google。
 - 也可以在「設定 → 供應商與帳號 → 新增」從清單加入其他 API／訂閱方案，或自訂任何有命令列模式的 CLI（例如 Kimi、Grok 等）。
 - 用 npm 安裝的工具需要 Node.js。
+- 想用免費模型：在「設定 → 能力 → 內建擴充」打開 **OmniRoute**，它會變成一家供應商，見[內建擴充](#內建擴充)。
 
 ## 下載與安裝
 
-所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.6`）：
+所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.7`）：
 
 <p align="center">
   <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="前往下載頁面" src="https://img.shields.io/badge/%E5%89%8D%E5%BE%80-%E4%B8%8B%E8%BC%89%E9%A0%81%E9%9D%A2-c96442?style=for-the-badge"></a>
@@ -249,6 +250,27 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 
 <p align="center"><img src="docs/images/context-pie.png" alt="輸入框旁的共用上下文圓餅圖：用量、自動壓縮門檻、現在壓縮與各 agent 的對話用量" width="420"></p>
 
+### 內建擴充
+
+「設定 → 能力 → 內建擴充」附了四個第三方擴充，**預設全部關閉**，打開開關就能用；每張卡片的「ⓘ 說明」會用一個小視窗介紹用途（Agent Skills 會逐一介紹 25 個技能）。
+
+| 擴充 | 做什麼 | 打開後 |
+|---|---|---|
+| [Ponytail](https://github.com/DietrichGebert/ponytail)（MIT） | 「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計 | 撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能，審查程式碼套用 ponytail-review；強度可選 lite／full／ultra。指示直接放進 agent 的提示詞，不靠 agent 自己去讀 |
+| [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 25 個工程技能：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能、上線… | 依角色提供（例如規劃者拿到計畫拆解、審查者拿到程式碼審查），每個技能可單獨開關；需要和使用者問答的技能預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
+| [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。資料夾有 `graphify-out/` 時每個 agent 先用 `graphify query` 查圖；沒有的話，可寫檔的 agent 會在需要時用 `graphify update .` 建立 |
+| [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。到它的管理頁用自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）後，供應商清單會出現「OmniRoute」 |
+
+OmniRoute 的細節：
+
+- **模型清單與推理強度**：從 OmniRoute 讀取，每個模型標示上下文上限與是否免費；支援推理的模型可選 low／medium／high（經 OpenCode 的模型變體傳給 OmniRoute）。
+- **組合裡有哪些模型**：選了 `auto/best-free` 這類組合，模型選單下方會列出它依序會挑的模型與目前狀態（可用／冷卻中／無法使用）；點其中一個就只用那個模型，不再自動切換。
+- **實際回答的模型**：agent 跑完後，對話與 Agent map 會顯示實際回答的是哪個模型（例如「auto/best-free → groq/llama-…」）。
+- **只當幫手**：自動指派只會把它用在 sub agent 與共用上下文壓縮；撰寫者、審查者與顧問仍用你登入的付費模型。你也可以自己把它指派到任何角色。
+- 免費模型能力不一，可能無預警改變額度或下架；部分免費供應商會記錄送出的內容，私人或公司的程式碼請小心。
+
+<p align="center"><img src="docs/images/extensions.png" alt="能力頁的內建擴充：Ponytail、Agent Skills、Graphify、OmniRoute" width="720"></p>
+
 ### 額外資料夾
 
 除了工作資料夾，可在「工作流設定 → 額外資料夾」加入最多 20 個資料夾（函式庫原始碼、文件、其他專案），所有 agent（包括 sub agent 與顧問）都能自己讀取與探索，類似 Claude Code 的 `--add-dir`。對話中也能增減，從下一個開始的 agent 起生效；agent 會把它們當參考資料，除非你要求，不會修改。
@@ -300,7 +322,8 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 ### 其他
 
 - **附件**：拖曳、貼上（Ctrl+V 截圖）或 📎 選擇檔案。程式碼與文字檔所有 agent 都能讀；圖片交給能看圖的 agent；PDF、Word、Excel、PowerPoint、OpenDocument、Jupyter 由 Aivenue 轉成文字；ZIP 自動解壓（有數量與大小上限）。讀不到的檔案會明確告知 agent，送出前輸入框也會提醒。
-- **能力（設定 → 能力）**：共用 MCP 伺服器（秘密值加密保存）、共用 Skills（Agent Skills 格式）、各角色的自訂指示。
+- **能力（設定 → 能力）**：內建擴充、共用 MCP 伺服器（秘密值加密保存）、共用 Skills（Agent Skills 格式）、各角色的自訂指示。
+- **模型的上下文上限**：所有選模型的地方都會在模型旁標出最大上下文（例如「1M」「272K」），滑鼠移上去可看來源：CLI 自己的模型清單（Codex、OmniRoute）、[models.dev](https://models.dev) 模型目錄，或 agent 實際執行時 CLI 回報的數字（跑過一次後優先使用）。同一個模型在不同工具裡的上限可能不同，所以顯示的是你選的那一家的數字。
 - **用量**：設定 → 用量可看每家的使用紀錄與官方剩餘額度（和官方 App 一樣顯示「剩餘 %」）：Claude Code、Codex 的 5 小時與每週上限直接沿用 CLI 的登入；GitHub Copilot 的每月進階請求沿用已登入的 GitHub 帳號；Antigravity 連接一次 Google 帳號後顯示 Claude／GPT-OSS、Gemini Pro、Gemini Flash 各組額度。
 
 ## 從原始碼建置
@@ -372,3 +395,5 @@ scripts/
 ## 授權
 
 [MIT](LICENSE)
+
+內建擴充的技能檔保留原本的授權：Ponytail 與 Agent Skills 為 MIT，Graphify 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。

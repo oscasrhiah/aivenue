@@ -70,6 +70,12 @@ export function autoAssign(input: AssignInput): AssignmentResult {
     return used >= 70 ? 1 : 0;
   };
   const penalties = new Map(ready.map((p) => [p.spec.id, quotaPenalty(p.spec.id)]));
+  // Free routers of unknown strength (OmniRoute) only help: sub-agents and compaction, not the main roles.
+  const helpers = ready.filter((p) => p.spec.profile?.helperOnly);
+  if (helpers.length && helpers.length < ready.length) {
+    for (const p of helpers) notes.push(L(`${p.spec.name} 只用在 sub agent 與壓縮（免費模型能力不一定）`, `${p.spec.name} is only used for sub-agents and compaction (free models vary in strength)`));
+    ready = ready.filter((p) => !p.spec.profile?.helperOnly);
+  }
   const skill = (p: ProviderInfo, k: Kind) => p.spec.profile?.[k] ?? 3;
   const base = (p: ProviderInfo, k: Kind) => skill(p, k) * w.skill + (p.spec.profile?.speed ?? 3) * w.speed - (penalties.get(p.spec.id) ?? 0);
 
@@ -108,8 +114,9 @@ export function autoAssign(input: AssignInput): AssignmentResult {
   );
   if (prefs.crossReview && ready.length === 1) notes.push(L('只有一家可用，審查者與撰寫者相同', 'Only one provider is ready, so the reviewer is the same as the author'));
 
-  // Sub-agents: every ready provider, fastest first in economy mode.
-  const subagents = [...ready].sort((a, b) => (prefs.priority === 'economy' ? (b.spec.profile?.speed ?? 3) - (a.spec.profile?.speed ?? 3) : base(b, 'code') - base(a, 'code'))).map((p) => p.spec.id);
+  // Sub-agents: every ready provider, free helpers first, then fastest first in economy mode.
+  const fastest = [...ready].sort((a, b) => (prefs.priority === 'economy' ? (b.spec.profile?.speed ?? 3) - (a.spec.profile?.speed ?? 3) : base(b, 'code') - base(a, 'code'))).map((p) => p.spec.id);
+  const subagents = [...helpers.filter((p) => !ready.includes(p)).map((p) => p.spec.id), ...fastest];
 
   return { plan: { author: planAuthor, reviewer: planReviewer }, implement: { author: codeAuthor, reviewer: codeReviewer }, subagents, notes, ranking };
 }

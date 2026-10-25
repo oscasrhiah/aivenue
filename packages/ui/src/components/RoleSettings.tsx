@@ -4,6 +4,7 @@ import { ModelPicker } from './ModelPicker';
 import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
+import { fmtContext } from '../../../core/src/modelContext';
 import { useT } from '../i18n';
 import { cx, providerColor, providerName } from '../util';
 
@@ -253,7 +254,11 @@ function ClaudeAdvisorModel({ value, onChange, disabled }: { value: AdvisorConfi
   const current = value.claudeModel || 'opus';
   const [custom, setCustom] = useState(!ADVISOR_ALIASES.includes(current) && !versions.includes(current));
   const showCustom = custom || (!ADVISOR_ALIASES.includes(current) && !versions.includes(current) && versions.length > 0);
-  const alias = (a: string) => t(`${a[0].toUpperCase()}${a.slice(1)}（最新版）`, `${a[0].toUpperCase()}${a.slice(1)} (latest)`);
+  const ctx = (id: string) => {
+    const c = models.find((m) => m.id === id)?.context;
+    return c ? ` · ${fmtContext(c)}` : '';
+  };
+  const alias = (a: string) => t(`${a[0].toUpperCase()}${a.slice(1)}（最新版）`, `${a[0].toUpperCase()}${a.slice(1)} (latest)`) + ctx(a);
   return (
     <div className="kv">
       <label>{t('顧問模型', 'Advisor model')}</label>
@@ -282,6 +287,7 @@ function ClaudeAdvisorModel({ value, onChange, disabled }: { value: AdvisorConfi
               {versions.map((id) => (
                 <option key={id} value={id}>
                   {id}
+                  {ctx(id)}
                 </option>
               ))}
             </optgroup>

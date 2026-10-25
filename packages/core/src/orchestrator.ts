@@ -11,6 +11,7 @@ import type {
   ProviderSpec,
   AgentRunInfo,
   IssueResponse,
+  ModelInfo,
   PlanDoc,
   PushMessage,
   Review,
@@ -55,6 +56,8 @@ export interface OrchestratorDeps {
   push: (m: PushMessage) => void;
   /** GitHub access agents are told about (gh signed in; GitHub MCP on). */
   github?: () => { gh: boolean; user?: string; mcp: boolean } | undefined;
+  /** Through a router provider (OmniRoute): the models that actually answered between two times. */
+  servedBy?: (provider: string, model: string | undefined, from: number, to: number) => Promise<string[] | undefined>;
 }
 
 class Cancelled extends Error {
@@ -180,7 +183,8 @@ const SHARE_OF_WINDOW = 0.2;
 const MIN_COMPACT_TOKENS = 1000;
 
 /** Automatic compactor: the first signed-in of these (mid-priced models, not the tiniest free ones). */
-const AUTO_COMPACTORS: { provider: string; model?: string }[] = [{ provider: 'claude', model: 'haiku' }, { provider: 'codex' }, { provider: 'antigravity' }, { provider: 'copilot' }, { provider: 'qwen' }, { provider: 'opencode' }];
+// OmniRoute (when on and connected) first: compaction needs no tools, so a free model does, and the result is checked anyway.
+const AUTO_COMPACTORS: { provider: string; model?: string }[] = [{ provider: 'omniroute' }, { provider: 'claude', model: 'haiku' }, { provider: 'codex' }, { provider: 'antigravity' }, { provider: 'copilot' }, { provider: 'qwen' }, { provider: 'opencode' }];
 
 /** 158000 → "158K". */
 const fmtK = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
@@ -1277,7 +1281,7 @@ export class Orchestrator {
       }
       const caps = this.d.capabilities;
       // Skills are announced once per conversation; a resumed session already has them.
-      const skills = resume ? '' : caps.skillsBlock(info.role);
+      const skills = resume ? '' : caps.skillsBlock(info.role, run.config.cwd);
       const attached = run.config.attachments ?? [];
       // Per provider: which version of each file to read, and an explicit note for what it cannot read.
       const files = resume ? '' : attachmentsBlock(attached, spec.profile);
@@ -1300,6 +1304,7 @@ export class Orchestrator {
               : '';
       // Extra folders are named every turn: they can be added while the conversation runs.
       const extraDirs = (run.config.extraDirs ?? []).filter((d) => fs.existsSync(d));
+      const turnStart = now();
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
@@ -1342,6 +1347,8 @@ export class Orchestrator {
       if (res.sessionId) info.sessionId = res.sessionId;
       if (res.sessionId && !plain && !res.error) this.sharedSeen.set(`${run.id}|${res.sessionId}`, sharedAt);
       await this.readAgentContext(info, spec, res.sessionId);
+      const served = await this.d.servedBy?.(spec.accountOf ?? spec.id, this.requestedModel.get(info.id) ?? info.model, turnStart, now()).catch(() => undefined);
+      if (served) info.servedBy = [...new Set([...(info.servedBy ?? []), ...served])];
       info.resumed = info.resumed || res.resumed;
       info.exitCode = res.exitCode;
       info.finalText = res.finalText;
@@ -1368,6 +1375,8 @@ export class Orchestrator {
     if (e.kind === 'session' && e.text?.trim() && !/\s/.test(e.text.trim())) info.model = e.text.trim();
     // How full its own conversation is (and the model's limit), as the CLI reports it.
     if (!isUpdate && e.context && (e.context.used || e.context.window)) info.context = { ...info.context, ...(e.context.used ? { used: e.context.used } : {}), ...(e.context.window ? { window: e.context.window } : {}) };
+    // The CLI's own limit beats the catalog in the model menus from now on.
+    if (!isUpdate && e.context?.window) for (const m of new Set([this.requestedModel.get(info.id), info.model])) this.d.registry.noteContext(info.provider, m, e.context.window);
     if (!isUpdate && e.usage) {
       const t = (info.tokens ??= { input: 0, output: 0, cached: 0 });
       t.input += e.usage.input ?? 0;
@@ -1771,17 +1780,17 @@ export class Orchestrator {
   private async windowFor(run: WorkflowRun, info: AgentRunInfo, resume?: string): Promise<number | undefined> {
     if (info.context?.window) return info.context.window;
     const earlier = resume ? Object.values(run.agents).filter((a) => a.sessionId === resume && a.context?.window).pop() : undefined;
-    return earlier?.context?.window ?? (await this.catalogWindow(this.requestedModel.get(info.id) ?? info.model));
+    return earlier?.context?.window ?? (await this.catalogWindow(info.provider, this.requestedModel.get(info.id) ?? info.model));
   }
 
-  /** A catalog model's context size ("provider/model", e.g. OpenCode's models). */
-  private async catalogWindow(model?: string): Promise<number | undefined> {
-    if (!model || !model.includes('/')) return undefined;
-    if (this.catalogWindows.has(model)) return this.catalogWindows.get(model);
-    const [pid, ...rest] = model.split('/');
-    const found = (await this.d.registry.catalogLoader?.().catch(() => undefined))?.find((p) => p.id === pid)?.models.find((m) => m.id === rest.join('/'));
-    const w = found?.context || undefined;
-    this.catalogWindows.set(model, w);
+  /** A model's context size as the model menus show it (what a run measured, the CLI's list, or the catalog). */
+  private async catalogWindow(provider: string, model?: string): Promise<number | undefined> {
+    const key = `${provider} ${model ?? ''}`;
+    if (this.catalogWindows.has(key)) return this.catalogWindows.get(key);
+    const models = await this.d.registry.listModels(provider).catch(() => [] as ModelInfo[]);
+    const id = model ?? this.d.registry.defaults(provider).model;
+    const w = models.find((m) => m.id === id)?.context;
+    this.catalogWindows.set(key, w);
     return w;
   }
 
@@ -1796,7 +1805,7 @@ export class Orchestrator {
       }
     }
     if (info.context?.used && !info.context.window) {
-      const w = await this.catalogWindow(this.requestedModel.get(info.id) ?? info.model);
+      const w = await this.catalogWindow(info.provider, this.requestedModel.get(info.id) ?? info.model);
       if (w) info.context = { ...info.context, window: w };
     }
   }

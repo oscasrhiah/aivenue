@@ -28,15 +28,35 @@ const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 
 const secretKey = (server: string, kind: 'env' | 'header', key: string) => `mcp:${server}:${kind}:${key}`;
 
-function parseFrontmatter(text: string): Record<string, string> {
+export function parseFrontmatter(text: string): Record<string, string> {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const out: Record<string, string> = {};
   if (!m) return out;
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = /^([A-Za-z_-]+):\s*(.*)$/.exec(line);
-    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, '').trim();
+  const lines = m[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const kv = /^([A-Za-z_-]+):\s*(.*)$/.exec(lines[i]);
+    if (!kv) continue;
+    let value = kv[2].trim();
+    // YAML block scalars ("description: >" / "|"): the indented lines that follow.
+    if (/^[>|][+-]?$/.test(value)) {
+      const block: string[] = [];
+      while (i + 1 < lines.length && (/^\s+\S/.test(lines[i + 1]) || !lines[i + 1].trim())) block.push(lines[++i].trim());
+      value = block.filter(Boolean).join(value.startsWith('|') ? '\n' : ' ');
+    }
+    out[kv[1]] = value.replace(/^["']|["']$/g, '').trim();
   }
   return out;
+}
+
+/** A skill an extension adds to the index for one role (its files stay in the extension's folder). */
+export interface ExtraSkill {
+  name: string;
+  description: string;
+  path: string;
+  /** Read and follow it from the start (e.g. Ponytail), not only when it looks relevant. */
+  always?: string;
+  /** For an always-on skill: its instructions, put in the prompt so no agent skips reading them. */
+  body?: string;
 }
 
 function countFiles(dir: string): number {
@@ -56,6 +76,9 @@ export class CapabilityStore {
 
   /** The GitHub CLI's signed-in token, for servers configured with { ghToken: true }. */
   ghToken?: () => Promise<string | undefined>;
+  /** Set by the extensions: their skills for a role, and rules that depend on the working folder. */
+  extraSkills?: (role: AgentRole) => ExtraSkill[];
+  extraRules?: (role: AgentRole, cwd?: string) => string;
 
   constructor(dataDir: string, private secrets: SecretStore) {
     this.file = path.join(dataDir, 'capabilities.json');
@@ -151,6 +174,11 @@ export class CapabilityStore {
     return { name: s.id, transport: s.transport, command: s.command, args: s.args ?? [], env: env.values, secretEnv: env.secret, url: s.url, headers: headers.values, secretHeaders: headers.secret };
   }
 
+  setExtensions(extensions: CapabilitiesConfig['extensions']) {
+    this.cfg.extensions = extensions;
+    this.save();
+  }
+
   // ---------- role instructions ----------
 
   setInstructions(instructions: CapabilitiesConfig['instructions']) {
@@ -224,14 +252,27 @@ export class CapabilityStore {
    * Skills index for a role. Every CLI can read files, so skills are offered by reference:
    * the agent sees name + description and reads SKILL.md itself when a skill is relevant.
    */
-  skillsBlock(role: AgentRole): string {
-    if (role === 'test') return '';
-    const skills = this.listSkills().filter((s) => s.enabled && (!s.roles?.length || s.roles.includes(role as InstructionRole)));
-    if (!skills.length) return '';
+  skillsBlock(role: AgentRole, cwd?: string): string {
+    if (role === 'test' || role === 'compactor') return '';
+    const own = this.listSkills().filter((s) => s.enabled && (!s.roles?.length || s.roles.includes(role as InstructionRole)));
+    // The advisor only judges: extensions add nothing to it.
+    const extra = role === 'advisor' ? [] : (this.extraSkills?.(role) ?? []);
+    const names = new Set(own.map((s) => s.name));
+    const skills: ExtraSkill[] = [...own.map((s) => ({ name: s.name, description: s.description, path: s.path })), ...extra.filter((s) => !names.has(s.name))];
+    const always = skills.filter((s) => s.always);
+    const rules = role === 'advisor' ? '' : (this.extraRules?.(role, cwd) ?? '');
+    if (!skills.length && !rules) return '';
     return [
       '',
-      'SKILLS: The user provides these skills. When one is relevant to what you are doing, read its SKILL.md first and follow it (files next to SKILL.md may be referenced by it):',
-      ...skills.map((s) => `- ${s.name}: ${s.description || '(no description)'} — ${s.path}`),
+      ...(skills.length
+        ? [
+            'SKILLS: The user provides these skills. When one is relevant to what you are doing, read its SKILL.md first and follow it (files next to SKILL.md may be referenced by it):',
+            ...skills.map((s) => `- ${s.name}: ${s.always ? `[ALWAYS ON: ${s.always}] ` : ''}${s.description || '(no description)'} — ${s.path}`),
+          ]
+        : []),
+      // Always-on skills come with their instructions: an agent may not open a file it was only pointed at.
+      ...always.flatMap((s) => [`ALWAYS ON — ${s.name} (${s.always}): follow these instructions for this whole task, within the rules above (Aivenue's tools and output formats still come first):`, s.body ?? `Read ${s.path} before you start.`]),
+      ...(rules ? [rules] : []),
     ].join('\n');
   }
 }

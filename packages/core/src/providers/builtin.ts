@@ -12,6 +12,7 @@ import type { ProviderSpec } from '../types';
 export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   {
     id: 'claude',
+    contextCatalog: ['anthropic'],
     name: 'Claude Code',
     description: 'Anthropic Claude Code CLI（Claude Pro / Max 訂閱）',
     command: 'claude',
@@ -58,6 +59,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'codex',
+    contextCatalog: ['openai'],
     name: 'Codex',
     description: 'OpenAI Codex CLI（ChatGPT Plus / Pro 訂閱）',
     command: 'codex',
@@ -111,6 +113,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'antigravity',
+    contextCatalog: ['google', 'anthropic', 'openai'],
     name: 'Antigravity',
     description: 'Google Antigravity CLI（Google AI Pro / Ultra 訂閱）',
     command: 'agy',
@@ -155,6 +158,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'opencode',
+    contextCatalog: ['opencode'],
     name: 'OpenCode',
     description: 'OpenCode CLI — 內建 OpenCode Zen 免費模型，也能接上百家 API；優先使用 OpenCode Desktop 附的 CLI。注意：部分免費模型會用你的資料改進模型',
     command: 'opencode',
@@ -189,6 +193,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'qwen',
+    contextCatalog: ['alibaba', 'qwen'],
     name: 'Qwen Code',
     description: 'Alibaba Qwen Code CLI（QwenCloud Token Plan 訂閱）',
     command: 'qwen',
@@ -226,6 +231,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
   },
   {
     id: 'copilot',
+    contextCatalog: ['github-copilot'],
     name: 'GitHub Copilot',
     description: 'GitHub Copilot CLI（Copilot Pro / Pro+ / Business 訂閱，可選 Claude、GPT、Gemini 等模型）',
     command: 'copilot',

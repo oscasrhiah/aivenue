@@ -165,8 +165,14 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
   const s = p.spec;
   const en = EN_NOTES[s.id];
   const call = (name: string, method: string, params: unknown) => run(name, () => hub.call(method, params));
+  // Run by a built-in extension (OmniRoute): turned on, off and signed in from Capabilities → Built-in extensions.
+  const managed = s.modelSource?.type === 'extension';
   const stateText = !p.installed
     ? t('未安裝', 'Not installed')
+    : managed
+      ? p.auth.state === 'logged_in'
+        ? t('可以使用', 'Ready')
+        : t('未就緒', 'Not ready')
     : p.auth.state === 'logged_in'
       ? p.authMode === 'api'
         ? t('API 金鑰', 'API key')
@@ -186,7 +192,7 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
           <div className="prow-name">
             {s.name}
             {s.accountOf && <span className="tag">{t('其他帳號', 'Extra account')}</span>}
-            {!p.builtin && !s.accountOf && <span className="tag">{t('自訂', 'Custom')}</span>}
+            {managed ? <span className="tag">{t('內建擴充', 'Built-in extension')}</span> : !p.builtin && !s.accountOf && <span className="tag">{t('自訂', 'Custom')}</span>}
             {p.customized && <span className="tag">{t('已修改', 'Modified')}</span>}
           </div>
           <div className="muted small">{t(s.description ?? '', en?.description ?? s.description ?? '')}</div>
@@ -210,6 +216,15 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
             </div>
           )}
 
+          {managed ? (
+            <div className="row gap wrap">
+              <span className="muted small">{t('由「能力 → 內建擴充」管理：在那裡開關、開啟管理頁與連接供應商。', 'Managed under Capabilities → Built-in extensions: turn it on or off, open its dashboard and connect providers there.')}</span>
+              <a className="btn small ghost" href="#/settings/capabilities">
+                {t('前往', 'Open')}
+              </a>
+            </div>
+          ) : (
+          <>
           <div className="seg">
             <button className={cx(p.authMode === 'subscription' && 'on')} onClick={() => call('mode', 'providers.setAuthMode', { id: s.id, mode: 'subscription' })}>
               {t('訂閱帳號', 'Subscription')}
@@ -260,6 +275,8 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
                 </div>
               )}
             </>
+          )}
+          </>
           )}
 
           <div className="kv sep">
@@ -314,9 +331,11 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
                 {t('還原預設', 'Reset')}
               </button>
             )}
-            <button className="btn ghost danger" onClick={() => confirm(t(`移除 ${s.name}？`, `Remove ${s.name}?`)) && call('delete', 'providers.delete', { id: s.id })}>
-              {t('移除', 'Remove')}
-            </button>
+            {!managed && (
+              <button className="btn ghost danger" onClick={() => confirm(t(`移除 ${s.name}？`, `Remove ${s.name}?`)) && call('delete', 'providers.delete', { id: s.id })}>
+                {t('移除', 'Remove')}
+              </button>
+            )}
           </div>
           )}
           {error && <div className="note err">{error}</div>}

@@ -48,6 +48,8 @@ const copy = (from, to) => {
 for (const shell of ['desktop', 'vscode']) {
   copy(path.join(pkg('bridge'), 'dist/bridge.cjs'), path.join(pkg(shell), 'dist/bridge.cjs'));
   copy(path.join(pkg('ui'), 'dist'), path.join(pkg(shell), 'dist/ui'));
+  // Skills of the built-in extensions (Ponytail, Agent Skills, Graphify).
+  copy(path.join(pkg('core'), 'bundled'), path.join(pkg(shell), 'dist/bundled'));
 }
 
 console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);

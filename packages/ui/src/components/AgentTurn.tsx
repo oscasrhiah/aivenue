@@ -218,6 +218,12 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           <span className="turn-model" title={agent.model ?? t('供應商預設模型', 'Provider default model')}>
             {agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}
           </span>
+          {agent.servedBy?.length ? (
+            <span className="turn-served" title={t(`實際回答的模型：${agent.servedBy.join('、')}`, `Models that actually answered: ${agent.servedBy.join(', ')}`)}>
+              {' → '}
+              {agent.servedBy.join('、')}
+            </span>
+          ) : null}
           {agent.effort ? ` · ${t('推理', 'effort')} ${agent.effort}` : ''}
         </span>
         <span className="turn-meta">

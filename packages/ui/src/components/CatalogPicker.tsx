@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CatalogProvider } from '../../../core/src/types';
 import { hub, useProviders } from '../api';
 import { useT } from '../i18n';
+import { fmtContext } from '../../../core/src/modelContext';
 import { cx } from '../util';
 
 type Kind = CatalogProvider['kind'] | 'custom';
@@ -143,7 +144,8 @@ export function CatalogPicker({ onDone }: { onDone: () => void }) {
                     {sel.models.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name}
-                        {m.free ? ' · free' : ''}
+                        {m.context ? ` · ${fmtContext(m.context)}` : ''}
+                        {m.free ? ` · ${t('免費', 'free')}` : ''}
                         {m.vision ? ' · vision' : ''}
                       </option>
                     ))}

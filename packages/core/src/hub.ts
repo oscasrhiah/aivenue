@@ -6,12 +6,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { AttachmentStore } from './attachments';
+import type { ExtensionId, PonytailLevel } from './types';
 import type { AppSettings, Attachment, CapabilitiesConfig, HostInfo, InstructionRole, McpServerConfig, ProviderSpec, PushMessage, RpcRequest, RpcResponse, WorkflowConfig, WorkflowPreset } from './types';
 import { CapabilityStore } from './capabilities';
 import { GithubService } from './github';
 import { AntigravityQuota } from './antigravityQuota';
 import { probeMcpServer } from './mcpProbe';
 import { MCP_PRESETS } from './mcpPresets';
+import { ExtensionService } from './extensions';
 import { loadCatalog } from './catalog';
 import { setLocale } from './i18n';
 import { SettingsStore } from './settings';
@@ -38,6 +40,8 @@ export interface HubOptions {
   uiDir: string;
   /** Path of the bundled MCP bridge script. */
   bridgePath: string;
+  /** Folder with the bundled extension skills (default: "bundled" next to the bridge script). */
+  bundledDir?: string;
   dataDir?: string;
   port?: number;
   hooks: HostHooks;
@@ -145,8 +149,23 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const githubMcpOn = () => capabilities.get().mcpServers.some((s) => s.id === GITHUB_MCP_ID && s.enabled);
   const store = new RunStore(dataDir);
   const attachments = new AttachmentStore(dataDir);
+  // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
+  const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }) });
+  void extensions.init().catch(() => undefined);
   let baseUrl = '';
-  const orchestrator = new Orchestrator({ registry, store, usage, capabilities, attachments, dataDir, bridgePath: opts.bridgePath, hubUrl: () => baseUrl, push, github: () => github.promptInfo(githubMcpOn()) });
+  const orchestrator = new Orchestrator({
+    registry,
+    store,
+    usage,
+    capabilities,
+    attachments,
+    dataDir,
+    bridgePath: opts.bridgePath,
+    hubUrl: () => baseUrl,
+    push,
+    github: () => github.promptInfo(githubMcpOn()),
+    servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
+  });
   void registry.checkAll();
 
   const methods: Record<string, (p: any) => unknown> = {
@@ -208,6 +227,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return capsChanged();
     },
     'capabilities.testServer': async (p: { id: string }) => probeMcpServer(await capabilities.resolveServer(p.id)),
+    'extensions.list': () => extensions.list(),
+    'extensions.setEnabled': (p: { id: ExtensionId; enabled: boolean }) => extensions.setEnabled(p.id, !!p.enabled),
+    'extensions.setOptions': (p: { id: ExtensionId; level?: PonytailLevel; skill?: string; on?: boolean }) => extensions.setOptions(p),
+    'extensions.retry': (p: { id: ExtensionId }) => extensions.retry(p.id),
+    'extensions.refresh': () => extensions.refreshOmni(true),
+    'extensions.omniPassword': () => extensions.omniPassword(),
+    'extensions.omniCandidates': (p: { model: string }) => extensions.omniCandidates(p.model),
+    'extensions.omniPin': (p: { model: string }) => extensions.omniPin(p.model),
     'capabilities.presets': () => MCP_PRESETS.map(({ id, name, zh, en, docsUrl }) => ({ id, name, zh, en, docsUrl })),
     'capabilities.addPreset': async (p: { id: string; headed?: boolean }) => {
       const preset = MCP_PRESETS.find((x) => x.id === p.id);
@@ -469,6 +496,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         for (const r of orchestrator.runs.values()) if (r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human') orchestrator.cancel(r.id);
         clearInterval(usageTimer);
         orchestrator.shutdown();
+        extensions.shutdown();
         for (const c of clients) c.close();
         wss.close();
         server.close(() => resolve());

@@ -6,6 +6,7 @@ import { capture, childPath, openTerminal, resolveCommand, specCommand, takesEff
 import type { SecretStore } from '../secrets';
 import { L } from '../i18n';
 import { BUILTIN_PROVIDERS, RETIRED_BUILTINS } from './builtin';
+import { lookupContext } from '../modelContext';
 
 interface StoredProviders {
   /** User specs; a spec with a built-in id overrides that built-in. */
@@ -141,9 +142,18 @@ export class ProviderRegistry {
   private keyed = new Set<string>();
   private onChange: () => void;
   readonly ready: Promise<void>;
+  /** Context sizes the CLIs reported while running ("<provider> <model>" → tokens): they beat the catalog. */
+  private measuredFile: string;
+  private measured: Record<string, number> = {};
 
   constructor(dataDir: string, private secrets: SecretStore, onChange: () => void) {
     this.file = path.join(dataDir, 'providers.json');
+    this.measuredFile = path.join(dataDir, 'model-context.json');
+    try {
+      this.measured = JSON.parse(fs.readFileSync(this.measuredFile, 'utf8'));
+    } catch {
+      // none measured yet
+    }
     this.accountsDir = path.join(dataDir, 'accounts');
     this.onChange = onChange;
     try {
@@ -201,6 +211,10 @@ export class ProviderRegistry {
 
   /** Set by the hub: loads the models.dev catalog. */
   catalogLoader?: () => Promise<CatalogProvider[]>;
+
+  /** Set by the extensions: models of a provider an extension runs (OmniRoute), and whether it is usable right now. */
+  extensionModels?: (id: string) => Promise<ModelInfo[] | undefined>;
+  extensionAuth?: (id: string) => Promise<ProviderInfo['auth'] | undefined>;
 
   /**
    * Add a provider from the catalog (subscription plan / pay-as-you-go API / local), or a custom
@@ -266,13 +280,18 @@ export class ProviderRegistry {
     let models: ModelInfo[] = [];
     try {
       const src = spec.modelSource;
-      if (src?.type === 'catalog') {
+      if (src?.type === 'extension') {
+        models = (await this.extensionModels?.(spec.accountOf ?? spec.id)) ?? [];
+      } else if (src?.type === 'catalog') {
         const cp = (await this.catalogLoader?.())?.find((p) => p.id === src.providerId);
         models = (cp?.models ?? []).map((m) => ({
           id: `${src.providerId}/${m.id}`,
           label: m.name,
-          description: [m.free && 'free', m.vision && 'vision', m.reasoning && 'reasoning', m.context && `${Math.round(m.context / 1000)}k ctx`].filter(Boolean).join(' · '),
+          description: [m.free && 'free', m.vision && 'vision', m.reasoning && 'reasoning'].filter(Boolean).join(' · '),
           efforts: spec.efforts,
+          context: m.context,
+          contextSource: m.context ? ('catalog' as const) : undefined,
+          free: m.free,
         }));
       } else if (src?.type === 'codex-cache') {
         // An extra account may not have its own cache yet; the model list is the same for every account.
@@ -288,6 +307,8 @@ export class ProviderRegistry {
             description: m.description,
             efforts: (m.supported_reasoning_levels ?? []).map((l: any) => l.effort).filter(Boolean),
             defaultEffort: m.default_reasoning_level,
+            context: m.context_window || undefined,
+            contextSource: m.context_window ? ('cli' as const) : undefined,
           }));
       } else if (src?.type === 'command') {
         const r = await capture(specCommand(spec), src.args, { timeoutMs: 30000 });
@@ -303,8 +324,44 @@ export class ProviderRegistry {
     if (!models.length) models = fallback;
     // Models that refuse a reasoning effort offer none, so the UI shows no effort choice for them.
     models = models.map((m) => (takesEffort(spec, m.id) ? m : { ...m, efforts: [], defaultEffort: undefined }));
+    models = await this.withContext(spec, models);
     this.modelCache.set(id, { at: Date.now(), models });
     return models;
+  }
+
+  /** Fill in each model's context size: what a run measured, else the models.dev catalog. */
+  private async withContext(spec: ProviderSpec, models: ModelInfo[]): Promise<ModelInfo[]> {
+    const base = spec.accountOf ? (this.get(spec.accountOf) ?? spec) : spec;
+    const providers = base.contextCatalog ?? (base.catalog ? [base.catalog.providerId] : []);
+    const catalog = await this.catalogLoader?.().catch(() => undefined);
+    return models.map((m) => {
+      const seen = this.measured[`${base.id} ${m.id}`];
+      if (seen) return { ...m, context: seen, contextSource: 'measured' };
+      if (m.context || !catalog) return m;
+      const context = lookupContext(catalog, providers, m.id);
+      return context ? { ...m, context, contextSource: 'catalog' } : m;
+    });
+  }
+
+  /** Read the provider's model list again next time (its source changed). */
+  forgetModels(id: string) {
+    this.modelCache.delete(id);
+  }
+
+  /** A run reported its model's context size: remember it for the model menus. */
+  noteContext(id: string, model: string | undefined, window: number | undefined) {
+    const spec = this.get(id);
+    if (!spec || !model || !window) return;
+    const key = `${spec.accountOf ?? spec.id} ${model}`;
+    if (this.measured[key] === window) return;
+    this.measured[key] = window;
+    this.modelCache.delete(spec.accountOf ?? spec.id);
+    this.modelCache.delete(id);
+    try {
+      fs.writeFileSync(this.measuredFile, JSON.stringify(this.measured, null, 2));
+    } catch {
+      // read-only data folder: keep it for this session
+    }
   }
 
   async setApiKey(id: string, key: string | undefined): Promise<void> {
@@ -487,6 +544,10 @@ export class ProviderRegistry {
 
   private async evaluateAuth(spec: ProviderSpec): Promise<ProviderInfo['auth']> {
     if (!resolveCommand(specCommand(spec))) return { state: 'logged_out', detail: L('尚未安裝', 'Not installed') };
+    if (spec.modelSource?.type === 'extension') {
+      const ext = await this.extensionAuth?.(spec.id);
+      if (ext) return ext;
+    }
     if (this.authMode(spec.id) === 'api') {
       return this.keyed.has(spec.id) ? { state: 'logged_in', detail: L('API 模式：金鑰已設定', 'API mode: key saved') } : { state: 'logged_out', detail: L('API 模式：尚未輸入金鑰', 'API mode: no key yet') };
     }

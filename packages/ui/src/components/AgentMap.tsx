@@ -212,6 +212,7 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
           {providerName(providers, agent.provider)}
           {' · '}
           <b>{agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}</b>
+          {agent.servedBy?.length ? ` → ${t('實際', 'served by')} ${agent.servedBy.join('、')}` : ''}
           {agent.effort && ` · ${t('推理', 'effort')} ${agent.effort}`}
           {' · '}
           {roleLabel(t, agent.role)}

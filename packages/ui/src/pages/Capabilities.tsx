@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { ConfigValue, InstructionRole, McpServerConfig, SkillInfo } from '../../../core/src/types';
-import { hub, useCapabilities, useHostInfo, useProviders } from '../api';
+import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, SkillInfo } from '../../../core/src/types';
+import { hub, useCapabilities, useExtensions, useHostInfo, useProviders } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
+import { ExtensionGuide } from '../components/ExtensionGuide';
 
 const ROLES: InstructionRole[] = ['all', 'planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent'];
 
@@ -617,6 +618,214 @@ function Skills() {
   );
 }
 
+// ---------------- built-in extensions ----------------
+
+const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en: string; url: string; license: string }> = {
+  ponytail: {
+    icon: '🪮',
+    name: 'Ponytail',
+    zh: '「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計、不加沒人要的功能。',
+    en: '"The laziest senior dev in the room": the smallest change that fully solves the task, no over-engineering, no features nobody asked for.',
+    url: 'https://github.com/DietrichGebert/ponytail',
+    license: 'MIT',
+  },
+  'agent-skills': {
+    icon: '🧰',
+    name: 'Agent Skills',
+    zh: 'Addy Osmani 的 25 個工程技能：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能等，依角色提供。',
+    en: "Addy Osmani's 25 engineering skills: specs, task breakdown, TDD, debugging, code review, security, performance and more, per role.",
+    url: 'https://github.com/addyosmani/agent-skills',
+    license: 'MIT',
+  },
+  graphify: {
+    icon: '🕸️',
+    name: 'Graphify',
+    zh: '把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案。程式碼在本機解析，不呼叫 API。',
+    en: 'Turns the project into a knowledge graph; agents query the graph before reading files. Code is parsed locally, no API calls.',
+    url: 'https://github.com/Graphify-Labs/graphify',
+    license: 'Apache-2.0',
+  },
+  omniroute: {
+    icon: '🔀',
+    name: 'OmniRoute',
+    zh: '本機 AI 閘道，接上數百家供應商；auto/best-free 會自動挑選現在能用的免費模型，額度用完就換下一家。',
+    en: 'A local AI gateway to hundreds of providers; auto/best-free picks a free model that works right now and moves on when one runs out.',
+    url: 'https://github.com/diegosouzapw/OmniRoute',
+    license: 'MIT',
+  },
+};
+
+const ROLE_SHORT = (t: T, r: InstructionRole) => roleName(t, r);
+
+function ExtensionCard({ s }: { s: ExtensionStatus }) {
+  const t = useT();
+  const info = EXT_INFO[s.id];
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [guide, setGuide] = useState(false);
+  const { error, busy, run } = useBusy();
+  const pill =
+    s.state === 'ready' ? (
+      <span className="pill ok">{t('可以使用', 'Ready')}</span>
+    ) : s.state === 'working' ? (
+      <span className="pill">{t('處理中…', 'Working…')}</span>
+    ) : s.state === 'error' ? (
+      <span className="pill warn">{t('需要處理', 'Needs attention')}</span>
+    ) : null;
+  const skills = s.skills ?? [];
+  const on = skills.filter((k) => k.enabled).length;
+  return (
+    <div className={cx('preset-card ext-card', s.enabled && s.state === 'ready' && 'on')}>
+      <div className="ext-head">
+        <label className="switch">
+          <input type="checkbox" checked={s.enabled} disabled={busy} onChange={(e) => run(() => hub.call('extensions.setEnabled', { id: s.id, enabled: e.target.checked }))} />
+          <span />
+        </label>
+        <b>
+          {info.icon} {info.name}
+        </b>
+        {s.version && <span className="tag">v{s.version}</span>}
+        {pill}
+        <button className="btn small ghost ext-guide-btn" onClick={() => setGuide(true)} title={t('這是什麼、包含哪些技能', 'What it is and what it includes')}>
+          ⓘ {t('說明', 'About')}
+        </button>
+      </div>
+      <div className="muted small">{t(info.zh, info.en)}</div>
+      {s.enabled && s.message && <div className={cx('note', s.state === 'error' && 'err')}>{s.message}</div>}
+
+      {s.id === 'ponytail' && s.enabled && (
+        <>
+          <div className="row gap wrap">
+            <span className="muted tiny">{t('強度', 'Level')}</span>
+            <div className="seg small">
+              {(['lite', 'full', 'ultra'] as PonytailLevel[]).map((l) => (
+                <button key={l} className={cx(s.level === l && 'on')} onClick={() => run(() => hub.call('extensions.setOptions', { id: 'ponytail', level: l }))}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="muted tiny">
+            {s.level === 'lite'
+              ? t('lite：照要求做，只用一句話提出更小的做法。', 'lite: build what was asked; name the smaller option in one line.')
+              : s.level === 'ultra'
+                ? t('ultra：動手前先質疑需求裡沒必要的部分。', 'ultra: also pushes back on parts of the request the need does not justify.')
+                : t('full（預設）：最小但完整的改動。', 'full (default): the smallest complete change.')}{' '}
+            {t('撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能；審查程式碼套用 ponytail-review。', 'Planner, plan reviewer, implementer and sub-agents always follow the main skill; the code reviewer follows ponytail-review.')}
+          </div>
+        </>
+      )}
+
+      {s.id === 'agent-skills' && s.enabled && (
+        <>
+          <button className="link tiny" onClick={() => setOpen(!open)}>
+            {t(`已開啟 ${on} / ${skills.length} 個技能`, `${on} of ${skills.length} skills on`)} {open ? '▴' : '▾'}
+          </button>
+          {open && (
+            <div className="ext-skills">
+              {skills.map((k) => (
+                <label key={k.name} className="ext-skill" title={k.description}>
+                  <input type="checkbox" checked={k.enabled} onChange={(e) => run(() => hub.call('extensions.setOptions', { id: 'agent-skills', skill: k.name, on: e.target.checked }))} />
+                  <span className="mono small">{k.name}</span>
+                  {k.interactive && <span className="tag">{t('需要問答', 'asks questions')}</span>}
+                  <span className="muted tiny ext-skill-roles">{k.roles.map((r) => ROLE_SHORT(t, r)).join('、')}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="muted tiny">{t('agent 只會看到技能名稱與一句說明，用到才讀全文，幾乎不增加 token。', 'Agents only see each skill\'s name and one-line description and read the rest when needed, so it costs almost no tokens.')}</div>
+        </>
+      )}
+
+      {s.id === 'graphify' && s.enabled && (
+        <div className="muted tiny">
+          {t(
+            '第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python，不需要另外安裝）。agent 需要了解大型專案時會用 graphify update . 建圖（寫到 graphify-out/），之後先查圖再讀檔。',
+            'The first time it installs uv and graphify (uv brings its own Python). When agents need to understand a large project they build the graph with graphify update . (into graphify-out/) and query it before reading files.',
+          )}
+        </div>
+      )}
+
+      {s.id === 'omniroute' && s.enabled && (
+        <>
+          {s.omniroute && (
+            <div className="ext-stats small">
+              <span>
+                {t('網址', 'URL')} <span className="mono">{s.omniroute.url}</span>
+              </span>
+              <span>{t(`已連接 ${s.omniroute.connections} 個供應商`, `${s.omniroute.connections} providers connected`)}</span>
+              <span>{t(`agent 可用 ${s.omniroute.models} 個模型（免費 ${s.omniroute.free}）`, `${s.omniroute.models} models for agents (${s.omniroute.free} free)`)}</span>
+            </div>
+          )}
+          {s.omniroute && (
+            <div className="row gap wrap">
+              <button className="btn small primary" onClick={() => hub.call('host.openExternal', { url: s.omniroute!.dashboardUrl })}>
+                {t('開啟 OmniRoute 管理頁', 'Open the OmniRoute dashboard')}
+              </button>
+              <button
+                className="btn small ghost"
+                onClick={() =>
+                  run(async () => {
+                    await navigator.clipboard.writeText(await hub.call<string>('extensions.omniPassword'));
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 2000);
+                  })
+                }
+              >
+                {copied ? `✓ ${t('已複製', 'Copied')}` : t('複製管理密碼', 'Copy dashboard password')}
+              </button>
+              <button className="btn small ghost" disabled={busy} onClick={() => run(() => hub.call('extensions.refresh'))}>
+                {t('重新讀取', 'Reload')}
+              </button>
+            </div>
+          )}
+          <div className="muted tiny">
+            {s.omniroute && !s.omniroute.connections
+              ? t('下一步：在管理頁用你自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）。連好後按「重新讀取」，供應商清單就會出現 OmniRoute。', 'Next: connect free providers (e.g. Gemini, Groq, OpenRouter) with your own accounts in the dashboard, then press Reload; OmniRoute then shows up as a provider.')
+              : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型；自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')}{' '}
+            {t('只在這台電腦上執行（127.0.0.1），管理密碼是自動產生的亂數。注意：部分免費供應商會記錄你送出的內容，私人或公司的程式碼請小心。', 'Runs on this computer only (127.0.0.1) with a generated dashboard password. Some free providers log what you send: be careful with private or company code.')}
+          </div>
+        </>
+      )}
+
+      {s.enabled && s.state === 'error' && (s.id === 'graphify' || s.id === 'omniroute') && (
+        <button className="btn small" disabled={busy} onClick={() => run(() => hub.call('extensions.retry', { id: s.id }))}>
+          {t('重試', 'Retry')}
+        </button>
+      )}
+      {error && <div className="note err">{error}</div>}
+      {guide && <ExtensionGuide id={s.id} onClose={() => setGuide(false)} />}
+      <div className="row gap">
+        <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
+          {t('來源', 'Source')}
+        </button>
+        <span className="muted tiny">{info.license}</span>
+      </div>
+    </div>
+  );
+}
+
+function Extensions() {
+  const t = useT();
+  const list = useExtensions();
+  if (!list.length) return null;
+  return (
+    <section className="cap">
+      <div className="cap-head">
+        <div>
+          <h3>{t('內建擴充', 'Built-in extensions')}</h3>
+          <p className="muted small">{t('隨 Aivenue 附上，預設全部關閉，打開就能用。Graphify 與 OmniRoute 第一次打開時會自動下載需要的工具。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time.')}</p>
+        </div>
+      </div>
+      <div className="presets-grid ext-grid">
+        {list.map((s) => (
+          <ExtensionCard key={s.id} s={s} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function CapabilitiesPane() {
   const t = useT();
   return (
@@ -628,6 +837,7 @@ export function CapabilitiesPane() {
         </div>
       </div>
       <GithubCard />
+      <Extensions />
       <Instructions />
       <McpServers />
       <Skills />

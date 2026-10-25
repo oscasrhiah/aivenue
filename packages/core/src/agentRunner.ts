@@ -199,6 +199,8 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     model: o.model,
     // Left out for models that refuse it (e.g. Claude through Antigravity), whatever was saved or assigned.
     effort: takesEffort(spec, o.model) ? o.effort : undefined,
+    // "model#effort", for CLIs that pick the effort as a variant of the model (OpenCode).
+    modelEffort: o.model && takesEffort(spec, o.model) && o.effort ? `${o.model}#${o.effort}` : o.model,
     sessionId: canResume ? o.resumeSessionId : undefined,
     newSessionId: canResume ? undefined : randomUUID(),
     prompt: spec.run.prompt === 'arg' ? o.prompt : undefined,

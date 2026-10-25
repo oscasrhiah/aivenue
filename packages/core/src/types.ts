@@ -127,8 +127,10 @@ export interface ProviderSpec {
   efforts?: string[];
   /** Models (regex on the model id) that take no reasoning effort: {effort} is left out of their command line. */
   noEffortModels?: string;
+  /** models.dev providers to look a model's context size up in, when the model list has none (e.g. ["anthropic"]). */
+  contextCatalog?: string[];
   /** Where to discover the available models: Codex's local cache, a CLI command that prints them, or the provider catalog. */
-  modelSource?: { type: 'codex-cache' } | { type: 'command'; args: string[] } | { type: 'catalog'; providerId: string };
+  modelSource?: { type: 'codex-cache' } | { type: 'command'; args: string[] } | { type: 'catalog'; providerId: string } | { type: 'extension' };
   /** Set for providers added from the catalog (run through OpenCode). */
   catalog?: { providerId: string; kind: CatalogProvider['kind'] };
   /** Built-in reader for the official plan quota the CLI stores locally. */
@@ -186,6 +188,8 @@ export interface ProviderProfile {
   /** Understands audio / video files. */
   audio?: boolean;
   video?: boolean;
+  /** Free models of unknown strength (a free-tier router): automatic assignment only uses it for sub-agents and compaction. */
+  helperOnly?: boolean;
 }
 
 // ---------- Automatic role assignment ----------
@@ -248,6 +252,53 @@ export interface CapabilitiesConfig {
   instructions: Partial<Record<InstructionRole, string>>;
   /** Per-skill settings (skill content lives in <dataDir>/skills/<name>/SKILL.md). */
   skills: Record<string, { enabled: boolean; roles?: InstructionRole[] }>;
+  /** Built-in extensions (all off until the user turns them on). */
+  extensions?: ExtensionsConfig;
+}
+
+export type ExtensionId = 'ponytail' | 'agent-skills' | 'graphify' | 'omniroute';
+export type PonytailLevel = 'lite' | 'full' | 'ultra';
+
+export interface ExtensionsConfig {
+  ponytail?: { enabled: boolean; level?: PonytailLevel };
+  /** skills: per-skill on/off over the defaults. */
+  'agent-skills'?: { enabled: boolean; skills?: Record<string, boolean> };
+  graphify?: { enabled: boolean };
+  /** port: where OmniRoute listens (picked once, kept). pinned: models picked from an auto pool, kept in the menus. */
+  omniroute?: { enabled: boolean; port?: number; pinned?: string[] };
+}
+
+/** One bundled skill of an extension, as the settings list it. */
+export interface ExtensionSkill {
+  name: string;
+  description: string;
+  roles: InstructionRole[];
+  enabled: boolean;
+  /** Needs a person to answer questions, so it is off by default in a headless run. */
+  interactive?: boolean;
+}
+
+/** One model an OmniRoute auto pool may route to, as OmniRoute reports it right now. */
+export interface OmniCandidate {
+  /** Model id agents use ("omniroute/groq/llama-4-scout"). */
+  id: string;
+  provider: string;
+  /** ok: can be picked now · cooldown: resting after errors or a quota · excluded: not reachable / not allowed. */
+  state: 'ok' | 'cooldown' | 'excluded';
+}
+
+export interface ExtensionStatus {
+  id: ExtensionId;
+  enabled: boolean;
+  /** off · working (installing / starting) · ready · error */
+  state: 'off' | 'working' | 'ready' | 'error';
+  /** What is happening or what went wrong, in the user's language. */
+  message?: string;
+  version?: string;
+  skills?: ExtensionSkill[];
+  level?: PonytailLevel;
+  /** OmniRoute: where it runs, which upstream providers are connected, how many models agents can use. */
+  omniroute?: { url: string; dashboardUrl: string; connections: number; models: number; free: number };
 }
 
 export interface SkillInfo {
@@ -404,6 +455,11 @@ export interface ModelInfo {
   description?: string;
   efforts?: string[];
   defaultEffort?: string;
+  /** Largest context the model takes (tokens), and where that number comes from. */
+  context?: number;
+  contextSource?: 'cli' | 'catalog' | 'measured';
+  /** Costs nothing to use (free tier / free model). */
+  free?: boolean;
 }
 
 export interface StageConfig {
@@ -602,6 +658,8 @@ export interface AgentRunInfo {
   context?: { used?: number; window?: number; estimated?: boolean; compactedAt?: number };
   /** Shared notes / agent results it has already been given (time), so later turns only get what is new. */
   sharedSeenAt?: number;
+  /** Through a router (OmniRoute): the models that actually answered ("groq/llama-4-scout"). */
+  servedBy?: string[];
 }
 
 export interface PlanStep {
@@ -759,6 +817,7 @@ export type PushMessage =
   | { topic: 'usage'; data: ProviderUsage[] }
   | { topic: 'github'; data: GithubStatus }
   | { topic: 'capabilities'; data: { config: CapabilitiesConfig; skills: SkillInfo[] } }
+  | { topic: 'extensions'; data: ExtensionStatus[] }
   | { topic: 'test'; data: { testId: string; providerId: string; event?: AgentEvent; isUpdate?: boolean; result?: TestResult } };
 
 export interface TestResult {

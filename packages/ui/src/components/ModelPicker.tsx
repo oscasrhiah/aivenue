@@ -1,9 +1,35 @@
-import { useState } from 'react';
-import type { ModelInfo, ProviderInfo } from '../../../core/src/types';
-import { useModels } from '../api';
-import { useT } from '../i18n';
+import { useEffect, useState } from 'react';
+import type { ModelInfo, OmniCandidate, ProviderInfo } from '../../../core/src/types';
+import { hub, useModels } from '../api';
+import { cx } from '../util';
+import { useT, type T } from '../i18n';
+import { fmtContext } from '../../../core/src/modelContext';
 
 const CUSTOM = '__custom__';
+
+/** "Claude Opus (claude-opus-5-5) · 1M · 免費" */
+export function modelOptionLabel(t: T, m: ModelInfo): string {
+  const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
+  return [name, m.context && fmtContext(m.context), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+}
+
+/** Where a model's context size comes from, for the tooltip. */
+export function contextHint(t: T, m: ModelInfo): string {
+  if (!m.context) return '';
+  const from = m.contextSource === 'measured' ? t('CLI 執行時回報', 'reported by the CLI while running') : m.contextSource === 'cli' ? t('CLI 的模型清單', "the CLI's model list") : t('models.dev 模型目錄', 'the models.dev catalog');
+  return t(`最大上下文 ${m.context.toLocaleString()} tokens（來源：${from}）`, `Max context ${m.context.toLocaleString()} tokens (from ${from})`);
+}
+
+/** A small "1M" badge with the source on hover. */
+export function ContextBadge({ model }: { model?: ModelInfo }) {
+  const t = useT();
+  if (!model?.context) return null;
+  return (
+    <span className="ctx-badge" title={contextHint(t, model)}>
+      {fmtContext(model.context)}
+    </span>
+  );
+}
 
 /**
  * Model + reasoning-effort selectors for one provider. Empty values mean "use the default"
@@ -39,7 +65,11 @@ export function ModelPicker({
   // Picking a model that takes no effort drops the one chosen before.
   const pick = (next?: string) => onChange({ model: next, effort: effortsOf(models.find((m) => m.id === (next || provider?.defaultModel))).length ? effort : undefined });
   const showCustom = custom || (!!model && !known && models.length > 0) || models.length === 0;
+  // An OmniRoute pool (auto/best-free…): show what it can route to, and let the user pick one of those instead.
+  const effective = model || provider?.defaultModel || provider?.spec.defaultModel;
+  const poolId = provider?.spec.id === 'omniroute' && effective?.startsWith('omniroute/auto/') ? effective : undefined;
   return (
+    <div className="model-picker-wrap">
     <div className="model-picker">
       {showCustom ? (
         <input
@@ -60,13 +90,14 @@ export function ModelPicker({
         >
           <option value="">{inheritLabel ?? t('預設模型', 'Default model')}</option>
           {models.map((m) => (
-            <option key={m.id} value={m.id} title={m.description}>
-              {m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id}
+            <option key={m.id} value={m.id} title={[m.description, contextHint(t, m)].filter(Boolean).join('\n')}>
+              {modelOptionLabel(t, m)}
             </option>
           ))}
           <option value={CUSTOM}>{t('自行輸入…', 'Other…')}</option>
         </select>
       )}
+      {!showCustom && <ContextBadge model={current} />}
       {efforts.length > 0 && (
         <select disabled={disabled} value={effort ?? ''} onChange={(e) => onChange({ model, effort: e.target.value || undefined })} title={t('推理強度', 'Reasoning effort')}>
           <option value="">
@@ -83,6 +114,56 @@ export function ModelPicker({
       <button className="icon-btn" disabled={disabled} title={t('重新讀取模型清單', 'Reload model list')} onClick={refresh}>
         ↻
       </button>
+    </div>
+    {poolId && !showCustom && (
+      <OmniPool
+        pool={poolId}
+        disabled={disabled}
+        onPick={async (id) => {
+          await hub.call('extensions.omniPin', { model: id });
+          refresh();
+          pick(id);
+        }}
+      />
+    )}
+    </div>
+  );
+}
+
+/** The models an OmniRoute pool may route to right now; picking one uses only that model. */
+function OmniPool({ pool, disabled, onPick }: { pool: string; disabled?: boolean; onPick: (id: string) => void }) {
+  const t = useT();
+  const [list, setList] = useState<OmniCandidate[]>();
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setList(undefined);
+    hub.call<OmniCandidate[]>('extensions.omniCandidates', { model: pool }).then((l) => live && setList(l)).catch(() => live && setList([]));
+    return () => {
+      live = false;
+    };
+  }, [pool]);
+  if (!list) return <div className="muted tiny">{t('讀取這個組合的模型…', 'Reading the models of this pool…')}</div>;
+  if (!list.length) return <div className="muted tiny">{t('這個組合目前沒有可用的模型：到 OmniRoute 管理頁連接免費供應商。', 'No model in this pool right now: connect free providers in the OmniRoute dashboard.')}</div>;
+  const ok = list.filter((c) => c.state === 'ok').length;
+  const label = (s: OmniCandidate['state']) => (s === 'ok' ? t('可用', 'ready') : s === 'cooldown' ? t('冷卻中', 'cooling down') : t('無法使用', 'unavailable'));
+  return (
+    <div className="omni-pool">
+      <button className="link tiny" onClick={() => setOpen(!open)}>
+        {t(`這個組合會依序從 ${list.length} 個模型挑（${ok} 個可用）`, `This pool picks from ${list.length} models in order (${ok} ready)`)} {open ? '▴' : '▾'}
+      </button>
+      {open && (
+        <div className="omni-pool-list">
+          <div className="muted tiny">{t('點一個模型就只用它，不再自動切換。', 'Click a model to use only that one, without automatic switching.')}</div>
+          {list.map((c, i) => (
+            <button key={c.id} className={cx('omni-cand', c.state)} disabled={disabled || c.state === 'excluded'} onClick={() => onPick(c.id)} title={c.provider}>
+              <span className="muted tiny">{i + 1}</span>
+              <span className="mono small">{c.id.replace(/^omniroute\//, '')}</span>
+              <span className={cx('tiny', c.state === 'ok' ? 'ok-text' : 'muted')}>{label(c.state)}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

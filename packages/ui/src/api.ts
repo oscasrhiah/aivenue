@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus } from '../../core/src/types';
+import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus } from '../../core/src/types';
 
 type Listener = (data: any) => void;
 
@@ -149,6 +149,10 @@ export function useUsage(): ProviderUsage[] {
 
 export function useCapabilities(): { config: CapabilitiesConfig; skills: SkillInfo[] } {
   return useSynced('capabilities.get', undefined, 'capabilities', { config: { mcpServers: [], instructions: {}, skills: {} }, skills: [] as SkillInfo[] })[0];
+}
+
+export function useExtensions(): ExtensionStatus[] {
+  return useSynced<ExtensionStatus[]>('extensions.list', undefined, 'extensions', [])[0];
 }
 
 const NO_GITHUB: GithubStatus = { git: { installed: false }, gh: { installed: false }, auth: { loggedIn: false }, gitCredential: false, checkedAt: 0 };
