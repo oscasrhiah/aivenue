@@ -269,8 +269,12 @@ export class ExtensionService {
         if ((await capture('uv', ['--version'], { timeoutMs: 20000 })).code !== 0) throw new Error(L(`uv 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install uv: ${tail(r.stderr || r.stdout || r.error)}`));
       }
       step(L('用 uv 安裝 graphify（會一併下載 Python，約 1–3 分鐘）…', 'Installing graphify with uv (downloads Python too, 1–3 minutes)…'));
-      const r = await capture('uv', ['tool', 'install', '--upgrade', 'graphifyy'], { timeoutMs: 15 * 60000 });
-      if (!(await this.checkGraphify())) throw new Error(L(`graphify 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install graphify: ${tail(r.stderr || r.stdout || r.error)}`));
+      // tree-sitter 0.25.2 沒有 Python 3.15 wheel，指定已有預編譯套件的版本。
+      const r = await capture('uv', ['tool', 'install', '--upgrade', '--python', '3.12', 'graphifyy'], { timeoutMs: 15 * 60000 });
+      if (!(await this.checkGraphify())) {
+        const detail = (r.stderr || r.stdout || r.error || L('沒有輸出', 'no output')).trim().slice(0, 3000);
+        throw new Error(L(`graphify 安裝失敗：${detail}`, `Could not install graphify: ${detail}`));
+      }
       this.work.delete('graphify');
     } catch (e) {
       this.work.set('graphify', { error: (e as Error).message });
