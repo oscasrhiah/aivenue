@@ -241,7 +241,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     docsUrl: 'https://docs.github.com/copilot/how-tos/copilot-cli',
     login: { args: ['login'], note: '會開啟瀏覽器到 GitHub 授權' },
     // The token sits in the OS credential store; the config file records the signed-in account.
-    status: { fileContains: [{ path: '~/.copilot/config.json', text: 'logged_in_user' }], env: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN'] },
+    // Older Copilot CLIs wrote "logged_in_user"; v1 keeps "loggedInUsers": [{ login, … }].
+    status: { fileContains: [{ path: '~/.copilot/config.json', text: 'logged_in_user' }, { path: '~/.copilot/config.json', text: '"login"' }], env: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN'] },
     run: {
       // Piped stdin runs non-interactively, so long prompts never hit the Windows command-line limit.
       common: [['--output-format', 'json'], ['--no-ask-user'], ['--no-auto-update'], ['--model', '{model}'], ['--reasoning-effort', '{effort}'], ['--additional-mcp-config', '@{mcpConfigFile}'], ['--add-dir', '{skillsDir}'], ['--add-dir', '{attachDir}']],
