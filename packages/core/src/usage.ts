@@ -12,6 +12,10 @@ import { readCopilotQuota } from './copilotQuota';
 interface Stored {
   /** providerId -> YYYY-MM-DD -> totals */
   days: Record<string, Record<string, UsageTotals>>;
+  /** providerId -> YYYY-MM-DD -> model -> totals ("" = the CLI's own default model) */
+  models: Record<string, Record<string, Record<string, UsageTotals>>>;
+  /** The per-model numbers were rebuilt once from the saved conversations (they predate per-model counting). */
+  modelsBackfilled?: boolean;
   limits: Record<string, { at: number; message: string }>;
 }
 
@@ -32,7 +36,7 @@ export const LIMIT_PATTERN = /usage limit|rate[ _-]?limit|quota|429|resource[_ ]
 /** Tracks token usage of every agent run (per provider, per day) plus limit hits and official quotas. */
 export class UsageTracker {
   private file: string;
-  private data: Stored = { days: {}, limits: {} };
+  private data: Stored = { days: {}, models: {}, limits: {} };
   private timer?: NodeJS.Timeout;
   private official = new Map<string, { value: ProviderUsage['official']; readAt: number; error?: string }>();
   /** Reads Antigravity's quota from Google once the user connected an account. */
@@ -44,15 +48,52 @@ export class UsageTracker {
     this.file = path.join(dataDir, 'usage.json');
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      this.data = { days: raw.days ?? {}, limits: raw.limits ?? {} };
+      this.data = { days: raw.days ?? {}, models: raw.models ?? {}, modelsBackfilled: raw.modelsBackfilled, limits: raw.limits ?? {} };
     } catch {
       // first run
     }
+    if (!this.data.modelsBackfilled) this.backfillModels(path.join(dataDir, 'runs'));
   }
 
   private bucket(provider: string): UsageTotals {
     const p = (this.data.days[provider] ??= {});
     return (p[day()] ??= empty());
+  }
+
+  private modelBucket(provider: string, model: string | undefined, date = day()): UsageTotals {
+    const d = ((this.data.models[provider] ??= {})[date] ??= {});
+    return (d[model ?? ''] ??= empty());
+  }
+
+  /**
+   * Per-model numbers for the last two weeks, from the agents of saved conversations (each keeps its provider, model
+   * and token totals). Runs once: from then on every turn is counted per model as it happens.
+   */
+  private backfillModels(runsDir: string) {
+    const since = Date.now() - 14 * 86400000;
+    try {
+      for (const id of fs.readdirSync(runsDir)) {
+        try {
+          const file = path.join(runsDir, id, 'run.json');
+          if (fs.statSync(file).mtimeMs < since) continue;
+          const run = JSON.parse(fs.readFileSync(file, 'utf8')) as { agents?: Record<string, { provider: string; model?: string; startedAt?: number; tokens?: { input: number; output: number; cached: number } }> };
+          for (const a of Object.values(run.agents ?? {})) {
+            if (!a.startedAt || a.startedAt < since) continue;
+            const b = this.modelBucket(a.provider, a.model, day(a.startedAt));
+            b.runs++;
+            b.input += a.tokens?.input ?? 0;
+            b.output += a.tokens?.output ?? 0;
+            b.cached += a.tokens?.cached ?? 0;
+          }
+        } catch {
+          // a damaged or partly written conversation
+        }
+      }
+    } catch {
+      // no conversations yet
+    }
+    this.data.modelsBackfilled = true;
+    this.changed();
   }
 
   private changed() {
@@ -65,17 +106,19 @@ export class UsageTracker {
     }, 1000);
   }
 
-  recordRun(provider: string) {
+  recordRun(provider: string, model?: string) {
     this.bucket(provider).runs++;
+    this.modelBucket(provider, model).runs++;
     this.changed();
   }
 
-  recordUsage(provider: string, u: TokenUsage) {
-    const b = this.bucket(provider);
-    b.input += u.input ?? 0;
-    b.output += u.output ?? 0;
-    b.cached += u.cached ?? 0;
-    b.costUsd += u.costUsd ?? 0;
+  recordUsage(provider: string, u: TokenUsage, model?: string) {
+    for (const b of [this.bucket(provider), this.modelBucket(provider, model)]) {
+      b.input += u.input ?? 0;
+      b.output += u.output ?? 0;
+      b.cached += u.cached ?? 0;
+      b.costUsd += u.costUsd ?? 0;
+    }
     this.changed();
   }
 
@@ -108,11 +151,24 @@ export class UsageTracker {
       const daily = days.map((d) => ({ date: d, ...(p[d] ?? empty()) }));
       const last7 = daily.slice(-7).reduce((acc, d) => add(acc, d), empty());
       const limit = this.data.limits[spec.id];
+      // Per model: today and the last 7 days.
+      const perModel = new Map<string, { today: UsageTotals; last7: UsageTotals }>();
+      const pm = this.data.models[spec.id] ?? {};
+      for (const d of days.slice(-7))
+        for (const [model, t] of Object.entries(pm[d] ?? {})) {
+          const e = perModel.get(model) ?? { today: empty(), last7: empty() };
+          e.last7 = add(e.last7, t);
+          if (d === today) e.today = add(e.today, t);
+          perModel.set(model, e);
+        }
+      const tokens = (t: UsageTotals) => t.input + t.output;
+      const models = [...perModel].map(([model, v]) => ({ model, ...v })).sort((a, b) => tokens(b.last7) - tokens(a.last7) || b.last7.runs - a.last7.runs);
       return {
         providerId: spec.id,
         today: p[today] ?? empty(),
         last7,
         daily,
+        models: models.length ? models : undefined,
         // A limit hit older than a week is no longer interesting.
         limitHit: limit && Date.now() - limit.at < 7 * 86400000 ? limit : undefined,
         official: official[i],

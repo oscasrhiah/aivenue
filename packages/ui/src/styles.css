@@ -4042,3 +4042,54 @@ textarea.code {
 .omni-conn-msg {
   flex-basis: 100%;
 }
+
+/* Usage per model, under each provider's usage card. */
+.umodels {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.umodels th {
+  text-align: right;
+  font-weight: 500;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.umodels th:first-child,
+.umodels td:first-child {
+  text-align: left;
+  width: 100%;
+}
+
+.umodels td {
+  text-align: right;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.umodel-name {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.umodel-bar {
+  height: 3px;
+  margin-top: 3px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+.umodel-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}

@@ -398,6 +398,8 @@ export interface ProviderUsage {
   today: UsageTotals;
   last7: UsageTotals;
   daily: ({ date: string } & UsageTotals)[];
+  /** The same numbers per model (most used in the last 7 days first); "" = the CLI's own default model. */
+  models?: { model: string; today: UsageTotals; last7: UsageTotals }[];
   /** Last time the provider reported hitting a usage/rate limit. */
   limitHit?: { at: number; message: string };
   /** Official plan quota, when the CLI records it locally. */

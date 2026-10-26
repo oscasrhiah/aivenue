@@ -767,7 +767,7 @@ export class Orchestrator {
     const secret = randomUUID();
     this.sessions.set(secret, { workflowId: testId, agentId: 'test', onTestCall: () => (mcpCalled = true) });
     const started = now();
-    this.d.usage.recordRun(providerId);
+    this.d.usage.recordRun(providerId, this.d.registry.defaults(providerId).model);
     void Promise.all([this.d.registry.runAuth(providerId), this.d.capabilities.serversFor(providerId)])
       .then(([auth, mcpServers]) => {
         if (spec.mcpRegistration) this.sessions.get(secret)!.proxyServers = mcpServers;
@@ -786,7 +786,7 @@ export class Orchestrator {
           signal: AbortSignal.timeout(240000),
           auth,
           onEvent: (event, isUpdate) => {
-            this.trackUsage(providerId, event, isUpdate);
+            this.trackUsage(providerId, event, isUpdate, this.d.registry.defaults(providerId).model);
             this.d.push({ topic: 'test', data: { testId, providerId, event, isUpdate } });
           },
         });
@@ -1308,7 +1308,7 @@ export class Orchestrator {
     // The bridge session in use (a reused CLI keeps its own) and whether the CLI stays running afterwards.
     let liveSecret: string = secret;
     let keptAlive = false;
-    this.d.usage.recordRun(info.provider);
+    this.d.usage.recordRun(info.provider, this.usageModel(info));
     try {
       let auth;
       let mcpServers;
@@ -1408,15 +1408,20 @@ export class Orchestrator {
     }
   }
 
-  private trackUsage(provider: string, e: AgentEvent, isUpdate: boolean) {
+  /** The model an agent's usage is counted under: what was asked for, else the provider default (the same key every turn). */
+  private usageModel(info: AgentRunInfo): string | undefined {
+    return this.requestedModel.get(info.id) ?? this.d.registry.defaults(info.provider).model ?? info.model;
+  }
+
+  private trackUsage(provider: string, e: AgentEvent, isUpdate: boolean, model?: string) {
     if (isUpdate) return;
-    if (e.usage) this.d.usage.recordUsage(provider, e.usage);
+    if (e.usage) this.d.usage.recordUsage(provider, e.usage, model);
     if ((e.kind === 'error' || e.kind === 'stderr') && e.text && LIMIT_PATTERN.test(e.text)) this.d.usage.recordError(provider, e.text);
   }
 
   private onAgentEvent(run: WorkflowRun, info: AgentRunInfo, e: AgentEvent, isUpdate: boolean) {
     this.d.store.appendEvent(run.id, info.id, e, isUpdate);
-    this.trackUsage(info.provider, e, isUpdate);
+    this.trackUsage(info.provider, e, isUpdate, this.usageModel(info));
     // The model the CLI reports it is actually using (an alias like "opus" resolves to the full id).
     if (e.kind === 'session' && e.text?.trim() && !/\s/.test(e.text.trim())) info.model = e.text.trim();
     // How full its own conversation is (and the model's limit), as the CLI reports it.

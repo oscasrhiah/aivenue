@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ProviderUsage } from '../../../core/src/types';
 import { hub, useHostInfo, useProviders, useUsage } from '../api';
 import { ACCENTS, saveSettings, useAppSettings, useT } from '../i18n';
-import { cx, fmtTokens, providerColor, providerName } from '../util';
+import { cx, fmtTokens, modelLabel, providerColor, providerName } from '../util';
 import { ProvidersPane } from './Providers';
 import { CapabilitiesPane } from './Capabilities';
 
@@ -207,6 +207,38 @@ function UsageCard({ u, name }: { u: ProviderUsage; name: string }) {
           return <div key={d.date} className="bar" style={{ height: `${Math.max(2, (total / max) * 100)}%` }} title={`${d.date}: ${fmtTokens(total)} tokens · ${d.runs} runs`} />;
         })}
       </div>
+
+      {!!u.models?.length && (
+        <table className="umodels">
+          <thead>
+            <tr>
+              <th>{t('依模型（近 7 天）', 'By model (7 days)')}</th>
+              <th>{t('今日', 'Today')}</th>
+              <th>{t('7 天', '7 days')}</th>
+              <th>{t('執行', 'Runs')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {u.models.map((m) => {
+              const week = m.last7.input + m.last7.output;
+              const all = u.last7.input + u.last7.output;
+              return (
+                <tr key={m.model}>
+                  <td title={m.model || undefined}>
+                    <div className="umodel-name">{m.model ? modelLabel(m.model) : t('CLI 預設模型', 'CLI default model')}</div>
+                    <div className="umodel-bar">
+                      <span style={{ width: `${all ? Math.max(2, (week / all) * 100) : 0}%` }} />
+                    </div>
+                  </td>
+                  <td>{fmtTokens(m.today.input + m.today.output)}</td>
+                  <td>{fmtTokens(week)}</td>
+                  <td>{m.last7.runs}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
