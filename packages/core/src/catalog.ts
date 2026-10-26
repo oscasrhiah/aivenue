@@ -24,6 +24,7 @@ function trimModels(models: Record<string, any>): CatalogModel[] {
       name: m.name ?? id,
       tools: m.tool_call !== false,
       vision: Array.isArray(m.modalities?.input) ? m.modalities.input.includes('image') : !!m.attachment,
+      inputs: Array.isArray(m.modalities?.input) ? m.modalities.input : undefined,
       reasoning: !!m.reasoning,
       context: m.limit?.context,
       free: m.cost ? m.cost.input === 0 && m.cost.output === 0 : undefined,

@@ -34,6 +34,7 @@ import { L } from './i18n';
 import { LIMIT_PATTERN, type UsageTracker } from './usage';
 import type { CapabilityStore, ResolvedMcpServer } from './capabilities';
 import { attachmentsBlock, isImage, type AttachmentStore } from './attachments';
+import { profileForInputs } from './readability';
 import { autoAssign, DEFAULT_AUTO } from './assign';
 import { diffSnapshots, snapshot, type Snapshot } from './outputs';
 import { captureScreenshot, isLoopbackUrl, resolveTarget } from './screenshot';
@@ -1326,7 +1327,9 @@ export class Orchestrator {
       const skills = resume ? '' : caps.skillsBlock(info.role, run.config.cwd);
       const attached = run.config.attachments ?? [];
       // Per provider: which version of each file to read, and an explicit note for what it cannot read.
-      const files = resume ? '' : attachmentsBlock(attached, spec.profile);
+      // What this model reads (images, video, audio, PDF): OpenCode, OmniRoute and Copilot reach models of every kind.
+      const profile = attached.length ? await this.modelProfile(info.provider, spec, this.requestedModel.get(info.id) ?? info.model) : spec.profile;
+      const files = resume ? '' : attachmentsBlock(attached, profile);
       // What the other agents did so far (empty in "summary" mode).
       // A resumed conversation already has what it was given before: only what is new, within this model's share.
       const seenKey = resume ? `${run.id}|${resume}` : undefined;
@@ -1358,7 +1361,8 @@ export class Orchestrator {
         skillsDir: skills && !plain ? caps.skillsDir : undefined,
         permission: run.config.permission,
         attachDir: attached.length ? this.d.attachments.runDir(run.id) : undefined,
-        images: spec.profile?.vision === false ? [] : attached.filter(isImage).map((a) => a.path),
+        // Media the model takes natively ride along as files (images; video and audio too when it reads them).
+        images: attached.filter((a) => (isImage(a) && profile?.vision !== false) || (a.kind === 'video' && profile?.video) || (a.kind === 'audio' && profile?.audio)).map((a) => a.path),
         cwd: run.config.cwd,
         mode,
         // What was asked for, not the resolved id the CLI reported (that would look like a settings change to the pool).
@@ -1823,6 +1827,13 @@ export class Orchestrator {
     if (info.context?.window) return info.context.window;
     const earlier = resume ? Object.values(run.agents).filter((a) => a.sessionId === resume && a.context?.window).pop() : undefined;
     return earlier?.context?.window ?? (await this.catalogWindow(info.provider, this.requestedModel.get(info.id) ?? info.model));
+  }
+
+  /** The provider's profile narrowed to what this model reads (from the model list), for attachments. */
+  private async modelProfile(provider: string, spec: ProviderSpec, model?: string): Promise<ProviderSpec['profile']> {
+    const models = await this.d.registry.listModels(provider).catch(() => [] as ModelInfo[]);
+    const id = model ?? this.d.registry.defaults(provider).model;
+    return profileForInputs(spec.profile, models.find((m) => m.id === id)?.inputs);
   }
 
   /** A model's context size as the model menus show it (what a run measured, the CLI's list, or the catalog). */

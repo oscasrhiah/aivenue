@@ -6,7 +6,7 @@ import { capture, childPath, openTerminal, resolveCommand, specCommand, takesEff
 import type { SecretStore } from '../secrets';
 import { L } from '../i18n';
 import { BUILTIN_PROVIDERS, RETIRED_BUILTINS } from './builtin';
-import { lookupContext } from '../modelContext';
+import { lookupModel } from '../modelContext';
 
 interface StoredProviders {
   /** User specs; a spec with a built-in id overrides that built-in. */
@@ -322,6 +322,7 @@ export class ProviderRegistry {
           context: m.context,
           contextSource: m.context ? ('catalog' as const) : undefined,
           free: m.free,
+          inputs: m.inputs,
         }));
       } else if (src?.type === 'codex-cache') {
         // An extra account may not have its own cache yet; the model list is the same for every account.
@@ -338,6 +339,7 @@ export class ProviderRegistry {
             efforts: (m.supported_reasoning_levels ?? []).map((l: any) => l.effort).filter(Boolean),
             defaultEffort: m.default_reasoning_level,
             context: m.context_window || undefined,
+            inputs: Array.isArray(m.input_modalities) ? m.input_modalities : undefined,
             contextSource: m.context_window ? ('cli' as const) : undefined,
           }));
       } else if (src?.type === 'command') {
@@ -366,10 +368,14 @@ export class ProviderRegistry {
     const catalog = await this.catalogLoader?.().catch(() => undefined);
     return models.map((m) => {
       const seen = this.measured[`${base.id} ${m.id}`];
-      if (seen) return { ...m, context: seen, contextSource: 'measured' };
-      if (m.context || !catalog) return m;
-      const context = lookupContext(catalog, providers, m.id);
-      return context ? { ...m, context, contextSource: 'catalog' } : m;
+      if (seen) m = { ...m, context: seen, contextSource: 'measured' };
+      if ((m.context && m.inputs) || !catalog) return m;
+      const found = lookupModel(catalog, providers, m.id);
+      return {
+        ...m,
+        ...(!m.context && found.context ? { context: found.context, contextSource: 'catalog' as const } : {}),
+        inputs: m.inputs ?? found.inputs,
+      };
     });
   }
 

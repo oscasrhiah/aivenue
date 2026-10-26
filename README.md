@@ -327,9 +327,9 @@ OmniRoute 的細節：
 
 ### 其他
 
-- **附件**：拖曳、貼上（Ctrl+V 截圖）或 📎 選擇檔案。程式碼與文字檔所有 agent 都能讀；圖片交給能看圖的 agent；PDF、Word、Excel、PowerPoint、OpenDocument、Jupyter 由 Aivenue 轉成文字；ZIP 自動解壓（有數量與大小上限）。讀不到的檔案會明確告知 agent，送出前輸入框也會提醒。
+- **附件**：拖曳、貼上（Ctrl+V 截圖）或 📎 選擇檔案。程式碼與文字檔所有 agent 都能讀；圖片、影片、音訊依「每個角色實際用的模型」能讀什麼來決定（例如 OpenCode 的 DeepSeek V4.1 Flash 能讀圖片、GLM-5.3 還能讀影片，Big Pickle 只有文字），模型支援的會直接附給它；PDF、Word、Excel、PowerPoint、OpenDocument、Jupyter 由 Aivenue 轉成文字；ZIP 自動解壓（有數量與大小上限）。讀不到的檔案會明確告知 agent，送出前輸入框也會提醒。
 - **能力（設定 → 能力）**：內建擴充、共用 MCP 伺服器（秘密值加密保存）、共用 Skills（Agent Skills 格式）、各角色的自訂指示。
-- **模型的上下文上限**：所有選模型的地方都會在模型旁標出最大上下文（例如「1M」「272K」），滑鼠移上去可看來源：CLI 自己的模型清單（Codex、OmniRoute）、[models.dev](https://models.dev) 模型目錄，或 agent 實際執行時 CLI 回報的數字（跑過一次後優先使用）。同一個模型在不同工具裡的上限可能不同，所以顯示的是你選的那一家的數字。
+- **模型的上下文上限與檔案類型**：所有選模型的地方都會在模型旁標出最大上下文（例如「1M」「272K」）與能讀的檔案類型（圖片、影片、音訊、PDF 或「只有文字」），滑鼠移上去可看來源：CLI 自己的模型清單（Codex、OmniRoute）、[models.dev](https://models.dev) 模型目錄，或 agent 實際執行時 CLI 回報的數字（跑過一次後優先使用）。同一個模型在不同工具裡的上限可能不同，所以顯示的是你選的那一家的數字。
 - **用量**：設定 → 用量可看每家的使用紀錄與官方剩餘額度（和官方 App 一樣顯示「剩餘 %」）：Claude Code、Codex 的 5 小時與每週上限直接沿用 CLI 的登入；GitHub Copilot 的每月進階請求沿用已登入的 GitHub 帳號；Antigravity 連接一次 Google 帳號後顯示 Claude／GPT-OSS、Gemini Pro、Gemini Flash 各組額度。
 
 ## 從原始碼建置

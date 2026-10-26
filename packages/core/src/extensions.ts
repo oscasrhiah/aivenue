@@ -73,7 +73,8 @@ interface OmniModel {
   name?: string;
   owned_by?: string;
   context_length?: number;
-  capabilities?: { tool_calling?: boolean; reasoning?: boolean; thinking?: boolean };
+  capabilities?: { tool_calling?: boolean; reasoning?: boolean; thinking?: boolean; vision?: boolean };
+  input_modalities?: string[];
   pricing?: { prompt?: string; input?: number };
 }
 
@@ -596,6 +597,7 @@ export class ExtensionService {
       contextSource: m.context_length ? 'cli' : undefined,
       efforts: m.capabilities?.reasoning || m.capabilities?.thinking ? OMNI_EFFORTS : [],
       free: this.omniFree(m),
+      inputs: Array.isArray(m.input_modalities) ? m.input_modalities : m.capabilities?.vision ? ['text', 'image'] : undefined,
     }));
   }
 

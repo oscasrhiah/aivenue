@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, PermissionLevel, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
+import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useHostInfo, useProviders, useThreads, useWorkflow, useWorkflows } from '../api';
-import { readability, type Reason } from '../../../core/src/readability';
+import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
@@ -172,13 +172,23 @@ const reasonText = (t: ReturnType<typeof useT>, r: Reason) =>
   })[r];
 
 /** Which of the chosen agents cannot read which attachment. */
-function compatWarnings(t: ReturnType<typeof useT>, files: Attachment[], providerIds: string[], providers: ProviderInfo[]): string[] {
+/** A role that will see the attachments: its provider and the model it runs (none = the provider default). */
+type RoleTarget = { provider: string; model?: string };
+
+/** What each role's model cannot read, judged by the model's own input types when its list says (else the provider's). */
+function compatWarnings(t: ReturnType<typeof useT>, files: Attachment[], targets: RoleTarget[], providers: ProviderInfo[], models: Record<string, ModelInfo[]>): string[] {
   const out: string[] = [];
+  const seen = new Set<string>();
   for (const a of files) {
-    for (const id of [...new Set(providerIds)]) {
-      const p = providers.find((x) => x.spec.id === id);
-      const r = readability(a, p?.spec.profile);
-      if (!r.ok) out.push(t(`${p?.spec.name ?? id} 無法讀取 ${a.name}（${reasonText(t, r.reason!)}）`, `${p?.spec.name ?? id} cannot read ${a.name} (${reasonText(t, r.reason!)})`));
+    for (const r0 of targets) {
+      const p = providers.find((x) => x.spec.id === r0.provider);
+      const id = r0.model ?? p?.defaultModel ?? p?.spec.defaultModel;
+      const key = `${r0.provider}|${id ?? ''}|${a.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const r = readability(a, profileForInputs(p?.spec.profile, models[r0.provider]?.find((m) => m.id === id)?.inputs));
+      const who = `${p?.spec.name ?? r0.provider}${id ? `（${modelLabel(id)}）` : ''}`;
+      if (!r.ok) out.push(t(`${who} 無法讀取 ${a.name}（${reasonText(t, r.reason!)}）`, `${who} cannot read ${a.name} (${reasonText(t, r.reason!)})`));
     }
   }
   return out;
@@ -215,7 +225,7 @@ function Composer({
   busy: boolean;
   canPickFiles: boolean;
   preview?: AssignmentResult;
-  roleProviders: string[];
+  roleProviders: RoleTarget[];
   compact?: boolean;
   onSafety?: (v: { permission?: PermissionLevel; isolation?: boolean }) => void;
   onAdvisor?: (v: AdvisorConfig) => void;
@@ -267,6 +277,17 @@ function Composer({
     setFiles((cur) => cur.filter((x) => x.key !== f.key));
   };
 
+  // Model lists of the roles' providers, for what each model can read (only while files are attached).
+  const [roleModels, setRoleModels] = useState<Record<string, ModelInfo[]>>({});
+  const roleIds = [...new Set(roleProviders.map((r) => r.provider))].sort().join(',');
+  useEffect(() => {
+    if (!files.length || !roleIds) return;
+    let live = true;
+    Promise.all(roleIds.split(',').map((id) => hub.call<ModelInfo[]>('providers.models', { id }).then((m) => [id, m] as const).catch(() => [id, []] as const))).then((list) => live && setRoleModels(Object.fromEntries(list)));
+    return () => {
+      live = false;
+    };
+  }, [roleIds, files.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
   const uploading = files.some((f) => f.status === 'uploading');
   const send = async () => {
     const ready = files.filter((f) => f.status === 'ready' && f.att).map((f) => f.att!);
@@ -313,7 +334,7 @@ function Composer({
         </div>
       )}
       {(() => {
-        const warn = compatWarnings(t, files.filter((f) => f.att).map((f) => f.att!), roleProviders, providers);
+        const warn = compatWarnings(t, files.filter((f) => f.att).map((f) => f.att!), roleProviders, providers, roleModels);
         return warn.length ? (
           <div className="att-warn">
             {warn.map((w, i) => (
@@ -616,12 +637,15 @@ export function Chat({ id }: { id?: string }) {
 
   if (!shown) return <div className="center-fill muted">{t('載入中…', 'Loading…')}</div>;
   // Providers that will see the attachments: auto picks (before the run) or the configured roles.
-  const roleProviders = (() => {
+  const roleProviders = ((): RoleTarget[] => {
     const a = !run && isAuto(shown) ? preview.result : undefined;
-    const ids: (string | undefined)[] = [];
-    if (shown.plan.enabled) ids.push(a?.plan.author ?? shown.plan.author.provider, shown.plan.reviewer ? a?.plan.reviewer ?? shown.plan.reviewer.provider : undefined);
-    if (shown.implement.enabled) ids.push(a?.implement.author ?? shown.implement.author.provider, shown.implement.reviewer ? a?.implement.reviewer ?? shown.implement.reviewer.provider : undefined);
-    return ids.filter((x): x is string => !!x);
+    // Auto picks run each provider's default model; configured roles may name their own.
+    const of = (picked: string | undefined, role: { provider?: string; model?: string } | null | undefined): RoleTarget | undefined =>
+      picked ? { provider: picked } : role?.provider ? { provider: role.provider, model: role.model } : undefined;
+    const list: (RoleTarget | undefined)[] = [];
+    if (shown.plan.enabled) list.push(of(a?.plan.author, shown.plan.author), shown.plan.reviewer ? of(a?.plan.reviewer, shown.plan.reviewer) : undefined);
+    if (shown.implement.enabled) list.push(of(a?.implement.author, shown.implement.author), shown.implement.reviewer ? of(a?.implement.reviewer, shown.implement.reviewer) : undefined);
+    return list.filter((x): x is RoleTarget => !!x);
   })();
   const missing = !run && !isAuto(shown) ? missingProviders(shown, providers) : [];
   const st = run ? wfStatus(t, run.status) : null;

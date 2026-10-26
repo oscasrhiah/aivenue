@@ -10,7 +10,15 @@ const CUSTOM = '__custom__';
 /** "Claude Opus (claude-opus-5-5) · 1M · 免費" */
 export function modelOptionLabel(t: T, m: ModelInfo): string {
   const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
-  return [name, m.context && fmtContext(m.context), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+}
+
+/** What a model reads besides text ("圖片、影片"), or "只有文字"; empty when unknown. */
+export function inputsLabel(t: T, m: ModelInfo): string {
+  if (!m.inputs) return '';
+  const names: Record<string, string> = { image: t('圖片', 'images'), pdf: 'PDF', audio: t('音訊', 'audio'), video: t('影片', 'video') };
+  const extra = m.inputs.filter((x) => names[x]).map((x) => names[x]);
+  return extra.length ? extra.join(t('、', ', ')) : t('只有文字', 'text only');
 }
 
 /** Where a model's context size comes from, for the tooltip. */

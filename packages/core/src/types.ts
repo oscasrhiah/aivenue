@@ -462,6 +462,8 @@ export interface CatalogModel {
   name: string;
   tools: boolean;
   vision: boolean;
+  /** Input types from the catalog ("text", "image", "pdf", "audio", "video"). */
+  inputs?: string[];
   reasoning: boolean;
   context?: number;
   free?: boolean;
@@ -478,6 +480,8 @@ export interface ModelInfo {
   contextSource?: 'cli' | 'catalog' | 'measured';
   /** Costs nothing to use (free tier / free model). */
   free?: boolean;
+  /** What the model reads besides text: "image", "pdf", "audio", "video" (unknown when not set: the provider's profile decides). */
+  inputs?: string[];
 }
 
 export interface StageConfig {

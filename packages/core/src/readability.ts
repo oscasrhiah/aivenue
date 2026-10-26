@@ -40,6 +40,12 @@ export function readability(a: Pick<Attachment, 'kind' | 'companion'>, profile: 
   }
 }
 
+/** A provider's profile narrowed to what one model reads (its input types, when known). */
+export function profileForInputs(profile: ProviderProfile | undefined, inputs: string[] | undefined): ProviderProfile | undefined {
+  if (!inputs) return profile;
+  return { ...profile, vision: inputs.includes('image'), pdf: inputs.includes('pdf') || undefined, audio: inputs.includes('audio'), video: inputs.includes('video') };
+}
+
 /** English explanation used inside prompts. */
 export const REASON_EN: Record<Reason, string> = {
   'no-vision': 'you cannot view images',

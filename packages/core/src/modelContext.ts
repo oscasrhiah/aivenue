@@ -34,6 +34,15 @@ const newer = (a: number[], b: number[]) => {
  * agrees — anywhere. Aliases without a version ("opus") resolve to the newest model of that name.
  */
 export function lookupContext(catalog: CatalogProvider[], providers: string[], model: string): number | undefined {
+  return lookupModel(catalog, providers, model).context;
+}
+
+/**
+ * What the catalog knows about a model: its context size and what it reads (image, pdf, audio, video). Looks in the given providers
+ * first (the CLI's own vendor, e.g. "anthropic" for Claude Code), then — only when every other catalog that lists the
+ * model agrees — anywhere. Aliases without a version ("opus") resolve to the newest model of that name.
+ */
+export function lookupModel(catalog: CatalogProvider[], providers: string[], model: string): { context?: number; inputs?: string[] } {
   const prefix = model.includes('/') ? model.split('/')[0] : undefined;
   const order = [...new Set([prefix, ...providers].filter((p): p is string => !!p))];
   const wanted = variants(model);
@@ -42,23 +51,29 @@ export function lookupContext(catalog: CatalogProvider[], providers: string[], m
     if (!cp) continue;
     for (const w of wanted) {
       const hit = cp.models.find((m) => norm(m.id) === w);
-      if (hit?.context) return hit.context;
+      if (hit) return { context: hit.context || undefined, inputs: hit.inputs };
     }
     // "opus", "sonnet": the newest model whose name carries that word.
     if (!/\d/.test(wanted[0])) {
-      let best: { v: number[]; context: number } | undefined;
+      let best: { v: number[]; m: CatalogProvider['models'][number] } | undefined;
       for (const m of cp.models) {
-        if (!m.context || !new RegExp(`(^|-)${wanted[0]}(-|$)`).test(norm(m.id)) || !/\d/.test(m.id)) continue;
+        if (!new RegExp(`(^|-)${wanted[0]}(-|$)`).test(norm(m.id)) || !/\d/.test(m.id)) continue;
         const v = version(norm(m.id).replace(/-\d{8}$/, ''));
-        if (!best || newer(v, best.v)) best = { v, context: m.context };
+        if (!best || newer(v, best.v)) best = { v, m };
       }
-      if (best) return best.context;
+      if (best) return { context: best.m.context || undefined, inputs: best.m.inputs };
     }
   }
   // Elsewhere only when it is unambiguous: hosts of the same open model often cap it differently.
-  const seen = new Set<number>();
-  for (const cp of catalog) for (const m of cp.models) if (m.context && wanted.includes(norm(m.id))) seen.add(m.context);
-  return seen.size === 1 ? [...seen][0] : undefined;
+  const contexts = new Set<number>();
+  const inputs = new Set<string>();
+  for (const cp of catalog)
+    for (const m of cp.models)
+      if (wanted.includes(norm(m.id))) {
+        if (m.context) contexts.add(m.context);
+        inputs.add(JSON.stringify([...(m.inputs ?? [])].sort()));
+      }
+  return { context: contexts.size === 1 ? [...contexts][0] : undefined, inputs: inputs.size === 1 && [...inputs][0] !== '[]' ? JSON.parse([...inputs][0]) : undefined };
 }
 
 /** 1000000 → "1M", 272000 → "272K", 1048576 → "1M". */
