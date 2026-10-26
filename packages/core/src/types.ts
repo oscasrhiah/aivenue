@@ -686,6 +686,8 @@ export interface AgentRunInfo {
   sharedSeenAt?: number;
   /** Through a router (OmniRoute): the models that actually answered ("groq/llama-4-scout"). */
   servedBy?: string[];
+  /** Skills put in its prompt as always on (e.g. "ponytail · level full"). */
+  alwaysOn?: string[];
 }
 
 export interface PlanStep {

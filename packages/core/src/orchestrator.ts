@@ -1325,6 +1325,9 @@ export class Orchestrator {
       const caps = this.d.capabilities;
       // Skills are announced once per conversation; a resumed session already has them.
       const skills = resume ? '' : caps.skillsBlock(info.role, run.config.cwd);
+      // Shown on the agent's header: skills it follows the whole time (they never show up as a file it reads).
+      const always = [...skills.matchAll(/ALWAYS ON — (\S+) \(Ponytail, ([^)]*)\)/g)].map((m) => `${m[1]} · ${m[2].split(' — ')[0]}`);
+      if (always.length) info.alwaysOn = always;
       const attached = run.config.attachments ?? [];
       // Per provider: which version of each file to read, and an explicit note for what it cannot read.
       // What this model reads (images, video, audio, PDF): OpenCode, OmniRoute and Copilot reach models of every kind.

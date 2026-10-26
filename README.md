@@ -262,6 +262,8 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 | [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。資料夾有 `graphify-out/` 時每個 agent 先用 `graphify query` 查圖；沒有的話，可寫檔的 agent 會在需要時用 `graphify update .` 建立 |
 | [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。在卡片裡的「連接免費供應商」接上至少一家（例如 Gemini、OpenRouter）後，就能當 agent 使用 |
 
+**看得出用了什麼**：agent 的標題列會標出 🪮 Ponytail（強度）、🧰 讀過的技能、🕸️ Graphify 執行次數，滑鼠移上去看明細；處理過程裡讀技能顯示成「🧰 使用技能 名稱」，graphify 指令顯示成「🕸️ Graphify 查詢 "…"」。
+
 OmniRoute 的細節：
 
 - **連接免費供應商**：卡片裡列出推薦的 5 家（Google Gemini、OpenRouter、NVIDIA NIM、Mistral、Groq），另外 3 家收在「更多」（Ollama Cloud；Logfare 會記錄每一次請求；Cerebras 要綁卡）。按「取得金鑰」到官方網站自己註冊並建立 API 金鑰，貼回來按「連接」，Aivenue 會交給 OmniRoute（加密保存在它的資料庫）。接上後自動測試一次：送出和 agent 開頭差不多長的請求並要求呼叫工具，通過才顯示「可以跑 agent」，沒通過會寫出原因（金鑰無效、上下文太短、每分鐘上限太低、不支援工具）。

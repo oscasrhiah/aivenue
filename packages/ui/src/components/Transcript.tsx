@@ -3,6 +3,7 @@ import type { AgentEvent } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
 import { clock, cx, fmtTokens } from '../util';
 import { Markdown } from './Markdown';
+import { extensionUse } from '../extensionUse';
 
 function toolVerb(t: T, e: AgentEvent): string {
   const tool = e.tool!;
@@ -42,12 +43,31 @@ function ToolLine({ e }: { e: AgentEvent }) {
   const [open, setOpen] = useState(false);
   const tool = e.tool!;
   const pv = tool.status === 'error' ? preview(tool.output, 3) : preview(tool.output, tool.category === 'command' ? 2 : 1);
+  const use = extensionUse(e);
+  const action = (a: string) => ({ update: t('建立／更新圖譜', 'build / update the graph'), query: t('查詢', 'query'), path: t('找關聯', 'path'), explain: t('解釋', 'explain') })[a] ?? a;
   return (
-    <div className={cx('tl', tool.status)}>
+    <div className={cx('tl', tool.status, use && 'tl-ext')}>
       <div className="tl-head" onClick={() => setOpen(!open)}>
         <span className={cx('tl-dot', tool.status)}>⏺</span>
-        <span className="tl-verb">{toolVerb(t, e)}</span>
-        <span className="tl-arg">{tool.title}</span>
+        {use?.kind === 'skill' ? (
+          <>
+            <span className="tl-verb">🧰 {t('使用技能', 'Skill')}</span>
+            <span className="tl-arg">{use.name}</span>
+          </>
+        ) : use?.kind === 'graphify' ? (
+          <>
+            <span className="tl-verb">🕸️ Graphify</span>
+            <span className="tl-arg">
+              {action(use.action)}
+              {use.arg && use.action !== 'update' ? ` "${use.arg}"` : ''}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="tl-verb">{toolVerb(t, e)}</span>
+            <span className="tl-arg">{tool.title}</span>
+          </>
+        )}
       </div>
       {!open && pv && tool.category !== 'read' && (tool.category !== 'hub' || tool.status === 'error') && (
         <div className="tl-out">

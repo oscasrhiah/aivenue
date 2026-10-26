@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { AgentRunInfo, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, useAgentEvents } from '../api';
 import { useT } from '../i18n';
 import { agentStatus, cx, elapsed, modelLabel, providerColor, providerName, roleLabel, STEP_ICON } from '../util';
 import { Transcript, visible } from './Transcript';
 import { Markdown } from './Markdown';
+import { extensionSummary } from '../extensionUse';
 
 function roundOf(run: WorkflowRun, a: AgentRunInfo): Round | undefined {
   if (!a.stage) return undefined;
@@ -204,6 +205,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
     .filter((a) => a.parentId === agent.id)
     .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
   const steps = visible(events, false);
+  const ext = useMemo(() => extensionSummary(events), [events]);
   const hidden = Math.max(0, steps.length - LIVE_LINES);
 
   return (
@@ -226,6 +228,25 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           ) : null}
           {agent.effort ? ` · ${t('推理', 'effort')} ${agent.effort}` : ''}
         </span>
+        {(agent.alwaysOn?.length || ext.skills.length || ext.graphify > 0) && (
+          <span className="turn-ext">
+            {agent.alwaysOn?.map((a) => (
+              <span key={a} className="ext-chip" title={t(`整個任務都套用：${a}`, `Applied for the whole task: ${a}`)}>
+                🪮 {a}
+              </span>
+            ))}
+            {ext.skills.length > 0 && (
+              <span className="ext-chip" title={t(`讀了這些技能：${ext.skills.join('、')}`, `Skills it read: ${ext.skills.join(', ')}`)}>
+                🧰 {ext.skills.length === 1 ? ext.skills[0] : t(`${ext.skills.length} 個技能`, `${ext.skills.length} skills`)}
+              </span>
+            )}
+            {ext.graphify > 0 && (
+              <span className="ext-chip" title={t(`執行了 ${ext.graphify} 次 graphify 指令`, `Ran graphify ${ext.graphify} times`)}>
+                🕸️ Graphify × {ext.graphify}
+              </span>
+            )}
+          </span>
+        )}
         <span className="turn-meta">
           {!running && <span className={cx('status', st.cls)}>{st.label}</span>}
           <span>{elapsed(agent.startedAt, agent.endedAt)}</span>
