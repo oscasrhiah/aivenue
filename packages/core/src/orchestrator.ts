@@ -371,7 +371,8 @@ export class Orchestrator {
     if (files.length) {
       const adopted = this.d.attachments.adopt(run.id, files, run.config.attachments ?? []);
       added = (await this.d.attachments.prepare(adopted)).attachments;
-      run.config.attachments = [...(run.config.attachments ?? []), ...added];
+      // Marked "earlier" so the first message does not show them; the mid-run message shows them itself.
+      run.config.attachments = [...(run.config.attachments ?? []), ...added.map((a) => ({ ...a, earlier: true }))];
     }
     const listed = added.map((a) => `- ${a.name}: ${a.companion?.path ?? a.path}${a.companion ? ` (Aivenue's readable version of ${a.path})` : ''}`);
     const msg = [text.trim().slice(0, 8000), listed.length ? `The user attached these files; read them:\n${listed.join('\n')}` : ''].filter(Boolean).join('\n\n');

@@ -1,7 +1,7 @@
 {
   "name": "@aivenue/desktop",
   "private": true,
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Aivenue desktop app",
   "main": "dist/main.cjs",
   "author": "Aivenue",

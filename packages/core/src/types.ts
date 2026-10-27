@@ -302,6 +302,8 @@ export interface ExtensionStatus {
   state: 'off' | 'working' | 'ready' | 'error';
   /** What is happening or what went wrong, in the user's language. */
   message?: string;
+  /** While installing: when the current step began and the last line its tool printed. */
+  progress?: { since?: number; line?: string; /** Estimated, 0–100. */ percent?: number };
   version?: string;
   skills?: ExtensionSkill[];
   level?: PonytailLevel;

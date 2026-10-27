@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentEvent } from '../../../core/src/types';
+import type { AgentEvent, Attachment } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
 import { clock, cx, fmtTokens } from '../util';
 import { Markdown } from './Markdown';
@@ -69,7 +69,8 @@ function ToolLine({ e }: { e: AgentEvent }) {
           </>
         )}
       </div>
-      {!open && pv && tool.category !== 'read' && (tool.category !== 'hub' || tool.status === 'error') && (
+      {/* Only the first line by default (the command or file); output on click, except an error's first lines. */}
+      {!open && pv && tool.status === 'error' && (
         <div className="tl-out">
           <span className="tl-elbow">⎿</span>
           <pre>{pv}</pre>
@@ -127,16 +128,33 @@ export function visible(events: AgentEvent[], raw: boolean): AgentEvent[] {
   return events.filter((e) => raw || e.kind === 'tool' || e.kind === 'message' || e.kind === 'thinking' || e.kind === 'error');
 }
 
-export function Transcript({ events, raw = false, limit }: { events: AgentEvent[]; raw?: boolean; limit?: number }) {
-  const shown = visible(events, raw);
-  const items = limit ? shown.slice(-limit) : shown;
+/** A message the user sent while this agent worked, shown where it arrived among the agent's steps. */
+export interface SaidMessage {
+  ts: number;
+  text: string;
+  attachments?: Attachment[];
+}
+
+export function Transcript({ events, raw = false, limit, said = [] }: { events: AgentEvent[]; raw?: boolean; limit?: number; said?: SaidMessage[] }) {
+  const t = useT();
+  const shown: ({ said: SaidMessage; ts: number } | { e: AgentEvent; ts: number })[] = [...visible(events, raw).map((e) => ({ e, ts: e.ts })), ...said.map((m) => ({ said: m, ts: m.ts }))].sort((a, b) => a.ts - b.ts);
+  // The last steps only, but never hide what the user sent in between.
+  const items = limit ? shown.filter((it, i) => i >= shown.length - limit || 'said' in it) : shown;
   return (
     <div className="tx">
-      {items.map((e) => (
-        <div key={e.seq} title={clock(e.ts)}>
-          <Line e={e} raw={raw} />
-        </div>
-      ))}
+      {items.map((it, i) =>
+        'said' in it ? (
+          <div key={`said${it.ts}${i}`} className="tx-said" title={clock(it.ts)}>
+            <span className="tx-said-who">👤 {t('你（執行中追加）', 'You (sent while working)')}</span>
+            {it.said.text && <div className="tx-said-text">{it.said.text}</div>}
+            {!!it.said.attachments?.length && <div className="muted tiny">📎 {it.said.attachments.map((a) => a.name).join('、')}</div>}
+          </div>
+        ) : (
+          <div key={it.e.seq} title={clock(it.e.ts)}>
+            <Line e={it.e} raw={raw} />
+          </div>
+        ),
+      )}
     </div>
   );
 }

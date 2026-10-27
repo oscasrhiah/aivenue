@@ -1,4 +1,4 @@
-import type { AgentRole, AgentStatus, ProviderInfo, StageRun, WorkflowStatus } from '../../core/src/types';
+import type { AgentRole, AgentStatus, ProviderInfo, StageRun, WorkflowRun, WorkflowStatus } from '../../core/src/types';
 import type { T } from './i18n';
 
 export const roleLabel = (t: T, r: AgentRole): string =>
@@ -110,4 +110,10 @@ export function providerColor(id: string): string {
   let h = 0;
   for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return `hsl(${h % 360} 45% 50%)`;
+}
+
+/** The top-level agent that was working when the user sent a mid-run message (its message is shown among its steps). */
+export function saidOwner(run: WorkflowRun, ts: number): string | undefined {
+  const working = Object.values(run.agents).filter((a) => !a.parentId && a.startedAt && a.startedAt <= ts && (!a.endedAt || a.endedAt >= ts));
+  return working.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]?.id;
 }

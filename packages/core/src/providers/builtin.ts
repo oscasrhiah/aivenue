@@ -172,7 +172,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
       fresh: [['run']],
       resume: [['run'], ['--session', '{sessionId}']],
       // --standalone: a private server per run, so the user's OpenCode Desktop is untouched and our MCP config applies.
-      common: [['--standalone'], ['--format', 'json'], ['--model', '{model}']],
+      common: [['?--standalone'], ['--format', 'json'], ['--model', '{model}']],
       images: [['--file', '{image}']],
       env: { OPENCODE_CONFIG_CONTENT: '{mcpConfigJson}' },
       // No flag for extra folders: reading outside the working folder is a permission of its own.

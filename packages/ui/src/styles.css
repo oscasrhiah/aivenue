@@ -4115,3 +4115,223 @@ textarea.code {
 .tl-ext .tl-verb {
   color: var(--accent);
 }
+
+/* A message the user sent while the agent worked, among its steps. */
+.tx-said {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 0 8px 8px 0;
+}
+
+.tx-said-who {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.tx-said-text {
+  white-space: pre-wrap;
+}
+
+/* Final result and file list fold to one line until clicked. */
+.fold-head {
+  cursor: pointer;
+  user-select: none;
+}
+
+.fold-head .chev {
+  display: inline-block;
+  width: 14px;
+  color: var(--muted);
+}
+
+.final-result.folded {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.fold-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Settings: a way back to the chat at the bottom of its own column (the chat list is hidden here). */
+.settings-nav a.settings-back {
+  margin-top: auto;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding-top: 12px;
+  color: var(--muted);
+}
+
+.settings-body {
+  min-width: 0;
+}
+
+.pane-head {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pane-head > div:first-child {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .settings {
+    flex-direction: column;
+  }
+
+  .settings-nav {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .settings-title {
+    width: 100%;
+    font-size: 18px;
+    margin-bottom: 4px;
+  }
+
+  .settings-nav a.settings-back {
+    margin-top: 0;
+    margin-left: auto;
+    border-top: none;
+    padding-top: 6px;
+  }
+}
+
+/* Extension install progress: an indeterminate bar plus the installer's latest line. */
+.install-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.install-progress .tiny {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  position: relative;
+}
+
+.install-bar span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: install-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes install-slide {
+  0% {
+    left: -35%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/*
+ * Medium widths (a VS Code panel, a half-screen window): the chat list becomes a drawer too, so the
+ * conversation keeps the whole width; ☰ in the compact bar opens it.
+ */
+@media (max-width: 1100px) {
+  .app {
+    position: relative;
+  }
+
+  .sidebar {
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(280px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .sidebar.open {
+    transform: none;
+  }
+
+  .side-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 39;
+    background: rgb(0 0 0 / 0.28);
+  }
+
+  .compact-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+
+  .compact-bar .wordmark {
+    font-size: 15px;
+  }
+
+  .compact-bar .logo {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+  }
+}
+
+.install-bar.known span {
+  left: 0;
+  animation: none;
+  transition: width 0.6s ease;
+}
+
+.install-pct {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Top bar: the title gives way first; status, time and buttons always stay on one line. */
+.topbar-title {
+  flex: 1 1 auto;
+}
+
+.title-text {
+  flex: 0 1 auto;
+  min-width: 60px;
+  max-width: none;
+}
+
+.topbar-title > *:not(.title-text),
+.topbar .status {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.topbar > *:not(.topbar-title) {
+  flex-shrink: 0;
+  white-space: nowrap;
+}

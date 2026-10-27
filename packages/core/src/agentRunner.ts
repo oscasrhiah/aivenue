@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import type { AgentEvent, ArgGroup, ModeKey, PermissionLevel, ProviderSpec } from './types';
-import { childEnv, killTree, resolveCommand, spawnResolved, specCommand, takesEffort } from './proc';
+import { capture, childEnv, killTree, resolveCommand, spawnResolved, specCommand, takesEffort } from './proc';
 import { createParser, type EventDraft } from './providers/parsers';
 import { L } from './i18n';
 import type { ResolvedMcpServer } from './capabilities';
@@ -175,6 +175,32 @@ export function ensurePermissionRules(file: string, allow: string[]) {
   fs.writeFileSync(p, JSON.stringify(json, null, 2));
 }
 
+const helpCache = new Map<string, Promise<string>>();
+/** Flags newer CLI versions added (OpenCode's --standalone): checked against --help even when not marked "?". */
+const LATER_FLAGS = ['--standalone'];
+
+/**
+ * Flags written "?--flag" are only passed when the installed CLI knows them (its --help mentions them): older
+ * versions of a CLI (e.g. OpenCode before --standalone) otherwise refuse to start.
+ */
+async function dropUnsupported(spec: ProviderSpec, raw: string[]): Promise<string[]> {
+  // Providers saved before a flag became optional (OpenCode-based ones added from the catalog) carry it plainly.
+  const args = raw.map((a) => (LATER_FLAGS.includes(a) ? `?${a}` : a));
+  if (!args.some((a) => a.startsWith('?--'))) return args;
+  const cmd = specCommand(spec);
+  // Help of the subcommand used (e.g. "opencode run --help").
+  const sub = (spec.run.fresh ?? []).flat().filter((a) => !a.startsWith('-') && !a.includes('{'));
+  const key = `${resolveCommand(cmd)?.display ?? cmd} ${sub.join(' ')}`;
+  if (!helpCache.has(key)) helpCache.set(key, capture(cmd, [...sub, '--help'], { timeoutMs: 20000 }).then((r) => r.stdout + r.stderr));
+  const help = await helpCache.get(key)!;
+  const out: string[] = [];
+  for (const a of args) {
+    if (!a.startsWith('?--')) out.push(a);
+    else if (help.split(/[\s,=[\]]+/).includes(a.slice(1))) out.push(a.slice(1));
+  }
+  return out;
+}
+
 export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
   const { spec } = o;
   const resolved = resolveCommand(specCommand(spec));
@@ -320,7 +346,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
   const extraDirs = o.extraDirs ?? [];
   const extraDirArgs = extraDirs.flatMap((extraDir) => renderGroups(spec.run.extraDir, { ...tokens, extraDir }));
 
-  const args = [
+  const rawArgs = [
     ...renderGroups(canResume ? spec.run.resume : spec.run.fresh, tokens),
     ...imageArgs,
     ...renderGroups(spec.run.systemPrompt, tokens),
@@ -333,6 +359,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     ...renderGroups(o.auth?.args, tokens),
     ...renderGroups(spec.run.tail, tokens),
   ];
+  const args = await dropUnsupported(spec, rawArgs);
   const extraEnv: Record<string, string> = { ...secretProcessEnv, ...(o.auth?.env ?? {}), ...(pickMode(spec.modeEnv, modeKey) ?? {}) };
   for (const [k, v] of Object.entries(spec.run.env ?? {})) {
     const r = renderGroups([[v]], tokens);

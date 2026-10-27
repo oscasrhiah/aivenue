@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import type { AgentRunInfo, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, useAgentEvents } from '../api';
 import { useT } from '../i18n';
-import { agentStatus, cx, elapsed, modelLabel, providerColor, providerName, roleLabel, STEP_ICON } from '../util';
+import { agentStatus, cx, elapsed, saidOwner, modelLabel, providerColor, providerName, roleLabel, STEP_ICON } from '../util';
 import { Transcript, visible } from './Transcript';
 import { Markdown } from './Markdown';
 import { extensionSummary } from '../extensionUse';
@@ -206,6 +206,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
     .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
   const steps = visible(events, false);
   const ext = useMemo(() => extensionSummary(events), [events]);
+  const said = (run.userMessages ?? []).filter((m) => saidOwner(run, m.ts) === agent.id);
   const hidden = Math.max(0, steps.length - LIVE_LINES);
 
   return (
@@ -258,7 +259,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
 
       <div className="turn-body">
         {expanded ? (
-          <Transcript events={events} raw={raw} />
+          <Transcript events={events} raw={raw} said={said} />
         ) : (
           <>
             {hidden > 0 && (
@@ -266,7 +267,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
                 + {t(`另外 ${hidden} 個步驟`, `${hidden} earlier steps`)}
               </button>
             )}
-            <Transcript events={events} limit={running ? LIVE_LINES : LIVE_LINES} />
+            <Transcript events={events} limit={LIVE_LINES} said={said} />
           </>
         )}
         {running && (

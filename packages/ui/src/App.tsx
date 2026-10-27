@@ -88,6 +88,12 @@ function Sidebar({ route, open }: { route: Route; open: boolean }) {
 export function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [menu, setMenu] = useState(false);
+  // Where "back to the conversation" in Settings goes: the last chat page shown.
+  const [lastChat, setLastChat] = useState('#/new');
+  useEffect(() => {
+    if (route.page === 'run') setLastChat(`#/run/${route.id}`);
+    if (route.page === 'new') setLastChat('#/new');
+  }, [route]);
   useEffect(() => {
     const on = () => {
       setRoute(parseHash());
@@ -109,14 +115,15 @@ export function App() {
   }, []);
   return (
     <SettingsProvider>
-      <div className="app">
-        <Sidebar route={route} open={menu} />
-        {menu && <div className="side-scrim" onClick={() => setMenu(false)} />}
+      <div className={cx('app', route.page === 'settings' && 'in-settings')}>
+        {/* Settings has its own column (with a way back), so the chat list steps aside. */}
+        {route.page !== 'settings' && <Sidebar route={route} open={menu} />}
+        {menu && route.page !== 'settings' && <div className="side-scrim" onClick={() => setMenu(false)} />}
         <main className="main">
           <CompactBar route={route} onMenu={() => setMenu(!menu)} />
           {route.page === 'new' && <Chat key="new" />}
           {route.page === 'run' && <Chat key={route.id} id={route.id} />}
-          {route.page === 'settings' && <Settings tab={route.tab} />}
+          {route.page === 'settings' && <Settings tab={route.tab} backHref={lastChat} />}
         </main>
       </div>
     </SettingsProvider>

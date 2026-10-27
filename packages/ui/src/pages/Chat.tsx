@@ -12,7 +12,7 @@ import { ContextAsk, ContextPie } from '../components/ContextPie';
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
-import { cx, elapsed, modelLabel, providerName, wfStatus } from '../util';
+import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 
 type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[] } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
@@ -24,7 +24,10 @@ function timeline(run: WorkflowRun): Item[] {
   run.log.forEach((l, i) => {
     if (l.chat) items.push({ type: 'divider', text: l.text, level: l.level, ts: l.ts, key: `log${i}` });
   });
-  (run.userMessages ?? []).forEach((m, i) => items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments }));
+  // A message sent while an agent worked shows among that agent's steps; one sent between agents stands alone.
+  (run.userMessages ?? []).forEach((m, i) => {
+    if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments });
+  });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
 }
@@ -54,7 +57,9 @@ const attKey = (a: Attachment) => `${a.name}|${a.size}`;
  * saved before that mark existed are matched by name and size against the conversation's earlier messages.
  */
 function ownAttachments(run: WorkflowRun, before: WorkflowRun[]): Attachment[] {
-  const list = run.config.attachments ?? [];
+  // Files sent with a mid-run message belong to that message.
+  const midRun = new Set((run.userMessages ?? []).flatMap((m) => m.attachments ?? []).map((x) => x.path));
+  const list = (run.config.attachments ?? []).filter((x) => !midRun.has(x.path));
   if (list.some((a) => a.earlier !== undefined)) return list.filter((a) => !a.earlier);
   const seen = new Set(before.flatMap((r) => r.config.attachments ?? []).map(attKey));
   return list.filter((a) => !seen.has(attKey(a)));
@@ -482,6 +487,8 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
  */
 function FinalResult({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
+  // Folded by default: the agent's own turn above already ends with the same text.
+  const [open, setOpen] = useState(false);
   if (run.status !== 'completed') return null;
   const main = Object.values(run.agents).filter((a) => a.depth === 0 && a.status === 'completed');
   const last = (role: AgentRunInfo['role']) => main.filter((a) => a.role === role).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
@@ -493,8 +500,9 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   const author = exec ?? last('planner');
   const review = (exec ? implRound : planRound)?.review;
   return (
-    <div className="final-result">
-      <div className="final-head">
+    <div className={cx('final-result', !open && 'folded')}>
+      <div className="final-head fold-head" onClick={() => setOpen(!open)}>
+        <span className="chev">{open ? '▾' : '▸'}</span>
         <span className="final-title">{exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}</span>
         {author && (
           <span className="muted small">
@@ -504,7 +512,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         )}
         {review && <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}</span>}
       </div>
-      <Markdown className="prose" text={text} />
+      {open ? <Markdown className="prose" text={text} /> : <div className="muted small fold-preview">{text.replace(/[#*`>_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)}…</div>}
     </div>
   );
 }

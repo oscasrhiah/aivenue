@@ -196,6 +196,7 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
             {p.customized && <span className="tag">{t('已修改', 'Modified')}</span>}
           </div>
           <div className="muted small">{t(s.description ?? '', en?.description ?? s.description ?? '')}</div>
+          {(s.id === 'antigravity' || s.accountOf === 'antigravity') && <AgyWarning />}
           {(p.defaultModel || p.defaultEffort) && <div className="muted tiny mono">{[p.defaultModel, p.defaultEffort && `effort ${p.defaultEffort}`].filter(Boolean).join(' · ')}</div>}
         </div>
         <span className={cx('state', ready ? 'ok' : p.installed ? 'warn' : 'err')}>{stateText}</span>
@@ -402,6 +403,20 @@ function AddProvider({ onClose }: { onClose: () => void }) {
         </div>
         <CatalogPicker onDone={onClose} />
       </div>
+    </div>
+  );
+}
+
+/** Google's terms forbid reaching Antigravity through third-party tools: say so wherever it can be set up. */
+export function AgyWarning() {
+  const t = useT();
+  return (
+    <div className="warn-text small agy-warning">
+      ⚠{' '}
+      {t(
+        'Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取；在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖。功能保留，是否使用請自行評估。',
+        "Google's Antigravity terms explicitly prohibit access through third-party software, tools or services (proxies included); using Antigravity through Aivenue may get your Google account suspended or blocked. The feature stays available; use it at your own risk.",
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRole, OmniCandidate, OmniTest, ExtensionId, ExtensionsConfig, ExtensionSkill, ExtensionStatus, InstructionRole, ModelInfo, PonytailLevel, ProviderInfo, ProviderSpec } from './types';
 import { type CapabilityStore, type ExtraSkill, parseFrontmatter } from './capabilities';
-import { capture, childEnv, findNode, killTree, refreshPathCache } from './proc';
+import { capture, childEnv, findNode, killTree, refreshPathCache, resolveCommand, spawnResolved, type CaptureResult } from './proc';
 import type { ProviderRegistry } from './providers/registry';
 import { BUILTIN_PROVIDERS } from './providers/builtin';
 import type { SecretStore } from './secrets';
@@ -65,6 +65,16 @@ const PONYTAIL_LEVEL: Record<PonytailLevel, string> = {
 const OMNI_PROVIDER = 'omniroute';
 const OMNI_PORT = 20128;
 const OMNI_EFFORTS = ['low', 'medium', 'high'];
+
+/** How a step usually goes: its share of the install (from–to %), its usual length, and how many output lines it prints. */
+interface Estimate {
+  from: number;
+  to: number;
+  ms: number;
+  lines?: number;
+}
+/** npm install of OmniRoute: about four minutes on a fresh machine (its output line count varies too much to use). */
+const NPM_EST: Estimate = { from: 0, to: 90, ms: 240000 };
 const FREE_POOLS = ['auto/best-free', 'auto/coding:free'];
 const MAX_OMNI_MODELS = 120;
 
@@ -87,7 +97,7 @@ interface OmniModel {
 export class ExtensionService {
   private skillsRoot: string;
   private toolsDir: string;
-  private work = new Map<ExtensionId, { message?: string; error?: string }>();
+  private work = new Map<ExtensionId, { message?: string; error?: string; since?: number }>();
   private graphifyVersion?: string;
   private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string> };
   private omniStarting?: Promise<void>;
@@ -147,6 +157,7 @@ export class ExtensionService {
         enabled,
         state: !enabled ? 'off' : w?.error ? 'error' : w?.message ? 'working' : ready ? 'ready' : 'error',
         message: !enabled ? undefined : (w?.error ?? w?.message ?? (ready ? undefined : notReady)),
+        progress: w?.message && !w.error ? { since: this.progress.get(id)?.since ?? w.since, line: this.progress.get(id)?.line, percent: this.percent(id) } : undefined,
         ...extra,
       };
     };
@@ -253,6 +264,75 @@ export class ExtensionService {
     return out;
   }
 
+  // ---------- install progress ----------
+
+  /** When the current install step began and the last line its tool printed, per extension. */
+  private progress = new Map<ExtensionId, { since: number; line?: string; lines: number; est?: Estimate }>();
+
+  /**
+   * An estimated percentage: the step's share of the whole install, filled by elapsed time against its usual
+   * length (or by output lines, e.g. npm's fetches, when that is further), never past 95% of the step.
+   */
+  private percent(id: ExtensionId): number | undefined {
+    const p = this.progress.get(id);
+    if (!p?.est) return undefined;
+    const done = Math.min(0.95, Math.max((Date.now() - p.since) / p.est.ms, p.est.lines ? p.lines / p.est.lines : 0));
+    return Math.round(p.est.from + (p.est.to - p.est.from) * done);
+  }
+
+  /** Mark a step without a running command (e.g. waiting for OmniRoute to answer). */
+  private phase(id: ExtensionId, est: Estimate) {
+    this.progress.set(id, { since: Date.now(), lines: 0, est });
+    this.tick();
+  }
+
+  /** Push the status every 2 s while something installs, so the percentage moves even when the tool is quiet. */
+  private ticker?: NodeJS.Timeout;
+  private tick() {
+    this.ticker ??= setInterval(() => {
+      if (!this.progress.size) {
+        clearInterval(this.ticker);
+        this.ticker = undefined;
+      }
+      this.changed();
+    }, 2000);
+  }
+  private progressTimer?: NodeJS.Timeout;
+
+  /** Run an install command, passing its output on as progress (the latest line, at most twice a second). */
+  private live(id: ExtensionId, command: string, args: string[], timeoutMs: number, est?: Estimate): Promise<CaptureResult> {
+    return new Promise((resolve) => {
+      const resolved = resolveCommand(command);
+      if (!resolved) return resolve({ code: null, stdout: '', stderr: '', error: `command not found: ${command}` });
+      const p = { since: Date.now(), line: undefined as string | undefined, lines: 0, est };
+      this.progress.set(id, p);
+      this.tick();
+      const child = spawnResolved(resolved, args, { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      const onData = (chunk: Buffer, to: 'out' | 'err') => {
+        const text = chunk.toString();
+        if (to === 'out') stdout += text;
+        else stderr += text;
+        // eslint-disable-next-line no-control-regex
+        const last = text.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/[\r\n]+/).map((l) => l.trim()).filter(Boolean).pop();
+        if (last) p.line = last.slice(0, 160);
+        p.lines += text.split('\n').length - 1;
+        this.progressTimer ??= setTimeout(() => ((this.progressTimer = undefined), this.changed()), 500);
+      };
+      child.stdout?.on('data', (d: Buffer) => onData(d, 'out'));
+      child.stderr?.on('data', (d: Buffer) => onData(d, 'err'));
+      const timer = setTimeout(() => killTree(child), timeoutMs);
+      const done = (r: CaptureResult) => {
+        clearTimeout(timer);
+        this.progress.delete(id);
+        resolve(r);
+      };
+      child.on('error', (e) => done({ code: null, stdout, stderr, error: e.message }));
+      child.on('close', (code) => done({ code, stdout, stderr }));
+    });
+  }
+
   // ---------- Graphify ----------
 
   private async checkGraphify(): Promise<boolean> {
@@ -266,7 +346,7 @@ export class ExtensionService {
   /** Install uv (when missing) and then the graphify command with it. No admin rights needed. */
   private async installGraphify(): Promise<void> {
     if (this.work.get('graphify')?.message) return;
-    const step = (message: string) => (this.work.set('graphify', { message }), this.changed());
+    const step = (message: string) => (this.work.set('graphify', { message, since: Date.now() }), this.changed());
     try {
       step(L('檢查 graphify…', 'Checking graphify…'));
       if (await this.checkGraphify()) return;
@@ -274,15 +354,15 @@ export class ExtensionService {
         step(L('安裝 uv（Python 套件管理工具，約 1 分鐘）…', 'Installing uv (Python package manager, about a minute)…'));
         // Astral's official installers; they put uv in ~/.local/bin for this user only.
         const r = isWin
-          ? await capture('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://astral.sh/uv/install.ps1 | iex'], { timeoutMs: 5 * 60000 })
-          : await capture('sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh'], { timeoutMs: 5 * 60000 });
+          ? await this.live('graphify', 'powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://astral.sh/uv/install.ps1 | iex'], 5 * 60000, { from: 0, to: 30, ms: 60000 })
+          : await this.live('graphify', 'sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh'], 5 * 60000, { from: 0, to: 30, ms: 60000 });
         refreshPathCache();
         if ((await capture('uv', ['--version'], { timeoutMs: 20000 })).code !== 0) throw new Error(L(`uv 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install uv: ${tail(r.stderr || r.stdout || r.error)}`));
       }
       step(L('用 uv 安裝 graphify（會一併下載 Python，約 1–3 分鐘）…', 'Installing graphify with uv (downloads Python too, 1–3 minutes)…'));
       // tree-sitter 0.25.2 沒有 Python 3.15 wheel，指定已有預編譯套件的版本。
       // --force: take over graphify.exe left by an earlier or half-finished install.
-      const r = await capture('uv', ['tool', 'install', '--force', '--upgrade', '--python', '3.12', 'graphifyy'], { timeoutMs: 15 * 60000 });
+      const r = await this.live('graphify', 'uv', ['tool', 'install', '--force', '--upgrade', '--python', '3.12', 'graphifyy'], 15 * 60000, { from: 30, to: 99, ms: 90000 });
       if (!(await this.checkGraphify())) {
         const detail = (r.stderr || r.stdout || r.error || L('沒有輸出', 'no output')).trim().slice(0, 3000);
         throw new Error(L(`graphify 安裝失敗：${detail}`, `Could not install graphify: ${detail}`));
@@ -353,7 +433,7 @@ export class ExtensionService {
   }
 
   private async doStartOmni(): Promise<void> {
-    const step = (message: string) => (this.work.set('omniroute', { message }), this.changed());
+    const step = (message: string) => (this.work.set('omniroute', { message, since: Date.now() }), this.changed());
     try {
       const node = findNode();
       if (!node) throw new Error(L('需要 Node.js 22.22 以上或 24：請先安裝 Node.js', 'OmniRoute needs Node.js 22.22+ or 24: install Node.js first'));
@@ -365,8 +445,8 @@ export class ExtensionService {
         fs.mkdirSync(this.omniDir(), { recursive: true });
         // npm's own script next to node: the npm.cmd shim goes through cmd.exe, which breaks on "C:\Program Files".
         const npmCli = path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-        const args = ['install', '--prefix', this.omniDir(), 'omniroute', '--no-audit', '--no-fund', '--loglevel', 'error'];
-        const r = fs.existsSync(npmCli) ? await capture(node, [npmCli, ...args], { timeoutMs: 20 * 60000 }) : await capture('npm', args, { timeoutMs: 20 * 60000 });
+        const args = ['install', '--prefix', this.omniDir(), 'omniroute', '--no-audit', '--no-fund', '--loglevel', 'http'];
+        const r = fs.existsSync(npmCli) ? await this.live('omniroute', node, [npmCli, ...args], 20 * 60000, NPM_EST) : await this.live('omniroute', 'npm', args, 20 * 60000, NPM_EST);
         if (!fs.existsSync(this.omniBin())) throw new Error(L(`OmniRoute 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install OmniRoute: ${tail(r.stderr || r.stdout || r.error)}`));
       }
       const apiKey = await this.omniSecret('apiKey');
@@ -377,6 +457,7 @@ export class ExtensionService {
         const usePort = (await portFree(port)) ? port : await freePort();
         if (usePort !== this.cfg().omniroute?.port) this.save({ ...this.cfg(), omniroute: { enabled: true, ...this.cfg().omniroute, port: usePort } });
         step(L('啟動 OmniRoute…', 'Starting OmniRoute…'));
+        this.phase('omniroute', { from: 90, to: 99, ms: 30000 });
         const dataDir = path.join(this.toolsDir, 'omniroute-data');
         fs.mkdirSync(dataDir, { recursive: true });
         const { spawn } = await import('node:child_process');
@@ -415,6 +496,7 @@ export class ExtensionService {
       this.work.set('omniroute', { error: (e as Error).message });
       throw e;
     } finally {
+      this.progress.delete('omniroute');
       this.changed();
     }
   }

@@ -65,22 +65,23 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
 export function Outputs({ run, onImage }: { run: WorkflowRun; onImage: (src: string) => void }) {
   const t = useT();
   const [all, setAll] = useState(false);
+  const [open, setOpen] = useState(false);
   const list = run.outputs ?? [];
   if (!list.length) return null;
   const shown = all ? list : list.slice(0, 12);
   const counts = { added: list.filter((f) => f.status === 'added').length, modified: list.filter((f) => f.status === 'modified').length, deleted: list.filter((f) => f.status === 'deleted').length };
   return (
     <div className="outputs">
-      <div className="outputs-head">
-        <span>📁 {t('這次產生或修改的檔案', 'Files created or changed in this run')}</span>
+      <div className="outputs-head fold-head" onClick={() => setOpen(!open)}>
+        <span>
+          <span className="chev">{open ? '▾' : '▸'}</span> 📁 {t('這次產生或修改的檔案', 'Files created or changed in this run')}
+        </span>
         <span className="muted small">
           {[counts.added && t(`新增 ${counts.added}`, `${counts.added} added`), counts.modified && t(`修改 ${counts.modified}`, `${counts.modified} modified`), counts.deleted && t(`刪除 ${counts.deleted}`, `${counts.deleted} deleted`)].filter(Boolean).join(' · ')}
         </span>
       </div>
-      {shown.map((f) => (
-        <Row key={f.path} f={f} onImage={onImage} />
-      ))}
-      {list.length > shown.length && (
+      {open && shown.map((f) => <Row key={f.path} f={f} onImage={onImage} />)}
+      {open && list.length > shown.length && (
         <button className="link" onClick={() => setAll(true)}>
           {t(`顯示全部 ${list.length} 個`, `Show all ${list.length}`)}
         </button>

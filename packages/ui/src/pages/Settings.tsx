@@ -294,7 +294,7 @@ function UsagePane() {
   );
 }
 
-export function Settings({ tab }: { tab: Tab }) {
+export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: string }) {
   const t = useT();
   const tabs: { id: Tab; label: string }[] = [
     { id: 'general', label: t('一般', 'General') },
@@ -311,6 +311,9 @@ export function Settings({ tab }: { tab: Tab }) {
             {x.label}
           </a>
         ))}
+        <a className="settings-back" href={backHref}>
+          ← {t('返回對話', 'Back to chat')}
+        </a>
       </nav>
       <div className="settings-body">
         {tab === 'general' && <GeneralPane />}

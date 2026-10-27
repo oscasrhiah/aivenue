@@ -5,7 +5,7 @@
   <a href="https://github.com/oscasrhiah/aivenue/releases"><img alt="所有版本" src="https://img.shields.io/badge/%E6%89%80%E6%9C%89-%E7%89%88%E6%9C%AC-555555?style=for-the-badge"></a>
 </p>
 
-> **English summary** — Aivenue lets the subscription-based AI coding CLIs you already have (Claude Code, Codex, Antigravity, GitHub Copilot CLI, OpenCode, Qwen Code) work together in one workflow: one writes the plan and another reviews it, one implements and another verifies the code, looping until the reviewer approves. Any agent can hand sub-tasks to another vendor's CLI as a sub-agent. It runs locally as a desktop app (Windows, Linux) or a VS Code extension, uses your own accounts or API keys, and never handles your passwords. Licensed under MIT.
+> **English summary** — Aivenue lets the subscription-based AI coding CLIs you already have (Claude Code, Codex, Antigravity, GitHub Copilot CLI, OpenCode, Qwen Code) work together in one workflow: one writes the plan and another reviews it, one implements and another verifies the code, looping until the reviewer approves. Any agent can hand sub-tasks to another vendor's CLI as a sub-agent. It runs locally as a desktop app (Windows, Linux) or a VS Code extension, uses your own accounts or API keys, and never handles your passwords. Licensed under MIT. **Warning:** Google's Antigravity terms prohibit access through third-party tools; using Antigravity through Aivenue may get your Google account suspended or blocked.
 
 讓多家訂閱制 AI coding CLI 在同一個工作流裡分工合作：一家寫計畫、另一家審查，來回修改直到通過；接著實作，再由審查者驗收程式碼，直到通過為止。任何 agent 在工作中都能透過 Aivenue 把子任務派給其他家的 agent 當 sub agent。全程即時顯示每個 agent 讀了什麼、改了什麼、跑了什麼指令。
 
@@ -18,6 +18,8 @@ https://github.com/user-attachments/assets/52121552-f158-4b92-a55a-004743efcdad
 <p align="center"><sub>影片約 1 分鐘，畫面加速播放：輸入任務 → Antigravity 額度用完、自動改由 Claude 寫計畫 → Codex 審查退回 2 個問題 → 第二輪通過 → Claude 實作並平行派出 OpenCode、Antigravity 兩個 sub agent → 審查者失敗時自動換 Codex 驗收 → 完成。</sub></p>
 
 ---
+
+> ⚠️ 使用 Antigravity（`agy`）前請先看[這段風險說明](#支援的-ai-工具)：Google 的服務條款禁止透過第三方工具存取，可能導致帳號被停用或封鎖。
 
 ## 目錄
 
@@ -61,6 +63,8 @@ Aivenue 把這些 CLI 串成一個工作流：
 | OpenCode | 內建免費模型，另可接上百家 API 與訂閱方案（Kimi、通義、GLM、MiniMax…） | ✓ | `npm install -g opencode-ai` |
 | Qwen Code | QwenCloud Token Plan | 任何 OpenAI 相容 API | `npm install -g @qwen-code/qwen-code` |
 
+> ⚠️ **Antigravity（`agy`）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取 Antigravity。在 Aivenue 中使用 Antigravity 屬於這種情況，**可能導致你的 Google 帳號被停用或封鎖**。Aivenue 保留這項功能，是否使用請自行評估風險。
+
 - Antigravity 是 Google 的訂閱版本，取代已停止個人登入的 Gemini CLI。需要 Google AI Studio 金鑰的話，可在「新增 → 按量 API」加入 Google。
 - 也可以在「設定 → 供應商與帳號 → 新增」從清單加入其他 API／訂閱方案，或自訂任何有命令列模式的 CLI（例如 Kimi、Grok 等）。
 - 用 npm 安裝的工具需要 Node.js。
@@ -69,7 +73,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 
 ## 下載與安裝
 
-所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.8`）：
+所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.1.9`）：
 
 <p align="center">
   <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="前往下載頁面" src="https://img.shields.io/badge/%E5%89%8D%E5%BE%80-%E4%B8%8B%E8%BC%89%E9%A0%81%E9%9D%A2-c96442?style=for-the-badge"></a>

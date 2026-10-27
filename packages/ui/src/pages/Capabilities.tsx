@@ -693,6 +693,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
       </div>
       <div className="muted small">{t(info.zh, info.en)}</div>
       {s.enabled && s.message && <div className={cx('note', s.state === 'error' && 'err')}>{s.message}</div>}
+      {s.enabled && s.state === 'working' && s.progress && <InstallProgress p={s.progress} />}
 
       {s.id === 'ponytail' && s.enabled && (
         <>
@@ -802,6 +803,29 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
           {t('來源', 'Source')}
         </button>
         <span className="muted tiny">{info.license}</span>
+      </div>
+    </div>
+  );
+}
+
+/** An install in progress: a moving bar, how long it has run, and the last line the installer printed. */
+function InstallProgress({ p }: { p: NonNullable<ExtensionStatus['progress']> }) {
+  const t = useT();
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secs = p.since ? Math.max(0, Math.round((now - p.since) / 1000)) : 0;
+  return (
+    <div className="install-progress">
+      <div className={cx('install-bar', p.percent !== undefined && 'known')}>
+        <span style={p.percent !== undefined ? { width: `${p.percent}%` } : undefined} />
+      </div>
+      <div className="muted tiny">
+        {p.percent !== undefined && <b className="install-pct">{t(`約 ${p.percent}%`, `about ${p.percent}%`)} · </b>}
+        {t(`已進行 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒`, `${Math.floor(secs / 60)}m ${secs % 60}s so far`)}
+        {p.line ? ` · ${p.line}` : ''}
       </div>
     </div>
   );

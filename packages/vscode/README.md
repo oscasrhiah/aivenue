@@ -168,6 +168,9 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 | OpenCode | 內建免費模型，另可接上百家 API 與訂閱方案（Kimi、通義、GLM、MiniMax…） | ✓ | `npm install -g opencode-ai` |
 | Qwen Code | QwenCloud Token Plan | 任何 OpenAI 相容 API | `npm install -g @qwen-code/qwen-code` |
 
+> ⚠️ **Antigravity（`agy`）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取 Antigravity。在 Aivenue 中使用 Antigravity 屬於這種情況，**可能導致你的 Google 帳號被停用或封鎖**。Aivenue 保留這項功能，是否使用請自行評估風險。
+
+
 也可以在「設定 → 供應商與帳號 → 新增」從清單加入其他 API／訂閱方案，或自訂任何有命令列模式的 CLI。
 
 ### 同一個工具登入多個帳號
