@@ -219,6 +219,7 @@ function Composer({
   onPause,
   onResume,
   onSay,
+  onStop,
   extra,
 }: {
   draft: RoleDraft;
@@ -239,6 +240,8 @@ function Composer({
   /** Shown after the role pills (the shared-context pie). */
   extra?: ReactNode;
   onPause?: () => void;
+  /** End the workflow for good (from the send button's right-click menu while it runs or is paused). */
+  onStop?: () => void;
   /** Resume; what the user typed meanwhile is passed to the agents. */
   onResume?: (note: string) => void;
   /** While agents work: hand a message (and files) to them right away. */
@@ -248,6 +251,8 @@ function Composer({
   const [text, setText] = useState('');
   const [files, setFiles] = useState<Pending[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [stopMenu, setStopMenu] = useState<{ x: number; y: number } | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const input = useRef<HTMLInputElement>(null);
   useLayoutEffect(() => {
@@ -385,6 +390,15 @@ function Composer({
         />
         <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} />
         {extra}
+        {/* Right-click while it runs or is paused: end the workflow (asks for confirmation). */}
+        <span
+          className="send-wrap"
+          onContextMenu={(e) => {
+            if (!runState || !onStop) return;
+            e.preventDefault();
+            setStopMenu({ x: e.clientX, y: e.clientY });
+          }}
+        >
         {runState === 'running' && (text.trim() || files.some((f) => f.status === 'ready')) ? (
           <button className="send" onClick={send} title={t('交給正在工作的 agent：它們會停下來看這則訊息，再接著做', 'Hand it to the working agents: they stop, read it and carry on')} aria-label={t('送出', 'Send')}>
             ↑
@@ -410,7 +424,51 @@ function Composer({
             ↑
           </button>
         )}
+        </span>
       </div>
+      {stopMenu && (
+        <>
+          <div className="ctx-scrim" onClick={() => setStopMenu(null)} onContextMenu={(e) => (e.preventDefault(), setStopMenu(null))} />
+          <div className="ctx-menu" style={{ left: Math.min(stopMenu.x, window.innerWidth - 220), top: Math.max(8, stopMenu.y - 56) }}>
+            <button
+              className="danger"
+              onClick={() => {
+                setStopMenu(null);
+                setConfirmStop(true);
+              }}
+            >
+              ■ {t('終止此工作流…', 'End this workflow…')}
+            </button>
+          </div>
+        </>
+      )}
+      {confirmStop && (
+        <div className="modal-back" onClick={() => setConfirmStop(false)}>
+          <div className="modal stop-confirm" onClick={(e) => e.stopPropagation()}>
+            <h3>{t('確定要終止這個工作流嗎？', 'End this workflow?')}</h3>
+            <p className="small">
+              {t(
+                '正在工作的 agent 會立刻停止。工作流結束後無法再繼續，只能重新發起任務（已經完成的檔案與紀錄會保留）。',
+                'Working agents stop right away. Once it has ended the workflow cannot be resumed; you can only start the task again (files and history so far are kept).',
+              )}
+            </p>
+            <div className="row end gap">
+              <button className="btn" onClick={() => setConfirmStop(false)}>
+                {t('不確認', 'Cancel')}
+              </button>
+              <button
+                className="btn stop-yes"
+                onClick={() => {
+                  setConfirmStop(false);
+                  onStop?.();
+                }}
+              >
+                {t('確認終止', 'End it')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -679,6 +737,7 @@ export function Chat({ id }: { id?: string }) {
         onSend={send}
         runState={run?.status === 'running' ? 'running' : paused ? 'paused' : undefined}
         onPause={() => run && hub.call('workflows.pause', { id: run.id }).catch((e) => setError((e as Error).message))}
+        onStop={() => run && hub.call('workflows.cancel', { id: run.id }).catch((e) => setError((e as Error).message))}
         onResume={(note) => run && hub.call('workflows.resume', { id: run.id, note }).catch((e) => setError((e as Error).message))}
         onSay={(text, attachments) =>
           run

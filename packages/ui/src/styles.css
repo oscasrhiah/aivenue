@@ -4335,3 +4335,59 @@ textarea.code {
   flex-shrink: 0;
   white-space: nowrap;
 }
+
+/* Right-click menu of the send button (end the workflow). */
+.send-wrap {
+  display: inline-flex;
+}
+
+.ctx-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+
+.ctx-menu {
+  position: fixed;
+  z-index: 61;
+  min-width: 200px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.ctx-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ctx-menu button:hover {
+  background: var(--sunken);
+}
+
+.ctx-menu button.danger {
+  color: var(--err, #c0392b);
+}
+
+.stop-confirm {
+  max-width: 440px;
+}
+
+.btn.stop-yes {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff;
+}
+
+.btn.stop-yes:hover {
+  background: #a93226;
+}
