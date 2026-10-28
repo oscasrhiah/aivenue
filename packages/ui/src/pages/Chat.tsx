@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
+import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useHostInfo, useProviders, useThreads, useWorkflow, useWorkflows } from '../api';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
+import { PreflightList, RunMenu } from '../components/RunTools';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
 import { ContextAsk, ContextPie } from '../components/ContextPie';
@@ -15,7 +16,7 @@ import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 
-type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[] } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
+type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
 function timeline(run: WorkflowRun): Item[] {
   // A follow-up's goal carries the earlier task as context; show only what the user wrote.
@@ -26,14 +27,14 @@ function timeline(run: WorkflowRun): Item[] {
   });
   // A message sent while an agent worked shows among that agent's steps; one sent between agents stands alone.
   (run.userMessages ?? []).forEach((m, i) => {
-    if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments });
+    if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments, delivered: m.deliveredTo?.length });
   });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
 }
 
 /** A message sent while the agents were working: handed to them right away. */
-function MidRunMessage({ text, files, onImage }: { text: string; files?: Attachment[]; onImage: (src: string) => void }) {
+function MidRunMessage({ text, files, onImage, delivered }: { text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number }) {
   const t = useT();
   return (
     <div className="user-msg-wrap">
@@ -45,7 +46,11 @@ function MidRunMessage({ text, files, onImage }: { text: string; files?: Attachm
         </div>
       )}
       {text && <div className="user-msg">{text}</div>}
-      <div className="muted tiny mid-run-tag">{t('執行中追加 · 已交給正在工作的 agent', 'Sent while working · handed to the working agents')}</div>
+      <div className="muted tiny mid-run-tag">
+        {delivered
+          ? t(`執行中追加 · 已送達 ${delivered} 個 agent`, `Sent while working · reached ${delivered} agent(s)`)
+          : t('執行中追加 · 會交給下一個開始工作的 agent', 'Sent while working · goes to the next agent that starts')}
+      </div>
     </div>
   );
 }
@@ -73,7 +78,7 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
     <div className="earlier-msg">
       {items.map((it) =>
         it.type === 'user' && it.midRun ? (
-          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} />
+          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} delivered={it.delivered} />
         ) : it.type === 'user' ? (
           <div key={it.key} className="user-block">
             {own.length > 0 && (
@@ -653,8 +658,30 @@ export function Chat({ id }: { id?: string }) {
     if (!run) return updateDraft(d);
     setRunDraft(d);
     if (active) {
-      const { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs } = d;
-      hub.call('workflows.updateConfig', { id: run.id, patch: { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs: extraDirs ?? [] } }).catch((e) => setError((e as Error).message));
+      hub.call('workflows.updateConfig', { id: run.id, patch: runPatch(d) }).catch((e) => setError((e as Error).message));
+    }
+  };
+  const runPatch = (d: RoleDraft) => {
+    const { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs, verify, limits } = d;
+    return { plan, implement, subagents, permission, contextSharing, context, assignment, advisor, extraDirs: extraDirs ?? [], verify, limits };
+  };
+  const applyNow = () => {
+    if (!run) return;
+    hub
+      .call('workflows.updateConfig', { id: run.id, patch: runPatch(runDraft ?? run.config), restart: true })
+      .then(() => setRolesOpen(false))
+      .catch((e) => setError((e as Error).message));
+  };
+  // Errors found before sending: the user decides to send anyway or fix them first.
+  const [pre, setPre] = useState<{ items: PreflightItem[]; decide: (go: boolean) => void }>();
+  const dryRun = async () => {
+    if (!draft?.cwd) return;
+    setRolesOpen(false);
+    try {
+      const newId = await hub.call<string>('workflows.start', { config: { ...draft, dryRun: true, title: t('試跑', 'Dry run'), goal: t('試跑：只檢查環境、路徑、資源與恢復，不執行 agent', 'Dry run: check environment, paths, resources and recovery; no agent runs') } });
+      navigate(`run/${newId}`);
+    } catch (e) {
+      setError((e as Error).message);
     }
   };
 
@@ -687,6 +714,12 @@ export function Chat({ id }: { id?: string }) {
     }
     setSending(true);
     try {
+      const checks = await hub.call<PreflightItem[]>('workflows.preflight', { config }).catch(() => [] as PreflightItem[]);
+      if (checks.some((c) => c.level === 'error')) {
+        const go = await new Promise<boolean>((resolve) => setPre({ items: checks, decide: resolve }));
+        setPre(undefined);
+        if (!go) return false;
+      }
       const newId = await hub.call<string>('workflows.start', { config });
       follow.current = true;
       // The next new conversation starts at Full auto again; this one keeps whole-computer access in its own config.
@@ -725,6 +758,20 @@ export function Chat({ id }: { id?: string }) {
         </div>
       )}
       {error && <div className="note err">{error}</div>}
+      {pre && (
+        <div className="note err">
+          <div>{t('送出前的預檢發現問題：', 'The check before sending found problems:')}</div>
+          <PreflightList items={pre.items} />
+          <div className="row gap">
+            <button className="btn small" onClick={() => pre.decide(false)}>
+              {t('先不送，我去處理', 'Not yet, I will fix it')}
+            </button>
+            <button className="btn small danger" onClick={() => pre.decide(true)}>
+              {t('仍然送出', 'Send anyway')}
+            </button>
+          </div>
+        </div>
+      )}
       {!run && preview.error && <div className="note warn">{preview.error}</div>}
       <Composer
         draft={shown}
@@ -782,6 +829,7 @@ export function Chat({ id }: { id?: string }) {
           </div>
           <div className="row gap">
             <AgentMapButton run={run} thread={earlier.length > 0} onOpen={() => setAgentMap(true)} />
+            <RunMenu run={run} providers={providers} />
             <button className="icon-btn" title={t('開啟資料夾', 'Open folder')} onClick={() => hub.call('host.openPath', { path: run.config.cwd })}>
               📁
             </button>
@@ -834,7 +882,7 @@ export function Chat({ id }: { id?: string }) {
                 <EarlierMessage key={r.id} run={r} before={earlier.slice(0, i)} providers={providers} onImage={setLightbox} />
               ))}
               {items.map((it) => {
-                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} />;
+                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} delivered={it.delivered} />;
                 if (it.type === 'user')
                   return (
                     <div key={it.key} className="user-block">
@@ -884,6 +932,12 @@ export function Chat({ id }: { id?: string }) {
               <ContextAsk run={run} providers={providers} />
               {run.pending && <Decision run={run} d={run.pending} />}
               {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
+              {run.status === 'incomplete' && (
+                <div className="note warn">
+                  {t(`未完成：${run.incompleteReason ?? '目標沒有達成'}。這不是成功；可以在下方輸入訊息，用相同設定接續。`, `Incomplete: ${run.incompleteReason ?? 'the goal was not met'}. This is not a success; send a message below to continue with the same setup.`)}
+                </div>
+              )}
+              {run.dryRun && run.preflight && <PreflightList items={run.preflight} showOk />}
               {run.status === 'interrupted' && <div className="note warn">{t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}</div>}
             </div>
           </div>
@@ -903,9 +957,14 @@ export function Chat({ id }: { id?: string }) {
           draft={shown}
           providers={providers}
           lockFolder={active}
+          onApplyNow={active ? applyNow : undefined}
+          onDryRun={!run ? dryRun : undefined}
           notice={
             active
-              ? t('這段對話正在執行：變更會套用到接下來才開始的 agent，正在工作的 agent 不受影響。', 'This conversation is running: changes apply to agents started from now on; agents already working keep theirs.')
+              ? t(
+                  '這段對話正在執行。生效時機：模型、思考程度、權限、驗收與限制 → 下一個開始的 agent 回合；技能與角色指示 → 新開的對話（接續中的對話不重送）；正在工作的 agent 不受影響。要立刻生效請按「立即套用」，受影響的 agent 會停下並用新設定重新派發。你中途送出的訊息則會立即送到正在工作的 agent。',
+                  'This conversation is running. When changes take effect: model, effort, permission, verification and limits → the next agent turn that starts; skills and role instructions → new conversations (a continued one is not sent them again); working agents keep theirs. Press "Apply now" to have affected agents stop and re-dispatch with the new settings. Messages you send mid-run reach the working agents right away.',
+                )
               : run
                 ? t('變更會套用到你在這段對話接著送出的訊息。', 'Changes apply to the next message you send in this conversation.')
                 : undefined

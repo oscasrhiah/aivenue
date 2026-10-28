@@ -15,6 +15,8 @@ const ROLE: Record<AgentRunInfo['role'], string> = {
   plan_reviewer: 'plan reviewer',
   executor: 'implementer',
   code_reviewer: 'code reviewer',
+  verifier: 'goal verifier',
+  adjudicator: 'adjudicator',
   subagent: 'sub-agent',
   advisor: 'advisor',
   compactor: 'context compactor',
@@ -34,7 +36,7 @@ export function agentLabel(a: AgentRunInfo): string {
 
 /** What an agent handed over: its submission for its round, or its final reply. */
 export function agentResult(run: WorkflowRun, a: AgentRunInfo): string {
-  const round = a.stage ? run.stages[a.stage].rounds.find((r) => r.n === a.round) : undefined;
+  const round = a.stage ? run.stages[a.stage]?.rounds.find((r) => r.n === a.round) : undefined;
   if (round?.reviewerAgentId === a.id && round.review) return `verdict ${round.review.verdict}, ${round.review.issues.length} issue(s): ${round.review.summary}`;
   if (round?.authorAgentId === a.id && round.submission) return round.submission.plan ? `plan: ${round.submission.plan.summary}` : round.submission.summary;
   return a.finalText ?? '';

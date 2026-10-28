@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AgentRunInfo, ProviderInfo, WorkflowRun } from '../../../core/src/types';
-import { useAgentEvents } from '../api';
+import { hub, useAgentEvents } from '../api';
+import { failureLabel } from './AgentTurn';
 import { useT } from '../i18n';
 import { agentStatus, cx, elapsed, fmtTokens, modelLabel, providerColor, providerName, roleLabel } from '../util';
 import { Markdown } from './Markdown';
@@ -37,7 +38,8 @@ function byStart(a: AgentRunInfo, b: AgentRunInfo) {
 export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; providers: ProviderInfo[]; onClose: () => void }) {
   const t = useT();
   const [selected, setSelected] = useState<string | undefined>();
-  const agents = Object.values(run.agents).filter((a) => a.role !== 'test');
+  // Closed agents leave the map (their records stay in the conversation).
+  const agents = Object.values(run.agents).filter((a) => a.role !== 'test' && !a.closed);
   useTick(agents.some(isLive));
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -57,7 +59,7 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   const sections = groupRoots(roots);
   // A conversation of several messages: number them in the section titles.
   const messages = [...new Set(sections.map((s) => s.workflowId))];
-  const stageName = (s?: string) => (s === 'plan' ? t('計畫', 'Plan') : s === 'implement' ? t('實作與審查', 'Implement & review') : t('其他', 'Other'));
+  const stageName = (s?: string) => (s === 'plan' ? t('計畫', 'Plan') : s === 'implement' ? t('實作與審查', 'Implement & review') : s === 'verify' ? t('目標驗收', 'Goal verification') : t('其他', 'Other'));
 
   // An agent with the agents it started hanging below it.
   const tree = (a: AgentRunInfo) => {
@@ -240,6 +242,8 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
         </div>
       </div>
 
+      <AgentActions t={t} run={run} agent={agent} />
+
       {(agent.role === 'subagent' || agent.role === 'advisor') && agent.task && (
         <div className="am-section">
           <div className="am-label">{agent.role === 'advisor' ? t('問題', 'Question') : t('任務', 'Task')}</div>
@@ -298,5 +302,43 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
         {events.length ? <Transcript events={events} raw={raw} /> : <div className="muted small">{t('載入中…', 'Loading…')}</div>}
       </div>
     </>
+  );
+}
+
+/** Stop, re-run and close one agent; plus why it failed or what it waits for. */
+function AgentActions({ t, run, agent }: { t: T; run: WorkflowRun; agent: AgentRunInfo }) {
+  const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
+  const act = (method: string) => hub.call(method, { workflowId: agent.workflowId ?? run.id, agentId: agent.id }).catch((e) => alert((e as Error).message));
+  const parentLive = !agent.parentId || isLive(run.agents[agent.parentId] ?? agent);
+  const canRerun = live && ((agent.role === 'subagent' && parentLive) || (agent.role !== 'subagent' && agent.role !== 'advisor' && agent.status === 'running'));
+  return (
+    <div className="am-section">
+      {agent.waiting && <div className="small">⏳ {agent.waiting}</div>}
+      {agent.failure && agent.status !== 'completed' && (
+        <div className="small warn-text">
+          {failureLabel(t, agent.failure.kind)}：{agent.failure.action}
+        </div>
+      )}
+      {agent.endedWithoutResult && <div className="small warn-text">{t('程序已結束，但沒有交出結果（不是成功）', 'The process ended without a result (not a success)')}</div>}
+      {live && agent.role !== 'compactor' && (
+        <div className="row gap">
+          {isLive(agent) && (
+            <button className="btn small danger" onClick={() => act('agents.stop')}>
+              ■ {t('停止', 'Stop')}
+            </button>
+          )}
+          {canRerun && (
+            <button className="btn small" onClick={() => act('agents.rerun')}>
+              ↻ {agent.role === 'subagent' ? t('重跑', 'Re-run') : t('重新派發', 'Re-dispatch')}
+            </button>
+          )}
+          {agent.role === 'subagent' && !isLive(agent) && (
+            <button className="btn small" onClick={() => act('agents.close')}>
+              ✕ {t('關閉', 'Close')}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

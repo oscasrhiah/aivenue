@@ -21,6 +21,20 @@ const bundled = await build({
         export function childEnv() { return {}; }
         export function findNode() {}
         export function killTree() {}
+        export function resolveCommand(c) { return { file: c, prefixArgs: [], display: c }; }
+        // 安裝指令改由 spawn 串流進度：用同一個 capture 替身回應。
+        import { EventEmitter } from 'node:events';
+        export function spawnResolved(cmd, args) {
+          const child = new EventEmitter();
+          child.stdout = new EventEmitter();
+          child.stderr = new EventEmitter();
+          Promise.resolve(capture(cmd.file, args)).then((r) => {
+            if (r.stdout) child.stdout.emit('data', Buffer.from(r.stdout));
+            if (r.stderr) child.stderr.emit('data', Buffer.from(r.stderr));
+            child.emit('close', r.code);
+          });
+          return child;
+        }
       ` }));
     },
   }],

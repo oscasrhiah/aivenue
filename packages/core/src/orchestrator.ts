@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type {
@@ -14,11 +14,18 @@ import type {
   IssueResponse,
   ModelInfo,
   PlanDoc,
+  PreflightItem,
   PushMessage,
   Review,
+  ReviewIssue,
   RoleConfig,
   Round,
+  RouteDecision,
   StageKey,
+  PhaseKey,
+  Verification,
+  VerifyConfig,
+  HumanDecision,
   TestResult,
   WorkflowConfig,
   WorkflowRun,
@@ -28,7 +35,12 @@ import { runAgent, type BridgeLaunch, type RunAgentResult } from './agentRunner'
 import { capture, findNode } from './proc';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
-import { extractJson, parsePlan, parseReview, parseWork, planFromText, TOOL_DEFS, toolsForRole, type ToolDef } from './hubTools';
+import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, type ToolDef } from './hubTools';
+import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
+import { buildHandoff, evidenceStamp, markStale, searchRecords, treeHash, type RecordQuery } from './records';
+import { killPid, pidAlive, ResourceManager } from './resources';
+import { classifyFailure, recoveryFor } from './failures';
+import { exportBundle, distilProjectSkill } from './bundle';
 import { classifyTool } from './providers/parsers';
 import { L } from './i18n';
 import { LIMIT_PATTERN, type UsageTracker } from './usage';
@@ -68,13 +80,26 @@ class Cancelled extends Error {
   }
 }
 
-type Expect = 'submit_plan' | 'submit_review' | 'submit_work';
+/** Ended short of the goal: a limit was hit or the user stopped retrying. Never reported as done. */
+class Incomplete extends Error {}
+
+type Expect = 'submit_plan' | 'submit_review' | 'submit_work' | 'submit_verification' | 'submit_ruling';
 
 interface Submission {
   plan?: { plan: PlanDoc; responses?: IssueResponse[] };
   review?: Review;
   work?: { summary: string; responses?: IssueResponse[] };
+  verification?: Verification;
+  rulings?: { issue_id: string; ruling: 'uphold' | 'dismiss'; reason: string }[];
 }
+
+/** How a stage is re-entered after a verification or a re-diagnosis: the first prompt of that pass. */
+interface Entry {
+  prompt: () => string;
+}
+
+/** A sub-agent with no sign of life this long is reported to its parent as stalled. */
+const STALL_MS = 10 * 60000;
 
 interface Session {
   workflowId: string;
@@ -93,6 +118,8 @@ const roleLabel = (r: AgentRole): string =>
     plan_reviewer: L('計畫審查', 'Plan reviewer'),
     executor: L('實作', 'Implementer'),
     code_reviewer: L('程式審查', 'Code reviewer'),
+    verifier: L('目標驗收', 'Goal verifier'),
+    adjudicator: L('裁定', 'Adjudicator'),
     subagent: 'Sub agent',
     advisor: L('顧問', 'Advisor'),
     compactor: L('上下文壓縮', 'Context compactor'),
@@ -108,6 +135,10 @@ function activityOf(e: AgentEvent): string | undefined {
   if (e.kind === 'error' && e.text) return `⚠️ ${e.text.slice(0, 120)}`;
   return undefined;
 }
+
+const routeName = (to: RouteDecision['to']) => ({ done: L('完成', 'done'), implementer: L('交回實作者', 'back to the implementer'), planner: L('交回計畫者重新規劃', 'back to the planner'), adjudicate: L('交付裁定', 'to adjudication'), user: L('交給你', 'to you') })[to];
+
+const outcomeLabel = (o: Verification['outcome']) => ({ met: L('達標', 'met'), not_met: L('目標未達成', 'goal not met'), invalid_evidence: L('證據無效', 'invalid evidence'), defect: L('有缺陷', 'defects') })[o];
 
 const now = () => Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -220,8 +251,25 @@ export class Orchestrator {
   private decisionWaiters = new Map<string, (d: { optionId: string; text?: string }) => void>();
   private pushTimers = new Map<string, NodeJS.Timeout>();
 
+  /** GPU locks and condition waits. */
+  readonly resources: ResourceManager;
+  /** Agents the user stopped (no automatic failover or retry for them). */
+  private stoppedByUser = new Set<string>();
+  /** Agents stopped to start again with changed settings. */
+  private redispatch = new Set<string>();
+  /** A sub-agent's full task and mode, to run it again. */
+  private subSpecs = new Map<string, { task: string; mode: 'write' | 'readonly' }>();
+  /** Notices for a parent (a sub-agent failed, stalled, was stopped or re-run), added to its next Aivenue tool result. */
+  private inbox = new Map<string, string[]>();
+  private stallNoted = new Set<string>();
+  private watchdogs = new Map<string, NodeJS.Timeout>();
+  private noProgressAskedAt = new Map<string, number>();
+  /** Runs stopped by a limit: they end as "incomplete". */
+  private incompleteWhy = new Map<string, string>();
+
   constructor(private d: OrchestratorDeps) {
     for (const r of d.store.loadAll()) this.runs.set(r.id, r);
+    this.resources = new ResourceManager(d.dataDir);
   }
 
   // ---------- public API ----------
@@ -295,7 +343,9 @@ export class Orchestrator {
       stages: {
         plan: { key: 'plan', status: 'pending', rounds: [], roundLimit: Math.max(1, config.plan.maxRounds) },
         implement: { key: 'implement', status: 'pending', rounds: [], roundLimit: Math.max(1, config.implement.maxRounds) },
+        ...(config.verify?.enabled ? { verify: { key: 'verify' as const, status: 'pending' as const, rounds: [], roundLimit: 999 } } : {}),
       },
+      lastProgressAt: now(),
       steps: [],
       agents: {},
       log: [],
@@ -472,6 +522,9 @@ export class Orchestrator {
       return a ? `${roleLabel(a.role)} ${a.provider}` : undefined;
     };
     run.notes = (prev.notes ?? []).map((n) => ({ ...n, by: n.by ?? label(n.agentId) }));
+    if (prev.sideEffects?.length) run.sideEffects = [...prev.sideEffects];
+    const waits = (prev.waits ?? []).filter((w) => w.state === 'waiting' && w.timeoutAt > now());
+    if (waits.length) run.waits = waits.map((w) => ({ ...w }));
     if (prev.memory) run.memory = { ...prev.memory };
     if (prev.contextMuted) run.contextMuted = [...prev.contextMuted];
     if (prev.contextAsked) run.contextAsked = { ...prev.contextAsked };
@@ -528,9 +581,26 @@ export class Orchestrator {
    * Change settings of a conversation while it runs. Applies to agents started from now on;
    * running agents keep theirs. The working folder and isolation are fixed once a run started.
    */
-  updateConfig(id: string, patch: Partial<Pick<WorkflowConfig, 'plan' | 'implement' | 'subagents' | 'permission' | 'contextSharing' | 'context' | 'assignment' | 'advisor' | 'extraDirs'>>): WorkflowRun {
+  updateConfig(id: string, patch: Partial<Pick<WorkflowConfig, 'plan' | 'implement' | 'subagents' | 'permission' | 'contextSharing' | 'context' | 'assignment' | 'advisor' | 'extraDirs' | 'verify' | 'limits'>>, restart = false): WorkflowRun {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    // "Apply now": the agents of a changed role stop and start again with the new settings (same round, same task).
+    if (restart && run.status === 'running') {
+      for (const key of ['plan', 'implement'] as StageKey[]) {
+        const next = patch[key];
+        if (!next) continue;
+        const cur = run.config[key];
+        const changed = (a?: RoleConfig | null, b?: RoleConfig | null) => !!a && (!b || a.provider !== b.provider || (a.model ?? '') !== (b.model ?? '') || (a.effort ?? '') !== (b.effort ?? ''));
+        const roles: AgentRole[] = [];
+        if (changed(next.author, cur.author)) roles.push(key === 'plan' ? 'planner' : 'executor');
+        if (next.reviewer !== undefined && changed(next.reviewer, cur.reviewer)) roles.push(key === 'plan' ? 'plan_reviewer' : 'code_reviewer');
+        for (const a of Object.values(run.agents)) {
+          if (a.status !== 'running' || a.stage !== key || !roles.includes(a.role)) continue;
+          this.redispatch.add(a.id);
+          this.agentAborts.get(a.id)?.abort();
+        }
+      }
+    }
     for (const key of ['plan', 'implement'] as StageKey[]) {
       const next = patch[key];
       if (!next) continue;
@@ -550,7 +620,17 @@ export class Orchestrator {
     if (patch.assignment) run.config.assignment = patch.assignment;
     if (patch.advisor) run.config.advisor = patch.advisor;
     if (patch.extraDirs) run.config.extraDirs = checkExtraDirs(patch.extraDirs, run.worktree?.origCwd ?? run.config.cwd);
-    this.log(run, L('你調整了這段對話的設定（套用到接下來開始的 agent）', 'You changed this conversation\'s settings (applies to agents started from now on)'));
+    if (patch.verify) {
+      run.config.verify = patch.verify;
+      if (patch.verify.enabled) run.stages.verify ??= { key: 'verify', status: 'pending', rounds: [], roundLimit: 999 };
+    }
+    if (patch.limits) run.config.limits = patch.limits;
+    this.log(
+      run,
+      restart
+        ? L('你調整了設定並立即套用：受影響的 agent 停下後用新設定重新派發', 'You changed the settings and applied them now: affected agents stop and are re-dispatched with them')
+        : L('你調整了這段對話的設定（套用到接下來開始的 agent）', 'You changed this conversation\'s settings (applies to agents started from now on)'),
+    );
     this.touch(run);
     return run;
   }
@@ -587,6 +667,172 @@ export class Orchestrator {
 
   events(workflowId: string, agentId: string): AgentEvent[] {
     return this.d.store.getEvents(workflowId, agentId);
+  }
+
+  /** Stop one agent. A role then goes to the usual "what next" question (no automatic failover); a sub-agent's parent is told. */
+  stopAgent(workflowId: string, agentId: string): void {
+    const run = this.runs.get(workflowId);
+    const a = run?.agents[agentId];
+    if (!run || !a) throw new Error(L('找不到這個 agent', 'Agent not found'));
+    if (!['running', 'queued', 'paused'].includes(a.status)) return;
+    this.stoppedByUser.add(a.id);
+    this.pausedAgents.delete(a.id);
+    this.agentAborts.get(a.id)?.abort();
+    this.log(run, L(`你停止了 ${this.label(a)}`, `You stopped ${this.label(a)}`), 'warn', true);
+    this.touch(run);
+  }
+
+  /** Hide a finished or stopped agent from the agent map (its records stay). */
+  closeAgent(workflowId: string, agentId: string): void {
+    const run = this.runs.get(workflowId);
+    const a = run?.agents[agentId];
+    if (!run || !a) throw new Error(L('找不到這個 agent', 'Agent not found'));
+    if (['running', 'queued', 'paused'].includes(a.status)) throw new Error(L('請先停止這個 agent', 'Stop this agent first'));
+    a.closed = true;
+    this.touch(run);
+  }
+
+  /** Run a sub-agent's task again (same provider and task); its parent is told the new id. A running role restarts its turn. */
+  rerunAgent(workflowId: string, agentId: string): string {
+    const run = this.runs.get(workflowId);
+    const a = run?.agents[agentId];
+    if (!run || !a) throw new Error(L('找不到這個 agent', 'Agent not found'));
+    if (!['running', 'paused', 'waiting_human'].includes(run.status)) throw new Error(L('這段對話已經結束，請直接送出新訊息', 'This conversation has finished; send a new message instead'));
+    if (a.role !== 'subagent') {
+      if (a.status !== 'running') throw new Error(L('只有執行中的角色可以重跑', 'Only a running role can be re-run'));
+      this.redispatch.add(a.id);
+      this.agentAborts.get(a.id)?.abort();
+      this.log(run, L(`你重新派發了 ${this.label(a)}`, `You re-dispatched ${this.label(a)}`), 'info', true);
+      return a.id;
+    }
+    const parent = a.parentId ? run.agents[a.parentId] : undefined;
+    if (!parent || !['running', 'paused', 'queued'].includes(parent.status)) throw new Error(L('它的上層 agent 已經結束，無法交回結果', 'Its parent has finished, so a re-run has nobody to report to'));
+    if (['running', 'queued', 'paused'].includes(a.status)) this.stopAgent(workflowId, agentId);
+    const spec = this.subSpecs.get(a.id) ?? { task: a.task, mode: a.readonly ? ('readonly' as const) : ('write' as const) };
+    const child = this.launchChild(run, parent, { provider: a.provider, model: a.model, effort: a.effort, task: spec.task, mode: spec.mode, rerunOf: a.id });
+    this.notifyParent(run, child, `the user re-ran sub-agent ${a.id} as ${child.id}; collect it with wait_subagent {subagent_id: "${child.id}"} (ignore ${a.id}).`);
+    return child.id;
+  }
+
+  /** Search a run's records (the user's search box). */
+  search(id: string, q: RecordQuery) {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    return searchRecords(run, (aid) => this.events(run.id, aid), q);
+  }
+
+  gpus() {
+    return this.resources.gpus();
+  }
+
+  /**
+   * Checks before a run starts (and the whole of a dry run): folders, providers signed in, models and efforts that
+   * exist, tools, GPUs and disk, and that Aivenue can save the run to recover it.
+   */
+  async preflight(config: WorkflowConfig): Promise<PreflightItem[]> {
+    const out: PreflightItem[] = [];
+    const add = (level: PreflightItem['level'], area: PreflightItem['area'], message: string) => out.push({ level, area, message });
+    if (config.assignment?.mode === 'auto' && !config.dryRun) config = this.applyAssignment(config, this.autoAssignment(config));
+    // folders
+    const writable = (d: string) => {
+      try {
+        fs.accessSync(d, fs.constants.W_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    if (!config.cwd || !fs.existsSync(config.cwd) || !fs.statSync(config.cwd).isDirectory()) add('error', 'path', L(`工作資料夾不存在：${config.cwd}`, `Working folder does not exist: ${config.cwd}`));
+    else if (!writable(config.cwd)) add('error', 'path', L(`工作資料夾不能寫入：${config.cwd}`, `Working folder is not writable: ${config.cwd}`));
+    else add('ok', 'path', L(`工作資料夾可讀寫：${config.cwd}`, `Working folder is readable and writable: ${config.cwd}`));
+    for (const d of config.extraDirs ?? []) if (!fs.existsSync(d)) add('error', 'path', L(`找不到額外資料夾：${d}`, `Extra folder not found: ${d}`));
+    // providers, models, efforts
+    const infos = this.d.registry.list();
+    const roles: [string, RoleConfig | null | undefined][] = [];
+    if (config.plan.enabled) roles.push([L('計畫撰寫', 'Planner'), config.plan.author], [L('計畫審查', 'Plan reviewer'), config.plan.reviewer]);
+    if (config.implement.enabled) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
+    if (config.verify?.enabled) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
+    if (config.advisor?.mode === 'cross' && config.advisor.provider) roles.push([L('顧問', 'Advisor'), { provider: config.advisor.provider, model: config.advisor.model }]);
+    for (const [label, role] of roles) {
+      if (!role) continue;
+      const p = infos.find((x) => x.spec.id === role.provider);
+      if (!p) {
+        add('error', 'provider', L(`${label}：未知的供應商 ${role.provider}`, `${label}: unknown provider ${role.provider}`));
+        continue;
+      }
+      if (!p.installed) add('error', 'provider', L(`${label}：${p.spec.name} 沒有安裝`, `${label}: ${p.spec.name} is not installed`));
+      else if (p.auth.state !== 'logged_in') add('error', 'provider', L(`${label}：${p.spec.name} 尚未登入`, `${label}: ${p.spec.name} is not signed in`));
+      else add('ok', 'provider', L(`${label}：${p.spec.name} 已就緒`, `${label}: ${p.spec.name} is ready`));
+      const model = role.model || this.d.registry.defaults(role.provider).model;
+      const effort = role.effort || this.d.registry.defaults(role.provider).effort;
+      if (!model || !p.installed) continue;
+      const models = await this.d.registry.listModels(role.provider).catch(() => [] as ModelInfo[]);
+      const m = models.find((x) => x.id === model || x.id.endsWith(`/${model}`));
+      if (models.length && !m) add('warn', 'model', L(`${label}：${p.spec.name} 的模型清單裡沒有「${model}」`, `${label}: "${model}" is not in ${p.spec.name}'s model list`));
+      else if (m && effort && m.efforts?.length && !m.efforts.includes(effort)) add('warn', 'model', L(`${label}：模型 ${model} 不支援思考程度「${effort}」（支援：${m.efforts.join('、')}）`, `${label}: model ${model} does not take effort "${effort}" (it takes: ${m.efforts.join(', ')})`));
+    }
+    if (config.verify?.enabled && !config.plan.enabled) add('warn', 'model', L('目標驗收已開啟但沒有計畫階段：驗收者會自己從任務推導驗收指標', 'Goal verification is on without a planning stage: the verifier derives the metrics from the task'));
+    // tools
+    const git = await capture('git', ['--version'], { timeoutMs: 10000 }).catch(() => undefined);
+    if (git?.code === 0) add('ok', 'tool', `git ${/(\d+\.\d+\.\d+)/.exec(git.stdout)?.[1] ?? ''}`.trim());
+    else add('warn', 'tool', L('找不到 git：變更摘要會改用 agent 的檔案紀錄，證據不含 commit', 'git not found: change summaries use the agents\' file records and evidence has no commit'));
+    // resources
+    const gpus = this.resources.gpus();
+    if (gpus.length) add('ok', 'resource', L(`GPU：${gpus.length} 張，${gpus.filter((g) => !g.lockedBy && g.memUsedMB <= 1024).length} 張空閒`, `GPU: ${gpus.length}, ${gpus.filter((g) => !g.lockedBy && g.memUsedMB <= 1024).length} free`));
+    else add('ok', 'resource', L('沒有偵測到 NVIDIA GPU（不需要 GPU 的任務不受影響）', 'No NVIDIA GPU detected (tasks that need none are not affected)'));
+    try {
+      const st = fs.statfsSync(config.cwd);
+      const freeGB = (st.bavail * st.bsize) / 1024 ** 3;
+      add(freeGB < 2 ? 'warn' : 'ok', 'resource', L(`磁碟剩餘 ${freeGB.toFixed(1)} GB`, `${freeGB.toFixed(1)} GB free on disk`));
+    } catch {
+      // unknown
+    }
+    // recovery
+    if (writable(this.d.dataDir)) add('ok', 'recovery', L('工作流狀態即時存檔：中斷後可在同一段對話接續，已核准的對外動作不會重做', 'The run is saved as it goes: after an interruption it continues in the same conversation, and approved external actions are not repeated'));
+    else add('error', 'recovery', L(`Aivenue 資料夾不能寫入：${this.d.dataDir}`, `Aivenue's data folder is not writable: ${this.d.dataDir}`));
+    if (config.limits?.enabled) {
+      const l = config.limits;
+      add('ok', 'recovery', L(`執行限制：${[l.maxMinutes && `${l.maxMinutes} 分鐘`, l.maxCostUsd && `$${l.maxCostUsd}`, l.maxCycles && `${l.maxCycles} 次循環`, l.noProgressMinutes && `${l.noProgressMinutes} 分鐘沒進展就詢問`].filter(Boolean).join('、') || '未設定數值'}`, `Limits: ${[l.maxMinutes && `${l.maxMinutes} min`, l.maxCostUsd && `$${l.maxCostUsd}`, l.maxCycles && `${l.maxCycles} cycles`, l.noProgressMinutes && `ask after ${l.noProgressMinutes} min without progress`].filter(Boolean).join(', ') || 'no values set'}`));
+    }
+    return out;
+  }
+
+  /** Dry run: the checks, a save-and-reload of the run, and the routes the controller would take. Runs no agent. */
+  private dryRun(run: WorkflowRun) {
+    run.dryRun = true;
+    this.d.store.saveNow(run);
+    const back = this.d.store.loadAll().find((r) => r.id === run.id);
+    (run.preflight ??= []).push(back ? { level: 'ok', area: 'recovery', message: L('存檔後可重新載入（中斷可恢復）', 'Saved and reloaded (an interruption can be recovered)') } : { level: 'error', area: 'recovery', message: L('存檔後無法重新載入', 'The run could not be reloaded after saving') });
+    const stages = [run.config.plan.enabled && L('計畫 → 計畫審查', 'plan → plan review'), run.config.implement.enabled && L('實作 → 程式審查', 'implement → code review'), run.config.verify?.enabled && L(`目標驗收（${run.config.verify.by === 'planner' ? '計畫者' : '獨立驗收者'}）`, `goal verification (${run.config.verify.by === 'planner' ? 'planner' : 'independent'})`)].filter(Boolean);
+    this.log(run, L(`試跑：流程 ${stages.join(' → ')}`, `Dry run: ${stages.join(' → ')}`), 'info', true);
+    if (run.config.verify?.enabled) {
+      const m = [{ id: 'M1', value: '-', met: false, evidence: '-' }];
+      const sims: [string, Verification][] = [
+        ['met', { outcome: 'met', summary: '', metrics: [{ ...m[0], met: true }], issues: [] }],
+        ['defect', { outcome: 'defect', summary: '', metrics: m, issues: [{ id: 'V1', severity: 'major', title: 'x' }] }],
+        ['invalid_evidence', { outcome: 'invalid_evidence', summary: '', metrics: m, issues: [{ id: 'V1', severity: 'major', title: 'x' }] }],
+        ['not_met', { outcome: 'not_met', summary: '', metrics: m, issues: [] }],
+      ];
+      for (const [name, v] of sims) this.log(run, L(`試跑：驗收結果「${outcomeLabel(v.outcome)}」→ ${routeName(routeVerification(v, []).to)}`, `Dry run: verification ${name} → ${routeName(routeVerification(v, []).to)}`), 'info', true);
+    }
+    const errors = (run.preflight ?? []).filter((p) => p.level === 'error').length;
+    run.status = errors ? 'failed' : 'completed';
+    if (errors) run.error = L(`試跑發現 ${errors} 個問題`, `The dry run found ${errors} problem(s)`);
+    this.log(run, errors ? L(`試跑結束：${errors} 個問題要先處理（沒有執行任何 agent）`, `Dry run finished: ${errors} problem(s) to fix first (no agent was run)`) : L('試跑結束：一切就緒（沒有執行任何 agent）', 'Dry run finished: everything is ready (no agent was run)'), errors ? 'warn' : 'info', true);
+  }
+
+  /** A traceable bundle of a run: settings, every agent's records, notes, reviews and verifications; secrets masked. */
+  exportRun(id: string, mask = true): { path: string; bytes: number; masked: number } {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    return exportBundle(this.d.dataDir, run, (aid) => this.events(run.id, aid), mask);
+  }
+
+  /** Write the run's verified rules (facts, decisions, rulings, how the goal was measured) into the project's Skill. */
+  distilSkill(id: string): { path: string; added: number } {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    return distilProjectSkill(run.worktree?.origCwd ?? run.config.cwd, run);
   }
 
   // ---------- MCP bridge entry points ----------
@@ -671,12 +917,26 @@ export class Orchestrator {
     // A CLI kept running after its turn (or a leftover background process) can't act on a finished conversation.
     if (!['running', 'paused', 'waiting_human'].includes(run.status) || !['running', 'queued', 'paused'].includes(info.status)) throw new Error('This agent turn has ended; Aivenue tools are no longer available to it');
     if (!this.toolsFor(secret).some((t) => t.name === name)) throw new Error(`Tool ${name} is not available to the ${info.role} role`);
+    const text = await this.runTool(run, info, name, args);
+    // Notices about its sub-agents ride along with the parent's next tool result.
+    const notes = this.inbox.get(info.id);
+    if (!notes?.length) return text;
+    this.inbox.delete(info.id);
+    return `${text}\n\nAIVENUE NOTICE (about your sub-agents; decide: retry it, adjust its task, replace it with another provider, or do it yourself):\n${notes.map((n) => `- ${n}`).join('\n')}`;
+  }
+
+  private async runTool(run: WorkflowRun, info: AgentRunInfo, name: string, args: Record<string, unknown>): Promise<string> {
     const sub = this.submissions.get(info.id) ?? {};
     this.submissions.set(info.id, sub);
+    if (name.startsWith('submit_')) {
+      this.requireChildrenSettled(run, info);
+      run.lastProgressAt = now();
+    }
     switch (name) {
       case 'submit_plan': {
         const p = parsePlan(args);
         if (!p) throw new Error('Invalid plan: provide summary, markdown and steps[]');
+        if (run.config.verify?.enabled && !p.plan.goal?.metrics.length) throw new Error('Goal verification is on: include goal {statement, metrics: [{id, name, target, how}]} with measurable acceptance metrics.');
         sub.plan = p;
         return 'Plan received by Aivenue. You can finish your turn now.';
       }
@@ -691,6 +951,79 @@ export class Orchestrator {
         if (!w) throw new Error('Invalid submission: provide summary');
         sub.work = w;
         return 'Work received by Aivenue. You can finish your turn now.';
+      }
+      case 'submit_verification': {
+        const v = parseVerification(args);
+        if (!v) throw new Error('Invalid verification: outcome must be met, not_met, invalid_evidence or defect');
+        if (!v.metrics.length) throw new Error('List every acceptance metric you measured (id, value, met, evidence).');
+        sub.verification = v;
+        return 'Verification received by Aivenue; it decides who works next. You can finish your turn now.';
+      }
+      case 'submit_ruling': {
+        const r = parseRulings(args);
+        if (!r?.length) throw new Error('Give one ruling per disputed issue: {issue_id, ruling: "uphold"|"dismiss", reason}');
+        sub.rulings = r;
+        return 'Ruling received by Aivenue. You can finish your turn now.';
+      }
+      case 'search_records': {
+        const str = (k: string) => (typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim().slice(0, 300) : undefined);
+        const q: RecordQuery = { q: str('q'), role: str('role'), agentId: str('agent_id'), stage: str('stage'), round: Number(args.round) || undefined, file: str('file'), issueId: str('issue_id'), limit: Number(args.limit) || undefined };
+        const hits = searchRecords(run, (id) => this.events(run.id, id), q);
+        return hits.length ? JSON.stringify(hits) : 'No matching records.';
+      }
+      case 'report_skill_use': {
+        const u = parseSkillUse(args);
+        if (!u) throw new Error('name is required');
+        const list = (info.skillUses ??= []);
+        const same = list.findIndex((x) => x.name === u.name);
+        if (same >= 0) list[same] = { ...list[same], ...Object.fromEntries(Object.entries(u).filter(([, v]) => v !== undefined)), ts: now() };
+        else if (list.length < 50) list.push({ ...u, ts: now() });
+        this.touch(run);
+        return u.verified ? 'Recorded as applied and verified.' : 'Recorded as applied. Report again with verified=true once you checked it.';
+      }
+      case 'wait_for':
+        return this.waitFor(run, info, args);
+      case 'gpu_status':
+        return JSON.stringify(this.resources.gpus());
+      case 'gpu_acquire': {
+        const count = Math.min(16, Math.max(1, Math.round(Number(args.count) || 1)));
+        if (!this.resources.gpus().length) throw new Error('No NVIDIA GPU found (nvidia-smi is not available).');
+        const got = this.resources.acquire({ workflowId: run.id, agentId: info.id }, count, { maxUsedMB: Number(args.max_used_mb) || undefined });
+        if (!got) return JSON.stringify({ status: 'busy', hint: 'Not enough free GPUs right now. Use wait_for {check, gpus} to wait for them.', gpus: this.resources.gpus() });
+        this.noteGpus(run, info, got);
+        return JSON.stringify({ status: 'locked', gpus: got, hint: `Run your job with CUDA_VISIBLE_DEVICES=${got.join(',')}. Call gpu_release when it is done.` });
+      }
+      case 'gpu_release': {
+        const freed = this.resources.release(run.id, info.id);
+        run.gpuLocks = (run.gpuLocks ?? []).filter((l) => l.agentId !== info.id);
+        this.touch(run);
+        return freed.length ? `Released GPU ${freed.join(', ')}.` : 'You held no GPU.';
+      }
+      case 'track_process': {
+        const pid = Math.round(Number(args.pid));
+        if (!pid || pid <= 0) throw new Error('pid must be a process id');
+        const cleanup = ['aivenue', 'agent', 'keep'].includes(String(args.cleanup)) ? (String(args.cleanup) as 'aivenue') : 'agent';
+        const list = (run.processes ??= []).filter((p) => p.pid !== pid);
+        if (list.length >= 50) throw new Error('At most 50 tracked processes');
+        list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now() });
+        run.processes = list;
+        this.touch(run);
+        return pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`;
+      }
+      case 'stop_subagent': {
+        const id = String(args.subagent_id ?? '');
+        const child = run.agents[id];
+        if (!child || child.parentId !== info.id) throw new Error(`${id} is not one of your sub-agents`);
+        if (typeof args.handoff === 'string' && args.handoff.trim()) {
+          child.handoff = args.handoff.trim().slice(0, 300);
+          this.touch(run);
+          return `${id} keeps running after your turn; hand-off noted.`;
+        }
+        if (child.status === 'running' || child.status === 'queued' || child.status === 'paused') {
+          this.stoppedByUser.add(id);
+          this.agentAborts.get(id)?.abort();
+        }
+        return `Stopped ${id}.`;
       }
       case 'report_progress': {
         const stepId = String(args.step_id ?? '').trim();
@@ -726,7 +1059,8 @@ export class Orchestrator {
         const text = String(args.text ?? '').trim().slice(0, 2000);
         if (!text) throw new Error('text is required');
         if ((run.notes?.length ?? 0) >= 200) throw new Error('This conversation already has 200 shared notes, the limit');
-        (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, ts: now() });
+        const kind = ['fact', 'inference', 'decision'].includes(String(args.kind)) ? (String(args.kind) as 'fact') : 'inference';
+        (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, kind, ts: now() });
         this.refreshShared(run);
         this.touch(run);
         return 'Note shared with all later agents.';
@@ -737,7 +1071,14 @@ export class Orchestrator {
         // Always asked, whatever the permission level: pushes, PRs and comments are visible to others and hard to take back.
         const kind = normalizeKind(String(args.kind ?? 'other'));
         const input = { command: kind, target: String(args.target ?? '').slice(0, 300), details: String(args.details ?? '').slice(0, 4000) };
+        // A resumed or repeated turn must not push, publish or comment twice.
+        const done = run.sideEffects?.find((e) => e.kind === kind && e.target === input.target && e.details === input.details);
+        if (done) return `already done earlier in this workflow (${new Date(done.ts).toISOString()}): do not do it again.`;
         const d = await this.requestApproval(run, info, 'external_action', input);
+        if (d.allow) {
+          (run.sideEffects ??= []).push({ kind, target: input.target, details: input.details, agentId: info.id, ts: now() });
+          this.touch(run);
+        }
         if (!d.allow && !this.aborted(run)) {
           (run.deniedActions ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, kind: input.command, target: input.target, details: input.details, note: d.message, ts: now() });
           this.touch(run);
@@ -947,16 +1288,33 @@ export class Orchestrator {
         for (const w of warnings) this.log(run, w, 'warn', true);
         this.touch(run);
       }
-      await this.runStage(run, 'plan');
-      await this.runStage(run, 'implement');
+      run.preflight = await this.preflight(run.config);
+      for (const p of run.preflight.filter((x) => x.level !== 'ok')) this.log(run, `${L('預檢', 'Preflight')}：${p.message}`, p.level === 'error' ? 'error' : 'warn', true);
+      if (run.config.dryRun) {
+        this.dryRun(run);
+        return;
+      }
+      this.startWatchdog(run);
+      await this.cycle(run);
       run.status = 'completed';
-      this.log(run, L('工作流完成 ✅', 'Workflow completed ✅'), 'info', true);
+      this.log(run, run.config.verify?.enabled ? L('工作流完成 ✅ 目標驗收通過', 'Workflow completed ✅ goal verified') : L('工作流完成 ✅', 'Workflow completed ✅'), 'info', true);
     } catch (e) {
-      const cancelled = e instanceof Cancelled || this.aborts.get(run.id)?.signal.aborted;
-      run.status = cancelled ? 'cancelled' : 'failed';
-      if (!cancelled) run.error = (e as Error).message;
-      this.log(run, cancelled ? L('工作流已取消', 'Workflow cancelled') : L(`工作流失敗：${(e as Error).message}`, `Workflow failed: ${(e as Error).message}`), cancelled ? 'warn' : 'error', true);
-      for (const st of Object.values(run.stages)) if (st.status === 'running' || st.status === 'pending') st.status = cancelled ? 'cancelled' : 'failed';
+      const why = e instanceof Incomplete ? e.message : this.incompleteWhy.get(run.id);
+      const cancelled = !why && (e instanceof Cancelled || this.aborts.get(run.id)?.signal.aborted);
+      run.status = why ? 'incomplete' : cancelled ? 'cancelled' : 'failed';
+      if (why) run.incompleteReason = why;
+      else if (!cancelled) run.error = (e as Error).message;
+      this.log(
+        run,
+        why
+          ? L(`工作流未完成：${why}。目標沒有達成，不算完成。`, `Workflow incomplete: ${why}. The goal was not met, so it is not done.`)
+          : cancelled
+            ? L('工作流已取消', 'Workflow cancelled')
+            : L(`工作流失敗：${(e as Error).message}`, `Workflow failed: ${(e as Error).message}`),
+        cancelled || why ? 'warn' : 'error',
+        true,
+      );
+      for (const st of Object.values(run.stages)) if (st && (st.status === 'running' || st.status === 'pending')) st.status = cancelled || why ? 'cancelled' : 'failed';
       for (const a of Object.values(run.agents)) {
         if (a.status === 'running' || a.status === 'queued') {
           this.agentAborts.get(a.id)?.abort();
@@ -965,6 +1323,7 @@ export class Orchestrator {
         }
       }
     } finally {
+      this.endRunResources(run);
       this.updateOutputs(run);
       this.baselines.delete(run.id);
       run.pending = undefined;
@@ -976,6 +1335,188 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * plan → implement (with code review) → goal verification, until the goal is met. The controller routes on the
+   * structured results: defects and bad evidence go back to the implementer, a missed goal (or the same problem
+   * surviving several fixes) back to the planner. Without goal verification it is plan → implement, as before.
+   */
+  private async cycle(run: WorkflowRun) {
+    let planEntry: Entry | undefined;
+    let implEntry: Entry | undefined;
+    for (let first = true; ; first = false) {
+      if (first || planEntry) {
+        await this.runStage(run, 'plan', planEntry);
+        if (planEntry) implEntry = { prompt: () => P.implementRevisedPrompt(run.plan) };
+        planEntry = undefined;
+      }
+      const impl = await this.runStage(run, 'implement', implEntry);
+      implEntry = undefined;
+      if (impl.replan) {
+        this.nextCycle(run);
+        planEntry = { prompt: () => P.replanPrompt(run.config, impl.replan!.why, impl.replan!.detail, true) };
+        continue;
+      }
+      const vcfg = run.config.verify;
+      if (!vcfg?.enabled) return;
+      const { route, verification } = await this.runVerify(run, vcfg);
+      const next = nextPhase(route, run.config.plan.enabled);
+      if (next === 'done') return;
+      this.nextCycle(run);
+      if (next === 'plan') {
+        planEntry = { prompt: () => P.replanPrompt(run.config, route.reason, P.verificationText(verification), !!route.rediagnose) };
+      } else {
+        // No planning stage: the implementer also changes the approach.
+        const r = route.to === 'planner' ? { ...route, reason: `${route.reason} (there is no planning stage: change the approach yourself)` } : route;
+        implEntry = { prompt: () => P.verifyFixPrompt(verification, r) };
+      }
+    }
+  }
+
+  /** One more fix / re-plan cycle; stops the run as incomplete when a limit is reached. */
+  private nextCycle(run: WorkflowRun) {
+    run.cycles = (run.cycles ?? 0) + 1;
+    const hit = limitHit(run.config.limits, { startedAt: run.createdAt, now: now(), costUsd: this.runCost(run), cycles: run.cycles });
+    if (hit) throw new Incomplete(hit);
+    this.touch(run);
+  }
+
+  private runCost(run: WorkflowRun): number {
+    return Object.values(run.agents).reduce((sum, a) => sum + (a.costUsd ?? 0), 0);
+  }
+
+  /** Goal verification: the planner or an independent verifier measures every metric; the router decides what is next. */
+  private async runVerify(run: WorkflowRun, vcfg: VerifyConfig): Promise<{ route: RouteDecision; verification: Verification }> {
+    const stage = (run.stages.verify ??= { key: 'verify', status: 'pending', rounds: [], roundLimit: 999 });
+    stage.status = 'running';
+    const n = stage.rounds.length + 1;
+    const round: Round = { n };
+    stage.rounds.push(round);
+    const earlier = stage.rounds.slice(0, -1).flatMap((r) => (r.verification ? [r.verification] : []));
+    const byPlanner = vcfg.by === 'planner';
+    const planner = run.config.plan.enabled ? run.config.plan.author : run.config.implement.author;
+    let who: RoleConfig = byPlanner ? planner : (vcfg.verifier ?? { provider: this.otherVendor(run, run.config.implement.author.provider) });
+    this.log(run, L(`目標驗收 第 ${n} 次（${byPlanner ? '由計畫者' : '獨立驗收者'}：${this.providerName(who.provider)}）`, `Goal verification · check ${n} (${byPlanner ? 'by the planner' : 'independent verifier'}: ${this.providerName(who.provider)})`), 'info', true);
+    this.touch(run);
+    const work = [...run.stages.implement.rounds].reverse().find((r) => r.submission)?.submission?.summary ?? '';
+    const tried = new Set<string>();
+    let verification: Verification | undefined;
+    for (;;) {
+      const spec = this.d.registry.get(who.provider);
+      const canResume = !!(spec?.run.resume && spec.capabilities?.resume !== false);
+      // The planner verifies in its own conversation (it knows why it set each metric); a verifier keeps its own.
+      const own = byPlanner && who.provider === run.config.plan.author.provider && run.config.plan.enabled ? run.stages.plan.authorSessionId : stage.authorSessionId;
+      const resume = canResume ? own : undefined;
+      const evidence = evidenceStamp(run.config.cwd);
+      const r = await this.runRole(run, {
+        role: 'verifier',
+        roleCfg: who,
+        stage: 'verify',
+        round: n,
+        prompt: P.verifyPrompt(run.config, run.plan, work, await this.describeChanges(run), earlier, byPlanner, this.subBlock(run, 0)),
+        mode: 'readonly',
+        resume,
+        expect: 'submit_verification',
+        task: byPlanner ? L('計畫者驗收目標', 'Planner verifies the goal') : L('獨立驗收目標', 'Verify the goal'),
+      });
+      round.reviewerAgentId = r.info.id;
+      if (r.info.sessionId) {
+        if (byPlanner && who.provider === run.config.plan.author.provider && run.config.plan.enabled) run.stages.plan.authorSessionId = r.info.sessionId;
+        else stage.authorSessionId = r.info.sessionId;
+      }
+      verification = r.sub?.verification;
+      if (verification) {
+        verification.evidence = evidence;
+        break;
+      }
+      tried.add(who.provider);
+      const fallback = this.stoppedByUser.has(r.info.id) ? undefined : this.failoverTarget(run, 'review', new Set([...tried, run.config.implement.author.provider])) ?? this.failoverTarget(run, 'review', tried);
+      if (fallback) {
+        this.log(run, L(`自動換手：驗收者 ${this.providerName(who.provider)} 失敗，改由 ${this.providerName(fallback)} 驗收`, `Auto failover: verifier ${this.providerName(who.provider)} failed; ${this.providerName(fallback)} verifies instead`), 'warn', true);
+        who = { provider: fallback };
+        stage.authorSessionId = undefined;
+        continue;
+      }
+      // There is no "accept as met": an unverified goal is not a met goal.
+      const dec = await this.ask(run, 'verify', L(`驗收者（${this.providerName(r.info.provider)}）沒有交出驗收結果：${r.res.error ?? '未呼叫 submit_verification'}`, `The verifier (${this.providerName(r.info.provider)}) submitted no verification: ${r.res.error ?? 'submit_verification was not called'}`), [
+        { id: 'retry', label: L('重新驗收', 'Verify again') },
+        ...this.switchOptions(who.provider),
+        { id: 'incomplete', label: L('停止（標記為未完成）', 'Stop (mark incomplete)') },
+      ]);
+      if (dec.optionId === 'incomplete') throw new Incomplete(L('目標驗收沒有完成', 'goal verification did not finish'));
+      if (dec.optionId.startsWith('switch:')) {
+        who = { provider: dec.optionId.slice(7) };
+        stage.authorSessionId = undefined;
+      }
+    }
+    round.verification = verification;
+    const route = routeVerification(verification, earlier, Math.max(2, vcfg.repeatLimit ?? 3));
+    round.route = route;
+    round.handoff = buildHandoff(run, 'verify', round);
+    const met = verification.metrics.filter((m) => m.met).length;
+    this.log(
+      run,
+      route.to === 'done'
+        ? L(`目標驗收通過 ✅ ${met}/${verification.metrics.length} 項指標達成`, `Goal verified ✅ ${met}/${verification.metrics.length} metrics met`)
+        : L(`目標驗收未通過（${met}/${verification.metrics.length} 項達成，${outcomeLabel(verification.outcome)}）→ ${routeName(route.to)}`, `Goal not verified (${met}/${verification.metrics.length} met, ${outcomeLabel(verification.outcome)}) → ${routeName(route.to)}`),
+      route.to === 'done' ? 'info' : 'warn',
+      true,
+    );
+    stage.status = route.to === 'done' ? 'approved' : 'running';
+    this.touch(run);
+    return { route, verification };
+  }
+
+  /** A logged-in provider other than `not` (another vendor checks the work), or `not` itself when there is none. */
+  private otherVendor(run: WorkflowRun, not: string, also: (string | undefined)[] = []): string {
+    const avoid = new Set([not, ...also].filter(Boolean) as string[]);
+    const ready = this.d.registry.list().filter((p) => p.installed && p.auth.state === 'logged_in').map((p) => p.spec.id);
+    const ranked = run.assignment?.ranking.review ?? [];
+    return [...ranked, ...ready].find((id) => ready.includes(id) && !avoid.has(id)) ?? not;
+  }
+
+  /**
+   * Issues the author rebutted and the reviewer raised again: an independent agent (another vendor when possible)
+   * rules on each from the evidence. Returns the rulings (empty when it gave none).
+   */
+  private async adjudicate(run: WorkflowRun, key: StageKey, round: number, disputed: ReviewIssue[]) {
+    const cfg = run.config[key];
+    const stage = run.stages[key];
+    const provider = this.otherVendor(run, cfg.author.provider, [cfg.reviewer?.provider]);
+    const history = (i: ReviewIssue) =>
+      stage.rounds
+        .filter((r) => r.review)
+        .map((r) => {
+          const mine = r.review!.issues.find((x) => x.title.trim().toLowerCase() === i.title.trim().toLowerCase());
+          const answer = stage.rounds.find((x) => x.n === r.n + 1)?.submission?.responses?.find((x) => mine && x.issue_id === mine.id);
+          return mine ? `Round ${r.n} reviewer: ${mine.detail ?? mine.title}${mine.location ? ` (${mine.location})` : ''}${answer ? `\nAuthor (${answer.action}): ${answer.note ?? ''}` : ''}` : '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    this.log(run, L(`審查者與作者對 ${disputed.map((i) => i.id).join('、')} 意見不合，交由 ${this.providerName(provider)} 依證據裁定`, `The reviewer and the author disagree on ${disputed.map((i) => i.id).join(', ')}; ${this.providerName(provider)} rules on the evidence`), 'warn', true);
+    const r = await this.runRole(run, {
+      role: 'adjudicator',
+      roleCfg: { provider },
+      stage: key,
+      round,
+      prompt: P.adjudicatePrompt(run.config, disputed.map((i) => ({ id: i.id, title: i.title, history: history(i) }))),
+      mode: 'readonly',
+      expect: 'submit_ruling',
+      task: L('依證據裁定爭議', 'Rule on the disputes'),
+    });
+    const rulings = (r.sub?.rulings ?? []).filter((x) => disputed.some((i) => i.id === x.issue_id));
+    if (!rulings.length) {
+      this.log(run, L('裁定者沒有交出裁定，爭議的問題維持原狀', 'The adjudicator gave no ruling; the disputed issues stay'), 'warn', true);
+      return [];
+    }
+    for (const x of rulings) {
+      (run.rulings ??= []).push({ issueId: x.issue_id, ruling: `${x.ruling}: ${x.reason}`.slice(0, 1000), by: r.info.id, ts: now() });
+      (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: r.info.id, kind: 'decision', text: `Ruling on ${x.issue_id}: ${x.ruling === 'uphold' ? 'UPHELD (must be fixed)' : 'DISMISSED (the author is right)'} — ${x.reason}`.slice(0, 2000), ts: now() });
+    }
+    this.log(run, L(`裁定：${rulings.map((x) => `${x.issue_id} ${x.ruling === 'uphold' ? '維持' : '駁回'}`).join('、')}`, `Ruling: ${rulings.map((x) => `${x.issue_id} ${x.ruling === 'uphold' ? 'upheld' : 'dismissed'}`).join(', ')}`), 'info', true);
+    this.touch(run);
+    return rulings;
+  }
+
   /** Options to retry a failed role with another logged-in provider. */
   private switchOptions(current: string): { id: string; label: string }[] {
     return this.d.registry
@@ -984,7 +1525,7 @@ export class Orchestrator {
       .map((p) => ({ id: `switch:${p.spec.id}`, label: L(`改用 ${p.spec.name}`, `Use ${p.spec.name} instead`) }));
   }
 
-  private async runStage(run: WorkflowRun, key: StageKey) {
+  private async runStage(run: WorkflowRun, key: StageKey, entry?: Entry): Promise<{ replan?: { why: string; detail: string } }> {
     const cfg = run.config[key];
     const stage = run.stages[key];
     const isPlan = key === 'plan';
@@ -992,10 +1533,13 @@ export class Orchestrator {
     if (!cfg.enabled) {
       stage.status = 'skipped';
       this.touch(run);
-      return;
+      return {};
     }
     stage.status = 'running';
-    this.log(run, L(`${stageName}開始`, `${stageName} started`), 'info', true);
+    // Another pass (after a verification or a re-diagnosis) gets its own rounds.
+    const firstN = stage.rounds.length + 1;
+    if (entry) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + Math.max(1, cfg.maxRounds));
+    this.log(run, entry ? L(`${stageName}重新開始（第 ${(run.cycles ?? 0) + 1} 輪循環）`, `${stageName} again (cycle ${(run.cycles ?? 0) + 1})`) : L(`${stageName}開始`, `${stageName} started`), 'info', true);
     this.touch(run);
 
     let pendingReview: Review | undefined;
@@ -1027,6 +1571,13 @@ export class Orchestrator {
       const buildPrompt = () => {
         const authorSpec = this.d.registry.get(cfg.author.provider);
         const resume = !!(stage.authorSessionId && authorSpec?.run.resume && authorSpec.capabilities?.resume !== false);
+        if (entry && n === firstN) {
+          if (resume) return { resume, prompt: entry.prompt() };
+          const base = isPlan
+            ? `${P.planDraftPrompt(run.config, subText)}\n\nYOUR PREVIOUS PLAN:\n${P.planBlock(run.plan)}`
+            : `${P.implementPrompt(run.config, run.plan, subText)}\n\nYou (or another agent) already implemented this earlier; the current code is in the working directory.`;
+          return { resume, prompt: `${base}\n\n${entry.prompt()}` };
+        }
         if (n === 1 && !pendingReview) {
           return { resume, prompt: isPlan ? P.planDraftPrompt(run.config, subText, userFeedback) : P.implementPrompt(run.config, run.plan, subText, userFeedback) };
         }
@@ -1062,8 +1613,12 @@ export class Orchestrator {
           authorResult = a.sub;
           break;
         }
+        if (this.redispatch.delete(a.info.id)) {
+          this.log(run, L(`依新的設定重新派發${roleLabel(a.info.role)}（${this.providerName(cfg.author.provider)}）`, `Re-dispatching the ${roleLabel(a.info.role)} with the new settings (${this.providerName(cfg.author.provider)})`), 'info', true);
+          continue;
+        }
         authorTried.add(cfg.author.provider);
-        const fallback = this.failoverTarget(run, isPlan ? 'plan' : 'code', authorTried);
+        const fallback = this.stoppedByUser.has(a.info.id) ? undefined : this.failoverTarget(run, isPlan ? 'plan' : 'code', authorTried);
         if (fallback) {
           this.log(run, L(`自動換手：${this.providerName(cfg.author.provider)} 失敗（${a.res.error ?? '沒有產出結果'}），改由 ${this.providerName(fallback)} 擔任${roleLabel(a.info.role)}`, `Auto failover: ${this.providerName(cfg.author.provider)} failed (${a.res.error ?? 'no result'}); ${this.providerName(fallback)} takes over as ${roleLabel(a.info.role)}`), 'warn', true);
           cfg.author = { provider: fallback };
@@ -1091,12 +1646,19 @@ export class Orchestrator {
         run.steps = plan.steps.map((st) => ({ ...st, status: 'pending' }));
       } else if (authorResult.work) {
         round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses };
+        // Reviews and verifications of the code before this change no longer count.
+        if (this.hasEvidence(run)) {
+          const stale = markStale(run, treeHash(run.config.cwd));
+          if (stale) this.log(run, L(`程式碼已變更：${stale} 筆先前的審查／驗收結果標為過期`, `The code changed: ${stale} earlier review / verification result(s) marked stale`));
+        }
       }
       userFeedback = undefined;
+      run.lastProgressAt = now();
       this.touch(run);
 
       // ----- reviewer -----
       if (!cfg.reviewer) {
+        round.handoff = buildHandoff(run, key, round);
         if (cfg.humanGate) {
           const g = await this.gate(run, key, L(`${stageName}已完成（未設定審查者）。請確認結果。`, `${stageName} finished (no reviewer). Please check the result.`));
           if (g.revise) {
@@ -1117,6 +1679,7 @@ export class Orchestrator {
         const reviewerSpec = this.d.registry.get(cfg.reviewer.provider);
         const reviewerResume = !!(stage.reviewerSessionId && reviewerSpec?.run.resume && reviewerSpec.capabilities?.resume !== false);
         const changes = isPlan ? '' : await this.describeChanges(run);
+        const evidence = isPlan ? undefined : evidenceStamp(run.config.cwd);
         const rprompt = isPlan
           ? P.planReviewPrompt(run.config, run.plan!, n, prior) + this.subBlock(run, 0)
           : P.codeReviewPrompt(run.config, run.plan, round.submission?.summary ?? '', changes, n, prior) + this.subBlock(run, 0);
@@ -1135,10 +1698,14 @@ export class Orchestrator {
         if (!reviewerResume) stage.reviewerHandoff = undefined;
         if (r.info.sessionId) stage.reviewerSessionId = r.info.sessionId;
         review = r.sub?.review;
-        if (review) break;
+        if (review) {
+          review.evidence = evidence;
+          break;
+        }
+        if (this.redispatch.delete(r.info.id)) continue;
         reviewerTried.add(cfg.reviewer.provider);
         // Prefer a reviewer from another vendor than the author, if any is left.
-        const fallback = this.failoverTarget(run, 'review', new Set([...reviewerTried, cfg.author.provider])) ?? this.failoverTarget(run, 'review', reviewerTried);
+        const fallback = this.stoppedByUser.has(r.info.id) ? undefined : (this.failoverTarget(run, 'review', new Set([...reviewerTried, cfg.author.provider])) ?? this.failoverTarget(run, 'review', reviewerTried));
         if (fallback) {
           this.log(run, L(`自動換手：審查者 ${this.providerName(cfg.reviewer.provider)} 失敗，改由 ${this.providerName(fallback)} 審查`, `Auto failover: reviewer ${this.providerName(cfg.reviewer.provider)} failed; ${this.providerName(fallback)} reviews instead`), 'warn', true);
           cfg.reviewer = { provider: fallback };
@@ -1165,6 +1732,23 @@ export class Orchestrator {
       round.review = review;
       this.touch(run);
 
+      // Rebutted and raised again: an independent ruling on the evidence, not another round of the same argument.
+      if (review!.verdict === 'revise') {
+        const disputed = disputedIssues(stage.rounds.filter((r) => r.review).map((r) => ({ issues: r.review!.issues, responses: r.submission?.responses })));
+        if (disputed.length) {
+          const rulings = await this.adjudicate(run, key, n, disputed);
+          const dismissed = new Set(rulings.filter((x) => x.ruling === 'dismiss').map((x) => x.issue_id));
+          const upheld = rulings.filter((x) => x.ruling === 'uphold');
+          if (dismissed.size) review!.issues = review!.issues.filter((i) => !dismissed.has(i.id));
+          if (upheld.length) userFeedback = [userFeedback, `An independent adjudicator UPHELD these issues; fix them, do not rebut them again:\n${upheld.map((x) => `- ${x.issue_id}: ${x.reason}`).join('\n')}`].filter(Boolean).join('\n\n');
+          if (!review!.issues.length) {
+            review!.verdict = 'approve';
+            review!.summary += L('（裁定者駁回了剩下的爭議問題）', ' (the adjudicator dismissed the remaining disputed issues)');
+          }
+        }
+      }
+      round.handoff = buildHandoff(run, key, round);
+
       if (review!.verdict === 'approve') {
         this.log(run, L(`${stageName}審查通過 ✅`, `${stageName} approved ✅`), 'info', true);
         if (cfg.humanGate) {
@@ -1180,8 +1764,17 @@ export class Orchestrator {
       }
 
       this.log(run, L(`${stageName}審查要求修改：${review!.issues.length} 個問題`, `${stageName} review requested changes: ${review!.issues.length} issue(s)`), 'warn', true);
+      // The same issue failing fix after fix: the plan, not the code, is probably wrong — the planner re-diagnoses.
+      const limit = Math.max(2, run.config.verify?.repeatLimit ?? 3);
+      const stuck = !isPlan && run.config.plan.enabled ? repeatedIssues(stage.rounds.filter((r) => r.review).map((r) => r.review!.issues), limit) : [];
+      if (stuck.length) {
+        round.route = { to: 'planner', reason: `the same issue failed ${limit} code reviews in a row: re-diagnose`, issues: stuck.map((i) => i.id), rediagnose: true };
+        round.handoff = buildHandoff(run, key, round);
+        this.log(run, L(`同樣的問題（${stuck.map((i) => i.title).join('、').slice(0, 200)}）連續 ${limit} 輪修不好：交回計畫者重新診斷`, `The same issue (${stuck.map((i) => i.title).join(', ').slice(0, 200)}) failed ${limit} rounds in a row: back to the planner to re-diagnose`), 'warn', true);
+        return { replan: { why: round.route.reason, detail: P.reviewText(review!) } };
+      }
       const issueKey = review!.issues.map((i) => i.title.trim().toLowerCase()).sort().join('|');
-      if (prevIssueKey && issueKey && issueKey === prevIssueKey) {
+      if (prevIssueKey && issueKey && issueKey === prevIssueKey && (isPlan || !run.config.plan.enabled)) {
         const dec = await this.ask(run, key, L('連續兩輪審查提出相同的問題，迴圈可能卡住了。要怎麼處理？', 'The reviewer raised the same issues two rounds in a row; the loop may be stuck. What next?'), [
           { id: 'more', label: L('繼續修改', 'Keep revising') },
           { id: 'accept', label: L('視為通過', 'Accept as approved') },
@@ -1196,6 +1789,11 @@ export class Orchestrator {
     }
     stage.status = 'approved';
     this.touch(run);
+    return {};
+  }
+
+  private hasEvidence(run: WorkflowRun): boolean {
+    return [run.stages.implement, run.stages.verify].some((st) => st?.rounds.some((r) => r.review?.evidence || r.verification?.evidence));
   }
 
   private async gate(run: WorkflowRun, key: StageKey, message: string): Promise<{ revise?: string }> {
@@ -1211,7 +1809,7 @@ export class Orchestrator {
 
   private async runRole(
     run: WorkflowRun,
-    o: { role: AgentRole; roleCfg: RoleConfig; stage: StageKey; round: number; prompt: string; mode: 'write' | 'readonly'; resume?: string; expect: Expect; task: string },
+    o: { role: AgentRole; roleCfg: RoleConfig; stage: PhaseKey; round: number; prompt: string; mode: 'write' | 'readonly'; resume?: string; expect: Expect; task: string },
   ): Promise<{ info: AgentRunInfo; res: RunAgentResult; sub?: Submission }> {
     const def = this.d.registry.defaults(o.roleCfg.provider);
     const info = this.newAgent(run, { role: o.role, provider: o.roleCfg.provider, model: o.roleCfg.model || def.model, effort: o.roleCfg.effort || def.effort, stage: o.stage, round: o.round, depth: 0, task: o.task });
@@ -1230,10 +1828,34 @@ export class Orchestrator {
       res = await this.invokePausable(run, info, P.nudgePrompt(o.expect), o.mode, res.sessionId, res.lastSeq);
       sub = this.collect(info.id, o.expect, res);
     }
-    info.status = this.aborted(run) ? 'cancelled' : res.error && !sub ? 'failed' : 'completed';
+    // A failed turn: what kind of failure decides the recovery (wait and retry, hand over, or ask).
+    for (let attempt = 1; !sub && res.error && !this.aborted(run) && !this.stoppedByUser.has(info.id) && !this.redispatch.has(info.id); attempt++) {
+      const kind = classifyFailure(res.error);
+      const rec = recoveryFor(kind, attempt, L);
+      info.failure = { kind, message: res.error.slice(0, 500), action: rec.action };
+      this.touch(run);
+      if (!rec.retry) break;
+      this.log(run, `${this.label(info)}：${rec.action}`, 'warn', true);
+      info.waiting = rec.action;
+      await this.sleepFor(run, info, rec.delayMs);
+      info.waiting = undefined;
+      if (this.aborted(run) || this.stoppedByUser.has(info.id)) break;
+      const sid = res.sessionId ?? info.sessionId;
+      res = sid && spec?.run.resume && spec.capabilities?.resume !== false ? await this.invokePausable(run, info, P.resumeAfterError(), o.mode, sid, res.lastSeq) : await this.invokePausable(run, info, o.prompt, o.mode, o.resume, res.lastSeq);
+      sub = this.collect(info.id, o.expect, res);
+    }
+    if (sub) info.failure = undefined;
+    // The CLI exited cleanly without the result its role must hand in: the process ended, the task did not.
+    if (!sub && !res.error && !this.aborted(run)) {
+      info.endedWithoutResult = true;
+      res = { ...res, error: L('程序已結束，但沒有交出結果（這不是成功）', 'The process ended without handing in a result (this is not a success)') };
+    }
+    info.status = this.aborted(run) || this.stoppedByUser.has(info.id) || this.redispatch.has(info.id) ? 'cancelled' : res.error && !sub ? 'failed' : 'completed';
     info.error = res.error;
     info.endedAt = now();
     info.activity = undefined;
+    info.waiting = undefined;
+    this.endAgentResources(run, info);
     this.cancelChildren(run, info.id);
     this.updateOutputs(run);
     this.refreshShared(run);
@@ -1251,6 +1873,14 @@ export class Orchestrator {
   private collect(agentId: string, expect: Expect, res: RunAgentResult): Submission | undefined {
     const sub = this.submissions.get(agentId) ?? {};
     const json = extractJson(res.finalText) as any;
+    if (expect === 'submit_verification') {
+      sub.verification ??= parseVerification(json);
+      return sub.verification ? sub : undefined;
+    }
+    if (expect === 'submit_ruling') {
+      sub.rulings ??= parseRulings(json);
+      return sub.rulings?.length ? sub : undefined;
+    }
     if (expect === 'submit_plan') {
       if (!sub.plan) {
         sub.plan = parsePlan(json);
@@ -1354,14 +1984,26 @@ export class Orchestrator {
       // Extra folders are named every turn: they can be added while the conversation runs.
       const extraDirs = (run.config.extraDirs ?? []).filter((d) => fs.existsSync(d));
       const turnStart = now();
+      const systemPrompt = caps.instructionsFor(info.role);
+      // What this turn runs with, to tell later which settings and messages reached it.
+      info.snapshot = {
+        at: turnStart,
+        model: this.requestedModel.get(info.id) ?? info.model,
+        effort: info.effort,
+        permission: run.config.permission,
+        instructions: systemPrompt || skills ? createHash('sha1').update(`${systemPrompt ?? ''}\0${skills}`).digest('hex').slice(0, 10) : info.snapshot?.instructions,
+        skills: skills ? [...skills.matchAll(/^- ([\w.-]+): /gm)].map((m) => m[1]) : (info.snapshot?.skills ?? []),
+        userMessages: run.userMessages?.length ?? 0,
+      };
+      if (!plain) for (const m of run.userMessages ?? []) if (!(m.deliveredTo ??= []).includes(info.id)) m.deliveredTo.push(info.id);
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + shared + advisorText + files + skills,
+        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,
-        systemPrompt: caps.instructionsFor(info.role),
+        systemPrompt,
         skillsDir: skills && !plain ? caps.skillsDir : undefined,
         permission: run.config.permission,
         attachDir: attached.length ? this.d.attachments.runDir(run.id) : undefined,
@@ -1425,6 +2067,9 @@ export class Orchestrator {
 
   private onAgentEvent(run: WorkflowRun, info: AgentRunInfo, e: AgentEvent, isUpdate: boolean) {
     this.d.store.appendEvent(run.id, info.id, e, isUpdate);
+    info.lastEventAt = now();
+    if (e.kind === 'tool' || e.files?.length) run.lastProgressAt = now();
+    if (!isUpdate && e.usage?.costUsd) info.costUsd = (info.costUsd ?? 0) + e.usage.costUsd;
     this.trackUsage(info.provider, e, isUpdate, this.usageModel(info));
     // The model the CLI reports it is actually using (an alias like "opus" resolves to the full id).
     if (e.kind === 'session' && e.text?.trim() && !/\s/.test(e.text.trim())) info.model = e.text.trim();
@@ -1528,13 +2173,24 @@ export class Orchestrator {
       });
       if (!d.allow) throw new Error(d.message ?? 'The user did not allow this sub-agent.');
     }
-    const child = this.newAgent(run, { role: 'subagent', provider, model, effort, parentId: parent.id, depth: parent.depth + 1, stage: parent.stage, round: parent.round, task: task.slice(0, 400) });
-    this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(provider)}`));
-    const prompt = P.subagentPrompt(run.config.cwd, task, roleLabel(parent.role), this.subBlock(run, child.depth));
-    const done = this.invokePausable(run, child, prompt, mode)
+    const child = this.launchChild(run, parent, { provider, model, effort, task, mode });
+    const round = parent.role === 'advisor' ? this.nextFactRound(run, parent, child) : undefined;
+    return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default', ...(round ? { fact_finding_round: round } : {}) });
+  }
+
+  private launchChild(run: WorkflowRun, parent: AgentRunInfo, o: { provider: string; model?: string; effort?: string; task: string; mode: 'write' | 'readonly'; rerunOf?: string }): AgentRunInfo {
+    const child = this.newAgent(run, { role: 'subagent', provider: o.provider, model: o.model, effort: o.effort, parentId: parent.id, depth: parent.depth + 1, stage: parent.stage, round: parent.round, task: o.task.slice(0, 400), rerunOf: o.rerunOf });
+    this.subSpecs.set(child.id, { task: o.task, mode: o.mode });
+    this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
+    const prompt = P.subagentPrompt(run.config.cwd, o.task, roleLabel(parent.role), this.subBlock(run, child.depth));
+    const done = this.invokePausable(run, child, prompt, o.mode)
       .then((res) => {
-        child.status = this.aborted(run) || this.agentAborts.get(child.id)?.signal.aborted ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';
+        child.status = this.aborted(run) || this.agentAborts.get(child.id)?.signal.aborted || this.stoppedByUser.has(child.id) ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';
         child.error = res.error;
+        if (child.status === 'failed') {
+          const kind = classifyFailure(res.error);
+          child.failure = { kind, message: (res.error ?? '').slice(0, 500), action: recoveryFor(kind, 1, L).action };
+        }
       })
       .catch((e) => {
         child.status = 'failed';
@@ -1544,12 +2200,29 @@ export class Orchestrator {
         if (child.status === 'running') child.status = 'cancelled';
         child.endedAt = now();
         child.activity = undefined;
+        this.endAgentResources(run, child);
         this.cancelChildren(run, child.id);
         this.updateOutputs(run);
+        if (child.status === 'failed') this.notifyParent(run, child, `sub-agent ${child.id} (${child.provider}) FAILED${child.failure ? ` [${child.failure.kind}]` : ''}: ${(child.error ?? '').slice(0, 300)}`);
+        else if (child.status === 'cancelled' && this.stoppedByUser.has(child.id) && !this.aborted(run)) this.notifyParent(run, child, `sub-agent ${child.id} (${child.provider}) was STOPPED before it finished; its work may be partial.`);
       });
     this.agentDone.set(child.id, done);
-    const round = parent.role === 'advisor' ? this.nextFactRound(run, parent, child) : undefined;
-    return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default', ...(round ? { fact_finding_round: round } : {}) });
+    return child;
+  }
+
+  /** Tell a parent about one of its sub-agents (on its next Aivenue tool result) and show it in the conversation. */
+  private notifyParent(run: WorkflowRun, child: AgentRunInfo, text: string) {
+    const parent = child.parentId ? run.agents[child.parentId] : undefined;
+    if (!parent || !['running', 'paused', 'queued'].includes(parent.status)) return;
+    this.inbox.set(parent.id, [...(this.inbox.get(parent.id) ?? []), text]);
+    this.log(run, L(`已通知 ${this.label(parent)}：${text}`, `Told ${this.label(parent)}: ${text}`), 'warn', true);
+  }
+
+  /** A parent may only hand in its result once each of its sub-agents finished, was stopped or was handed off. */
+  private requireChildrenSettled(run: WorkflowRun, info: AgentRunInfo) {
+    const open = Object.values(run.agents).filter((a) => a.parentId === info.id && !a.handoff && (a.status === 'running' || a.status === 'queued' || a.status === 'paused'));
+    if (!open.length) return;
+    throw new Error(`Your sub-agents ${open.map((a) => `${a.id} (${a.provider})`).join(', ')} are still running. Before you submit: wait for them (wait_subagent), stop them (stop_subagent), or hand them off (stop_subagent {subagent_id, handoff: "who takes over its result"}).`);
   }
 
   private async waitSubagent(run: WorkflowRun, args: Record<string, unknown>): Promise<string> {
@@ -1565,6 +2238,7 @@ export class Orchestrator {
       provider: child.provider,
       status: child.status,
       ...(finished ? { result: (child.finalText ?? '').slice(0, 20000), error: child.error } : { activity: child.activity, hint: 'Still running; call wait_subagent again.' }),
+      ...(child.status === 'failed' ? { failure: child.failure?.kind, next: 'Decide: retry it (spawn_subagent again), adjust the task, or replace it with another provider (list_providers).' } : {}),
       files_changed: child.stats.filesChanged,
       ...(finished ? this.factRoundNote(run, child) : {}),
     });
@@ -1992,7 +2666,8 @@ export class Orchestrator {
 
   private cancelChildren(run: WorkflowRun, parentId: string) {
     for (const a of Object.values(run.agents)) {
-      if (a.parentId === parentId && (a.status === 'running' || a.status === 'queued')) {
+      // A handed-off sub-agent keeps running; it ends with the workflow.
+      if (a.parentId === parentId && !a.handoff && (a.status === 'running' || a.status === 'queued')) {
         this.log(run, L(`${this.label(a)} 的上層 agent 已結束，停止此 sub agent`, `${this.label(a)}: its parent finished, stopping this sub-agent`), 'warn');
         this.agentAborts.get(a.id)?.abort();
       }
@@ -2019,7 +2694,7 @@ export class Orchestrator {
     return files.size ? [...files].map((f) => `- ${f}`).join('\n') + '\n(not a git repository; list collected from agent tool calls)' : '';
   }
 
-  private ask(run: WorkflowRun, stage: StageKey, message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
+  private ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
     const wf = this.aborts.get(run.id);
     return new Promise((resolve, reject) => {
       if (!wf || wf.signal.aborted) return reject(new Cancelled());
@@ -2042,6 +2717,164 @@ export class Orchestrator {
         resolve(dec);
       });
     });
+  }
+
+  /** Sleep that ends early when the run or this agent is stopped. */
+  private async sleepFor(run: WorkflowRun, info: AgentRunInfo, ms: number) {
+    const until = now() + ms;
+    while (now() < until && !this.aborted(run) && !this.stoppedByUser.has(info.id)) await sleep(Math.min(1000, until - now()));
+  }
+
+  private noteGpus(run: WorkflowRun, info: AgentRunInfo, gpus: number[]) {
+    (run.gpuLocks ??= []).push({ gpus, agentId: info.id, since: now() });
+    this.log(run, L(`${this.label(info)} 鎖定 GPU ${gpus.join(', ')}`, `${this.label(info)} locked GPU ${gpus.join(', ')}`), 'info', true);
+    this.touch(run);
+  }
+
+  /** wait_for: check a condition every interval until it holds (then lock GPUs if asked), up to ~50 s per call. */
+  private async waitFor(run: WorkflowRun, info: AgentRunInfo, args: Record<string, unknown>): Promise<string> {
+    const wid = typeof args.wait_id === 'string' ? args.wait_id.trim() : '';
+    let w = wid ? run.waits?.find((x) => x.id === wid) : undefined;
+    if (wid && !w) throw new Error(`Unknown wait_id ${wid}`);
+    if (!w) {
+      const check = String(args.check ?? '').trim();
+      if (!check) throw new Error('check is required');
+      w = this.resources.newWait(info.id, { check: check.slice(0, 2000), contains: typeof args.contains === 'string' ? args.contains.slice(0, 300) : undefined, interval_sec: Number(args.interval_sec) || undefined, timeout_min: Number(args.timeout_min) || undefined, gpus: Number(args.gpus) || undefined });
+      run.waits = [...(run.waits ?? []).filter((x) => x.state === 'waiting').slice(-49), w];
+    }
+    // After a restart another turn of the agent continues it.
+    w.agentId = info.id;
+    let gpus: number[] | undefined;
+    const until = now() + 50000;
+    info.waiting = L(`等待條件：${w.check.slice(0, 80)}${w.gpus ? `（之後鎖定 ${w.gpus} 張 GPU）` : ''}`, `Waiting for: ${w.check.slice(0, 80)}${w.gpus ? ` (then lock ${w.gpus} GPU)` : ''}`);
+    this.touch(run);
+    try {
+      while (w.state === 'waiting' && !this.aborted(run) && !this.stoppedByUser.has(info.id)) {
+        if (now() > w.timeoutAt) {
+          w.state = 'timeout';
+          break;
+        }
+        if (now() >= (w.lastCheck ?? 0) + w.intervalSec * 1000) {
+          const c = await this.resources.check(w, run.config.cwd);
+          w.lastCheck = now();
+          w.lastOutput = c.output.slice(-500);
+          if (c.ok && !w.gpus) w.state = 'met';
+          else if (c.ok) {
+            const got = this.resources.acquire({ workflowId: run.id, agentId: info.id }, w.gpus!);
+            if (got) {
+              // Still true under the lock? Otherwise let the cards go and keep waiting.
+              const again = await this.resources.check(w, run.config.cwd);
+              if (again.ok) {
+                gpus = got;
+                w.state = 'met';
+                this.noteGpus(run, info, got);
+              } else this.resources.release(run.id, info.id, got);
+            }
+          }
+          this.touch(run);
+        }
+        if (w.state !== 'waiting' || now() >= until) break;
+        await this.sleepFor(run, info, Math.max(500, Math.min(until, (w.lastCheck ?? now()) + w.intervalSec * 1000, w.timeoutAt) - now()));
+      }
+    } finally {
+      info.waiting = undefined;
+      this.touch(run);
+    }
+    const left = Math.max(0, Math.round((w.timeoutAt - now()) / 60000));
+    return JSON.stringify({
+      wait_id: w.id,
+      status: w.state,
+      last_output: w.lastOutput,
+      ...(gpus ? { gpus, hint: `Run your job with CUDA_VISIBLE_DEVICES=${gpus.join(',')}; call gpu_release when it is done.` } : {}),
+      ...(w.state === 'waiting' ? { minutes_left: left, hint: 'Not yet. Call wait_for {wait_id} again to keep waiting.' } : {}),
+      ...(w.state === 'timeout' ? { hint: 'Timed out: the condition never held. Report it; do not treat the job as finished.' } : {}),
+    });
+  }
+
+  /** An agent's turn ended: its GPU locks and waits go, and a process it should have stopped is reported. */
+  private endAgentResources(run: WorkflowRun, info: AgentRunInfo) {
+    const freed = this.resources.release(run.id, info.id);
+    if (freed.length) {
+      run.gpuLocks = (run.gpuLocks ?? []).filter((l) => l.agentId !== info.id);
+      this.log(run, L(`${this.label(info)} 結束，釋放 GPU ${freed.join(', ')}`, `${this.label(info)} ended; released GPU ${freed.join(', ')}`));
+    }
+    for (const p of run.processes ?? []) {
+      if (p.agentId !== info.id || p.cleanup !== 'agent') continue;
+      p.alive = pidAlive(p.pid);
+      p.checkedAt = now();
+      if (p.alive) this.log(run, L(`${this.label(info)} 結束了，但它負責清理的程序 ${p.pid}（${p.purpose}）還在執行`, `${this.label(info)} ended but process ${p.pid} (${p.purpose}) it was to clean up is still running`), 'warn', true);
+    }
+  }
+
+  /** The run ended: every lock goes, open waits are cancelled, processes Aivenue owns are stopped. */
+  private endRunResources(run: WorkflowRun) {
+    const t = this.watchdogs.get(run.id);
+    if (t) clearInterval(t);
+    this.watchdogs.delete(run.id);
+    this.incompleteWhy.delete(run.id);
+    this.resources.release(run.id);
+    run.gpuLocks = [];
+    for (const w of run.waits ?? []) if (w.state === 'waiting') w.state = 'cancelled';
+    for (const p of run.processes ?? []) {
+      if (p.cleanup === 'aivenue' && pidAlive(p.pid)) {
+        killPid(p.pid);
+        this.log(run, L(`已停止背景程序 ${p.pid}（${p.purpose}）`, `Stopped background process ${p.pid} (${p.purpose})`));
+      }
+      p.alive = pidAlive(p.pid);
+      p.checkedAt = now();
+    }
+  }
+
+  /** Every 15 s while a run is active: limits, stalled sub-agents, background processes. */
+  private startWatchdog(run: WorkflowRun) {
+    const t = setInterval(() => this.watch(run), 15000);
+    t.unref?.();
+    this.watchdogs.set(run.id, t);
+  }
+
+  private watch(run: WorkflowRun) {
+    if (!['running', 'waiting_human', 'paused'].includes(run.status)) return;
+    const lim = run.config.limits;
+    // Time and cost: the run stops as incomplete (a cycle limit is checked between cycles).
+    const hit = run.status !== 'paused' ? limitHit(lim ? { ...lim, maxCycles: undefined } : undefined, { startedAt: run.createdAt, now: now(), costUsd: this.runCost(run), cycles: 0 }) : undefined;
+    if (hit) {
+      this.incompleteWhy.set(run.id, hit);
+      this.cancel(run.id);
+      return;
+    }
+    if (lim?.enabled && lim.noProgressMinutes && run.status === 'running' && !run.pending) {
+      const quiet = now() - Math.max(run.lastProgressAt ?? run.createdAt, this.noProgressAskedAt.get(run.id) ?? 0);
+      if (quiet > lim.noProgressMinutes * 60000) {
+        this.noProgressAskedAt.set(run.id, now());
+        void this.ask(run, 'run', L(`已經 ${lim.noProgressMinutes} 分鐘沒有進展（沒有工具呼叫、檔案變更或提交）。要怎麼處理？`, `No progress for ${lim.noProgressMinutes} minutes (no tool call, file change or submission). What next?`), [
+          { id: 'continue', label: L('繼續等', 'Keep going') },
+          { id: 'stop', label: L('停止（標記為未完成）', 'Stop (mark incomplete)') },
+        ])
+          .then((d) => {
+            if (d.optionId !== 'stop') return;
+            this.incompleteWhy.set(run.id, L(`${lim.noProgressMinutes} 分鐘沒有進展`, `no progress for ${lim.noProgressMinutes} min`));
+            this.cancel(run.id);
+          })
+          .catch(() => undefined);
+      }
+    }
+    let changed = false;
+    for (const a of Object.values(run.agents)) {
+      if (a.role !== 'subagent' || a.status !== 'running' || a.waiting || this.stallNoted.has(a.id)) continue;
+      if (now() - (a.lastEventAt ?? a.startedAt ?? now()) < STALL_MS) continue;
+      this.stallNoted.add(a.id);
+      this.notifyParent(run, a, `sub-agent ${a.id} (${a.provider}) has shown no activity for ${Math.round(STALL_MS / 60000)} minutes; it may be stuck.`);
+      changed = true;
+    }
+    for (const p of run.processes ?? []) {
+      const alive = pidAlive(p.pid);
+      p.checkedAt = now();
+      if (alive !== p.alive) {
+        p.alive = alive;
+        changed = true;
+      }
+    }
+    if (changed) this.touch(run);
   }
 
   private aborted(run: WorkflowRun) {

@@ -1,10 +1,51 @@
-import type { AgentRole, IssueResponse, PlanDoc, Review, ReviewIssue } from './types';
+import type { AgentRole, GoalSpec, IssueResponse, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
 
 export interface ToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 }
+
+const issuesSchema = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: '"R1", "R2", ...' },
+      severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
+      title: { type: 'string' },
+      detail: { type: 'string' },
+      location: { type: 'string', description: 'File/line or plan step the issue refers to.' },
+    },
+    required: ['id', 'severity', 'title'],
+  },
+};
+
+const goalSchema = {
+  type: 'object',
+  description: 'The goal that must be met before the workflow may end. Required when goal verification is on.',
+  properties: {
+    statement: { type: 'string', description: 'What done means, in one or two sentences.' },
+    metrics: {
+      type: 'array',
+      description: 'Acceptance metrics: each one measurable, with a target and how to measure it.',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '"M1", "M2", ...' },
+          name: { type: 'string' },
+          target: { type: 'string', description: 'e.g. "all tests pass", "accuracy >= 0.92", "p95 < 200 ms".' },
+          how: { type: 'string', description: 'The command or check that measures it.' },
+        },
+        required: ['id', 'name', 'target', 'how'],
+      },
+    },
+    expected: { type: 'string', description: 'Expected effect.' },
+    cost: { type: 'string', description: 'Expected cost (time, compute, money).' },
+    constraints: { type: 'string', description: 'What must not change or be broken.' },
+  },
+  required: ['statement', 'metrics'],
+};
 
 const responsesSchema = {
   type: 'array',
@@ -38,6 +79,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
             required: ['id', 'title'],
           },
         },
+        goal: goalSchema,
         responses: responsesSchema,
       },
       required: ['summary', 'markdown', 'steps'],
@@ -51,22 +93,158 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       properties: {
         verdict: { type: 'string', enum: ['approve', 'revise'] },
         summary: { type: 'string' },
-        issues: {
+        issues: issuesSchema,
+      },
+      required: ['verdict', 'summary', 'issues'],
+    },
+  },
+  submit_verification: {
+    name: 'submit_verification',
+    description:
+      'Submit the goal verification to Aivenue: each acceptance metric measured, with its value and evidence. Aivenue decides from it who works next; you do not decide whether the workflow is done.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        outcome: {
+          type: 'string',
+          enum: ['met', 'not_met', 'invalid_evidence', 'defect'],
+          description: 'met: every metric meets its target. defect: bugs or missing work stop it. invalid_evidence: the measurement itself is wrong, missing or not trustworthy. not_met: the work is valid but the goal is missed (the approach must change).',
+        },
+        summary: { type: 'string' },
+        metrics: {
           type: 'array',
           items: {
             type: 'object',
             properties: {
-              id: { type: 'string', description: '"R1", "R2", ...' },
-              severity: { type: 'string', enum: ['blocker', 'major', 'minor'] },
-              title: { type: 'string' },
-              detail: { type: 'string' },
-              location: { type: 'string', description: 'File/line or plan step the issue refers to.' },
+              id: { type: 'string', description: 'The metric id from the goal ("M1"…).' },
+              value: { type: 'string', description: 'What you measured.' },
+              met: { type: 'boolean' },
+              evidence: { type: 'string', description: 'The command you ran and the relevant output, or file:line.' },
             },
-            required: ['id', 'severity', 'title'],
+            required: ['id', 'value', 'met', 'evidence'],
+          },
+        },
+        issues: issuesSchema,
+      },
+      required: ['outcome', 'summary', 'metrics'],
+    },
+  },
+  submit_ruling: {
+    name: 'submit_ruling',
+    description: 'Submit your ruling on each disputed issue to Aivenue.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        rulings: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              issue_id: { type: 'string' },
+              ruling: { type: 'string', enum: ['uphold', 'dismiss'], description: 'uphold: the reviewer is right, it must be fixed. dismiss: the author is right.' },
+              reason: { type: 'string', description: 'The evidence that decides it (file:line, command output).' },
+            },
+            required: ['issue_id', 'ruling', 'reason'],
           },
         },
       },
-      required: ['verdict', 'summary', 'issues'],
+      required: ['rulings'],
+    },
+  },
+  search_records: {
+    name: 'search_records',
+    description:
+      "Search this workflow's records: every agent's messages, tool calls and their output, shared notes, review and verification issues. Filter by text and/or role, agent, stage, round, file or issue id. Returns matching snippets with the agent id (open one in full with read_context {agent_id}).",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        q: { type: 'string', description: 'Text to find (case-insensitive).' },
+        role: { type: 'string', enum: ['planner', 'plan_reviewer', 'executor', 'code_reviewer', 'verifier', 'adjudicator', 'subagent', 'advisor'] },
+        agent_id: { type: 'string' },
+        stage: { type: 'string', enum: ['plan', 'implement', 'verify'] },
+        round: { type: 'number' },
+        file: { type: 'string', description: 'A file path (or part of it).' },
+        issue_id: { type: 'string', description: 'e.g. "R2" or "M1".' },
+        limit: { type: 'number', description: 'Default 50.' },
+      },
+    },
+  },
+  report_skill_use: {
+    name: 'report_skill_use',
+    description:
+      'Tell Aivenue you applied a skill: which one, why, what it produced and how you checked that you followed it. Reading a SKILL.md alone does not count as following it; report it once you actually applied it (again with verified=true after checking).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        version: { type: 'string', description: 'Version from its frontmatter, if any.' },
+        reason: { type: 'string', description: 'Why it applies here.' },
+        deliverables: { type: 'string', description: 'What following it produced (files, checks, outputs).' },
+        verification: { type: 'string', description: 'How you checked you followed it (test, command, review).' },
+        verified: { type: 'boolean', description: 'true when that check passed.' },
+      },
+      required: ['name', 'reason'],
+    },
+  },
+  wait_for: {
+    name: 'wait_for',
+    description:
+      'Wait until a condition holds, checking it every interval_sec (e.g. a training run finished, a file exists, a server answers, a GPU is free). Waits up to ~50 s per call and returns status "waiting" with a wait_id: call again with that wait_id to keep waiting (the timeout and history are kept, also across an Aivenue restart). With gpus, Aivenue also locks that many free GPUs as soon as the condition holds (re-checked under the lock) and returns their indices.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        wait_id: { type: 'string', description: 'Continue an earlier wait.' },
+        check: { type: 'string', description: 'Shell command; the condition holds when it exits 0.' },
+        contains: { type: 'string', description: 'Also require this text in its output.' },
+        interval_sec: { type: 'number', description: 'Default 30 (5–600).' },
+        timeout_min: { type: 'number', description: 'Give up after this long (default 60).' },
+        gpus: { type: 'number', description: 'Lock this many GPUs once the condition holds.' },
+      },
+    },
+  },
+  gpu_status: {
+    name: 'gpu_status',
+    description: 'List the GPUs (nvidia-smi): memory, utilization and which Aivenue agent holds each one.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  gpu_acquire: {
+    name: 'gpu_acquire',
+    description:
+      'Lock free GPUs for your job so no other agent or workflow uses them, and get their indices (set CUDA_VISIBLE_DEVICES to them). Released when you call gpu_release or your turn ends. Use wait_for {gpus} to wait for GPUs that are busy.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        count: { type: 'number', description: 'Default 1.' },
+        max_used_mb: { type: 'number', description: 'A GPU counts as free with at most this much memory in use (default 1024).' },
+      },
+    },
+  },
+  gpu_release: {
+    name: 'gpu_release',
+    description: 'Release the GPUs you locked.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  track_process: {
+    name: 'track_process',
+    description:
+      'Register a background process you started (a server, a training job) so the user can see whether it is alive and who cleans it up. cleanup "aivenue": Aivenue stops it when the workflow ends; "agent": you stop it yourself before you finish; "keep": it is meant to keep running.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pid: { type: 'number' },
+        purpose: { type: 'string' },
+        cleanup: { type: 'string', enum: ['aivenue', 'agent', 'keep'] },
+      },
+      required: ['pid', 'purpose', 'cleanup'],
+    },
+  },
+  stop_subagent: {
+    name: 'stop_subagent',
+    description: 'Stop one of your sub-agents (it failed, stalled or is no longer needed), or hand it off: with handoff, it keeps running after your turn and the note says who takes over its result.',
+    inputSchema: {
+      type: 'object',
+      properties: { subagent_id: { type: 'string' }, handoff: { type: 'string', description: 'Keep it running and say who uses its result.' } },
+      required: ['subagent_id'],
     },
   },
   submit_work: {
@@ -161,10 +339,10 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   },
   post_note: {
     name: 'post_note',
-    description: 'Share a short note with every later agent in this workflow (e.g. a decision, a gotcha, where something lives). The user sees it too.',
+    description: 'Share a short note with every later agent in this workflow (e.g. a decision, a gotcha, where something lives). The user sees it too. Say what kind it is: a checked fact, an inference (a judgement not verified) or a decision.',
     inputSchema: {
       type: 'object',
-      properties: { text: { type: 'string', description: 'The note, at most a few sentences.' } },
+      properties: { text: { type: 'string', description: 'The note, at most a few sentences.' }, kind: { type: 'string', enum: ['fact', 'inference', 'decision'], description: 'Default inference.' } },
       required: ['text'],
     },
   },
@@ -200,16 +378,21 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   const names: string[] = [];
   if (role === 'planner') names.push('submit_plan');
   if (role === 'plan_reviewer' || role === 'code_reviewer') names.push('submit_review');
+  if (role === 'verifier') names.push('submit_verification');
+  if (role === 'adjudicator') names.push('submit_ruling');
   if (role === 'executor') names.push('report_progress', 'submit_work');
   if (role === 'subagent') names.push('report_progress');
   // The compactor only reads the material in its prompt.
   if (role === 'compactor') return [];
+  // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
+  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'gpu_status', 'gpu_acquire', 'gpu_release', 'track_process');
+  if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');
   // Anything that changes GitHub or another outside service needs the user's OK first (the advisor only advises).
   if (role !== 'test' && role !== 'advisor') names.push('confirm_external_action');
   if (shareContext && role !== 'test') names.push('read_context', 'post_note');
-  if (canSpawn) names.push('spawn_subagent', 'wait_subagent', 'list_providers');
+  if (canSpawn) names.push('spawn_subagent', 'wait_subagent', 'stop_subagent', 'list_providers');
   // The advisor itself does not consult another advisor.
   if (advisor && role !== 'test' && role !== 'advisor') names.push('ask_advisor', 'wait_subagent');
   return [...new Set(names)].map((n) => TOOL_DEFS[n]);
@@ -232,22 +415,63 @@ export function parsePlan(v: any): { plan: PlanDoc; responses?: IssueResponse[] 
     ? v.steps.map((st: any, i: number) => (typeof st === 'string' ? { id: String(i + 1), title: st } : { id: s(st.id) || String(i + 1), title: s(st.title), detail: st.detail ? s(st.detail) : undefined }))
     : [];
   if (!v.markdown && !v.summary && !steps.length) return undefined;
-  return { plan: { summary: s(v.summary), markdown: s(v.markdown) || s(v.summary), steps }, responses: parseResponses(v.responses) };
+  return { plan: { summary: s(v.summary), markdown: s(v.markdown) || s(v.summary), steps, goal: parseGoal(v.goal) }, responses: parseResponses(v.responses) };
+}
+
+export function parseGoal(v: any): GoalSpec | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const metrics = Array.isArray(v.metrics)
+    ? v.metrics.filter((m: any) => m && typeof m === 'object').map((m: any, i: number) => ({ id: s(m.id) || `M${i + 1}`, name: s(m.name) || s(m.target), target: s(m.target), how: s(m.how) }))
+    : [];
+  if (!s(v.statement) && !metrics.length) return undefined;
+  return { statement: s(v.statement), metrics, expected: v.expected ? s(v.expected) : undefined, cost: v.cost ? s(v.cost) : undefined, constraints: v.constraints ? s(v.constraints) : undefined };
+}
+
+function parseIssues(v: unknown, prefix = 'R'): ReviewIssue[] {
+  return Array.isArray(v)
+    ? v.map((i: any, n: number) => ({
+        id: s(i?.id) || `${prefix}${n + 1}`,
+        severity: ['blocker', 'major', 'minor'].includes(i?.severity) ? i.severity : 'major',
+        title: s(i?.title) || s(i?.detail).slice(0, 80),
+        detail: i?.detail ? s(i.detail) : undefined,
+        location: i?.location ? s(i.location) : undefined,
+      }))
+    : [];
+}
+
+export function parseVerification(v: any): Verification | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const outcome = s(v.outcome).toLowerCase().replace(/[\s-]+/g, '_') as VerifyOutcome;
+  if (!['met', 'not_met', 'invalid_evidence', 'defect'].includes(outcome)) return undefined;
+  const metrics = Array.isArray(v.metrics)
+    ? v.metrics.filter((m: any) => m && typeof m === 'object').map((m: any, i: number) => ({ id: s(m.id) || `M${i + 1}`, value: s(m.value), met: m.met === true || s(m.met).toLowerCase() === 'true', evidence: s(m.evidence) }))
+    : [];
+  return { outcome, summary: s(v.summary), metrics, issues: parseIssues(v.issues, 'V') };
+}
+
+export function parseRulings(v: any): { issue_id: string; ruling: 'uphold' | 'dismiss'; reason: string }[] | undefined {
+  const list = Array.isArray(v?.rulings) ? v.rulings : Array.isArray(v) ? v : undefined;
+  if (!list) return undefined;
+  return list.filter((r: any) => r && r.issue_id).map((r: any) => ({ issue_id: s(r.issue_id), ruling: s(r.ruling).toLowerCase() === 'dismiss' ? 'dismiss' : 'uphold', reason: s(r.reason) }));
+}
+
+export function parseSkillUse(v: any): Omit<SkillUse, 'ts'> | undefined {
+  if (!v || typeof v !== 'object' || !s(v.name).trim()) return undefined;
+  return {
+    name: s(v.name).trim().slice(0, 80),
+    version: v.version ? s(v.version).slice(0, 40) : undefined,
+    reason: s(v.reason).slice(0, 500),
+    deliverables: v.deliverables ? s(v.deliverables).slice(0, 1000) : undefined,
+    verification: v.verification ? s(v.verification).slice(0, 1000) : undefined,
+    verified: v.verified === true,
+  };
 }
 
 export function parseReview(v: any): Review | undefined {
   if (!v || typeof v !== 'object') return undefined;
   const verdict = s(v.verdict).toLowerCase();
   if (!['approve', 'approved', 'revise', 'reject', 'changes_requested'].includes(verdict)) return undefined;
-  const issues: ReviewIssue[] = Array.isArray(v.issues)
-    ? v.issues.map((i: any, n: number) => ({
-        id: s(i.id) || `R${n + 1}`,
-        severity: ['blocker', 'major', 'minor'].includes(i.severity) ? i.severity : 'major',
-        title: s(i.title) || s(i.detail).slice(0, 80),
-        detail: i.detail ? s(i.detail) : undefined,
-        location: i.location ? s(i.location) : undefined,
-      }))
-    : [];
+  const issues = parseIssues(v.issues);
   return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues };
 }
 

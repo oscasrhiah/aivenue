@@ -4391,3 +4391,256 @@ textarea.code {
 .btn.stop-yes:hover {
   background: #a93226;
 }
+
+/* ---------- 0.2.0: goal verification, records, agent control ---------- */
+
+.badge {
+  display: inline-block;
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.badge.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+}
+.badge.muted {
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.break {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ext-chip.ok {
+  color: var(--ok);
+}
+.ext-chip.warn {
+  color: var(--warn);
+}
+.ext-chip.muted {
+  color: var(--muted);
+}
+
+/* progress panel: gap to the goal, now, blocked by */
+.pp-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 14px 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 6px;
+}
+.pp-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-right: 4px;
+}
+.pp-goal {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pp-metric {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.pp-metric .pp-icon {
+  width: 14px;
+  text-align: center;
+  border: 0;
+  background: none;
+}
+.pp-metric.ok .pp-icon {
+  color: var(--ok);
+}
+.pp-metric.no .pp-icon {
+  color: var(--err);
+}
+.pp-metric.todo {
+  color: var(--muted);
+}
+.pp-now,
+.pp-block {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+.pp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-chip.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.pp-chip.muted {
+  color: var(--muted);
+}
+
+/* verification card */
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+.metric {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.metric-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.metric-icon {
+  width: 14px;
+  text-align: center;
+}
+.metric.ok .metric-icon {
+  color: var(--ok);
+}
+.metric.no .metric-icon {
+  color: var(--err);
+}
+.metric-name {
+  font-weight: 600;
+}
+.metric-value {
+  margin: 2px 0 0 22px;
+  overflow-wrap: anywhere;
+}
+.metric-evidence {
+  margin: 2px 0 0 22px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.route {
+  margin-top: 6px;
+  color: var(--warn);
+}
+.handoff-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+.handoff-body .pill {
+  margin-right: 4px;
+}
+
+/* agent card actions */
+.turn-actions {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+.turn-actions .icon-btn {
+  min-width: 22px;
+  height: 22px;
+  font-size: 11px;
+}
+
+/* conversation ⋯ menu */
+.run-menu {
+  position: relative;
+}
+.run-menu .menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+}
+.run-menu .menu button {
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.run-menu .menu button:hover {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.small-modal {
+  max-width: 520px;
+}
+.search-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.search-hit {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+/* preflight */
+.preflight {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 6px 0;
+}
+.pf-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+.pf-icon {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.pf-item.ok .pf-icon {
+  color: var(--ok);
+}
+.pf-item.warn .pf-icon {
+  color: var(--warn);
+}
+.pf-item.error .pf-icon {
+  color: var(--err);
+}
+.pf-area {
+  color: var(--muted);
+  min-width: 52px;
+  flex-shrink: 0;
+}

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, PermissionLevel, ProviderInfo, RoleConfig, StageConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
+import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
+import { PreflightList } from './RunTools';
 import { ModelPicker } from './ModelPicker';
 import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
@@ -185,6 +186,125 @@ function StageSection({ title, hint, authorLabel, reviewerLabel, stage, provider
           </label>
         </div>
       )}
+    </section>
+  );
+}
+
+/** Goal verification: the planner sets a goal that must pass; the workflow does not end until it does. */
+function GoalSection({ value, onChange, providers, disabled, auto, implementer }: { value: VerifyConfig; onChange: (v: VerifyConfig) => void; providers: ProviderInfo[]; disabled?: boolean; auto?: boolean; implementer: string }) {
+  const t = useT();
+  const other = providers.find((p) => p.spec.id !== implementer && p.installed && p.auth.state === 'logged_in')?.spec.id ?? implementer;
+  return (
+    <section className="sect">
+      <div className="sect-head">
+        <div>
+          <div className="sect-title">{t('目標驗收', 'Goal verification')}</div>
+          <div className="muted small">{t('計畫者設定一定要通過的最終目標（可量測的驗收指標）。程式審查通過後再逐項量測：有缺陷或證據無效就退回實作者，目標沒達成就退回計畫者重新規劃，直到全部達標才結束。', 'The planner sets a final goal that must pass (measurable acceptance metrics). After the code review each metric is measured: defects or bad evidence go back to the implementer, a missed goal back to the planner to re-plan, until every metric is met.')}</div>
+        </div>
+        <label className="switch">
+          <input type="checkbox" disabled={disabled} checked={value.enabled} onChange={(e) => onChange({ ...value, enabled: e.target.checked })} />
+          <span />
+        </label>
+      </div>
+      {value.enabled && (
+        <div className="sect-body">
+          <div className="seg wide">
+            <button disabled={disabled} className={cx(value.by === 'planner' && 'on')} onClick={() => onChange({ ...value, by: 'planner' })}>
+              {t('由計畫者驗收', 'The planner verifies')}
+            </button>
+            <button disabled={disabled} className={cx(value.by === 'independent' && 'on')} onClick={() => onChange({ ...value, by: 'independent', verifier: value.verifier ?? (auto ? undefined : { provider: other }) })}>
+              {t('獨立驗收者', 'Independent verifier')}
+            </button>
+          </div>
+          <div className="muted small">
+            {value.by === 'planner'
+              ? t('設定目標的計畫者在自己的對話中驗收：最清楚每個指標的用意。', 'The planner that set the goal verifies in its own conversation: it knows why each metric is there.')
+              : t('另一家 agent 獨立量測，不看實作者的說法；預設和實作者不同家。', 'Another agent measures independently, without trusting the implementer; by default another vendor than the implementer.')}
+          </div>
+          {value.by === 'independent' && !auto && (
+            <div className="kv">
+              <label>{t('驗收者', 'Verifier')}</label>
+              <ProviderSelect disabled={disabled} value={value.verifier ?? { provider: other }} providers={providers} onChange={(v) => v && onChange({ ...value, verifier: v })} />
+            </div>
+          )}
+          <div className="kv">
+            <label title={t('同一個問題連續修這麼多次還沒好，就交回計畫者重新診斷', 'The same problem failing this many fixes in a row goes back to the planner to re-diagnose')}>{t('重新診斷門檻', 'Re-diagnose after')}</label>
+            <input disabled={disabled} type="number" min={2} max={10} value={value.repeatLimit ?? 3} onChange={(e) => onChange({ ...value, repeatLimit: Math.min(10, Math.max(2, Number(e.target.value) || 3)) })} />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Time, cost, retry and no-progress limits (off by default). A run that hits one ends as "incomplete", never as done. */
+function LimitsSection({ value, onChange, disabled }: { value: LimitsConfig; onChange: (v: LimitsConfig) => void; disabled?: boolean }) {
+  const t = useT();
+  const num = (k: keyof Omit<LimitsConfig, 'enabled'>, label: string, unit: string) => (
+    <div className="kv">
+      <label>{label}</label>
+      <span className="row gap">
+        <input disabled={disabled} type="number" min={0} value={value[k] ?? ''} placeholder={t('不限', 'none')} onChange={(e) => onChange({ ...value, [k]: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })} />
+        <span className="muted small">{unit}</span>
+      </span>
+    </div>
+  );
+  return (
+    <section className="sect">
+      <div className="sect-head">
+        <div>
+          <div className="sect-title">{t('執行限制', 'Limits')}</div>
+          <div className="muted small">{t('預設關閉。開啟後碰到上限就停下並標成「未完成」，保留真實狀態，不會假裝成功。', 'Off by default. When on, reaching a limit stops the run and marks it "incomplete": the true state is kept, never a false success.')}</div>
+        </div>
+        <label className="switch">
+          <input type="checkbox" disabled={disabled} checked={value.enabled} onChange={(e) => onChange({ ...value, enabled: e.target.checked })} />
+          <span />
+        </label>
+      </div>
+      {value.enabled && (
+        <div className="sect-body">
+          {num('maxMinutes', t('總時間上限', 'Time limit'), t('分鐘', 'min'))}
+          {num('maxCostUsd', t('費用上限', 'Cost limit'), t('美元（CLI 有回報費用時）', 'USD (when the CLI reports cost)'))}
+          {num('maxCycles', t('修正／重新規劃次數', 'Fix / re-plan cycles'), t('次', 'times'))}
+          {num('noProgressMinutes', t('沒有進展多久就問我', 'Ask me after no progress for'), t('分鐘', 'min'))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Check before sending: providers, models, folders, tools, GPUs and recovery. A dry run does the same without running agents. */
+function PreflightSection({ draft, onDryRun }: { draft: RoleDraft; onDryRun?: () => void }) {
+  const t = useT();
+  const [items, setItems] = useState<PreflightItem[]>();
+  const [busy, setBusy] = useState(false);
+  const run = () => {
+    setBusy(true);
+    hub
+      .call<PreflightItem[]>('workflows.preflight', { config: { ...draft, goal: 'preflight' } })
+      .then(setItems)
+      .catch((e) => setItems([{ level: 'error', area: 'recovery', message: (e as Error).message }]))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <section className="sect">
+      <div className="sect-head">
+        <div>
+          <div className="sect-title">{t('預檢與試跑', 'Preflight and dry run')}</div>
+          <div className="muted small">{t('送出前檢查：供應商是否登入、模型與思考程度是否存在、資料夾能否寫入、git、GPU、磁碟與中斷恢復。送出時也會自動檢查，有錯誤會先告訴你。', 'Checks before sending: providers signed in, models and efforts that exist, writable folders, git, GPUs, disk and recovery. Sending runs it too and tells you about errors first.')}</div>
+        </div>
+      </div>
+      <div className="row gap">
+        <button className="btn" disabled={busy || !draft.cwd} onClick={run}>
+          {busy ? t('檢查中…', 'Checking…') : t('立即預檢', 'Check now')}
+        </button>
+        {onDryRun && (
+          <button className="btn" disabled={!draft.cwd} onClick={onDryRun} title={t('建立一次試跑：只做檢查與流程模擬，不執行任何 agent', 'Start a dry run: checks and a simulation of the flow, no agent runs')}>
+            {t('試跑一次', 'Dry run')}
+          </button>
+        )}
+      </div>
+      {items && <PreflightList items={items} showOk />}
     </section>
   );
 }
@@ -614,6 +734,8 @@ export function RoleSettings({
   onReuse,
   notice,
   lockFolder,
+  onApplyNow,
+  onDryRun,
 }: {
   draft: RoleDraft;
   providers: ProviderInfo[];
@@ -626,6 +748,10 @@ export function RoleSettings({
   notice?: string;
   /** Folder and isolation cannot change once a run started. */
   lockFolder?: boolean;
+  /** A running conversation: stop the agents whose role changed and start them again with the new settings. */
+  onApplyNow?: () => void;
+  /** Start a dry run with these settings. */
+  onDryRun?: () => void;
 }) {
   const t = useT();
   const [presets, setPresets] = useState<WorkflowPreset[]>([]);
@@ -773,6 +899,9 @@ export function RoleSettings({
           onChange={(implement) => set({ implement })}
         />
 
+        <GoalSection disabled={readOnly} value={draft.verify ?? { enabled: false, by: 'planner' }} providers={providers} auto={auto} implementer={draft.implement.author.provider} onChange={(verify) => set({ verify })} />
+        <LimitsSection disabled={readOnly} value={draft.limits ?? { enabled: false }} onChange={(limits) => set({ limits })} />
+
         <section className="sect">
           <div className="sect-head">
             <div>
@@ -846,6 +975,8 @@ export function RoleSettings({
 
         <AdvisorSection disabled={readOnly} providers={providers} value={draft.advisor ?? { mode: 'off' }} onChange={(advisor) => set({ advisor })} mains={claudeMains(t, draft, providers, preview.result)} />
 
+        {!readOnly && <PreflightSection draft={draft} onDryRun={onDryRun} />}
+
         {!readOnly && (
           <div className="row gap">
             <input className="grow" placeholder={t('存成常用組合，例如「Claude 寫、Codex 審」', 'Save as preset, e.g. "Claude writes, Codex reviews"')} value={presetName} onChange={(e) => setPresetName(e.target.value)} />
@@ -866,6 +997,11 @@ export function RoleSettings({
         )}
 
         <div className="wf-modal-foot">
+          {onApplyNow && (
+            <button className="btn" onClick={onApplyNow} title={t('正在工作、且設定被你改過的角色會停下，用新設定在同一輪重新派發', 'Working agents whose role you changed stop and are re-dispatched in the same round with the new settings')}>
+              {t('立即套用（重新派發）', 'Apply now (re-dispatch)')}
+            </button>
+          )}
           {(readOnly || notice) && onReuse && (
             <button className="btn" onClick={onReuse}>
               {t('用這組設定開新對話', 'New chat with these settings')}

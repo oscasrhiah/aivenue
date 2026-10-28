@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AgentRole, ProviderInfo, StageKey, WorkflowRun } from '../../../core/src/types';
+import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName } from '../util';
 
@@ -61,7 +61,58 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
         state: stateOf(running(reviewerRole), st.status === 'approved'),
       });
   }
+  // Goal verification: after the code review, until every metric is met.
+  const vst = run.stages.verify;
+  if (run.config.verify?.enabled && vst) {
+    const last = vst.rounds[vst.rounds.length - 1];
+    const runningV = agents.some((a) => a.role === 'verifier' && (a.status === 'running' || a.status === 'paused' || a.status === 'queued'));
+    const v = last?.verification;
+    items.push({
+      key: 'verify',
+      label: t('目標驗收', 'Goal verification'),
+      meta: [
+        run.config.verify.by === 'planner' ? t('由計畫者', 'by the planner') : t('獨立驗收', 'independent'),
+        vst.rounds.length > 1 ? t(`第 ${vst.rounds.length} 次`, `check ${vst.rounds.length}`) : undefined,
+        v && !runningV ? outcomeText(t, v) : undefined,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      state: runningV ? 'active' : vst.status === 'approved' ? 'done' : ended ? 'failed' : 'pending',
+    });
+  }
   return items;
+}
+
+export const outcomeText = (t: ReturnType<typeof useT>, v: Verification) =>
+  ({ met: t('達標', 'met'), not_met: t('目標未達成 → 重新規劃', 'goal missed → re-plan'), invalid_evidence: t('證據無效 → 重新驗證', 'invalid evidence → re-test'), defect: t('有缺陷 → 退回修正', 'defects → back to fix') })[v.outcome];
+
+/** Latest measurement of each acceptance metric (the gap to the goal). */
+export function goalGap(run: WorkflowRun) {
+  const metrics = run.plan?.goal?.metrics ?? [];
+  const checks = (run.stages.verify?.rounds ?? []).flatMap((r) => (r.verification ? [r.verification] : []));
+  const last = checks[checks.length - 1];
+  // The planner's metrics, plus what the verifier measured besides them (the user's own criteria, "U1"…).
+  const extra = (last?.metrics ?? []).filter((m) => !metrics.some((x) => x.id === m.id)).map((m) => ({ id: m.id, name: '', target: '', how: '' }));
+  const rows = [...metrics, ...extra].map((m) => {
+    const got = last?.metrics.find((x) => x.id === m.id);
+    return { ...m, value: got?.value, met: got?.met, evidence: got?.evidence };
+  });
+  return { rows, met: rows.filter((r) => r.met).length, stale: !!last?.stale, last };
+}
+
+/** What holds the workflow up right now, in words (empty when nothing does). */
+export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): string[] {
+  const out: string[] = [];
+  if (run.status === 'paused') out.push(t('已暫停', 'Paused'));
+  if (run.pending) out.push(t(`等你決定：${run.pending.message}`, `Waiting for your decision: ${run.pending.message}`));
+  if (run.approvals?.length) out.push(t(`等你核准 ${run.approvals.length} 個動作`, `${run.approvals.length} action(s) waiting for your approval`));
+  for (const a of Object.values(run.agents)) {
+    if (!['running', 'paused', 'queued'].includes(a.status)) continue;
+    const who = `${providerName(providers, a.provider)}`;
+    if (a.waiting) out.push(`${who}：${a.waiting}`);
+    else if (a.failure && a.status === 'running') out.push(`${who}：${a.failure.action}`);
+  }
+  return out;
 }
 
 export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
@@ -71,16 +122,86 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
   if (!items.length) return null;
   const done = items.filter((i) => i.state === 'done' || i.state === 'skipped').length;
   const current = items.find((i) => i.state === 'active');
+  const gap = goalGap(run);
+  const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
+  const block = live ? blockers(run, providers, t) : [];
+  const working = live ? Object.values(run.agents).filter((a) => a.status === 'running' && a.role !== 'compactor') : [];
   return (
     <div className="progress-panel">
       <button className="pp-head" onClick={() => setOpen(!open)}>
         <span className="pp-title">{t('進度', 'Progress')}</span>
         <span className="muted small">
           {done}/{items.length}
-          {!open && current ? ` · ${current.label}` : ''}
+          {gap.rows.length > 0 && ` · ${t('目標', 'goal')} ${gap.met}/${gap.rows.length}`}
+          {!open && block.length ? ` · ⏸ ${block[0]}` : !open && current ? ` · ${current.label}` : ''}
         </span>
         <span className="pp-chev">{open ? '▾' : '▸'}</span>
       </button>
+      {open && (gap.rows.length > 0 || working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || !!run.processes?.length) && (
+        <div className="pp-status">
+          {gap.rows.length > 0 && (
+            <div className="pp-goal">
+              <div className="pp-sub">
+                {t('距離目標', 'Gap to the goal')} · {gap.met}/{gap.rows.length} {t('項達成', 'met')}
+                {(run.cycles ?? 0) > 0 && <span className="muted"> · {t(`第 ${(run.cycles ?? 0) + 1} 輪循環`, `cycle ${(run.cycles ?? 0) + 1}`)}</span>}
+                {gap.stale && <span className="badge warn" title={t('程式碼在量測之後改過，這份結果要重新驗證', 'The code changed after this was measured; it needs checking again')}>{t('過期', 'stale')}</span>}
+              </div>
+              {gap.rows.map((m) => (
+                <div key={m.id} className={cx('pp-metric', m.met === true ? 'ok' : m.met === false ? 'no' : 'todo')} title={m.evidence || m.how}>
+                  <span className="pp-icon">{m.met === true ? '✓' : m.met === false ? '✕' : '·'}</span>
+                  <span className="pp-label">
+                    {m.id} {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
+                  </span>
+                  <span className="pp-meta">
+                    {m.value !== undefined ? `${m.value}` : t('尚未量測', 'not measured')}
+                    {m.target ? ` / ${m.target}` : ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {working.length > 0 && (
+            <div className="pp-now">
+              <span className="pp-sub">{t('目前', 'Now')}</span>
+              {working.map((a) => (
+                <span key={a.id} className="pp-chip" title={a.activity}>
+                  <span className={cx('am-dot', 'live')} /> {providerName(providers, a.provider)} · {a.task}
+                </span>
+              ))}
+            </div>
+          )}
+          {block.length > 0 && (
+            <div className="pp-block">
+              <span className="pp-sub">{t('卡在', 'Blocked by')}</span>
+              {block.map((b, i) => (
+                <span key={i} className="pp-chip warn">
+                  {b}
+                </span>
+              ))}
+            </div>
+          )}
+          {!!run.gpuLocks?.length && (
+            <div className="pp-now">
+              <span className="pp-sub">GPU</span>
+              {run.gpuLocks.map((l, i) => (
+                <span key={i} className="pp-chip">
+                  🔒 GPU {l.gpus.join(', ')} · {providerName(providers, run.agents[l.agentId]?.provider ?? '')}
+                </span>
+              ))}
+            </div>
+          )}
+          {!!run.processes?.length && (
+            <div className="pp-now">
+              <span className="pp-sub">{t('背景程序', 'Background')}</span>
+              {run.processes.map((p) => (
+                <span key={p.pid} className={cx('pp-chip', !p.alive && 'muted')} title={`${t('清理', 'Cleanup')}：${{ aivenue: t('工作流結束時由 Aivenue 停止', 'Aivenue stops it when the workflow ends'), agent: t('由啟動它的 agent 負責', 'the agent that started it'), keep: t('保留執行', 'keeps running') }[p.cleanup]}`}>
+                  <span className={cx('am-dot', p.alive && 'live')} /> {p.pid} · {p.purpose} · {p.alive ? t('執行中', 'alive') : t('已結束', 'ended')}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {open && (
         <div className="pp-list">
           {items.map((i) => (

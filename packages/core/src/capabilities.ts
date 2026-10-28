@@ -258,7 +258,9 @@ export class CapabilityStore {
     // The advisor only judges: extensions add nothing to it.
     const extra = role === 'advisor' ? [] : (this.extraSkills?.(role) ?? []);
     const names = new Set(own.map((s) => s.name));
-    const skills: ExtraSkill[] = [...own.map((s) => ({ name: s.name, description: s.description, path: s.path })), ...extra.filter((s) => !names.has(s.name))];
+    // The project's own skills (<cwd>/.aivenue/skills) come first: they outrank general ones.
+    const project = role === 'advisor' || !cwd ? [] : projectSkills(cwd);
+    const skills: ExtraSkill[] = [...project, ...own.filter((s) => !project.some((p) => p.name === s.name)).map((s) => ({ name: s.name, description: s.description, path: s.path })), ...extra.filter((s) => !names.has(s.name) && !project.some((p) => p.name === s.name))];
     const always = skills.filter((s) => s.always);
     const rules = role === 'advisor' ? '' : (this.extraRules?.(role, cwd) ?? '');
     if (!skills.length && !rules) return '';
@@ -268,6 +270,7 @@ export class CapabilityStore {
         ? [
             'SKILLS: The user provides these skills. When one is relevant to what you are doing, read its SKILL.md first and follow it (files next to SKILL.md may be referenced by it):',
             ...skills.map((s) => `- ${s.name}: ${s.always ? `[ALWAYS ON: ${s.always}] ` : ''}${s.description || '(no description)'} — ${s.path}`),
+            'Reading a skill is not following it: when you apply one, call the Aivenue tool `report_skill_use` {name, version?, reason, deliverables, verification, verified} — once applied, and again with verified=true after you checked it. If two skills conflict, the order is: the user\'s instructions, then project skills (in the working folder), then the skills above in the order listed; follow the higher one and say in report_skill_use which one you set aside and why.',
           ]
         : []),
       // Always-on skills come with their instructions: an agent may not open a file it was only pointed at.
@@ -275,4 +278,18 @@ export class CapabilityStore {
       ...(rules ? [rules] : []),
     ].join('\n');
   }
+}
+
+/** Skills in a project's .aivenue/skills folder (for example the rules Aivenue distilled from its workflows). */
+function projectSkills(cwd: string): ExtraSkill[] {
+  const dir = path.join(cwd, '.aivenue', 'skills');
+  if (!fs.existsSync(dir)) return [];
+  const out: ExtraSkill[] = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, e.name, 'SKILL.md');
+    if (!e.isDirectory() || !fs.existsSync(file)) continue;
+    const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
+    out.push({ name: e.name, description: `[PROJECT] ${fm.description ?? ''}`, path: file });
+  }
+  return out;
 }

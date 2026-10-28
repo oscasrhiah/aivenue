@@ -346,8 +346,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.say': (p: { id: string; text: string; attachments?: Attachment[] }) => orchestrator.interject(p.id, p.text ?? '', p.attachments ?? []),
     'workflows.continueDenied': (p: { id: string; deniedId: string }) => orchestrator.continueDenied(p.id, p.deniedId),
     'workflows.edit': (p: { id: string; goal: string; config?: WorkflowConfig }) => orchestrator.editAndResend(p.id, p.goal, p.config),
-    'workflows.updateConfig': (p: { id: string; patch: Parameters<Orchestrator['updateConfig']>[1] }) => {
-      orchestrator.updateConfig(p.id, p.patch);
+    'workflows.updateConfig': (p: { id: string; patch: Parameters<Orchestrator['updateConfig']>[1]; restart?: boolean }) => {
+      orchestrator.updateConfig(p.id, p.patch, !!p.restart);
       return true;
     },
     'workflows.compactShared': (p: { id: string }) => (orchestrator.compactSharedNow(p.id), true),
@@ -358,6 +358,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.worktree': (p: { id: string; action: 'apply' | 'discard' | 'keep' }) => orchestrator.worktreeAction(p.id, p.action),
     'workflows.delete': (p: { id: string }) => orchestrator.delete(p.id),
     'agents.events': (p: { workflowId: string; agentId: string }) => orchestrator.events(p.workflowId, p.agentId),
+    'agents.stop': (p: { workflowId: string; agentId: string }) => (orchestrator.stopAgent(p.workflowId, p.agentId), true),
+    'agents.close': (p: { workflowId: string; agentId: string }) => (orchestrator.closeAgent(p.workflowId, p.agentId), true),
+    'agents.rerun': (p: { workflowId: string; agentId: string }) => orchestrator.rerunAgent(p.workflowId, p.agentId),
+    'workflows.search': (p: { id: string; query: Parameters<Orchestrator['search']>[1] }) => orchestrator.search(p.id, p.query ?? {}),
+    'workflows.preflight': (p: { config: WorkflowConfig }) => orchestrator.preflight(p.config),
+    'workflows.export': (p: { id: string; mask?: boolean }) => orchestrator.exportRun(p.id, p.mask !== false),
+    'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
+    'resources.gpus': () => orchestrator.gpus(),
   };
 
   const readBody = (req: http.IncomingMessage) =>

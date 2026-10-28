@@ -88,6 +88,9 @@ interface OmniModel {
   pricing?: { prompt?: string; input?: number };
 }
 
+/** A graph is a shortcut, never a dependency: when it fails, the work goes on with plain search. */
+const GRAPH_FALLBACK = 'If a graphify command fails, times out or returns nothing useful, do not stop or retry it repeatedly: fall back to normal source search (rg / grep / glob, reading files) and say in your report that the graph was not used.';
+
 /**
  * Built-in extensions, all off until the user turns them on:
  * - Ponytail and Agent Skills: skills shipped with the app, offered to the roles they suit.
@@ -392,10 +395,10 @@ export class ExtensionService {
     if (graph && fs.existsSync(graph)) {
       const rule = readText(path.join(this.skillsRoot, 'graphify', 'always-on.md')) || readText(path.join(this.o.bundledDir, 'graphify', 'always-on.md'));
       // The /graphify line is for chat apps; Aivenue agents read the skill file instead.
-      return `\nGRAPHIFY (knowledge graph of this folder):\n${rule.replace(/^## graphify\s*/m, '').replace(/^When the user types `\/graphify`.*$/m, '').trim()}`;
+      return `\nGRAPHIFY (knowledge graph of this folder):\n${rule.replace(/^## graphify\s*/m, '').replace(/^When the user types `\/graphify`.*$/m, '').trim()}\n${GRAPH_FALLBACK}`;
     }
     if (role === 'plan_reviewer' || role === 'code_reviewer') return '';
-    return '\nGRAPHIFY: the `graphify` command is installed. Before exploring a large or unfamiliar codebase you may build a code graph with `graphify update .` (local parsing, no API cost; it writes graphify-out/ — add that folder to .gitignore unless the project already tracks it), then use `graphify query "<question>"`, `graphify path "<A>" "<B>"` and `graphify explain "<concept>"` instead of broad greps. Only build it when you are allowed to write files.';
+    return '\nGRAPHIFY: the `graphify` command is installed. Before exploring a large or unfamiliar codebase you may build a code graph with `graphify update .` (local parsing, no API cost; it writes graphify-out/ — add that folder to .gitignore unless the project already tracks it), then use `graphify query "<question>"`, `graphify path "<A>" "<B>"` and `graphify explain "<concept>"` instead of broad greps. Only build it when you are allowed to write files.\n' + GRAPH_FALLBACK;
   }
 
   // ---------- OmniRoute ----------

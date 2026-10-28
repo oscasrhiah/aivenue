@@ -568,6 +568,8 @@ export interface SharedNote {
   agentId: string;
   text: string;
   ts: number;
+  /** fact (checked), inference (a judgement, not verified) or decision (what was decided). */
+  kind?: 'fact' | 'inference' | 'decision';
   /** Who wrote it, kept when the note carries over to a follow-up message (its agent is in the earlier workflow). */
   by?: string;
 }
@@ -619,6 +621,81 @@ export interface WorkflowConfig {
   threadId?: string;
   /** External actions the user approved in advance ("allow and continue" after a denial); each is used once. */
   preApproved?: { kind: string; target: string; details: string }[];
+  /** Goal verification after the code review (off unless enabled). */
+  verify?: VerifyConfig;
+  /** Stops for time, cost, retries and lack of progress (off by default). */
+  limits?: LimitsConfig;
+  /** Only check environment, paths, providers and resources; no agent runs. */
+  dryRun?: boolean;
+}
+
+/**
+ * Goal verification: the planner sets a goal with measurable acceptance metrics; after the code review a verifier
+ * checks them and the controller routes the result (defect → implementer, bad evidence → implementer, goal missed →
+ * planner). The workflow only completes when the goal is met.
+ */
+export interface VerifyConfig {
+  enabled: boolean;
+  /** "planner": the planner verifies its own goal; "independent": a separate verifier role. */
+  by: 'planner' | 'independent';
+  /** The independent verifier (default: another vendor than the implementer). */
+  verifier?: RoleConfig;
+  /** The same issue failing this many fixes in a row sends it back to the planner to re-diagnose (default 3). */
+  repeatLimit?: number;
+}
+
+export interface LimitsConfig {
+  enabled: boolean;
+  /** Whole workflow wall time (minutes). */
+  maxMinutes?: number;
+  /** Spend reported by CLIs that report cost (USD). */
+  maxCostUsd?: number;
+  /** Fix / re-plan cycles after a failed verification. */
+  maxCycles?: number;
+  /** No new tool call, file change or submission for this long (minutes): ask the user. */
+  noProgressMinutes?: number;
+}
+
+/** What the planner commits to: the goal that must pass before the workflow may end. */
+export interface GoalSpec {
+  statement: string;
+  metrics: { id: string; name: string; target: string; how: string }[];
+  expected?: string;
+  cost?: string;
+  constraints?: string;
+}
+
+/** Where a result was measured: the code version, environment and data it applies to. */
+export interface EvidenceStamp {
+  at: number;
+  /** git commit (when the folder is a repo) and a hash of the working tree's files. */
+  commit?: string;
+  treeHash: string;
+  env: Record<string, string>;
+  /** Data files the plan names, with their sizes and modification times. */
+  data?: string;
+}
+
+export type VerifyOutcome = 'met' | 'not_met' | 'invalid_evidence' | 'defect';
+
+export interface Verification {
+  outcome: VerifyOutcome;
+  summary: string;
+  metrics: { id: string; value: string; met: boolean; evidence: string }[];
+  issues: ReviewIssue[];
+  evidence?: EvidenceStamp;
+  /** The code changed after this was measured: it no longer counts until checked again. */
+  stale?: boolean;
+}
+
+/** Where the controller sent the work after a review or verification, and why. */
+export interface RouteDecision {
+  to: 'done' | 'implementer' | 'planner' | 'adjudicate' | 'user';
+  reason: string;
+  /** Issues that caused it (ids). */
+  issues?: string[];
+  /** The same problem survived several fixes: the planner looks for the root cause, not just a new plan. */
+  rediagnose?: boolean;
 }
 
 export interface Attachment {
@@ -652,7 +729,7 @@ export interface WorkflowPreset {
 
 // ---------- Workflow run state ----------
 
-export type AgentRole = 'planner' | 'plan_reviewer' | 'executor' | 'code_reviewer' | 'subagent' | 'advisor' | 'compactor' | 'test';
+export type AgentRole = 'planner' | 'plan_reviewer' | 'executor' | 'code_reviewer' | 'verifier' | 'adjudicator' | 'subagent' | 'advisor' | 'compactor' | 'test';
 export type AgentStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentRunInfo {
@@ -664,7 +741,7 @@ export interface AgentRunInfo {
   effort?: string;
   parentId?: string;
   depth: number;
-  stage?: StageKey;
+  stage?: PhaseKey;
   round?: number;
   status: AgentStatus;
   task: string;
@@ -682,6 +759,16 @@ export interface AgentRunInfo {
   /** Tokens the CLI reported for this agent (all its turns). */
   tokens?: { input: number; output: number; cached: number };
   stats: { events: number; tools: number; commands: number; filesChanged: string[] };
+  /** Spend the CLI reported for it (USD), for the cost limit. */
+  costUsd?: number;
+  /** Last time it showed any sign of life (an event from its CLI). */
+  lastEventAt?: number;
+  /** The user closed it (a stopped or finished sub-agent hidden from the agent map). */
+  closed?: boolean;
+  /** A sub-agent its parent handed off instead of waiting for it: who takes over its result. */
+  handoff?: string;
+  /** Started again by the user from this agent. */
+  rerunOf?: string;
   /** Its own conversation: tokens in use now and the model's limit (when the CLI reports them). */
   context?: { used?: number; window?: number; estimated?: boolean; compactedAt?: number };
   /** Shared notes / agent results it has already been given (time), so later turns only get what is new. */
@@ -690,6 +777,41 @@ export interface AgentRunInfo {
   servedBy?: string[];
   /** Skills put in its prompt as always on (e.g. "ponytail · level full"). */
   alwaysOn?: string[];
+  /** Settings it ran with (taken when its turn started), to tell what a later change did and did not reach. */
+  snapshot?: AgentSnapshot;
+  /** Skills it reported applying (report_skill_use): reading a skill alone does not count as following it. */
+  skillUses?: SkillUse[];
+  /** Why it is waiting (a condition, a GPU, an approval), shown as the blocking reason. */
+  waiting?: string;
+  /** The CLI ended without the result its role must submit: the process finished, the task did not. */
+  endedWithoutResult?: boolean;
+  /** The last failure, classified (rate limit, quota, network…) and how it is being handled. */
+  failure?: { kind: FailureKind; message: string; action: string };
+}
+
+export type FailureKind = 'rate_limit' | 'quota' | 'network' | 'auth' | 'model_service' | 'logic' | 'unknown';
+
+export interface AgentSnapshot {
+  at: number;
+  model?: string;
+  effort?: string;
+  permission?: PermissionLevel;
+  /** Hash of the role instructions and skills index it was given. */
+  instructions?: string;
+  skills: string[];
+  /** Messages the user sent mid-run that it had received when the turn started. */
+  userMessages: number;
+}
+
+export interface SkillUse {
+  name: string;
+  version?: string;
+  reason: string;
+  deliverables?: string;
+  /** How following it was checked (tests, review…), and whether that passed. */
+  verification?: string;
+  verified?: boolean;
+  ts: number;
 }
 
 export interface PlanStep {
@@ -704,6 +826,8 @@ export interface PlanDoc {
   summary: string;
   markdown: string;
   steps: { id: string; title: string; detail?: string }[];
+  /** The goal that must be met before the workflow may end (goal verification). */
+  goal?: GoalSpec;
 }
 
 export interface ReviewIssue {
@@ -718,6 +842,9 @@ export interface Review {
   verdict: 'approve' | 'revise';
   summary: string;
   issues: ReviewIssue[];
+  /** The code version the review looked at. */
+  evidence?: EvidenceStamp;
+  stale?: boolean;
 }
 
 export interface IssueResponse {
@@ -727,6 +854,8 @@ export interface IssueResponse {
 }
 
 export type StageKey = 'plan' | 'implement';
+/** A stage that can run rounds: the two review stages and goal verification. */
+export type PhaseKey = StageKey | 'verify';
 
 export interface Round {
   n: number;
@@ -735,12 +864,30 @@ export interface Round {
   /** What the author submitted (plan or work summary). */
   submission?: { summary: string; plan?: PlanDoc; responses?: IssueResponse[] };
   review?: Review;
+  /** Goal verification of this round (verify stage). */
+  verification?: Verification;
+  /** Where the controller sent the work next. */
+  route?: RouteDecision;
   /** Feedback from the user that started this round. */
   userFeedback?: string;
+  /** Hand-off summary written when the round ended, with links back to the agents and issues it came from. */
+  handoff?: Handoff;
+}
+
+/** A round's hand-off: what was decided, what is open, and where the evidence is. */
+export interface Handoff {
+  ts: number;
+  stage: PhaseKey;
+  round: number;
+  facts: string[];
+  decisions: string[];
+  open: string[];
+  /** Agent ids and issue ids to open for the evidence. */
+  links: { agentId?: string; issueId?: string; label: string }[];
 }
 
 export interface StageRun {
-  key: StageKey;
+  key: PhaseKey;
   status: 'pending' | 'running' | 'approved' | 'skipped' | 'failed' | 'cancelled';
   rounds: Round[];
   authorSessionId?: string;
@@ -754,13 +901,14 @@ export interface StageRun {
 
 export interface HumanDecision {
   id: string;
-  stage: StageKey;
+  stage: PhaseKey | 'run';
   message: string;
   options: { id: string; label: string }[];
   allowText: boolean;
 }
 
-export type WorkflowStatus = 'running' | 'paused' | 'waiting_human' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+/** "incomplete": it ended (a limit, or the user stopped retrying) without meeting the goal — never reported as done. */
+export type WorkflowStatus = 'running' | 'paused' | 'waiting_human' | 'completed' | 'incomplete' | 'failed' | 'cancelled' | 'interrupted';
 
 export interface WorkflowRun {
   id: string;
@@ -769,7 +917,27 @@ export interface WorkflowRun {
   createdAt: number;
   updatedAt: number;
   endedAt?: number;
-  stages: Record<StageKey, StageRun>;
+  stages: { plan: StageRun; implement: StageRun; verify?: StageRun };
+  /** Plan → implement → verify cycles so far (goal verification). */
+  cycles?: number;
+  /** GPU locks agents of this run hold. */
+  gpuLocks?: { gpus: number[]; agentId: string; since: number }[];
+  /** Condition waits in progress (persisted, so a restart resumes them). */
+  waits?: ConditionWait[];
+  /** Side-effect actions already done (approved external actions), so a resumed run does not repeat them. */
+  sideEffects?: { kind: string; target: string; details: string; agentId: string; ts: number }[];
+  /** Why it stopped short: a limit hit or the goal not reached. */
+  incompleteReason?: string;
+  /** Rulings made when agents disagreed (adjudication). */
+  rulings?: { issueId: string; ruling: string; by: string; ts: number }[];
+  /** Results of the checks done before starting (and of a dry run). */
+  preflight?: PreflightItem[];
+  /** Only checked, nothing was run (dry run). */
+  dryRun?: boolean;
+  /** Last tool call, file change or submission (no-progress limit). */
+  lastProgressAt?: number;
+  /** Background processes agents registered (track_process): alive or not, and who cleans them up. */
+  processes?: TrackedProcess[];
   plan?: PlanDoc;
   steps: PlanStep[];
   agents: Record<string, AgentRunInfo>;
@@ -810,7 +978,40 @@ export interface WorkflowRun {
   /** `chat` entries are shown as divider lines in the conversation. */
   log: { ts: number; text: string; level: 'info' | 'warn' | 'error'; chat?: boolean }[];
   /** Messages the user sent while the workflow was running (handed to the working agents and every later one). */
-  userMessages?: { ts: number; text: string; attachments?: Attachment[] }[];
+  userMessages?: { ts: number; text: string; attachments?: Attachment[]; /** Agents it reached. */ deliveredTo?: string[] }[];
+}
+
+export interface ConditionWait {
+  id: string;
+  agentId: string;
+  /** Shell command; the condition holds when it exits 0 (and its output contains `contains`, if set). */
+  check: string;
+  contains?: string;
+  intervalSec: number;
+  timeoutAt: number;
+  startedAt: number;
+  lastCheck?: number;
+  lastOutput?: string;
+  /** Also take a GPU lock once the condition holds. */
+  gpus?: number;
+  state: 'waiting' | 'met' | 'timeout' | 'cancelled';
+}
+
+export interface TrackedProcess {
+  pid: number;
+  purpose: string;
+  /** aivenue: stopped when the workflow ends; agent: the agent stops it; keep: meant to keep running. */
+  cleanup: 'aivenue' | 'agent' | 'keep';
+  agentId: string;
+  startedAt: number;
+  alive?: boolean;
+  checkedAt?: number;
+}
+
+export interface PreflightItem {
+  level: 'ok' | 'warn' | 'error';
+  area: 'provider' | 'model' | 'path' | 'tool' | 'resource' | 'recovery';
+  message: string;
 }
 
 export interface WorkflowSummary {
