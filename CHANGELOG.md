@@ -69,11 +69,14 @@
 - **筆記收成一行**：共享筆記只顯示一行，點一下展開；內容只是重複這張卡片結果的筆記，會標成「與這張卡片的結果相同」。
 
 **OpenCode 帳號登入（付費方案）**
-- **登入 OpenCode 帳號**：OpenCode 的登入按鈕改成用瀏覽器登入 OpenCode Console 帳號（`opencode auth login opencode --method device`），Zen、Go 等付費方案會一起連動，不用再貼 API key。之前預設是 Zen 的貼 key 流程，用 OpenCode Go 的人沒辦法用。
-- **其他登入方式**：可選貼上 OpenCode Go 的 API key、貼上 Zen 的 API key，或開 OpenCode 自己的供應商選單；也多了「登出」。
+- **依 OpenCode 版本登入**：登入按鈕會先看這台電腦的 OpenCode 版本。
+  - **OpenCode 1.x**（目前 npm 與官方安裝程式提供的版本，例如 1.19.5）只能用 API key 登入：按鈕是「登入 OpenCode Go（貼 API key）」，終端機會先提示到 https://opencode.ai/auth 建立或複製金鑰再貼上。之前預設是 Zen 的流程，Go 方案用不了。
+  - **OpenCode 2.x**（OpenCode Desktop 附的 CLI）可以用瀏覽器登入 OpenCode Console 帳號（`opencode auth login opencode --method device`），Zen、Go 一起連動。
+- **其他登入方式**：可選貼上 OpenCode Go 或 Zen 的 API key，或開 OpenCode 自己的供應商選單（1.x 與 2.x 各用對應的指令）；也多了「登出」。
 - **登入後模型清單自動更新**：Aivenue 會讀 `opencode auth list`，看哪些帳號已登入。帳號有變動時，模型清單會重新從 CLI 讀取，所有模型選單也會跟著更新，例如登入 Go 後就會出現 `opencode-go/…` 模型。
 - **狀態標記**：沒登入帳號、只用免費模型時，標成「可使用／未登入」；登入後顯示已登入的帳號。
 - **沒有 Node.js 也能安裝**：在 Linux／macOS 找不到 npm 時，OpenCode 與 Claude Code 會自動改用官方安裝程式（`curl … | bash`，不需要 Node.js），不再停在「找不到 npm」。Aivenue 也會到 OpenCode 官方安裝程式的資料夾（~/.opencode/bin）找它。
+- **模型清單不會變空**：免費模型一直都在清單裡，登入付費方案後再加上付費模型。CLI 讀取失敗時，先用 `--standalone` 重試，再沿用上一次成功的清單，最後才用內建的免費模型，選單不會再變成只能手動輸入。（修正 0.2.0 先前版本中，前端用錯供應商 ID、導致清單變空的錯誤。）
 - **重新檢查就是全部重新檢查**：供應商頁的「重新檢查」和用量頁的「重新整理」，會一起更新每一家的登入狀態、模型清單與用量（含官方剩餘額度）；單一供應商的「重新檢查」也會重新讀取它的模型清單。
 
 **模型、預檢與進度**

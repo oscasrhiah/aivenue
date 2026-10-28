@@ -207,8 +207,9 @@ export function useWorkflow(id: string | undefined): WorkflowRun | null {
 const modelCache = new Map<string, Promise<ModelInfo[]>>();
 
 /** Models a provider offers (cached per session; `refresh` re-reads the CLI). */
-export function useModels(providerId: string | undefined): { models: ModelInfo[]; refresh: () => void } {
+export function useModels(providerId: string | undefined): { models: ModelInfo[]; refresh: () => void; loading: boolean } {
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [loading, setLoading] = useState(false);
   const [n, setN] = useState(0);
   // The hub bumps this when the list changed (e.g. after signing in to another plan).
   const version = useProviders().find((p) => p.spec.id === providerId)?.modelsVersion ?? 0;
@@ -216,13 +217,14 @@ export function useModels(providerId: string | undefined): { models: ModelInfo[]
     if (!providerId) return setModels([]);
     let alive = true;
     const key = `${providerId}@${version}`;
-    if (n > 0 || !modelCache.has(key)) modelCache.set(key, hub.call<ModelInfo[]>('providers.models', { id: key, refresh: n > 0 }).catch(() => []));
-    modelCache.get(key)!.then((m) => alive && setModels(m));
+    if (n > 0 || !modelCache.has(key)) modelCache.set(key, hub.call<ModelInfo[]>('providers.models', { id: providerId, refresh: n > 0 }).catch(() => []));
+    setLoading(true);
+    modelCache.get(key)!.then((m) => alive && (setModels(m), setLoading(false)));
     return () => {
       alive = false;
     };
   }, [providerId, n, version]);
-  return { models, refresh: () => setN((x) => x + 1) };
+  return { models, loading, refresh: () => setN((x) => x + 1) };
 }
 
 export function useHostInfo(): HostInfo | null {

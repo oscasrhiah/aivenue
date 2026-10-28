@@ -323,7 +323,12 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'providers.test': (p: { id: string }) => orchestrator.testProvider(p.id),
     'providers.setAuthMode': (p: { id: string; mode: 'subscription' | 'api'; baseUrl?: string }) => registry.setAuthMode(p.id, p.mode, p.baseUrl),
     'providers.setApiKey': (p: { id: string; key?: string }) => registry.setApiKey(p.id, p.key),
-    'providers.models': (p: { id: string; refresh?: boolean }) => registry.listModels(p.id, p.refresh),
+    // A failed read must not empty the menus (the registry falls back; this only guards an unexpected error).
+    'providers.models': (p: { id: string; refresh?: boolean }) =>
+      registry.listModels(p.id, p.refresh).catch((e) => {
+        console.warn(`[models] ${p.id}: ${(e as Error).message}`);
+        return (registry.get(p.id)?.models ?? []).map((id) => ({ id }));
+      }),
     'catalog.list': (p: { refresh?: boolean }) => loadCatalog(dataDir, p?.refresh),
     'catalog.add': async (p: { providerId?: string; key?: string; model?: string; extraEnv?: Record<string, string>; custom?: { name: string; baseURL: string; model: string } }) => {
       const cp = p.providerId ? (await loadCatalog(dataDir)).find((x) => x.id === p.providerId) : undefined;

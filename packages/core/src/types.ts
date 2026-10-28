@@ -24,9 +24,13 @@ export interface ProviderSpec {
   installOn?: Partial<Record<'win32' | 'darwin' | 'linux', string>>;
   docsUrl?: string;
   /** Interactive login: run `command ...args` in a new terminal window; the CLI opens the browser. */
-  login?: { args: string[]; note?: string };
-  /** Other ways to sign in (e.g. an API key for one plan); the login button offers them next to the default. */
-  loginOptions?: { id: string; zh: string; en: string; args: string[] }[];
+  /**
+   * minVersion: the version this sign-in needs. An older CLI (e.g. OpenCode 1.x, which has no browser sign-in) uses
+   * `older` instead: its own args, button label and note.
+   */
+  login?: { args: string[]; note?: string; minVersion?: string; older?: { args: string[]; zh: string; en: string; noteZh: string; noteEn: string; hint?: string } };
+  /** Other ways to sign in (e.g. an API key for one plan); `olderArgs` for a CLI older than login.minVersion. */
+  loginOptions?: { id: string; zh: string; en: string; args: string[]; olderArgs?: string[] }[];
   logout?: { args: string[] };
   status?: {
     /** Command args to run; logged in when exit code is 0 and the checks below pass. */
@@ -42,8 +46,8 @@ export interface ProviderSpec {
     env?: string[];
     /** Usable without signing in (e.g. free models) once installed. */
     ready?: boolean;
-    /** Command listing the accounts / plans signed in (shown, and a change refreshes the model list). */
-    accounts?: { args: string[]; none?: string };
+    /** Command listing the accounts / plans signed in (shown, and a change refreshes the model list). none / skip: regexes for "nobody signed in" and for header lines. */
+    accounts?: { args: string[]; none?: string; skip?: string };
   };
   run: {
     /** Args that carry the user's role instructions ({systemPrompt}); without them the text is prepended to the prompt. */
@@ -136,7 +140,8 @@ export interface ProviderSpec {
   /** models.dev providers to look a model's context size up in, when the model list has none (e.g. ["anthropic"]). */
   contextCatalog?: string[];
   /** Where to discover the available models: Codex's local cache, a CLI command that prints them, or the provider catalog. */
-  modelSource?: { type: 'codex-cache' } | { type: 'command'; args: string[] } | { type: 'catalog'; providerId: string } | { type: 'extension' };
+  /** command: `retryArgs` are tried when `args` gives no models (e.g. OpenCode without its background service). */
+  modelSource?: { type: 'codex-cache' } | { type: 'command'; args: string[]; retryArgs?: string[] } | { type: 'catalog'; providerId: string } | { type: 'extension' };
   /** Set for providers added from the catalog (run through OpenCode). */
   catalog?: { providerId: string; kind: CatalogProvider['kind'] };
   /** Built-in reader for the official plan quota the CLI stores locally. */
@@ -352,6 +357,9 @@ export interface ProviderInfo {
   hasApiKey: boolean;
   /** Bumped when the model list must be read again (e.g. after signing in to another plan). */
   modelsVersion?: number;
+  /** The CLI's version, and whether it is older than its browser sign-in needs (then it signs in with a key). */
+  cliVersion?: string;
+  loginLegacy?: boolean;
   baseUrl?: string;
   /** Used when a role does not pick its own model / effort (also in auto assignment). */
   defaultModel?: string;

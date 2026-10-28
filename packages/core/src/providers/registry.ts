@@ -308,6 +308,8 @@ export class ProviderRegistry {
   }
 
   private modelCache = new Map<string, { at: number; models: ModelInfo[] }>();
+  /** The last model list a provider's CLI really gave (kept when a later read fails). */
+  private lastModels = new Map<string, ModelInfo[]>();
 
   /** Models the provider offers: from the CLI's own cache/command when possible, else the preset list. */
   async listModels(id: string, refresh = false): Promise<ModelInfo[]> {
@@ -315,7 +317,10 @@ export class ProviderRegistry {
     if (!spec) throw new Error(unknownProvider(id));
     const hit = this.modelCache.get(id);
     if (hit && !refresh && Date.now() - hit.at < 10 * 60000) return hit.models;
-    const fallback = (spec.models ?? []).map((m) => ({ id: m, efforts: spec.efforts }));
+    // The built-in list (also for a customized copy of a built-in provider that lost it).
+    const preset = spec.models ?? BUILTIN_PROVIDERS.find((b) => b.id === (spec.accountOf ?? spec.id))?.models ?? [];
+    const fallback = preset.map((m) => ({ id: m, efforts: spec.efforts }));
+    let why = '';
     let models: ModelInfo[] = [];
     try {
       const src = spec.modelSource;
@@ -352,17 +357,28 @@ export class ProviderRegistry {
             contextSource: m.context_window ? ('cli' as const) : undefined,
           }));
       } else if (src?.type === 'command') {
-        const r = await capture(specCommand(spec), src.args, { timeoutMs: 30000 });
         // One model per line: "<id>  <label>" (tab / 2+ spaces / " - " separated); the id must look like a slug.
-        for (const line of (r.stdout || '').split(/\r?\n/)) {
-          const m = /^\s*[*>\-•]?\s*([a-z0-9][\w.\-:/]*\w)(?:(?:\t+|\s{2,}|\s+[-–|]\s+)(.+))?\s*$/i.exec(line);
-          if (m && /\d|-/.test(m[1]) && !/^(fetching|error|available|usage)$/i.test(m[1])) models.push({ id: m[1], label: m[2]?.trim(), efforts: spec.efforts });
-        }
+        const read = async (args: string[]) => {
+          const r = await capture(specCommand(spec), args, { timeoutMs: 45000, env: accountEnv(spec) });
+          const out: ModelInfo[] = [];
+          for (const line of (r.stdout || '').split(/\r?\n/)) {
+            const m = /^\s*[*>\-•]?\s*([a-z0-9][\w.\-:/]*\w)(?:(?:\t+|\s{2,}|\s+[-–|]\s+)(.+))?\s*$/i.exec(line);
+            if (m && /\d|-/.test(m[1]) && !/^(fetching|error|available|usage)$/i.test(m[1])) out.push({ id: m[1], label: m[2]?.trim(), efforts: spec.efforts });
+          }
+          if (!out.length) why = (r.error || r.stderr || r.stdout || `exit ${r.code}`).trim().slice(0, 300);
+          return out;
+        };
+        models = await read(src.args);
+        if (!models.length && src.retryArgs) models = await read(src.retryArgs);
       }
-    } catch {
-      // fall back to the preset list
+    } catch (e) {
+      why = (e as Error).message;
     }
-    if (!models.length) models = fallback;
+    // Never an empty menu: the last list that worked, else the built-in one (free models included).
+    if (!models.length) {
+      if (why) console.warn(`[models] ${spec.id}: could not read the model list (${why})`);
+      models = this.lastModels.get(id) ?? fallback;
+    } else this.lastModels.set(id, models);
     // Models that refuse a reasoning effort offer none, so the UI shows no effort choice for them.
     models = models.map((m) => (takesEffort(spec, m.id) ? m : { ...m, efforts: [], defaultEffort: undefined }));
     models = await this.withContext(spec, models);
@@ -545,6 +561,8 @@ export class ProviderRegistry {
         authMode: this.authMode(spec.id),
         hasApiKey: this.keyed.has(spec.id),
         modelsVersion: this.modelsVersion.get(spec.id) ?? 0,
+        cliVersion: this.versions.get(specCommand(spec))?.version,
+        loginLegacy: !!spec.login?.minVersion && !!spec.login.older && !!this.versions.get(specCommand(spec))?.version && older(this.versions.get(specCommand(spec))!.version!, spec.login.minVersion),
         baseUrl: this.stored.settings[spec.id]?.baseUrl,
         defaultModel: this.stored.settings[spec.id]?.defaultModel,
         defaultEffort: this.stored.settings[spec.id]?.defaultEffort,
@@ -585,9 +603,10 @@ export class ProviderRegistry {
   async checkAuth(id: string): Promise<ProviderInfo['auth']> {
     const spec = this.get(id);
     if (!spec) throw new Error(unknownProvider(id));
+    // What it was before this check (not the "checking" placeholder).
+    const before = this.auth.get(id);
     this.auth.set(id, { state: 'checking' });
     this.onChange();
-    const before = this.auth.get(id);
     const result = await this.evaluateAuth(spec);
     // Another account or plan signed in (or out): its models differ.
     if (before?.detail !== undefined && before.detail !== result.detail && spec.status?.accounts) this.forgetModels(id);
@@ -612,11 +631,16 @@ export class ProviderRegistry {
     const st = spec.status;
     if (!st) return { state: 'unknown', detail: L('未設定登入狀態檢查方式', 'No login status check configured') };
     if (st.ready && st.accounts) {
+      // Which sign-in this CLI has depends on its version: read it with the status.
+      await this.loginLegacy(spec);
       // Free models need no sign-in; the accounts signed in decide which paid models there are.
       const r = await capture(specCommand(spec), st.accounts.args, { timeoutMs: 20000, env: accountEnv(spec) }).catch(() => undefined);
       // eslint-disable-next-line no-control-regex
-      const lines = (r?.stdout ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map((l) => l.replace(/[│┌└◇●■◆┃─]/g, '').trim()).filter(Boolean);
-      const none = !lines.length || (st.accounts.none && lines.some((l) => l.includes(st.accounts!.none!)));
+      const all = `${r?.stdout ?? ''}\n${r?.stderr ?? ''}`.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map((l) => l.replace(/[│┌└◇●■◆┃─]/g, '').trim()).filter(Boolean);
+      const noneRe = st.accounts.none ? new RegExp(st.accounts.none, 'i') : undefined;
+      const skipRe = st.accounts.skip ? new RegExp(st.accounts.skip, 'i') : undefined;
+      const lines = all.filter((l) => !skipRe?.test(l) && !noneRe?.test(l));
+      const none = !lines.length;
       return none
         ? { state: 'logged_in', signedIn: false, detail: L('可直接使用免費模型（尚未登入帳號）', 'Free models ready (no account signed in)') }
         : { state: 'logged_in', signedIn: true, detail: L(`已登入：${lines.join('、').slice(0, 160)}`, `Signed in: ${lines.join(', ').slice(0, 160)}`) };
@@ -657,16 +681,38 @@ export class ProviderRegistry {
   }
 
   /** Open a terminal running the CLI's own login flow (or one of its other sign-in options); it opens the provider's official sign-in page. */
-  login(id: string, option?: string): void {
+  async login(id: string, option?: string): Promise<void> {
     const spec = this.get(id);
     if (!spec) throw new Error(unknownProvider(id));
     const cmd = resolveCommand(specCommand(spec));
     if (!cmd) throw new Error(L(`尚未安裝 ${spec.name}，請先安裝`, `${spec.name} is not installed yet`));
     const opt = option ? spec.loginOptions?.find((o) => o.id === option) : undefined;
     if (option && !opt) throw new Error(L('沒有這個登入方式', 'Unknown sign-in option'));
-    const args = opt?.args ?? spec.login?.args ?? [];
-    this.terminal({ title: `${L('登入', 'Sign in')} ${spec.name}`, command: cmd, args, env: accountEnv(spec) }, [specCommand(spec), ...args].join(' '));
+    // A CLI older than the sign-in needs (OpenCode 1.x: no browser sign-in) uses its own way.
+    const legacy = await this.loginLegacy(spec);
+    const args = (legacy ? (opt ? opt.olderArgs : spec.login?.older?.args) : undefined) ?? opt?.args ?? spec.login?.args ?? [];
+    const title = `${L('登入', 'Sign in')} ${spec.name}`;
+    const hint = legacy && spec.login?.older?.hint;
+    if (hint) {
+      // Where the key comes from, printed before the CLI asks for it.
+      const q = (a: string) => (/^[\w./:@=-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`);
+      const say = L(`到 ${hint} 建立或複製你的 API key，再貼到下面：`, `Create or copy your API key at ${hint}, then paste it below:`).replace(/[&|<>^%!"()]/g, ' ');
+      const raw = `echo ${say}${process.platform === 'win32' ? ' & ' : '; '}${q(cmd.display ?? specCommand(spec))} ${args.map(q).join(' ')}`;
+      this.terminal({ title, raw, env: accountEnv(spec) }, [specCommand(spec), ...args].join(' '));
+    } else this.terminal({ title, command: cmd, args, env: accountEnv(spec) }, [specCommand(spec), ...args].join(' '));
     this.pollAuth(id);
+  }
+
+  private versions = new Map<string, { at: number; version?: string }>();
+
+  /** Whether this CLI is older than its browser sign-in needs (version read at most every 10 minutes). */
+  private async loginLegacy(spec: ProviderSpec): Promise<boolean> {
+    const min = spec.login?.minVersion;
+    if (!min || !spec.login?.older) return false;
+    const command = specCommand(spec);
+    let v = this.versions.get(command);
+    if (!v || Date.now() - v.at > 600000) this.versions.set(command, (v = { at: Date.now(), version: await cliVersion(command) }));
+    return !!v.version && older(v.version, min);
   }
 
   /**
@@ -744,4 +790,18 @@ export class ProviderRegistry {
       }
     }, 4000);
   }
+}
+
+/** A CLI's version ("2.0.31"), from `--version`. */
+async function cliVersion(command: string): Promise<string | undefined> {
+  const r = await capture(command, ['--version'], { timeoutMs: 20000 }).catch(() => undefined);
+  return /(\d+\.\d+\.\d+)/.exec(`${r?.stdout ?? ''} ${r?.stderr ?? ''}`)?.[1];
+}
+
+/** a < b, comparing "x.y.z". */
+export function older(a: string, b: string): boolean {
+  const x = a.split('.').map(Number);
+  const y = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  return false;
 }

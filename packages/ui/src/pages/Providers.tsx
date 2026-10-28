@@ -240,10 +240,14 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
 
           {p.authMode === 'subscription' ? (
             <>
-              {s.login?.note && <div className="muted small">{t(s.login.note, en?.login ?? s.login.note)}</div>}
+              {p.loginLegacy && s.login?.older ? (
+                <div className="muted small">{t(s.login.older.noteZh, s.login.older.noteEn)}</div>
+              ) : (
+                s.login?.note && <div className="muted small">{t(s.login.note, en?.login ?? s.login.note)}</div>
+              )}
               <div className="row gap wrap">
                 <button className="btn primary" disabled={!p.installed} onClick={() => call('login', 'providers.login', { id: s.id })}>
-                  {s.loginOptions ? t('登入帳號', 'Sign in to the account') : p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in')}
+                  {p.loginLegacy && s.login?.older ? t(s.login.older.zh, s.login.older.en) : s.loginOptions ? t('登入帳號', 'Sign in to the account') : p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in')}
                 </button>
                 {s.loginOptions && (
                   <select
@@ -254,7 +258,7 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
                     title={t('其他登入方式', 'Other ways to sign in')}
                   >
                     <option value="">{t('其他登入方式…', 'Other ways to sign in…')}</option>
-                    {s.loginOptions.map((o) => (
+                    {s.loginOptions.filter((o) => !p.loginLegacy || o.olderArgs || o.id === 'other').filter((o) => !(p.loginLegacy && o.id === 'go-key')).map((o) => (
                       <option key={o.id} value={o.id}>
                         {t(o.zh, o.en)}
                       </option>

@@ -169,14 +169,28 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     installNoNpm: 'curl -fsSL https://opencode.ai/install | bash',
     docsUrl: 'https://opencode.ai/docs/zen/',
     // The OpenCode account (device sign-in in the browser) links every plan of that account: Zen, Go…
-    login: { args: ['auth', 'login', 'opencode', '--method', 'device'], note: '用瀏覽器登入 OpenCode 帳號，Zen、Go 等付費方案會一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
+    // Browser sign-in (device code) exists from OpenCode 2 (shipped with OpenCode Desktop). The CLI you can download
+    // (npm / opencode.ai/install) is OpenCode 1, which only takes an API key from the OpenCode console.
+    login: {
+      args: ['auth', 'login', 'opencode', '--method', 'device'],
+      minVersion: '2.0.0',
+      older: {
+        args: ['auth', 'login', '-p', 'opencode-go'],
+        zh: '登入 OpenCode Go（貼 API key）',
+        en: 'Sign in to OpenCode Go (paste an API key)',
+        noteZh: '這個 OpenCode 是 1.x（目前 npm 與官方安裝程式提供的版本），只能用 API key 登入，沒有網頁登入。到 https://opencode.ai/auth 建立或複製你的 API key（Go 方案用同一個帳號的金鑰），按下面的按鈕後貼上；登入後模型清單自動加入 Go 的模型。免費模型不登入也能用。',
+        noteEn: 'This OpenCode is 1.x (what npm and the official installer provide), which signs in with an API key only, no browser sign-in. Create or copy your API key at https://opencode.ai/auth (the Go plan uses the same account key), press the button below and paste it; the model list then adds the Go models. Free models work without signing in.',
+        hint: 'https://opencode.ai/auth',
+      },
+      note: '用瀏覽器登入 OpenCode 帳號，Zen、Go 等付費方案會一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
     loginOptions: [
-      { id: 'go-key', zh: '貼上 OpenCode Go 的 API key', en: 'Paste an OpenCode Go API key', args: ['auth', 'login', 'opencode-go', '--method', 'key'] },
-      { id: 'zen-key', zh: '貼上 OpenCode Zen 的 API key', en: 'Paste an OpenCode Zen API key', args: ['auth', 'login', 'opencode', '--method', 'key'] },
+      { id: 'go-key', zh: '貼上 OpenCode Go 的 API key', en: 'Paste an OpenCode Go API key', args: ['auth', 'login', 'opencode-go', '--method', 'key'], olderArgs: ['auth', 'login', '-p', 'opencode-go'] },
+      { id: 'zen-key', zh: '貼上 OpenCode Zen 的 API key', en: 'Paste an OpenCode Zen API key', args: ['auth', 'login', 'opencode', '--method', 'key'], olderArgs: ['auth', 'login', '-p', 'opencode'] },
       { id: 'other', zh: '其他供應商（OpenCode 的選單）', en: 'Another provider (OpenCode picker)', args: ['auth', 'login'] },
     ],
     logout: { args: ['auth', 'logout'] },
-    status: { ready: true, accounts: { args: ['auth', 'list'], none: 'No authenticated' } },
+    // OpenCode 2: "No authenticated integrations"; OpenCode 1: "Credentials <file>" … "0 credentials".
+    status: { ready: true, accounts: { args: ['auth', 'list'], none: '^(No authenticated|0 credentials)', skip: '^(Credentials\\b|\\d+ credentials)' } },
     run: {
       // `run` is the subcommand, so it leads both the fresh and the resumed form.
       fresh: [['run']],
@@ -195,7 +209,8 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     approvals: { type: 'fallback', zh: 'OpenCode 的 headless 模式無法逐項詢問：允許編輯檔案，禁止執行指令', en: "OpenCode headless can't ask per action: file edits allowed, shell commands denied" },
     output: 'opencode-json',
     mcpConfigFormat: 'opencode',
-    modelSource: { type: 'command', args: ['models'] },
+    // A fresh install may not reach its background service: a private server answers instead.
+    modelSource: { type: 'command', args: ['models'], retryArgs: ['models', '--standalone'] },
     defaultModel: 'opencode/big-pickle',
     models: ['opencode/big-pickle', 'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'opencode/minimax-m3.1-flash-free', 'opencode/mimo-v2.6-flash-free'],
     capabilities: { resume: true, mcp: true },

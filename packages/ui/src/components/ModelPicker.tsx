@@ -63,7 +63,7 @@ export function ModelPicker({
   inheritEffort?: string;
 }) {
   const t = useT();
-  const { models, refresh } = useModels(provider?.spec.id);
+  const { models, refresh, loading } = useModels(provider?.spec.id);
   const known = models.some((m) => m.id === model);
   const [custom, setCustom] = useState(!!model && !known && models.length > 0);
   const current = models.find((m) => m.id === (model || provider?.defaultModel));
@@ -73,7 +73,8 @@ export function ModelPicker({
   const efforts = effortsOf(current);
   // Picking a model that takes no effort drops the one chosen before.
   const pick = (next?: string) => onChange({ model: next, effort: effortsOf(models.find((m) => m.id === (next || provider?.defaultModel))).length ? effort : undefined });
-  const showCustom = custom || (!!model && !known && models.length > 0) || models.length === 0;
+  // While the list loads the menu waits for it; a typed-in box only when the provider really lists no models.
+  const showCustom = custom || (!!model && !known && models.length > 0) || (models.length === 0 && !loading);
   // An OmniRoute pool (auto/best-free…): show what it can route to, and let the user pick one of those instead.
   const effective = model || provider?.defaultModel || provider?.spec.defaultModel;
   const poolId = provider?.spec.id === 'omniroute' && effective?.startsWith('omniroute/auto/') ? effective : undefined;
@@ -97,7 +98,7 @@ export function ModelPicker({
             pick(e.target.value || undefined);
           }}
         >
-          <option value="">{inheritLabel ?? t('預設模型', 'Default model')}</option>
+          <option value="">{models.length === 0 && loading ? t('讀取模型清單中…', 'Loading the model list…') : (inheritLabel ?? t('預設模型', 'Default model'))}</option>
           {models.map((m) => (
             <option key={m.id} value={m.id} title={[m.description, contextHint(t, m)].filter(Boolean).join('\n')}>
               {modelOptionLabel(t, m)}
