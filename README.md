@@ -73,7 +73,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 
 ## 下載與安裝
 
-所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.2.0`）：
+所有安裝檔都在本儲存庫的 **GitHub Releases** 頁面下載（`<版本>` 例如 `0.2.1`）：
 
 <p align="center">
   <a href="https://github.com/oscasrhiah/aivenue/releases/latest"><img alt="前往下載頁面" src="https://img.shields.io/badge/%E5%89%8D%E5%BE%80-%E4%B8%8B%E8%BC%89%E9%A0%81%E9%9D%A2-c96442?style=for-the-badge"></a>
@@ -186,7 +186,7 @@ cd Aivenue-<版本>-linux-x64
 - **每個階段都能開關**：計畫、計畫審查、實作、程式碼審查可分別關閉，例如簡單任務直接實作、或只要一份計畫。
 - 每個階段的審查來回輪數可以填任何數字（留空＝無上限）；達到上限或卡住時會暫停，讓你決定再給幾輪、直接接受或停止；勾「審查通過後先問我」則每個階段結束都會先問你。
 - **模型與推理強度**：每家可設定預設模型與推理強度（模型清單直接從 CLI 讀取）。
-- **常駐 CLI**：Claude Code 與 Antigravity 在同一段對話中沿用執行中的 CLI，閒置 5 分鐘才關閉；其他工具每輪用同一個 session 接續。
+- **常駐 CLI**：Claude Code 與 Antigravity 在同一段對話中沿用執行中的 CLI；工作流還沒結束時（例如等額度重置）一律不關閉，結束後閒置超過「設定 → 一般」選的時間（預設 5 分鐘，也可以不自動關閉）才關閉。其他工具每輪用同一個 session 接續。
 
 <p align="center"><img src="docs/images/settings-roles.png" alt="工作流設定：自動／自訂指派、每個角色的供應商與模型" width="820"></p>
 
@@ -256,7 +256,9 @@ cd Aivenue-<版本>-linux-x64
   - `gpu_acquire`、`gpu_release` 與 `gpu_status` 透過 nvidia-smi 鎖定空閒的 GPU，跨工作流和跨視窗都不會搶到同一張卡。
   - 用 `wait_for {gpus}` 時，條件成立後才上鎖，上鎖後再確認一次條件仍然成立。
   - agent 或工作流結束時自動釋放。
-- **背景程序**：`track_process` 登記背景程序的用途與清理責任（由 Aivenue 結束時停止、由 agent 自己停止，或保留執行）。進度面板顯示程序是否還在執行。
+- **背景程序**：`track_process` 登記背景程序的用途與清理責任（由 Aivenue 結束時停止、由 agent 自己停止，或保留執行），也可以給輸出檔與預期大小或日誌檔，讓 Aivenue 算出進度。
+  - 進度面板點一下背景程序，會開小視窗顯示進度條、速度、預估剩餘時間、記憶體與日誌。GPU 和「目前」的 agent 也能點開看詳細狀態。
+  - 結束的程序會從進度面板移到 Agent map，列在啟動它的那一輪右側，標出類型、狀態與最後的百分比。
 - **錯誤分開處理**：
   - 限流：退避重試。
   - 額度用完：直接換一家。

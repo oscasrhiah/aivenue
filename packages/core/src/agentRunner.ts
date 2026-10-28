@@ -53,7 +53,7 @@ export interface RunAgentOptions {
    * session; `onReuse` is called with the session of an already-running process when one is reused,
    * `onClose` when a kept process finally closes.
    */
-  keepAlive?: { pool: CliPool; secret: string; onReuse: (secret: string) => void; onClose: (secret: string) => void };
+  keepAlive?: { pool: CliPool; secret: string; onReuse: (secret: string) => void; onClose: (secret: string) => void; /** The workflow using it (kept while it runs). */ owner?: string };
   /** A text-only call (the context compactor): no built-in tools, where the CLI can turn them off (spec.run.noTools). */
   noTools?: boolean;
   /** The CLI's own advisor model ({advisorModel}, spec.run.advisor), e.g. Claude Code's --advisor. */
@@ -402,7 +402,11 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
 
   if (persistent) {
     if (pooled && mcpFile) fs.rm(mcpFile, { force: true }, () => undefined);
-    if (pooled) o.keepAlive!.onReuse(pooled.secret);
+    if (pooled) {
+      o.keepAlive!.onReuse(pooled.secret);
+      // A follow-up message (another workflow) now uses it.
+      if (o.keepAlive!.owner) pooled.owner = o.keepAlive!.owner;
+    }
     const keep = o.keepAlive!;
     const entry: PooledCli =
       pooled ??
@@ -411,6 +415,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
         sessionId: '',
         child: spawnResolved(resolved, args, { cwd: o.cwd, env: childEnv(extraEnv), stdio: ['pipe', 'pipe', 'pipe'] }),
         secret: keep.secret,
+        owner: keep.owner,
         busy: true,
         cleanup: () => {
           if (mcpFile) fs.rm(mcpFile, { force: true }, () => undefined);

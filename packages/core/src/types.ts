@@ -457,6 +457,8 @@ export interface AppSettings {
   accent: string;
   /** Last role configuration used for a new conversation. */
   draft?: Omit<WorkflowConfig, 'goal' | 'title'>;
+  /** Minutes a CLI kept between turns may stay idle after its workflow ended (default 5; 0 = until Aivenue closes). Never closed while the workflow runs. */
+  cliIdleMinutes?: number;
 }
 
 // ---------- Workflow configuration ----------
@@ -1042,6 +1044,58 @@ export interface TrackedProcess {
   startedAt: number;
   alive?: boolean;
   checkedAt?: number;
+  /** Its output / log file: the last lines are shown, and a percentage in them is its progress. */
+  log?: string;
+  /** A file or folder it writes (a download, extracted data): its size against expectedBytes is the progress. */
+  watchFile?: string;
+  expectedBytes?: number;
+  /** What the agent reported (update_process). */
+  progress?: { percent?: number; note?: string; at: number };
+  /** Last progress Aivenue read (kept after it ended), and when it was seen ending. */
+  lastPercent?: number;
+  endedAt?: number;
+  /** The message (workflow) it belongs to, when shown in a conversation of several. */
+  workflowId?: string;
+}
+
+/** A background process as the detail window shows it. */
+export interface ProcessDetail {
+  pid: number;
+  purpose: string;
+  cleanup: TrackedProcess['cleanup'];
+  agentId: string;
+  alive: boolean;
+  startedAt: number;
+  runtimeSec: number;
+  memMB?: number;
+  watchFile?: string;
+  bytes?: number;
+  expectedBytes?: number;
+  /** Bytes per second the watched file grows. */
+  speed?: number;
+  etaSec?: number;
+  percent?: number;
+  /** Where the percentage comes from. */
+  source?: 'file' | 'log' | 'agent';
+  log?: string;
+  logTail?: string[];
+  note?: string;
+  reportedAt?: number;
+  /** It stopped before reaching 100%. */
+  endedEarly?: boolean;
+}
+
+/** One GPU with what runs on it, for the detail window. */
+export interface GpuDetail {
+  index: number;
+  name: string;
+  memUsedMB: number;
+  memTotalMB: number;
+  util: number;
+  tempC?: number;
+  powerW?: number;
+  lockedBy?: { workflowId: string; agentId: string; since: number };
+  apps: { pid: number; name: string; memMB?: number }[];
 }
 
 export interface PreflightItem {

@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { ConditionWait } from './types';
+import type { ConditionWait, GpuDetail } from './types';
 import { childEnv } from './proc';
 
 /** A GPU as nvidia-smi reports it. */
@@ -59,6 +59,35 @@ export class ResourceManager {
         if (lock) g.lockedBy = { workflowId: lock.workflowId, agentId: lock.agentId, since: lock.since };
         return g;
       });
+  }
+
+  /** Every GPU with temperature, power and the processes running on it (nvidia-smi). */
+  gpuDetail(): GpuDetail[] {
+    const smi = (args: string[]) => {
+      try {
+        return execFileSync('nvidia-smi', args, { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      } catch {
+        return '';
+      }
+    };
+    const rows = (out: string) => out.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split(',').map((x) => x.trim()));
+    const num = (x?: string) => (x && Number.isFinite(Number(x)) ? Number(x) : undefined);
+    const gpus = rows(smi(['--query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw,pci.bus_id', '--format=csv,noheader,nounits']));
+    const apps = rows(smi(['--query-compute-apps=gpu_bus_id,pid,process_name,used_memory', '--format=csv,noheader,nounits']));
+    return gpus.map(([index, name, used, total, util, temp, power, bus]) => {
+      const lock = this.readLock(Number(index));
+      return {
+        index: Number(index),
+        name,
+        memUsedMB: Number(used),
+        memTotalMB: Number(total),
+        util: Number(util),
+        tempC: num(temp),
+        powerW: num(power),
+        lockedBy: lock ? { workflowId: lock.workflowId, agentId: lock.agentId, since: lock.since } : undefined,
+        apps: apps.filter((a) => a[0] === bus).map(([, pid, pname, mem]) => ({ pid: Number(pid), name: pname, memMB: num(mem) })),
+      };
+    });
   }
 
   private lockPath(i: number) {

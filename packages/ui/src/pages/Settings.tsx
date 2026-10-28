@@ -57,6 +57,25 @@ function GeneralPane() {
       </section>
       <section className="setting">
         <div>
+          <div className="setting-title">{t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')}</div>
+          <div className="muted small">
+            {t(
+              'Claude Code、Antigravity 等會在對話中保持執行，下一輪不用重新讀取全部內容。工作流還沒結束時（例如等額度重置）一律不關；工作流結束後閒置超過這個時間才關閉。',
+              'Claude Code, Antigravity and similar CLIs stay running in a conversation so the next turn need not read everything again. While the workflow has not ended (e.g. waiting for a quota reset) they are never closed; after it ends they close once idle this long.',
+            )}
+          </div>
+        </div>
+        <select value={String(s.cliIdleMinutes ?? 5)} onChange={(e) => saveSettings({ cliIdleMinutes: Number(e.target.value) })}>
+          {[1, 5, 15, 30, 60, 180].map((m) => (
+            <option key={m} value={m}>
+              {m < 60 ? t(`${m} 分鐘`, `${m} min`) : t(`${m / 60} 小時`, `${m / 60} h`)}
+            </option>
+          ))}
+          <option value="0">{t('不自動關閉（關閉 Aivenue 時才關）', 'Never (until Aivenue closes)')}</option>
+        </select>
+      </section>
+      <section className="setting">
+        <div>
           <div className="setting-title">{t('資料位置', 'Data folder')}</div>
           <div className="muted small">{t('設定、對話紀錄與用量統計存放處', 'Where settings, chat logs and usage stats are stored')}</div>
         </div>

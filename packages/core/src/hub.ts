@@ -170,6 +170,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     github: () => github.promptInfo(githubMcpOn()),
     servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
   });
+  // Settings → General: how long kept CLIs stay idle after their workflow ended.
+  orchestrator.setCliIdleMinutes(settings.get().cliIdleMinutes ?? 5);
   void registry.checkAll();
 
   const methods: Record<string, (p: any) => unknown> = {
@@ -197,6 +199,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'settings.set': (p: { patch: Partial<AppSettings> }) => {
       const v = settings.set(p.patch);
       setLocale(v.locale);
+      if (p.patch.cliIdleMinutes !== undefined) orchestrator.setCliIdleMinutes(v.cliIdleMinutes ?? 5);
       push({ topic: 'settings', data: v });
       if (p.patch.locale) void registry.checkAll();
       return v;
@@ -383,6 +386,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.export': (p: { id: string; mask?: boolean }) => orchestrator.exportRun(p.id, p.mask !== false),
     'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
     'resources.gpus': () => orchestrator.gpus(),
+    'resources.gpuDetail': () => orchestrator.gpuDetail(),
+    'processes.inspect': (p: { workflowId: string; pid: number }) => orchestrator.inspectProcess(p.workflowId, p.pid),
     'workflows.sharedContext': (p: { id: string }) => orchestrator.sharedContext(p.id),
   };
 

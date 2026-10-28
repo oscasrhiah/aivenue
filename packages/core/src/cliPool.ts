@@ -3,8 +3,10 @@ import { killTree } from './proc';
 
 /**
  * CLI processes kept running between turns of the same session (for CLIs that read one message per
- * stdin line). A process is reused only for the same session with the same launch settings, and is
- * closed after `idleMs` without a new turn.
+ * stdin line). A process is reused only for the same session with the same launch settings.
+ * While the workflow that uses it has not ended (it may be waiting for a quota to reset), it is never closed for being
+ * idle, so the conversation goes on without reading everything again; after the workflow ends it is closed after
+ * `idleMs` without a new turn (0: never).
  */
 export interface PooledCli {
   /** Launch settings (model, mode, folder, MCP servers…): a turn with different ones needs a new process. */
@@ -21,12 +23,41 @@ export interface PooledCli {
   idle?: NodeJS.Timeout;
   /** Runs once when the process is closed (temp files, bridge session). */
   cleanup: () => void;
+  /** The workflow using it: kept while that workflow has not ended. */
+  owner?: string;
 }
 
 export class CliPool {
   private entries = new Map<string, PooledCli>();
 
-  constructor(private idleMs = 5 * 60 * 1000) {}
+  constructor(
+    private idleMs = 5 * 60 * 1000,
+    /** Whether a workflow is still going (running, paused, waiting for the user). */
+    private isActive: (owner: string) => boolean = () => false,
+  ) {}
+
+  /** How long a process may stay idle after its workflow ended (0: until Aivenue closes). Applies to idle ones now. */
+  setIdleMs(ms: number) {
+    this.idleMs = Math.max(0, ms);
+    for (const e of this.entries.values()) if (!e.busy) this.arm(e);
+  }
+
+  /** A workflow ended: the idle countdown of its processes starts now. */
+  ownerEnded(owner: string) {
+    for (const e of this.entries.values()) if (e.owner === owner && !e.busy) this.arm(e);
+  }
+
+  private arm(e: PooledCli) {
+    clearTimeout(e.idle);
+    e.idle = undefined;
+    if (!this.idleMs) return;
+    e.idle = setTimeout(() => {
+      // Its workflow still runs (e.g. waiting for a quota reset): keep it, look again later.
+      if (e.owner && this.isActive(e.owner)) this.arm(e);
+      else this.close(e);
+    }, this.idleMs);
+    e.idle.unref?.();
+  }
 
   /** A live, idle process for this session with the same launch settings, marked busy. */
   take(sessionId: string, fingerprint: string): PooledCli | undefined {
@@ -54,9 +85,7 @@ export class CliPool {
   release(e: PooledCli) {
     e.busy = false;
     e.onLine = e.onStderr = e.onExit = undefined;
-    clearTimeout(e.idle);
-    e.idle = setTimeout(() => this.close(e), this.idleMs);
-    e.idle.unref?.();
+    this.arm(e);
   }
 
   close(e: PooledCli) {

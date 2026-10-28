@@ -14,7 +14,9 @@ const bundled = await build({
       export * from './packages/core/src/records';
       export * from './packages/core/src/bundle';
       export { ResourceManager, pidAlive } from './packages/core/src/resources';
-      export { parseVerification, parsePlan, parseRulings, toolsForRole } from './packages/core/src/hubTools';`,
+      export { parseVerification, parsePlan, parseRulings, toolsForRole } from './packages/core/src/hubTools';
+      export { parseSize, inspectProcess } from './packages/core/src/procstat';
+      export { CliPool } from './packages/core/src/cliPool';`,
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -253,4 +255,74 @@ test('工具權限：驗收者能交驗收，實作者不能；顧問不能等�
   assert.ok(names('executor').includes('gpu_acquire') && names('executor').includes('wait_for'));
   assert.ok(!names('advisor').includes('gpu_acquire'));
   assert.ok(names('code_reviewer').includes('search_records'));
+});
+
+// ---------- background process progress ----------
+
+test('程序進度：大小字串解析', () => {
+  assert.equal(W.parseSize('15.6GB'), Math.round(15.6 * 1024 ** 3));
+  assert.equal(W.parseSize('800 MB'), 800 * 1024 ** 2);
+  assert.equal(W.parseSize(1234), 1234);
+  assert.equal(W.parseSize('a lot'), undefined);
+});
+
+test('程序進度：依輸出檔大小算百分比、速度與剩餘時間', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-proc-'));
+  const file = path.join(dir, 'data.tgz');
+  fs.writeFileSync(file, Buffer.alloc(250));
+  const p = { pid: process.pid, purpose: 'download', cleanup: 'agent', agentId: 'a', startedAt: Date.now() - 5000, watchFile: 'data.tgz', expectedBytes: 1000 };
+  const d1 = W.inspectProcess(p, dir);
+  assert.equal(d1.alive, true);
+  assert.equal(d1.source, 'file');
+  assert.equal(Math.round(d1.percent), 25);
+  await new Promise((r) => setTimeout(r, 1100));
+  fs.appendFileSync(file, Buffer.alloc(250));
+  const d2 = W.inspectProcess(p, dir);
+  assert.equal(Math.round(d2.percent), 50);
+  assert.ok(d2.speed > 0 && d2.etaSec > 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('程序進度：從日誌讀百分比；提前結束會標出來', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-proc-'));
+  fs.writeFileSync(path.join(dir, 'train.log'), 'epoch 1\r 12%|██   |\r 37%|█████ |\nsaving checkpoint\n');
+  const d = W.inspectProcess({ pid: 999999, purpose: 'train', cleanup: 'agent', agentId: 'a', startedAt: Date.now(), log: 'train.log' }, dir);
+  assert.equal(d.percent, 37);
+  assert.equal(d.source, 'log');
+  assert.equal(d.alive, false);
+  assert.equal(d.endedEarly, true);
+  assert.ok(d.logTail.includes('saving checkpoint'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- CLIs kept between turns ----------
+
+const fakeChild = () => ({ exitCode: null, killed: false, pid: undefined, stdin: { end() {} }, once() {}, on() {} });
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('常駐 CLI：工作流還沒結束就不關，結束後閒置超過設定時間才關', async () => {
+  let active = true;
+  const pool = new W.CliPool(60, () => active);
+  let closed = false;
+  pool.add({ fingerprint: 'f', sessionId: 's1', child: fakeChild(), secret: 'x', busy: true, owner: 'wf1', cleanup: () => (closed = true) });
+  await sleepMs(200); // 已超過閒置時間好幾次，但工作流仍在進行（例如等額度重置）
+  assert.equal(closed, false);
+  active = false;
+  pool.ownerEnded('wf1');
+  await sleepMs(30);
+  assert.equal(closed, false); // 倒數從工作流結束時才開始
+  await sleepMs(80);
+  assert.equal(closed, true);
+});
+
+test('常駐 CLI：設成不自動關閉就一直保留', async () => {
+  const pool = new W.CliPool(40, () => false);
+  pool.setIdleMs(0);
+  let closed = false;
+  pool.add({ fingerprint: 'f', sessionId: 's2', child: fakeChild(), secret: 'x', busy: true, owner: 'wf2', cleanup: () => (closed = true) });
+  pool.ownerEnded('wf2');
+  await sleepMs(120);
+  assert.equal(closed, false);
+  pool.closeAll();
+  assert.equal(closed, true);
 });

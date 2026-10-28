@@ -228,15 +228,27 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   track_process: {
     name: 'track_process',
     description:
-      'Register a background process you started (a server, a training job) so the user can see whether it is alive and who cleans it up. cleanup "aivenue": Aivenue stops it when the workflow ends; "agent": you stop it yourself before you finish; "keep": it is meant to keep running.',
+      'Register a background process you started (a download, a server, a training job) so the user can see whether it is alive, how far it is and who cleans it up. Give its progress source so the user sees a percentage: watch_file + expected_size for anything that writes a file or folder of known size (a download, extracted data), and log for its output file (redirect stdout/stderr there; a "45%" in it is read as progress). cleanup "aivenue": Aivenue stops it when the workflow ends; "agent": you stop it yourself before you finish; "keep": it is meant to keep running.',
     inputSchema: {
       type: 'object',
       properties: {
         pid: { type: 'number' },
         purpose: { type: 'string' },
         cleanup: { type: 'string', enum: ['aivenue', 'agent', 'keep'] },
+        log: { type: 'string', description: 'The file its output goes to (path relative to the working directory or absolute).' },
+        watch_file: { type: 'string', description: 'The file or folder it writes, whose size shows its progress.' },
+        expected_size: { type: 'string', description: 'The final size of watch_file, e.g. "15.6GB" or a number of bytes.' },
       },
       required: ['pid', 'purpose', 'cleanup'],
+    },
+  },
+  update_process: {
+    name: 'update_process',
+    description: 'Report the progress of a background process you registered with track_process, when neither its file size nor its log shows it (e.g. "epoch 3/10" → 30).',
+    inputSchema: {
+      type: 'object',
+      properties: { pid: { type: 'number' }, percent: { type: 'number', description: '0–100' }, note: { type: 'string', description: 'A short status, e.g. "epoch 3/10, loss 0.42".' } },
+      required: ['pid'],
     },
   },
   stop_subagent: {
@@ -387,7 +399,7 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   // The compactor only reads the material in its prompt.
   if (role === 'compactor') return [];
   // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
-  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
+  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', 'update_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
   if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');

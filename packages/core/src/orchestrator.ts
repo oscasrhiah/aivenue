@@ -25,6 +25,8 @@ import type {
   PhaseKey,
   Verification,
   VerifyConfig,
+  GpuDetail,
+  ProcessDetail,
   HumanDecision,
   TestResult,
   WorkflowConfig,
@@ -39,6 +41,7 @@ import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parse
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
+import { inspectProcess, parseSize } from './procstat';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
 import { classifyTool } from './providers/parsers';
@@ -773,6 +776,25 @@ export class Orchestrator {
     return this.resources.gpus();
   }
 
+  /** A GPU detail window: memory, load, temperature, power and what runs on each card. */
+  gpuDetail(): GpuDetail[] {
+    return this.resources.gpuDetail();
+  }
+
+  /** A background process detail window: alive, runtime, memory, progress (file size, log or report) and its log. */
+  inspectProcess(workflowId: string, pid: number): ProcessDetail {
+    const run = this.runs.get(workflowId);
+    const p = run?.processes?.find((x) => x.pid === pid);
+    if (!run || !p) throw new Error(L('找不到這個程序', 'Process not found'));
+    const d = inspectProcess(p, run.config.cwd);
+    if (p.alive !== d.alive) {
+      p.alive = d.alive;
+      p.checkedAt = now();
+      this.touch(run);
+    }
+    return d;
+  }
+
   private gpuSeen?: { at: number; has: boolean };
   /** Whether this computer has an NVIDIA GPU (checked every 5 minutes): GPU tools are only offered when it does. */
   private hasGpu(): boolean {
@@ -1069,10 +1091,23 @@ export class Orchestrator {
         const cleanup = ['aivenue', 'agent', 'keep'].includes(String(args.cleanup)) ? (String(args.cleanup) as 'aivenue') : 'agent';
         const list = (run.processes ??= []).filter((p) => p.pid !== pid);
         if (list.length >= 50) throw new Error('At most 50 tracked processes');
-        list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now() });
+        const str = (k: string) => (typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim().slice(0, 500) : undefined);
+        const expected = parseSize(args.expected_size);
+        if (args.expected_size !== undefined && !expected) throw new Error('expected_size must look like "15.6GB", "800MB" or a number of bytes');
+        list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now(), log: str('log'), watchFile: str('watch_file'), expectedBytes: expected });
         run.processes = list;
         this.touch(run);
-        return pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`;
+        const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
+        return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how;
+      }
+      case 'update_process': {
+        const pid = Math.round(Number(args.pid));
+        const p = run.processes?.find((x) => x.pid === pid);
+        if (!p) throw new Error(`Process ${pid} is not registered; call track_process first`);
+        const percent = args.percent === undefined ? undefined : Math.min(100, Math.max(0, Number(args.percent)));
+        p.progress = { percent: Number.isFinite(percent) ? percent : undefined, note: typeof args.note === 'string' ? args.note.slice(0, 300) : undefined, at: now() };
+        this.touch(run);
+        return 'ok';
       }
       case 'stop_subagent': {
         const id = String(args.subagent_id ?? '');
@@ -1220,7 +1255,13 @@ export class Orchestrator {
 
   private baselines = new Map<string, Snapshot>();
   /** CLIs kept running between turns of a session, closed after 5 idle minutes. */
-  private pool = new CliPool();
+  /** CLIs kept between turns: never closed while their workflow runs; closed after the idle time once it ended. */
+  private pool = new CliPool(5 * 60 * 1000, (id) => ['running', 'paused', 'waiting_human'].includes(this.runs.get(id)?.status ?? ''));
+
+  /** Settings → General: minutes a kept CLI may stay idle after its workflow ended (0: until Aivenue closes). */
+  setCliIdleMinutes(minutes: number) {
+    this.pool.setIdleMs(Math.max(0, minutes) * 60000);
+  }
   /** Model each agent was started with (agent.model later shows what the CLI reports it actually uses). */
   private requestedModel = new Map<string, string | undefined>();
 
@@ -1388,6 +1429,8 @@ export class Orchestrator {
       }
     } finally {
       this.endRunResources(run);
+      // The idle countdown of the CLIs it kept starts now.
+      this.pool.ownerEnded(run.id);
       this.updateOutputs(run);
       this.baselines.delete(run.id);
       run.pending = undefined;
@@ -2091,6 +2134,7 @@ export class Orchestrator {
         keepAlive: {
           pool: this.pool,
           secret,
+          owner: run.id,
           // A running CLI keeps the bridge session it started with: point it at this agent.
           onReuse: (old) => {
             this.sessions.set(old, { ...this.sessions.get(secret)!, proxyServers: this.sessions.get(secret)?.proxyServers });
@@ -2897,12 +2941,17 @@ export class Orchestrator {
     run.gpuLocks = [];
     for (const w of run.waits ?? []) if (w.state === 'waiting') w.state = 'cancelled';
     for (const p of run.processes ?? []) {
+      if (!p.endedAt) {
+        const d = inspectProcess(p, run.config.cwd);
+        if (d.percent !== undefined) p.lastPercent = Math.round(d.percent * 10) / 10;
+      }
       if (p.cleanup === 'aivenue' && pidAlive(p.pid)) {
         killPid(p.pid);
         this.log(run, L(`已停止背景程序 ${p.pid}（${p.purpose}）`, `Stopped background process ${p.pid} (${p.purpose})`));
       }
       p.alive = pidAlive(p.pid);
       p.checkedAt = now();
+      if (!p.alive) p.endedAt ??= now();
     }
   }
 
@@ -2948,10 +2997,19 @@ export class Orchestrator {
       changed = true;
     }
     for (const p of run.processes ?? []) {
-      const alive = pidAlive(p.pid);
+      if (p.endedAt) continue;
+      const d = inspectProcess(p, run.config.cwd);
       p.checkedAt = now();
-      if (alive !== p.alive) {
-        p.alive = alive;
+      if (d.percent !== undefined && d.percent !== p.lastPercent) {
+        p.lastPercent = Math.round(d.percent * 10) / 10;
+        changed = true;
+      }
+      if (d.alive !== p.alive) {
+        p.alive = d.alive;
+        changed = true;
+      }
+      if (!d.alive) {
+        p.endedAt = now();
         changed = true;
       }
     }

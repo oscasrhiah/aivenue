@@ -371,7 +371,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
   const unread = (run.userMessages ?? []).filter((m) => m.ts > (agent.startedAt ?? 0) && !m.deliveredTo?.includes(agent.id)).length;
 
   return (
-    <div className={cx('turn', roleTone(agent.role), (agent.role === 'subagent' || agent.role === 'advisor') && 'sub', agent.role === 'advisor' && 'advisor', running && 'live')}>
+    <div data-agent-id={agent.id} className={cx('turn', roleTone(agent.role), (agent.role === 'subagent' || agent.role === 'advisor') && 'sub', agent.role === 'advisor' && 'advisor', running && 'live')}>
       <div className="turn-head">
         <span className="mark" style={{ background: providerColor(agent.provider) }} />
         <span className="turn-who">{name}</span>

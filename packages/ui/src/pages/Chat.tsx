@@ -961,7 +961,7 @@ export function Chat({ id }: { id?: string }) {
       )}
 
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(undefined)} />}
-      {agentMap && run && <AgentMap run={earlier.length ? { ...run, agents: Object.assign({}, ...earlier.map((r) => r.agents), run.agents) } : run} providers={providers} onClose={() => setAgentMap(false)} />}
+      {agentMap && run && <AgentMap run={{ ...run, agents: earlier.length ? Object.assign({}, ...earlier.map((r) => r.agents), run.agents) : run.agents, processes: [...earlier, run].flatMap((r) => (r.processes ?? []).map((p) => ({ ...p, workflowId: r.id }))) }} providers={providers} onClose={() => setAgentMap(false)} />}
       {rolesOpen && (
         <RoleSettings
           draft={shown}
@@ -999,13 +999,16 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
   const all = Object.values(run.agents);
   const helpers = all.filter((a) => a.role === 'subagent' || a.role === 'advisor');
   // Also for a conversation of several messages: the map shows every message's agents.
-  if (!thread && !run.config.subagents?.enabled && helpers.length === 0) return null;
+  // Also for background processes: once ended they are listed there, next to the round that started them.
+  const procs = run.processes?.length ?? 0;
+  if (!thread && !run.config.subagents?.enabled && helpers.length === 0 && !procs) return null;
   const running = helpers.filter((a) => a.status === 'running' || a.status === 'queued').length;
   return (
     <button className="btn small am-open" onClick={onOpen} title={t('查看所有 agent 與 sub agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing')}>
       {running > 0 && <span className="am-dot live" />}
       Agent map
       {helpers.length > 0 && <span className="muted">· {helpers.length}</span>}
+      {procs > 0 && <span className="muted" title={`${procs}`}>· ⚙ {procs}</span>}
     </button>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName, subTitle } from '../util';
+import { AgentWindow, GpuWindow, ProcessWindow } from './DetailWindows';
 
 type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
 interface Item {
@@ -118,6 +119,8 @@ export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnT
 export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
   const [open, setOpen] = useState(run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human');
+  // A detail window opened from a tag: an agent, the GPUs or a background process.
+  const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number }>();
   const items = buildItems(run, providers, t);
   if (!items.length) return null;
   const done = items.filter((i) => i.state === 'done' || i.state === 'skipped').length;
@@ -126,6 +129,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
   const block = live ? blockers(run, providers, t) : [];
   const working = live ? Object.values(run.agents).filter((a) => a.status === 'running' && a.role !== 'compactor') : [];
+  const runningProcs = (run.processes ?? []).filter((p) => p.alive);
   return (
     <div className="progress-panel">
       <button className="pp-head" onClick={() => setOpen(!open)}>
@@ -137,7 +141,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
         </span>
         <span className="pp-chev">{open ? '▾' : '▸'}</span>
       </button>
-      {open && (gap.rows.length > 0 || working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || !!run.processes?.length) && (
+      {open && (gap.rows.length > 0 || working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || runningProcs.length > 0) && (
         <div className="pp-status">
           {gap.rows.length > 0 && (
             <div className="pp-goal">
@@ -164,9 +168,9 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             <div className="pp-now">
               <span className="pp-sub">{t('目前', 'Now')}</span>
               {working.map((a) => (
-                <span key={a.id} className="pp-chip" title={a.activity}>
+                <button key={a.id} className="pp-chip clickable" title={t('點一下查看它正在做什麼', 'Click to see what it is doing')} onClick={() => setDetail({ agent: a.id })}>
                   <span className={cx('am-dot', 'live')} /> {providerName(providers, a.provider)} · {a.role === 'subagent' ? subTitle(a) : a.task}
-                </span>
+                </button>
               ))}
             </div>
           )}
@@ -184,19 +188,20 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             <div className="pp-now">
               <span className="pp-sub">GPU</span>
               {run.gpuLocks.map((l, i) => (
-                <span key={i} className="pp-chip">
+                <button key={i} className="pp-chip clickable" title={t('點一下查看 GPU 的使用狀態', 'Click to see the GPU status')} onClick={() => setDetail({ gpu: true })}>
                   🔒 GPU {l.gpus.join(', ')} · {providerName(providers, run.agents[l.agentId]?.provider ?? '')}
-                </span>
+                </button>
               ))}
             </div>
           )}
-          {!!run.processes?.length && (
+          {!!run.processes?.some((p) => p.alive) && (
             <div className="pp-now">
               <span className="pp-sub">{t('背景程序', 'Background')}</span>
-              {run.processes.map((p) => (
-                <span key={p.pid} className={cx('pp-chip', !p.alive && 'muted')} title={`${t('清理', 'Cleanup')}：${{ aivenue: t('工作流結束時由 Aivenue 停止', 'Aivenue stops it when the workflow ends'), agent: t('由啟動它的 agent 負責', 'the agent that started it'), keep: t('保留執行', 'keeps running') }[p.cleanup]}`}>
+              {/* Ended ones move to the agent map, next to the round that started them. */}
+              {run.processes.filter((p) => p.alive).map((p) => (
+                <button key={p.pid} className={cx('pp-chip clickable', !p.alive && 'muted')} title={t('點一下查看進度、速度與日誌', 'Click to see its progress, speed and log')} onClick={() => setDetail({ pid: p.pid })}>
                   <span className={cx('am-dot', p.alive && 'live')} /> {p.pid} · {p.purpose} · {p.alive ? t('執行中', 'alive') : t('已結束', 'ended')}
-                </span>
+                </button>
               ))}
             </div>
           )}
@@ -213,6 +218,9 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
           ))}
         </div>
       )}
+      {detail && 'agent' in detail && <AgentWindow run={run} agentId={detail.agent} providers={providers} onClose={() => setDetail(undefined)} />}
+      {detail && 'gpu' in detail && <GpuWindow run={run} providers={providers} onClose={() => setDetail(undefined)} />}
+      {detail && 'pid' in detail && <ProcessWindow run={run} pid={detail.pid} providers={providers} onClose={() => setDetail(undefined)} />}
     </div>
   );
 }

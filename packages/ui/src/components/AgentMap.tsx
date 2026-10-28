@@ -6,6 +6,8 @@ import { useT } from '../i18n';
 import { agentStatus, cx, elapsed, firstLine, fmtTokens, modelLabel, providerColor, providerName, roleLabel, roleTone, subTitle } from '../util';
 import { Clamp } from './Clamp';
 import { SwitchProvider } from './RunTools';
+import { ProcessWindow } from './DetailWindows';
+import type { TrackedProcess } from '../../../core/src/types';
 import { Markdown } from './Markdown';
 import { Transcript, visible } from './Transcript';
 
@@ -40,6 +42,7 @@ function byStart(a: AgentRunInfo, b: AgentRunInfo) {
 export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; providers: ProviderInfo[]; onClose: () => void }) {
   const t = useT();
   const [selected, setSelected] = useState<string | undefined>();
+  const [proc, setProc] = useState<TrackedProcess>();
   // Closed agents leave the map (their records stay in the conversation).
   const agents = Object.values(run.agents).filter((a) => a.role !== 'test' && !a.closed);
   useTick(agents.some(isLive));
@@ -113,6 +116,7 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
                               {tree(a)}
                             </div>
                           ))}
+                          <RoundProcesses t={t} run={run} agents={row.agents} onOpen={setProc} />
                         </div>
                       </div>
                     ))}
@@ -123,6 +127,7 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
           </>
         )}
       </div>
+      {proc && <ProcessWindow run={run} pid={proc.pid} workflowId={proc.workflowId} providers={providers} onClose={() => setProc(undefined)} />}
     </div>
   );
 }
@@ -367,6 +372,45 @@ function AgentActions({ t, run, agent }: { t: T; run: WorkflowRun; agent: AgentR
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The background processes started in a round (by its agents or their helpers): kind, state, last progress. */
+function RoundProcesses({ t, run, agents, onOpen }: { t: T; run: WorkflowRun; agents: AgentRunInfo[]; onOpen: (p: TrackedProcess) => void }) {
+  const ids = new Set<string>();
+  const add = (id: string) => {
+    ids.add(id);
+    for (const a of Object.values(run.agents)) if (a.parentId === id && !ids.has(a.id)) add(a.id);
+  };
+  agents.forEach((a) => add(a.id));
+  const procs = (run.processes ?? []).filter((p) => ids.has(p.agentId));
+  if (!procs.length) return null;
+  return (
+    <div className="am-procs">
+      <div className="am-procs-label">{t('背景程序', 'Background')}</div>
+      {procs.map((p) => {
+        const kind = p.watchFile ? t('下載／寫檔', 'Download / write') : p.log ? t('有日誌', 'Logged') : t('程序', 'Process');
+        const done = !p.alive;
+        const incomplete = done && p.lastPercent !== undefined && p.lastPercent < 100;
+        const state = !done ? t('執行中', 'running') : incomplete ? t('未完成', 'incomplete') : t('已結束', 'ended');
+        return (
+          <button key={`${p.workflowId ?? ''}${p.pid}`} className={cx('am-proc', !done && 'live', incomplete && 'warn')} onClick={() => onOpen(p)} title={t('點一下查看進度、速度與日誌', 'Click to see its progress, speed and log')}>
+            <div className="am-proc-title">{p.purpose}</div>
+            <div className="am-proc-meta">
+              <span className="am-tag">{kind}</span>
+              <span className={cx('am-tag', incomplete && 'warn')}>{state}</span>
+              {p.lastPercent !== undefined && <span className="am-tag">{Math.round(p.lastPercent)}%</span>}
+            </div>
+            {p.lastPercent !== undefined && (
+              <div className="dw-bar">
+                <div className={cx('dw-fill', incomplete ? 'err' : p.lastPercent >= 100 ? 'ok' : undefined)} style={{ width: `${Math.min(100, p.lastPercent)}%` }} />
+              </div>
+            )}
+            <div className="am-proc-pid muted">PID {p.pid}{p.endedAt ? ` · ${elapsed(p.startedAt, p.endedAt)}` : ''}</div>
+          </button>
+        );
+      })}
     </div>
   );
 }
