@@ -4840,3 +4840,12 @@ textarea.code {
   left: 0;
   right: auto;
 }
+
+.build-info {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}

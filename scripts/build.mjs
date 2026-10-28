@@ -11,6 +11,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = (p) => path.join(root, 'packages', p);
 const hubOnly = process.argv.includes('--hub-only');
 
+// Build id ("<commit>-<UTC time>"), shown in Settings: releases keep one version number while they are rebuilt, so this
+// is how to tell which build runs (and whether the window and its background service are the same build).
+let commit = 'local';
+try {
+  commit = execSync('git rev-parse --short=7 HEAD', { cwd: root, encoding: 'utf8' }).trim();
+} catch {
+  // not a git checkout
+}
+const buildId = `${commit}-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12)}`;
+process.env.AIVENUE_BUILD = buildId;
+
 const common = {
   bundle: true,
   platform: 'node',
@@ -20,6 +31,7 @@ const common = {
   logLevel: 'warning',
   // optional native accelerators of `ws`
   external: ['bufferutil', 'utf-8-validate'],
+  define: { __AIVENUE_BUILD__: JSON.stringify(buildId), __AIVENUE_VERSION__: JSON.stringify(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version) },
 };
 
 const t0 = Date.now();
@@ -52,4 +64,4 @@ for (const shell of ['desktop', 'vscode']) {
   copy(path.join(pkg('core'), 'bundled'), path.join(pkg(shell), 'dist/bundled'));
 }
 
-console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+console.log(`done in ${((Date.now() - t0) / 1000).toFixed(1)}s (build ${buildId})`);

@@ -1097,6 +1097,8 @@ export interface HostInfo {
   defaultCwd?: string;
   dataDir: string;
   version: string;
+  /** Which build runs ("<commit>-<time>"); "dev" outside scripts/build.mjs. */
+  build?: string;
   canPickFolder: boolean;
   canPickFiles: boolean;
   /** API keys are encrypted by the OS (false in standalone browser mode). */

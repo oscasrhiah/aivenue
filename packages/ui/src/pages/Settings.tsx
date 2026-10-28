@@ -293,6 +293,27 @@ function UsagePane() {
   );
 }
 
+/** Version and build of the window and of its background service; a mismatch means a reload is due. */
+function BuildInfo() {
+  const t = useT();
+  const host = useHostInfo();
+  const ui = typeof __AIVENUE_BUILD__ === 'string' ? __AIVENUE_BUILD__ : 'dev';
+  if (!host) return null;
+  const same = !host.build || host.build === ui;
+  return (
+    <div className="build-info" title={t(`畫面：${ui}\n背景程式：${host.build ?? '?'}`, `Window: ${ui}\nBackground service: ${host.build ?? '?'}`)}>
+      Aivenue {host.version}
+      <br />
+      {t('建置', 'Build')} {host.build ?? ui}
+      {!same && (
+        <div className="warn-text">
+          {t('畫面和背景程式不是同一個建置：請重新載入視窗（VS Code：Developer: Reload Window）。', 'The window and the background service are different builds: reload the window (VS Code: Developer: Reload Window).')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: string }) {
   const t = useT();
   const tabs: { id: Tab; label: string }[] = [
@@ -313,6 +334,7 @@ export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: str
         <a className="settings-back" href={backHref}>
           ← {t('返回對話', 'Back to chat')}
         </a>
+        <BuildInfo />
       </nav>
       <div className="settings-body">
         {tab === 'general' && <GeneralPane />}

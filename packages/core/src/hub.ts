@@ -24,6 +24,10 @@ import { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { FileSecretStore, type SecretStore } from './secrets';
 
+/** Set by scripts/build.mjs (esbuild define). */
+declare const __AIVENUE_BUILD__: string | undefined;
+declare const __AIVENUE_VERSION__: string | undefined;
+
 export interface HostHooks {
   host: HostInfo['host'];
   defaultCwd?: () => string | undefined;
@@ -173,7 +177,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       host: opts.hooks.host,
       defaultCwd: opts.hooks.defaultCwd?.(),
       dataDir,
-      version: opts.version ?? '0.1.0',
+      version: opts.version ?? (typeof __AIVENUE_VERSION__ === 'string' ? __AIVENUE_VERSION__ : '0.1.0'),
+      build: typeof __AIVENUE_BUILD__ === 'string' ? __AIVENUE_BUILD__ : 'dev',
       canPickFolder: !!opts.hooks.pickFolder,
       canPickFiles: !!opts.hooks.pickFiles,
       secureSecrets: registry.secureSecrets,
