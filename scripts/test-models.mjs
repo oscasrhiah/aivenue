@@ -85,3 +85,24 @@ test('帳號變動（登入或登出）時模型清單版本加一，選單會�
   await r.checkAuth('fake-oc');
   assert.equal(r.list().find((p) => p.spec.id === 'fake-oc').modelsVersion, v0 + 1);
 });
+
+// V1 的網頁登入（opencode console login）只會出現在 console orgs，不在 auth list。
+const v1Spec = (orgs, exit = 0) => ({
+  ...statusSpec('0 credentials'),
+  // node 的版本（v2x）比 99 舊，所以這裡被當成「舊版」CLI，走 V1 的登入與狀態。
+  login: { args: ['x'], minVersion: '99.0.0', older: { args: ['console', 'login'], zh: '', en: '', noteZh: '', noteEn: '', accounts: { args: ['-e', `console.log(${JSON.stringify(orgs)}); process.exit(${exit})`], none: '^No accounts found' } } },
+});
+
+test('V1 用 console login 登入後，Aivenue 認得已登入', async () => {
+  const r = registry();
+  r.upsert(v1Spec('No accounts found'));
+  assert.equal((await r.checkAuth('fake-oc')).signedIn, false);
+  r.upsert(v1Spec('●  my-team (owner)'));
+  const a = await r.checkAuth('fake-oc');
+  assert.equal(a.signedIn, true);
+  assert.match(a.detail, /Console: my-team/);
+  assert.equal(r.list().find((p) => p.spec.id === 'fake-oc').loginLegacy, true);
+  // 指令失敗（例如離線）不能當成已登入
+  r.upsert(v1Spec('Error: network unreachable', 1));
+  assert.equal((await r.checkAuth('fake-oc')).signedIn, false);
+});

@@ -621,6 +621,8 @@ export class ProviderRegistry {
 
   private async evaluateAuth(spec: ProviderSpec): Promise<ProviderInfo['auth']> {
     if (!resolveCommand(specCommand(spec))) return { state: 'logged_out', detail: L('尚未安裝', 'Not installed') };
+    // Read with every status check (cached), so Settings shows which version is installed.
+    if (spec.modelSource?.type !== 'extension') await this.versionOf(spec).catch(() => undefined);
     if (spec.modelSource?.type === 'extension') {
       const ext = await this.extensionAuth?.(spec.id);
       if (ext) return ext;
@@ -632,14 +634,20 @@ export class ProviderRegistry {
     if (!st) return { state: 'unknown', detail: L('未設定登入狀態檢查方式', 'No login status check configured') };
     if (st.ready && st.accounts) {
       // Which sign-in this CLI has depends on its version: read it with the status.
-      await this.loginLegacy(spec);
+      const legacy = await this.loginLegacy(spec);
+      const extra = legacy ? spec.login?.older?.accounts : undefined;
       // Free models need no sign-in; the accounts signed in decide which paid models there are.
-      const r = await capture(specCommand(spec), st.accounts.args, { timeoutMs: 20000, env: accountEnv(spec) }).catch(() => undefined);
-      // eslint-disable-next-line no-control-regex
-      const all = `${r?.stdout ?? ''}\n${r?.stderr ?? ''}`.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map((l) => l.replace(/[│┌└◇●■◆┃─]/g, '').trim()).filter(Boolean);
-      const noneRe = st.accounts.none ? new RegExp(st.accounts.none, 'i') : undefined;
-      const skipRe = st.accounts.skip ? new RegExp(st.accounts.skip, 'i') : undefined;
-      const lines = all.filter((l) => !skipRe?.test(l) && !noneRe?.test(l));
+      const accounts = async (a: { args: string[]; none?: string; skip?: string }) => {
+        const r = await capture(specCommand(spec), a.args, { timeoutMs: 20000, env: accountEnv(spec) }).catch(() => undefined);
+        // A failed command (offline, unknown subcommand) says nothing about who is signed in.
+        if (!r || r.code !== 0) return [];
+        const all = `${r?.stdout ?? ''}\n${r?.stderr ?? ''}`.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map((l) => l.replace(/[│┌└◇●■◆┃─]/g, '').trim()).filter(Boolean);
+        const noneRe = a.none ? new RegExp(a.none, 'i') : undefined;
+        const skipRe = a.skip ? new RegExp(a.skip, 'i') : undefined;
+        return all.filter((l) => !skipRe?.test(l) && !noneRe?.test(l));
+      };
+      // OpenCode 1.x: API keys (auth list) and the console account (console orgs) are separate.
+      const lines = [...(await accounts(st.accounts)), ...(extra ? (await accounts(extra)).map((l) => `Console: ${l}`) : [])];
       const none = !lines.length;
       return none
         ? { state: 'logged_in', signedIn: false, detail: L('可直接使用免費模型（尚未登入帳號）', 'Free models ready (no account signed in)') }
@@ -709,10 +717,16 @@ export class ProviderRegistry {
   private async loginLegacy(spec: ProviderSpec): Promise<boolean> {
     const min = spec.login?.minVersion;
     if (!min || !spec.login?.older) return false;
+    const version = await this.versionOf(spec);
+    return !!version && older(version, min);
+  }
+
+  /** The installed CLI's version (read at most every 10 minutes), shown in Settings. */
+  private async versionOf(spec: ProviderSpec): Promise<string | undefined> {
     const command = specCommand(spec);
     let v = this.versions.get(command);
     if (!v || Date.now() - v.at > 600000) this.versions.set(command, (v = { at: Date.now(), version: await cliVersion(command) }));
-    return !!v.version && older(v.version, min);
+    return v.version;
   }
 
   /**
@@ -736,12 +750,13 @@ export class ProviderRegistry {
     }
   }
 
-  logout(id: string): void {
+  async logout(id: string): Promise<void> {
     const spec = this.get(id);
     if (!spec?.logout) throw new Error(L('此供應商沒有設定登出指令', 'This provider has no logout command'));
     const cmd = resolveCommand(specCommand(spec));
     if (!cmd) throw new Error(L(`尚未安裝 ${spec.name}`, `${spec.name} is not installed`));
-    this.terminal({ title: `${L('登出', 'Sign out')} ${spec.name}`, command: cmd, args: spec.logout.args, env: accountEnv(spec) }, [specCommand(spec), ...spec.logout.args].join(' '));
+    const args = (await this.loginLegacy(spec)) && spec.login?.older?.logoutArgs ? spec.login.older.logoutArgs : spec.logout.args;
+    this.terminal({ title: `${L('登出', 'Sign out')} ${spec.name}`, command: cmd, args, env: accountEnv(spec) }, [specCommand(spec), ...args].join(' '));
     this.pollAuth(id);
   }
 

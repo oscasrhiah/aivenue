@@ -174,15 +174,17 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     login: {
       args: ['auth', 'login', 'opencode', '--method', 'device'],
       minVersion: '2.0.0',
+      // OpenCode 1.x signs in to the console with `console login` (browser, device code); its status is `console orgs`.
       older: {
-        args: ['auth', 'login', '-p', 'opencode-go'],
-        zh: '登入 OpenCode Go（貼 API key）',
-        en: 'Sign in to OpenCode Go (paste an API key)',
-        noteZh: '這個 OpenCode 是 1.x（目前 npm 與官方安裝程式提供的版本），只能用 API key 登入，沒有網頁登入。到 https://opencode.ai/auth 建立或複製你的 API key（Go 方案用同一個帳號的金鑰），按下面的按鈕後貼上；登入後模型清單自動加入 Go 的模型。免費模型不登入也能用。',
-        noteEn: 'This OpenCode is 1.x (what npm and the official installer provide), which signs in with an API key only, no browser sign-in. Create or copy your API key at https://opencode.ai/auth (the Go plan uses the same account key), press the button below and paste it; the model list then adds the Go models. Free models work without signing in.',
-        hint: 'https://opencode.ai/auth',
+        args: ['console', 'login'],
+        zh: '登入帳號',
+        en: 'Sign in to the account',
+        noteZh: '這個 OpenCode 是 V1（1.x）：按「登入帳號」會用 opencode console login 開網頁登入 OpenCode Console，Go 等付費方案一起連動，登入後模型清單自動更新。也可以在「其他登入方式」改貼 API key。免費模型不登入也能用。',
+        noteEn: 'This OpenCode is V1 (1.x): "Sign in to the account" runs opencode console login to sign in to the OpenCode Console in your browser; paid plans such as Go are linked and the model list updates by itself. You can also paste an API key under "Other ways to sign in". Free models work without signing in.',
+        logoutArgs: ['console', 'logout'],
+        accounts: { args: ['console', 'orgs'], none: '^No accounts found' },
       },
-      note: '用瀏覽器登入 OpenCode 帳號，Zen、Go 等付費方案會一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
+      note: '這個 OpenCode 是 V2（2.x）：按「登入帳號」會用 opencode auth login opencode 開網頁登入 OpenCode Console，Zen、Go 等付費方案一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
     loginOptions: [
       { id: 'go-key', zh: '貼上 OpenCode Go 的 API key', en: 'Paste an OpenCode Go API key', args: ['auth', 'login', 'opencode-go', '--method', 'key'], olderArgs: ['auth', 'login', '-p', 'opencode-go'] },
       { id: 'zen-key', zh: '貼上 OpenCode Zen 的 API key', en: 'Paste an OpenCode Zen API key', args: ['auth', 'login', 'opencode', '--method', 'key'], olderArgs: ['auth', 'login', '-p', 'opencode'] },

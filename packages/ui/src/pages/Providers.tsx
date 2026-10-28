@@ -208,7 +208,16 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
 
       {open && (
         <div className="prow-body">
-          <div className="muted small mono">{p.installed ? p.resolvedPath : t(`找不到指令「${s.command}」`, `Command "${s.command}" not found`)}</div>
+          <div className="muted small mono">
+            {p.installed ? p.resolvedPath : t(`找不到指令「${s.command}」`, `Command "${s.command}" not found`)}
+            {p.installed && p.cliVersion && (
+              <span className="cli-version" title={t('這台電腦安裝的版本', 'The version installed on this computer')}>
+                {' · '}
+                {t('版本', 'version')} {p.cliVersion}
+                {s.login?.minVersion ? ` (V${p.cliVersion.split('.')[0]})` : ''}
+              </span>
+            )}
+          </div>
           {p.auth.detail && p.installed && <div className="muted small">{p.auth.detail}</div>}
 
           {!p.installed && p.installCommand && (
@@ -258,7 +267,7 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
                     title={t('其他登入方式', 'Other ways to sign in')}
                   >
                     <option value="">{t('其他登入方式…', 'Other ways to sign in…')}</option>
-                    {s.loginOptions.filter((o) => !p.loginLegacy || o.olderArgs || o.id === 'other').filter((o) => !(p.loginLegacy && o.id === 'go-key')).map((o) => (
+                    {s.loginOptions.filter((o) => !p.loginLegacy || o.olderArgs || o.id === 'other').map((o) => (
                       <option key={o.id} value={o.id}>
                         {t(o.zh, o.en)}
                       </option>

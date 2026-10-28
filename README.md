@@ -397,8 +397,9 @@ OmniRoute 的細節：
 OpenCode 不登入也能用免費模型（狀態顯示「可使用／未登入」）。要用付費方案：
 
 - **登入**：「設定 → 供應商與帳號 → OpenCode」。Aivenue 會依 OpenCode 版本給對的登入方式：
-  - **OpenCode 1.x**（npm 與官方安裝程式目前提供的版本）：按「登入 OpenCode Go（貼 API key）」，到 https://opencode.ai/auth 建立或複製金鑰後貼上。
-  - **OpenCode 2.x**（OpenCode Desktop 附的 CLI）：按「登入帳號」，在瀏覽器登入 OpenCode Console，Zen、Go 等付費方案會一起連動。
+  - **OpenCode V1（1.x）**（npm 與官方安裝程式目前提供的版本）：按「登入帳號」，會執行 `opencode console login`，在瀏覽器登入 OpenCode Console，Go 等付費方案一起連動。
+  - **OpenCode V2（2.x）**（OpenCode Desktop 附的 CLI）：按「登入帳號」，會執行 `opencode auth login opencode`，在瀏覽器登入。
+  - 設定裡會顯示這台電腦安裝的 OpenCode 版本與 V1／V2。
 - **其他登入方式**：也可以貼上 OpenCode Go 或 Zen 的 API key，或用 OpenCode 自己的供應商選單接上其他 API。
 - **登入後**：Aivenue 偵測到帳號變動，會自動重新讀取模型清單，例如登入 Go 後所有模型選單都會出現 `opencode-go/…` 模型。按「重新檢查」也會一併更新登入狀態、模型清單與用量。
 

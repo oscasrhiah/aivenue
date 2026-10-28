@@ -28,7 +28,13 @@ export interface ProviderSpec {
    * minVersion: the version this sign-in needs. An older CLI (e.g. OpenCode 1.x, which has no browser sign-in) uses
    * `older` instead: its own args, button label and note.
    */
-  login?: { args: string[]; note?: string; minVersion?: string; older?: { args: string[]; zh: string; en: string; noteZh: string; noteEn: string; hint?: string } };
+  login?: {
+    args: string[];
+    note?: string;
+    minVersion?: string;
+    /** Sign-in and sign-out of a CLI older than minVersion, and a status command only it has (e.g. OpenCode 1.x `console orgs`). */
+    older?: { args: string[]; zh: string; en: string; noteZh: string; noteEn: string; hint?: string; logoutArgs?: string[]; accounts?: { args: string[]; none?: string; skip?: string } };
+  };
   /** Other ways to sign in (e.g. an API key for one plan); `olderArgs` for a CLI older than login.minVersion. */
   loginOptions?: { id: string; zh: string; en: string; args: string[]; olderArgs?: string[] }[];
   logout?: { args: string[] };

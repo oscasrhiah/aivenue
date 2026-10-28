@@ -70,8 +70,9 @@
 
 **OpenCode 帳號登入（付費方案）**
 - **依 OpenCode 版本登入**：登入按鈕會先看這台電腦的 OpenCode 版本。
-  - **OpenCode 1.x**（目前 npm 與官方安裝程式提供的版本，例如 1.19.5）只能用 API key 登入：按鈕是「登入 OpenCode Go（貼 API key）」，終端機會先提示到 https://opencode.ai/auth 建立或複製金鑰再貼上。之前預設是 Zen 的流程，Go 方案用不了。
-  - **OpenCode 2.x**（OpenCode Desktop 附的 CLI）可以用瀏覽器登入 OpenCode Console 帳號（`opencode auth login opencode --method device`），Zen、Go 一起連動。
+  - **OpenCode V1（1.x）**（目前 npm 與官方安裝程式提供的版本，例如 1.19.5）：「登入帳號」用 `opencode console login` 開網頁登入 OpenCode Console，Go 等付費方案一起連動；登入狀態從 `opencode console orgs` 讀取（之前只讀 API key，網頁登入後 Aivenue 抓不到），登出用 `opencode console logout`。
+  - **OpenCode V2（2.x）**（OpenCode Desktop 附的 CLI）：「登入帳號」用 `opencode auth login opencode` 開網頁登入，Zen、Go 一起連動。
+  - 兩種版本都能在「其他登入方式」改貼 Go 或 Zen 的 API key。設定裡每個供應商都會顯示這台電腦安裝的 CLI 版本，OpenCode 另外標出 V1／V2。
 - **其他登入方式**：可選貼上 OpenCode Go 或 Zen 的 API key，或開 OpenCode 自己的供應商選單（1.x 與 2.x 各用對應的指令）；也多了「登出」。
 - **登入後模型清單自動更新**：Aivenue 會讀 `opencode auth list`，看哪些帳號已登入。帳號有變動時，模型清單會重新從 CLI 讀取，所有模型選單也會跟著更新，例如登入 Go 後就會出現 `opencode-go/…` 模型。
 - **狀態標記**：沒登入帳號、只用免費模型時，標成「可使用／未登入」；登入後顯示已登入的帳號。
