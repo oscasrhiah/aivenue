@@ -362,3 +362,25 @@ test('sub agent 額度用完 → 換一家重跑，上層改收新的結果', as
   assert.equal(second.title, 'write tests');
   assert.equal(r.agents[second.id].status, 'completed');
 });
+
+test('審查來回留空＝無上限：超過以前的上限也不會停下來問', async () => {
+  const { orch, cwd } = setup();
+  const revise = { tool: 'submit_review', args: { verdict: 'revise', summary: 'no', issues: [{ id: 'R1', severity: 'minor', title: 'nit' }] } };
+  const fixes = Array.from({ length: 7 }, (_, i) => ({ tool: 'submit_work', args: { summary: `fix ${i}`, responses: [{ issue_id: 'R1', action: 'fixed' }] } }));
+  // 每一輪問題都不同，不會觸發「同一問題」規則；只看輪數上限。
+  const reviews = Array.from({ length: 7 }, (_, i) => ({ ...revise, args: { ...revise.args, issues: [{ id: 'R1', severity: 'minor', title: `nit ${i}` }] } }));
+  fakeAgents(orch, { code_reviewer: [...reviews, defaults.code_reviewer], executor: [defaults.executor, ...fixes] });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, implement: { enabled: true, author: { provider: 'fake' }, reviewer: { provider: 'fake2' }, maxRounds: 0, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(r.stages.implement.rounds.length, 8);
+});
+
+test('重新診斷門檻留空＝無上限：同一缺陷一直退回實作者，不強制交回計畫者', async () => {
+  const { orch, cwd } = setup();
+  const same = verdict('defect', false, [{ id: 'V1', severity: 'major', title: 'Crash on empty input' }]);
+  fakeAgents(orch, { verifier: verify(same, same, same, same, verdict('met', true)) });
+  const r = await settle(orch, orch.start(config(cwd, { verify: { enabled: true, by: 'planner', repeatLimit: 0 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.deepEqual(routes(r), ['implementer', 'implementer', 'implementer', 'implementer', 'done']);
+  assert.equal(r.stages.plan.rounds.length, 1);
+});

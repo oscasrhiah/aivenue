@@ -48,6 +48,25 @@ export function useAssignPreview(draft: RoleDraft | null, providers: ProviderInf
   return state;
 }
 
+/** A count the user may leave empty for "no limit" (stored as 0); any number from `min` up. */
+function OptionalLimit({ value, min, onChange, disabled }: { value: number; min: number; onChange: (v: number) => void; disabled?: boolean }) {
+  const t = useT();
+  return (
+    <span className="row gap">
+      <input
+        disabled={disabled}
+        type="number"
+        min={min}
+        value={value === 0 ? '' : value}
+        placeholder={t('無上限', 'No limit')}
+        style={{ width: 96 }}
+        onChange={(e) => onChange(e.target.value === '' || Number(e.target.value) <= 0 ? 0 : Math.max(min, Math.round(Number(e.target.value))))}
+      />
+      <span className="muted small">{value === 0 ? t('無上限', 'no limit') : t('留空＝無上限', 'empty = no limit')}</span>
+    </span>
+  );
+}
+
 function Dot({ id }: { id: string }) {
   return <span className="mark" style={{ background: providerColor(id) }} />;
 }
@@ -177,7 +196,7 @@ function StageSection({ title, hint, authorLabel, reviewerLabel, stage, provider
           {stage.reviewer && (
             <div className="kv">
               <label>{t('最多來回', 'Max rounds')}</label>
-              <input disabled={disabled} type="number" min={1} max={20} value={stage.maxRounds} onChange={(e) => onChange({ ...stage, maxRounds: Math.max(1, Number(e.target.value) || 1) })} />
+              <OptionalLimit disabled={disabled} value={stage.maxRounds} min={1} onChange={(maxRounds) => onChange({ ...stage, maxRounds })} />
             </div>
           )}
           <label className="check">
@@ -229,7 +248,7 @@ function GoalSection({ value, onChange, providers, disabled, auto, implementer }
           )}
           <div className="kv">
             <label title={t('同一個問題連續修這麼多次還沒好，就交回計畫者重新診斷', 'The same problem failing this many fixes in a row goes back to the planner to re-diagnose')}>{t('重新診斷門檻', 'Re-diagnose after')}</label>
-            <input disabled={disabled} type="number" min={2} max={10} value={value.repeatLimit ?? 3} onChange={(e) => onChange({ ...value, repeatLimit: Math.min(10, Math.max(2, Number(e.target.value) || 3)) })} />
+            <OptionalLimit disabled={disabled} value={value.repeatLimit ?? 3} min={2} onChange={(repeatLimit) => onChange({ ...value, repeatLimit })} />
           </div>
         </div>
       )}
@@ -349,7 +368,7 @@ function AdvisorOptions({ value, onChange, providers, disabled, mains }: { value
         </div>
         <div className="kv">
           <label>{t('最多請教', 'Max calls')}</label>
-          <input disabled={disabled} type="number" min={1} max={20} value={value.maxCalls ?? 5} onChange={(e) => onChange({ ...value, maxCalls: Math.max(1, Number(e.target.value) || 1) })} />
+          <OptionalLimit disabled={disabled} value={value.maxCalls ?? 5} min={1} onChange={(maxCalls) => onChange({ ...value, maxCalls })} />
         </div>
         <div className="muted tiny">{t('每段對話的請教次數上限。', 'Consultations allowed per conversation.')}</div>
         <FactRounds value={value} onChange={onChange} disabled={disabled} />

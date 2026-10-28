@@ -499,6 +499,7 @@ export interface StageConfig {
   author: RoleConfig;
   /** null = no review, the author's output is accepted directly. */
   reviewer: RoleConfig | null;
+  /** Author ↔ reviewer rounds before asking the user; 0 = no limit. */
   maxRounds: number;
   /** Pause for the user's approval after the reviewer approves. */
   humanGate: boolean;
@@ -646,7 +647,7 @@ export interface VerifyConfig {
   by: 'planner' | 'independent';
   /** The independent verifier (default: another vendor than the implementer). */
   verifier?: RoleConfig;
-  /** The same issue failing this many fixes in a row sends it back to the planner to re-diagnose (default 3). */
+  /** The same issue failing this many fixes in a row sends it back to the planner to re-diagnose (default 3; 0 = never). */
   repeatLimit?: number;
 }
 
@@ -907,6 +908,7 @@ export interface StageRun {
   authorHandoff?: string;
   reviewerHandoff?: string;
   /** Rounds allowed (grows when the user grants more). */
+  /** 0 = no limit. */
   roundLimit: number;
 }
 

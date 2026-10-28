@@ -430,7 +430,7 @@ export function advisorHint(who: string, max: number, canSpawn: boolean): string
   return [
     '',
     `ADVISOR: ${who} is available as an advisor through the Aivenue tool \`ask_advisor\` {question, context}. It is the most expensive model in this workflow, so it is a last resort: ask only when you are genuinely stuck, i.e. you investigated${canSpawn ? ' (yourself or with read-only sub-agents fetching the facts)' : ''} and tried fixes and still cannot resolve it, or you face a high-stakes decision you cannot settle from the facts. Do not ask it for routine work or for things you can find out by reading the code.`,
-    `${canSpawn ? 'Do the legwork before asking: send read-only sub-agents to look things up and check their reports. ' : ''}The advisor does not explore the code itself, so in \`context\` say where you are, what you tried and what happened (exact errors), and the relevant code or file:line. At most ${max} consultations per conversation.`,
+    `${canSpawn ? 'Do the legwork before asking: send read-only sub-agents to look things up and check their reports. ' : ''}The advisor does not explore the code itself, so in \`context\` say where you are, what you tried and what happened (exact errors), and the relevant code or file:line.${max ? ` At most ${max} consultations per conversation.` : ''}`,
   ].join('\n');
 }
 

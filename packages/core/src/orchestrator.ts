@@ -143,6 +143,11 @@ const routeName = (to: RouteDecision['to']) => ({ done: L('完成', 'done'), imp
 
 const outcomeLabel = (o: Verification['outcome']) => ({ met: L('達標', 'met'), not_met: L('目標未達成', 'goal not met'), invalid_evidence: L('證據無效', 'invalid evidence'), defect: L('有缺陷', 'defects') })[o];
 
+/** Limits the user may leave empty: 0 means none; not set yet means the old default. */
+const roundLimitOf = (n: number | undefined) => (n === 0 ? 0 : Math.max(1, n ?? 3));
+const advisorCallsOf = (a: { maxCalls?: number }) => (a.maxCalls === 0 ? 0 : Math.max(1, a.maxCalls ?? 5));
+const repeatLimitOf = (v: { repeatLimit?: number } | undefined) => (v?.repeatLimit === 0 ? 0 : Math.max(2, v?.repeatLimit ?? 3));
+
 const now = () => Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -344,8 +349,8 @@ export class Orchestrator {
       createdAt: now(),
       updatedAt: now(),
       stages: {
-        plan: { key: 'plan', status: 'pending', rounds: [], roundLimit: Math.max(1, config.plan.maxRounds) },
-        implement: { key: 'implement', status: 'pending', rounds: [], roundLimit: Math.max(1, config.implement.maxRounds) },
+        plan: { key: 'plan', status: 'pending', rounds: [], roundLimit: roundLimitOf(config.plan.maxRounds) },
+        implement: { key: 'implement', status: 'pending', rounds: [], roundLimit: roundLimitOf(config.implement.maxRounds) },
         ...(config.verify?.enabled ? { verify: { key: 'verify' as const, status: 'pending' as const, rounds: [], roundLimit: 999 } } : {}),
       },
       lastProgressAt: now(),
@@ -612,7 +617,7 @@ export class Orchestrator {
       // A session belongs to one vendor: a new author / reviewer starts fresh.
       if (next.author && next.author.provider !== cur.author.provider) stage.authorSessionId = undefined;
       if (next.reviewer !== undefined && next.reviewer?.provider !== cur.reviewer?.provider) stage.reviewerSessionId = undefined;
-      if (next.maxRounds && next.maxRounds !== cur.maxRounds) stage.roundLimit = Math.max(1, next.maxRounds, stage.rounds.length);
+      if (next.maxRounds !== undefined && next.maxRounds !== cur.maxRounds) stage.roundLimit = next.maxRounds === 0 ? 0 : Math.max(1, next.maxRounds, stage.rounds.length);
       // Mutated in place: a stage that is already running reads the same object every round.
       Object.assign(cur, next);
     }
@@ -1508,7 +1513,8 @@ export class Orchestrator {
       }
     }
     round.verification = verification;
-    const route = routeVerification(verification, earlier, Math.max(2, vcfg.repeatLimit ?? 3));
+    // 0: never force a re-diagnosis (the user left the threshold empty).
+    const route = routeVerification(verification, earlier, repeatLimitOf(vcfg));
     round.route = route;
     round.handoff = buildHandoff(run, 'verify', round);
     const met = verification.metrics.filter((m) => m.met).length;
@@ -1597,7 +1603,7 @@ export class Orchestrator {
     stage.status = 'running';
     // Another pass (after a verification or a re-diagnosis) gets its own rounds.
     const firstN = stage.rounds.length + 1;
-    if (entry) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + Math.max(1, cfg.maxRounds));
+    if (entry && stage.roundLimit) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + Math.max(1, cfg.maxRounds));
     this.log(run, entry ? L(`${stageName}重新開始（第 ${(run.cycles ?? 0) + 1} 輪循環）`, `${stageName} again (cycle ${(run.cycles ?? 0) + 1})`) : L(`${stageName}開始`, `${stageName} started`), 'info', true);
     this.touch(run);
 
@@ -1607,7 +1613,8 @@ export class Orchestrator {
 
     for (;;) {
       this.checkCancelled(run);
-      if (stage.rounds.length >= stage.roundLimit) {
+      // 0: no limit (the user left it empty).
+      if (stage.roundLimit && stage.rounds.length >= stage.roundLimit) {
         const dec = await this.ask(run, key, L(`${stageName}已進行 ${stage.rounds.length} 輪，審查仍未通過。要怎麼處理？`, `${stageName} has gone ${stage.rounds.length} rounds without approval. What next?`), [
           { id: 'more', label: L('再進行 2 輪', 'Allow 2 more rounds') },
           { id: 'accept', label: L('視為通過，繼續', 'Accept and continue') },
@@ -1723,7 +1730,7 @@ export class Orchestrator {
           if (g.revise) {
             userFeedback = g.revise;
             pendingReview = undefined;
-            stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + 1);
+            if (stage.roundLimit) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + 1);
             continue;
           }
         }
@@ -1815,7 +1822,7 @@ export class Orchestrator {
           if (g.revise) {
             userFeedback = g.revise;
             pendingReview = undefined;
-            stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + 1);
+            if (stage.roundLimit) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + 1);
             continue;
           }
         }
@@ -1824,7 +1831,7 @@ export class Orchestrator {
 
       this.log(run, L(`${stageName}審查要求修改：${review!.issues.length} 個問題`, `${stageName} review requested changes: ${review!.issues.length} issue(s)`), 'warn', true);
       // The same issue failing fix after fix: the plan, not the code, is probably wrong — the planner re-diagnoses.
-      const limit = Math.max(2, run.config.verify?.repeatLimit ?? 3);
+      const limit = repeatLimitOf(run.config.verify);
       const stuck = !isPlan && run.config.plan.enabled ? repeatedIssues(stage.rounds.filter((r) => r.review).map((r) => r.review!.issues), limit) : [];
       if (stuck.length) {
         round.route = { to: 'planner', reason: `the same issue failed ${limit} code reviews in a row: re-diagnose`, issues: stuck.map((i) => i.id), rediagnose: true };
@@ -2036,7 +2043,7 @@ export class Orchestrator {
         info.role === 'advisor' || resume
           ? ''
           : this.crossAdvisor(run)
-            ? P.advisorHint(`${this.providerName(adv!.provider!)}${adv!.model ? ` (${adv!.model})` : ''}`, Math.max(1, adv!.maxCalls ?? 5), this.canSpawn(run, info))
+            ? P.advisorHint(`${this.providerName(adv!.provider!)}${adv!.model ? ` (${adv!.model})` : ''}`, advisorCallsOf(adv!), this.canSpawn(run, info))
             : nativeAdvisor
               ? '\nADVISOR: Your built-in advisor tool is enabled. It runs a more expensive model, so use it only when you are genuinely stuck after investigating and trying yourself, or for a high-stakes decision the facts do not settle.'
               : '';
@@ -2691,8 +2698,8 @@ export class Orchestrator {
     if (!question) throw new Error('question is required');
     const context = String(args.context ?? '').trim().slice(0, 30000);
     const used = Object.values(run.agents).filter((a) => a.role === 'advisor').length;
-    const max = Math.max(1, cfg.maxCalls ?? 5);
-    if (used >= max) throw new Error(`The advisor was already consulted ${used} times in this conversation (limit ${max}). Continue on your own.`);
+    const max = advisorCallsOf(cfg);
+    if (max && used >= max) throw new Error(`The advisor was already consulted ${used} times in this conversation (limit ${max}). Continue on your own.`);
     const def = this.d.registry.defaults(cfg.provider!);
     const child = this.newAgent(run, {
       role: 'advisor',
@@ -2735,7 +2742,7 @@ export class Orchestrator {
       return JSON.stringify({ advisor_id: child.id, status: 'running', hint: `The advisor is still thinking. Call wait_subagent {"subagent_id": "${child.id}"} to get the advice.` });
     }
     if (child.status !== 'completed') throw new Error(`The advisor failed: ${child.error ?? child.status}`);
-    return JSON.stringify({ advisor: `${this.providerName(child.provider)}${child.model ? ` (${child.model})` : ''}`, advice: (child.finalText ?? '').slice(0, 20000), calls_left: max - used - 1 });
+    return JSON.stringify({ advisor: `${this.providerName(child.provider)}${child.model ? ` (${child.model})` : ''}`, advice: (child.finalText ?? '').slice(0, 20000), calls_left: max ? max - used - 1 : 'unlimited' });
   }
 
   private cancelChildren(run: WorkflowRun, parentId: string) {
