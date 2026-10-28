@@ -12,6 +12,7 @@ const EN_NOTES: Record<string, { description?: string; login?: string; api?: str
   claude: { description: 'Anthropic Claude Code CLI (Claude Pro / Max)', login: 'Opens claude.ai in your browser to sign in', api: 'Anthropic API key; Base URL may point to any Anthropic-compatible endpoint' },
   codex: { description: 'OpenAI Codex CLI (ChatGPT Plus / Pro)', login: 'Opens ChatGPT sign-in in your browser (Google / Microsoft / Apple)', api: 'OpenAI API key' },
   antigravity: { description: 'Google Antigravity CLI (Google AI Pro / Ultra)', login: 'Sign in with your Google account in the terminal (a browser opens); type /quit when done' },
+  opencode: { login: 'Sign in to your OpenCode account in the browser: paid plans such as Zen and Go are linked, and the model list updates by itself. Free models work without signing in' },
   qwen: { description: 'Alibaba Qwen Code CLI (QwenCloud Token Plan)', login: 'Type /auth in the terminal to choose a sign-in method (the free Qwen OAuth tier ended on 2026-04-15)', api: 'Any OpenAI-compatible API (DashScope, Kimi, DeepSeek, Grok, OpenRouter…): set key + Base URL and pick a model per role' },
 };
 
@@ -176,7 +177,9 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
     : p.auth.state === 'logged_in'
       ? p.authMode === 'api'
         ? t('API 金鑰', 'API key')
-        : t('已登入', 'Signed in')
+        : p.auth.signedIn === false
+          ? t('可使用／未登入', 'Usable / not signed in')
+          : t('已登入', 'Signed in')
       : p.auth.state === 'checking'
         ? t('檢查中…', 'Checking…')
         : p.auth.state === 'unknown'
@@ -240,8 +243,24 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
               {s.login?.note && <div className="muted small">{t(s.login.note, en?.login ?? s.login.note)}</div>}
               <div className="row gap wrap">
                 <button className="btn primary" disabled={!p.installed} onClick={() => call('login', 'providers.login', { id: s.id })}>
-                  {p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in')}
+                  {s.loginOptions ? t('登入帳號', 'Sign in to the account') : p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in')}
                 </button>
+                {s.loginOptions && (
+                  <select
+                    className="btn"
+                    disabled={!p.installed}
+                    value=""
+                    onChange={(e) => e.target.value && call('login', 'providers.login', { id: s.id, option: e.target.value })}
+                    title={t('其他登入方式', 'Other ways to sign in')}
+                  >
+                    <option value="">{t('其他登入方式…', 'Other ways to sign in…')}</option>
+                    {s.loginOptions.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        {t(o.zh, o.en)}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 {s.logout && (
                   <button className="btn" disabled={!p.installed} onClick={() => call('logout', 'providers.logout', { id: s.id })}>
                     {t('登出', 'Sign out')}
@@ -426,6 +445,7 @@ export function ProvidersPane() {
   const providers = useProviders();
   const host = useHostInfo();
   const [adding, setAdding] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [builtins, setBuiltins] = useState<ProviderSpec[]>([]);
   useEffect(() => {
     hub.call('providers.templates').then((r) => setBuiltins(r.builtins)).catch(() => undefined);
@@ -444,8 +464,8 @@ export function ProvidersPane() {
           </p>
         </div>
         <div className="row gap">
-          <button className="btn ghost" onClick={() => hub.call('providers.refresh', {})}>
-            {t('重新檢查', 'Re-check all')}
+          <button className="btn ghost" disabled={checking} onClick={() => (setChecking(true), hub.call('providers.refresh', {}).finally(() => setChecking(false)))} title={t('重新檢查每一家的登入狀態、模型清單與用量', 'Re-check every provider\'s sign-in, model list and usage')}>
+            {checking ? t('檢查中…', 'Checking…') : t('重新檢查', 'Re-check all')}
           </button>
           <button className="btn primary" onClick={() => setAdding(true)}>
             {t('新增', 'Add')}

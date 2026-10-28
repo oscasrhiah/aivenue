@@ -385,7 +385,11 @@ export class ProviderRegistry {
   /** Read the provider's model list again next time (its source changed). */
   forgetModels(id: string) {
     this.modelCache.delete(id);
+    // The menus read the list again (they key their cache on this number).
+    this.modelsVersion.set(id, (this.modelsVersion.get(id) ?? 0) + 1);
   }
+
+  private modelsVersion = new Map<string, number>();
 
   /** A run reported its model's context size: remember it for the model menus. */
   noteContext(id: string, model: string | undefined, window: number | undefined) {
@@ -531,6 +535,7 @@ export class ProviderRegistry {
         auth: this.auth.get(spec.id) ?? { state: 'unknown' },
         authMode: this.authMode(spec.id),
         hasApiKey: this.keyed.has(spec.id),
+        modelsVersion: this.modelsVersion.get(spec.id) ?? 0,
         baseUrl: this.stored.settings[spec.id]?.baseUrl,
         defaultModel: this.stored.settings[spec.id]?.defaultModel,
         defaultEffort: this.stored.settings[spec.id]?.defaultEffort,
@@ -573,7 +578,10 @@ export class ProviderRegistry {
     if (!spec) throw new Error(unknownProvider(id));
     this.auth.set(id, { state: 'checking' });
     this.onChange();
+    const before = this.auth.get(id);
     const result = await this.evaluateAuth(spec);
+    // Another account or plan signed in (or out): its models differ.
+    if (before?.detail !== undefined && before.detail !== result.detail && spec.status?.accounts) this.forgetModels(id);
     this.auth.set(id, { ...result, checkedAt: Date.now() });
     this.onChange();
     return this.auth.get(id)!;
@@ -594,6 +602,16 @@ export class ProviderRegistry {
     }
     const st = spec.status;
     if (!st) return { state: 'unknown', detail: L('未設定登入狀態檢查方式', 'No login status check configured') };
+    if (st.ready && st.accounts) {
+      // Free models need no sign-in; the accounts signed in decide which paid models there are.
+      const r = await capture(specCommand(spec), st.accounts.args, { timeoutMs: 20000, env: accountEnv(spec) }).catch(() => undefined);
+      // eslint-disable-next-line no-control-regex
+      const lines = (r?.stdout ?? '').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split(/\r?\n/).map((l) => l.replace(/[│┌└◇●■◆┃─]/g, '').trim()).filter(Boolean);
+      const none = !lines.length || (st.accounts.none && lines.some((l) => l.includes(st.accounts!.none!)));
+      return none
+        ? { state: 'logged_in', signedIn: false, detail: L('可直接使用免費模型（尚未登入帳號）', 'Free models ready (no account signed in)') }
+        : { state: 'logged_in', signedIn: true, detail: L(`已登入：${lines.join('、').slice(0, 160)}`, `Signed in: ${lines.join(', ').slice(0, 160)}`) };
+    }
     if (st.ready) return { state: 'logged_in', detail: L('可直接使用（不需登入）', 'Ready (no sign-in needed)') };
     for (const e of st.env ?? []) if (process.env[e]) return { state: 'logged_in', detail: L(`使用環境變數 ${e}`, `Using environment variable ${e}`) };
     for (const f of st.files ?? []) if (fs.existsSync(expandHome(f))) return { state: 'logged_in', detail: L(`找到 ${f}`, `Found ${f}`) };
@@ -629,13 +647,16 @@ export class ProviderRegistry {
     return { state: 'logged_out', detail: L('尚未登入', 'Not signed in') };
   }
 
-  /** Open a terminal running the CLI's own login flow; it opens the provider's official sign-in page. */
-  login(id: string): void {
+  /** Open a terminal running the CLI's own login flow (or one of its other sign-in options); it opens the provider's official sign-in page. */
+  login(id: string, option?: string): void {
     const spec = this.get(id);
     if (!spec) throw new Error(unknownProvider(id));
     const cmd = resolveCommand(specCommand(spec));
     if (!cmd) throw new Error(L(`尚未安裝 ${spec.name}，請先安裝`, `${spec.name} is not installed yet`));
-    this.terminal({ title: `${L('登入', 'Sign in')} ${spec.name}`, command: cmd, args: spec.login?.args ?? [], env: accountEnv(spec) }, [specCommand(spec), ...(spec.login?.args ?? [])].join(' '));
+    const opt = option ? spec.loginOptions?.find((o) => o.id === option) : undefined;
+    if (option && !opt) throw new Error(L('沒有這個登入方式', 'Unknown sign-in option'));
+    const args = opt?.args ?? spec.login?.args ?? [];
+    this.terminal({ title: `${L('登入', 'Sign in')} ${spec.name}`, command: cmd, args, env: accountEnv(spec) }, [specCommand(spec), ...args].join(' '));
     this.pollAuth(id);
   }
 
@@ -694,17 +715,21 @@ export class ProviderRegistry {
   /** After login/install we re-check every few seconds for a while so the UI flips by itself. */
   private pollAuth(id: string) {
     let n = 0;
-    const initial = this.auth.get(id)?.state;
+    // State and detail: a CLI usable without signing in stays "logged in"; what changes is which accounts are.
+    const key = (a?: ProviderInfo['auth']) => `${a?.state}|${a?.detail ?? ''}`;
+    const initial = key(this.auth.get(id));
     const timer = setInterval(async () => {
       n++;
       const spec = this.get(id);
-      const before = this.auth.get(id)?.state;
+      const before = key(this.auth.get(id));
       const r = spec ? await this.evaluateAuth(spec).catch(() => undefined) : undefined;
       if (r) {
+        // A new account or plan brings other models: read the list again.
+        if (key(r) !== before && spec?.status?.accounts) this.forgetModels(id);
         this.auth.set(id, { ...r, checkedAt: Date.now() });
-        if (r.state !== before) this.onChange();
+        if (key(r) !== before) this.onChange();
       }
-      if (n >= 60 || !spec || (r && r.state !== initial)) {
+      if (n >= 60 || !spec || (r && key(r) !== initial)) {
         clearInterval(timer);
         this.onChange();
       }

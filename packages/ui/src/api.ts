@@ -210,16 +210,18 @@ const modelCache = new Map<string, Promise<ModelInfo[]>>();
 export function useModels(providerId: string | undefined): { models: ModelInfo[]; refresh: () => void } {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [n, setN] = useState(0);
+  // The hub bumps this when the list changed (e.g. after signing in to another plan).
+  const version = useProviders().find((p) => p.spec.id === providerId)?.modelsVersion ?? 0;
   useEffect(() => {
     if (!providerId) return setModels([]);
     let alive = true;
-    const key = providerId;
+    const key = `${providerId}@${version}`;
     if (n > 0 || !modelCache.has(key)) modelCache.set(key, hub.call<ModelInfo[]>('providers.models', { id: key, refresh: n > 0 }).catch(() => []));
     modelCache.get(key)!.then((m) => alive && setModels(m));
     return () => {
       alive = false;
     };
-  }, [providerId, n]);
+  }, [providerId, n, version]);
   return { models, refresh: () => setN((x) => x + 1) };
 }
 

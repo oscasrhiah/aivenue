@@ -250,17 +250,16 @@ function UsagePane() {
   const [fresh, setFresh] = useState<ProviderUsage[] | null>(null);
   const [loading, setLoading] = useState(false);
   // Opening the page (and every minute while it stays open) re-reads everything, including live quotas.
-  const refresh = () => {
+  const refresh = (all = false) => {
     setLoading(true);
-    hub
-      .call<ProviderUsage[]>('usage.get', { refresh: true })
-      .then(setFresh)
+    // The button re-checks everything (sign-in and model lists too); the timer only the usage.
+    Promise.all([hub.call<ProviderUsage[]>('usage.get', { refresh: true }).then(setFresh), all ? hub.call('providers.refresh', {}) : undefined])
       .catch(() => undefined)
       .finally(() => setLoading(false));
   };
   useEffect(() => {
     refresh();
-    const timer = setInterval(refresh, 60000);
+    const timer = setInterval(() => refresh(), 60000);
     return () => clearInterval(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   // Pushed updates (a run just finished) are newer than our last fetch.
@@ -280,7 +279,7 @@ function UsagePane() {
         </div>
         <div className="row gap">
           {checkedAt && <span className="muted tiny">{t(`更新於 ${new Date(checkedAt).toLocaleTimeString()}`, `Updated ${new Date(checkedAt).toLocaleTimeString()}`)}</span>}
-          <button className="btn" disabled={loading} onClick={refresh}>
+          <button className="btn" disabled={loading} onClick={() => refresh(true)}>
             {loading ? t('更新中…', 'Refreshing…') : t('重新整理', 'Refresh')}
           </button>
         </div>

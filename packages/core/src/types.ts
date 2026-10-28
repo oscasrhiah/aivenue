@@ -23,6 +23,8 @@ export interface ProviderSpec {
   docsUrl?: string;
   /** Interactive login: run `command ...args` in a new terminal window; the CLI opens the browser. */
   login?: { args: string[]; note?: string };
+  /** Other ways to sign in (e.g. an API key for one plan); the login button offers them next to the default. */
+  loginOptions?: { id: string; zh: string; en: string; args: string[] }[];
   logout?: { args: string[] };
   status?: {
     /** Command args to run; logged in when exit code is 0 and the checks below pass. */
@@ -38,6 +40,8 @@ export interface ProviderSpec {
     env?: string[];
     /** Usable without signing in (e.g. free models) once installed. */
     ready?: boolean;
+    /** Command listing the accounts / plans signed in (shown, and a change refreshes the model list). */
+    accounts?: { args: string[]; none?: string };
   };
   run: {
     /** Args that carry the user's role instructions ({systemPrompt}); without them the text is prepended to the prompt. */
@@ -339,10 +343,13 @@ export interface ProviderInfo {
   installCommand?: string;
   /** Undoes installCommand (winget / npm / Homebrew), when the CLI found is the one it installed. */
   uninstallCommand?: string;
-  auth: { state: 'logged_in' | 'logged_out' | 'unknown' | 'checking'; detail?: string; checkedAt?: number };
+  /** signedIn false: usable (free models) but no account signed in. */
+  auth: { state: 'logged_in' | 'logged_out' | 'unknown' | 'checking'; detail?: string; checkedAt?: number; signedIn?: boolean };
   /** Subscription = the CLI's own login; api = API key stored by Aivenue. */
   authMode: AuthMode;
   hasApiKey: boolean;
+  /** Bumped when the model list must be read again (e.g. after signing in to another plan). */
+  modelsVersion?: number;
   baseUrl?: string;
   /** Used when a role does not pick its own model / effort (also in auto assignment). */
   defaultModel?: string;

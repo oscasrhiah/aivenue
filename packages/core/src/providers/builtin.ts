@@ -165,8 +165,15 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     commandPaths: ['~/AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe'],
     install: 'npm install -g opencode-ai',
     docsUrl: 'https://opencode.ai/docs/zen/',
-    login: { args: ['auth', 'login'], note: '免費模型不需登入即可使用；要用付費模型或其他 API，在開啟的終端機中選擇供應商並輸入金鑰' },
-    status: { ready: true },
+    // The OpenCode account (device sign-in in the browser) links every plan of that account: Zen, Go…
+    login: { args: ['auth', 'login', 'opencode', '--method', 'device'], note: '用瀏覽器登入 OpenCode 帳號，Zen、Go 等付費方案會一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
+    loginOptions: [
+      { id: 'go-key', zh: '貼上 OpenCode Go 的 API key', en: 'Paste an OpenCode Go API key', args: ['auth', 'login', 'opencode-go', '--method', 'key'] },
+      { id: 'zen-key', zh: '貼上 OpenCode Zen 的 API key', en: 'Paste an OpenCode Zen API key', args: ['auth', 'login', 'opencode', '--method', 'key'] },
+      { id: 'other', zh: '其他供應商（OpenCode 的選單）', en: 'Another provider (OpenCode picker)', args: ['auth', 'login'] },
+    ],
+    logout: { args: ['auth', 'logout'] },
+    status: { ready: true, accounts: { args: ['auth', 'list'], none: 'No authenticated' } },
     run: {
       // `run` is the subcommand, so it leads both the fresh and the resumed form.
       fresh: [['run']],

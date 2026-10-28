@@ -293,12 +293,18 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     },
     'providers.list': () => registry.list(),
     'providers.templates': () => ({ templates: PROVIDER_TEMPLATES, builtins: BUILTIN_PROVIDERS }),
+    // Re-check = everything: sign-in, the model lists (read again from the CLIs) and, for the whole page, usage and live quotas.
     'providers.refresh': async (p: { id?: string }) => {
-      if (p?.id) await registry.checkAuth(p.id);
-      else await registry.checkAll();
+      if (p?.id) {
+        registry.forgetModels(p.id);
+        await registry.checkAuth(p.id);
+      } else {
+        for (const s of registry.specs()) registry.forgetModels(s.id);
+        await Promise.all([registry.checkAll(), usage.summary(registry.specs(), { refresh: true }).catch(() => undefined)]);
+      }
       return registry.list();
     },
-    'providers.login': (p: { id: string }) => registry.login(p.id),
+    'providers.login': (p: { id: string; option?: string }) => registry.login(p.id, p.option),
     'providers.logout': (p: { id: string }) => registry.logout(p.id),
     'providers.install': (p: { id: string }) => registry.install(p.id),
     'providers.uninstall': (p: { id: string }) => registry.uninstall(p.id),
