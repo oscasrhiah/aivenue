@@ -18,6 +18,8 @@ export interface ProviderSpec {
   commandPaths?: string[];
   /** Shell command that installs the CLI (run in a visible terminal). */
   install?: string;
+  /** Linux / macOS: the official installer that needs no Node.js, used when npm is missing. */
+  installNoNpm?: string;
   /** Install command for a specific OS, used instead of `install` there (e.g. winget on Windows, a script elsewhere). */
   installOn?: Partial<Record<'win32' | 'darwin' | 'linux', string>>;
   docsUrl?: string;

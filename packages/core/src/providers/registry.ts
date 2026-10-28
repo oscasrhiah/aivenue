@@ -115,7 +115,7 @@ function installedBy(cmd: string | undefined, found: string): string | undefined
   return ok ? cmd : undefined;
 }
 
-export function installLine(name: string, cmd: string): string {
+export function installLine(name: string, cmd: string, noNpm?: string): string {
   const isNpm = /^npm(\.cmd)?\s+(i|install)\b/.test(cmd.trim());
   const run = isNpm ? `${cmd} --loglevel=http --foreground-scripts` : cmd;
   const start = L(`正在安裝 ${name}：${cmd}`, `Installing ${name}: ${cmd}`);
@@ -125,14 +125,14 @@ export function installLine(name: string, cmd: string): string {
   // Echoed text must not contain anything cmd.exe would act on (a provider name from the online catalog, say).
   const e = (s: string) => s.replace(/[&|<>^%!"()\r\n]/g, ' ');
   if (process.platform === 'win32') return `echo ${e(start)} & echo ${e(wait)} & echo. & ${run} && (echo. & echo ${e(ok)}) || (echo. & echo ${e(fail)})`;
-  return posixInstallLine(cmd, run, isNpm, [start, wait], ok, fail);
+  return posixInstallLine(cmd, run, isNpm, [start, wait], ok, fail, noNpm);
 }
 
 /**
  * POSIX shell line for an install: checks the needed tool first, and for npm whether its global folder is
  * writable (a system Node.js needs sudo there), printing what to do instead of npm's bare EACCES error.
  */
-export function posixInstallLine(cmd: string, run: string, isNpm: boolean, intro: string[], ok: string, fail: string): string {
+export function posixInstallLine(cmd: string, run: string, isNpm: boolean, intro: string[], ok: string, fail: string, noNpmInstall?: string): string {
   const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
   const say = (...lines: string[]) => lines.map((l) => `echo ${q(l)}`).join('; ');
   const ifElse = (cond: string, then: string, otherwise: string) => `if ${cond}; then ${then}; else ${otherwise}; fi`;
@@ -145,7 +145,16 @@ export function posixInstallLine(cmd: string, run: string, isNpm: boolean, intro
     const hint = say(L(`✗ 找不到 ${tool}，請先用系統的套件管理員安裝它，再按一次「安裝」。`, `✗ ${tool} was not found. Install it with your system's package manager, then press Install again.`));
     return `${head}; ${ifElse(absent(tool), hint, attempt(''))}`;
   }
-  const noNpm = say(L('✗ 找不到 npm：請先安裝 Node.js 22 以上（建議用 nvm：https://github.com/nvm-sh/nvm ），再按一次「安裝」。', '✗ npm was not found. Install Node.js 22 or newer (nvm is recommended: https://github.com/nvm-sh/nvm), then press Install again.'));
+  const askNode = say(L('✗ 找不到 npm：請先安裝 Node.js 22 以上（建議用 nvm：https://github.com/nvm-sh/nvm ），再按一次「安裝」。', '✗ npm was not found. Install Node.js 22 or newer (nvm is recommended: https://github.com/nvm-sh/nvm), then press Install again.'));
+  // No npm but an official installer that needs no Node.js: use it (it only needs curl).
+  const viaScript = noNpmInstall
+    ? ifElse(
+        absent('curl'),
+        say(L('✗ 找不到 npm，也找不到 curl：請先用系統的套件管理員安裝 curl（或安裝 Node.js 22 以上），再按一次「安裝」。', '✗ Neither npm nor curl was found. Install curl with your package manager (or Node.js 22 or newer), then press Install again.')),
+        `${say(L(`找不到 npm，改用官方安裝程式（不需要 Node.js）：${noNpmInstall}`, `npm was not found; using the official installer instead (no Node.js needed): ${noNpmInstall}`))}; echo; ${ifElse(noNpmInstall, `echo; ${say(ok)}`, `echo; ${say(fail)}`)}`,
+      )
+    : askNode;
+  const noNpm = viaScript;
   const needsSudo = [
     say(L('✗ npm 的全域安裝資料夾需要管理員權限，所以沒有開始安裝：', "✗ npm's global folder needs administrator rights, so nothing was installed:")),
     'echo "    $AIV_W"',
@@ -708,7 +717,7 @@ export class ProviderRegistry {
     const spec = this.get(id);
     const cmd = spec && installCommand(spec);
     if (!spec || !cmd) throw new Error(L('此供應商沒有設定安裝指令', 'This provider has no install command'));
-    this.terminal({ title: `${L('安裝', 'Install')} ${spec.name}`, raw: installLine(spec.name, cmd) }, cmd);
+    this.terminal({ title: `${L('安裝', 'Install')} ${spec.name}`, raw: installLine(spec.name, cmd, process.platform === 'win32' ? undefined : spec.installNoNpm) }, cmd);
     this.pollAuth(id);
   }
 

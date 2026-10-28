@@ -17,6 +17,7 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     description: 'Anthropic Claude Code CLI（Claude Pro / Max 訂閱）',
     command: 'claude',
     install: 'npm install -g @anthropic-ai/claude-code',
+    installNoNpm: 'curl -fsSL https://claude.ai/install.sh | bash',
     docsUrl: 'https://docs.claude.com/en/docs/claude-code',
     login: { args: ['auth', 'login'], note: '會開啟瀏覽器到 claude.ai 登入' },
     logout: { args: ['auth', 'logout'] },
@@ -162,8 +163,10 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     name: 'OpenCode',
     description: 'OpenCode CLI — 內建 OpenCode Zen 免費模型，也能接上百家 API；優先使用 OpenCode Desktop 附的 CLI。注意：部分免費模型會用你的資料改進模型',
     command: 'opencode',
-    commandPaths: ['~/AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe'],
+    // OpenCode Desktop's CLI on Windows; the official installer's folder on Linux / macOS.
+    commandPaths: ['~/AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe', '~/.opencode/bin/opencode'],
     install: 'npm install -g opencode-ai',
+    installNoNpm: 'curl -fsSL https://opencode.ai/install | bash',
     docsUrl: 'https://opencode.ai/docs/zen/',
     // The OpenCode account (device sign-in in the browser) links every plan of that account: Zen, Go…
     login: { args: ['auth', 'login', 'opencode', '--method', 'device'], note: '用瀏覽器登入 OpenCode 帳號，Zen、Go 等付費方案會一起連動，登入後模型清單自動更新；免費模型不登入也能用' },
