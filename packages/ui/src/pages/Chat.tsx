@@ -7,6 +7,7 @@ import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { PreflightList, RunMenu } from '../components/RunTools';
+import { Replies, type Reply } from '../components/Replies';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
 import { ContextAsk, ContextPie } from '../components/ContextPie';
@@ -16,7 +17,7 @@ import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 
-type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
+type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
 function timeline(run: WorkflowRun): Item[] {
   // A follow-up's goal carries the earlier task as context; show only what the user wrote.
@@ -27,14 +28,14 @@ function timeline(run: WorkflowRun): Item[] {
   });
   // A message sent while an agent worked shows among that agent's steps; one sent between agents stands alone.
   (run.userMessages ?? []).forEach((m, i) => {
-    if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments, delivered: m.deliveredTo?.length });
+    if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments, delivered: m.deliveredTo?.length, replies: m.replies, planUpdated: m.planUpdated });
   });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
 }
 
 /** A message sent while the agents were working: handed to them right away. */
-function MidRunMessage({ text, files, onImage, delivered }: { text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number }) {
+function MidRunMessage({ text, files, onImage, delivered, replies, planUpdated }: { text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number; replies?: Reply[]; planUpdated?: boolean }) {
   const t = useT();
   return (
     <div className="user-msg-wrap">
@@ -46,6 +47,7 @@ function MidRunMessage({ text, files, onImage, delivered }: { text: string; file
         </div>
       )}
       {text && <div className="user-msg">{text}</div>}
+      <Replies replies={replies} planUpdated={planUpdated} />
       <div className="muted tiny mid-run-tag">
         {delivered
           ? t(`執行中追加 · 已送達 ${delivered} 個 agent`, `Sent while working · reached ${delivered} agent(s)`)
@@ -78,7 +80,7 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
     <div className="earlier-msg">
       {items.map((it) =>
         it.type === 'user' && it.midRun ? (
-          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} delivered={it.delivered} />
+          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />
         ) : it.type === 'user' ? (
           <div key={it.key} className="user-block">
             {own.length > 0 && (
@@ -882,7 +884,7 @@ export function Chat({ id }: { id?: string }) {
                 <EarlierMessage key={r.id} run={r} before={earlier.slice(0, i)} providers={providers} onImage={setLightbox} />
               ))}
               {items.map((it) => {
-                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} delivered={it.delivered} />;
+                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />;
                 if (it.type === 'user')
                   return (
                     <div key={it.key} className="user-block">

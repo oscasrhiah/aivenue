@@ -1016,7 +1016,17 @@ export interface WorkflowRun {
   /** `chat` entries are shown as divider lines in the conversation. */
   log: { ts: number; text: string; level: 'info' | 'warn' | 'error'; chat?: boolean }[];
   /** Messages the user sent while the workflow was running (handed to the working agents and every later one). */
-  userMessages?: { ts: number; text: string; attachments?: Attachment[]; /** Agents it reached. */ deliveredTo?: string[] }[];
+  userMessages?: {
+    ts: number;
+    text: string;
+    attachments?: Attachment[];
+    /** Agents it reached. */
+    deliveredTo?: string[];
+    /** What the agents answered (reply_user, or their first words after reading it), and whether it changes the plan. */
+    replies?: { agentId: string; who: string; text: string; ts: number; changesPlan?: boolean; auto?: boolean }[];
+    /** The planner revised the plan for it. */
+    planUpdated?: boolean;
+  }[];
 }
 
 export interface ConditionWait {

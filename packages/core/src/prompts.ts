@@ -327,6 +327,43 @@ export function extraDirsBlock(dirs: string[]): string {
   ].join('\n');
 }
 
+/** A message the user sent while the agent worked: answer it first, then go on (or stop for a plan update). */
+export function userMessagePrompt(note: string, o: { planner: boolean }): string {
+  return [
+    'THE USER SENT YOU A MESSAGE while you were working:',
+    note,
+    '',
+    'First answer it: call the Aivenue tool `reply_user` {text, changes_plan} with one or two sentences on how you understood it and what you will do (if the tool is not available to you, start your reply with those sentences). changes_plan is true when it changes what must be built, the approach or the acceptance criteria.',
+    o.planner
+      ? 'If it changes the plan, Aivenue has the planner update the plan and gives it back to you: after replying, stop and end your turn. Otherwise follow the message and continue your task.'
+      : 'Then follow it and continue your task where you left off.',
+  ].join('\n');
+}
+
+/** The planner, asked to update the plan for a message the user sent during implementation. */
+export function amendPlanPrompt(note: string): string {
+  return [
+    'The user sent a message that changes the task while the implementer was working on the plan:',
+    note,
+    '',
+    'Update the plan for it: keep the steps already done (same ids and titles), change or add steps for what the message asks, and update the goal and its metrics if the acceptance criteria change. Do not modify files.',
+    'Then call `submit_plan` with the FULL updated plan (summary, markdown, steps, goal).',
+    FALLBACK('submit_plan', PLAN_SHAPE),
+  ].join('\n');
+}
+
+/** The implementer, after the planner updated the plan for the user's message. */
+export function planUpdatedPrompt(plan: PlanDoc | undefined): string {
+  return [
+    "THE PLAN WAS UPDATED for the user's message. Continue from where you are (the files on disk are current): do the steps that are new or changed, skip what is already done.",
+    plan ? `\nUPDATED PLAN:\n${planBlock(plan)}` : '',
+    goalBlock(plan?.goal),
+    '',
+    'When finished, call `submit_work` with a summary of what you changed and how you verified it.',
+    FALLBACK('submit_work', WORK_SHAPE),
+  ].join('\n');
+}
+
 export function resumeAfterPause(): string {
   return 'The user paused you in the middle of your work and has now resumed. Continue the task exactly where you left off (check the working directory if unsure what was already done), and finish it as instructed before (including calling the Aivenue submit tool if you were asked to).';
 }

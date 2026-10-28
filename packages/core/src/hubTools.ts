@@ -242,6 +242,16 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       required: ['pid', 'purpose', 'cleanup'],
     },
   },
+  reply_user: {
+    name: 'reply_user',
+    description:
+      'Answer a message the user sent while you were working, before you go on: one or two sentences on how you understood it and what you will do. Set changes_plan to true when it changes what must be built, the approach or the acceptance criteria (not for a clarification you can just follow).',
+    inputSchema: {
+      type: 'object',
+      properties: { text: { type: 'string' }, changes_plan: { type: 'boolean' } },
+      required: ['text'],
+    },
+  },
   update_process: {
     name: 'update_process',
     description: 'Report the progress of a background process you registered with track_process, when neither its file size nor its log shows it (e.g. "epoch 3/10" → 30).',
@@ -401,6 +411,7 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
   if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', 'update_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
   if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
+  if (role !== 'test' && role !== 'advisor' && role !== 'adjudicator') names.push('reply_user');
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');
   // Anything that changes GitHub or another outside service needs the user's OK first (the advisor only advises).

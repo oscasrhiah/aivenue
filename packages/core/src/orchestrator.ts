@@ -480,12 +480,66 @@ export class Orchestrator {
       const session = res.sessionId ?? info.sessionId;
       const spec = this.d.registry.get(info.provider);
       const canResume = !!(session && spec?.run.resume && spec.capabilities?.resume !== false);
-      const extra = note ? `\n\nThe user added: ${note}` : '';
+      // It replied that the message changes the plan: the planner updates it, then this agent goes on with that.
+      const amend = this.amendFor.get(info.id);
+      this.amendFor.delete(info.id);
+      const updated = amend ? await this.amendPlan(run, amend) : false;
+      const extra = updated ? `\n\n${P.planUpdatedPrompt(run.plan)}` : note ? `\n\n${P.userMessagePrompt(note, { planner: info.role === 'executor' && run.config.plan.enabled && !!run.plan })}` : '';
+      const since = now();
       res = canResume
-        ? await this.invoke(run, info, P.resumeAfterPause() + extra, mode, session, res.lastSeq)
+        ? await this.invoke(run, info, (updated ? '' : P.resumeAfterPause()) + extra, mode, session, res.lastSeq)
         : await this.invoke(run, info, prompt + extra, mode, resume, res.lastSeq);
+      if (note && !updated) this.autoReply(run, info, since);
     }
     return res;
+  }
+
+  /** Agents that replied that a message changes the plan: the message the planner must take in. */
+  private amendFor = new Map<string, string>();
+
+  /**
+   * An agent that did not answer a mid-run message with reply_user (e.g. its CLI has no tools): its first words after
+   * reading it count as the answer, so the user never gets none.
+   */
+  private autoReply(run: WorkflowRun, info: AgentRunInfo, since: number) {
+    const open = [...(run.userMessages ?? [])].reverse().find((m) => m.ts <= since && m.deliveredTo?.includes(info.id) && !m.replies?.some((r) => r.agentId === info.id));
+    if (!open) return;
+    const first = this.events(run.id, info.id).find((e) => e.kind === 'message' && e.ts >= since && e.text?.trim());
+    if (!first?.text) return;
+    (open.replies ??= []).push({ agentId: info.id, who: `${this.providerName(info.provider)} · ${roleLabel(info.role)}`, text: first.text.trim().slice(0, 600), ts: first.ts, auto: true });
+    this.touch(run);
+  }
+
+  /** The planner updates the plan for a message the user sent during implementation (no review round). */
+  private async amendPlan(run: WorkflowRun, message: string): Promise<boolean> {
+    const cfg = run.config.plan;
+    const stage = run.stages.plan;
+    this.log(run, L('你追加的訊息改變了需求：請計畫者更新計畫', 'Your message changes the task: the planner updates the plan'), 'info', true);
+    const spec = this.d.registry.get(cfg.author.provider);
+    const resume = stage.authorSessionId && spec?.run.resume && spec.capabilities?.resume !== false ? stage.authorSessionId : undefined;
+    const prompt = resume ? P.amendPlanPrompt(message) : `${P.planDraftPrompt(run.config, '')}\n\nCURRENT PLAN:\n${P.planBlock(run.plan)}\n\n${P.amendPlanPrompt(message)}`;
+    const n = stage.rounds.length + 1;
+    const round: Round = { n, userFeedback: message };
+    stage.rounds.push(round);
+    const r = await this.runRole(run, { role: 'planner', roleCfg: cfg.author, stage: 'plan', round: n, prompt, mode: 'readonly', resume, expect: 'submit_plan', task: L('依你追加的訊息更新計畫', 'Update the plan for your message') });
+    round.authorAgentId = r.info.id;
+    if (r.info.sessionId) stage.authorSessionId = r.info.sessionId;
+    const plan = r.sub?.plan?.plan;
+    if (!plan) {
+      this.log(run, L('計畫者沒有交出更新後的計畫，實作者照原計畫並依你的訊息繼續', 'The planner gave no updated plan; the implementer follows your message on the current plan'), 'warn', true);
+      return false;
+    }
+    round.submission = { summary: plan.summary, plan, responses: r.sub?.plan?.responses };
+    // Steps already done stay done.
+    const before = run.steps;
+    run.plan = plan;
+    run.steps = plan.steps.map((st) => ({ ...st, status: before.find((o) => o.id === st.id && o.title === st.title)?.status ?? 'pending' }));
+    round.handoff = buildHandoff(run, 'plan', round);
+    const msg = [...(run.userMessages ?? [])].reverse().find((m) => m.text && message.includes(m.text.slice(0, 200)));
+    if (msg) msg.planUpdated = true;
+    this.log(run, L(`計畫已依你的訊息更新：${plan.steps.length} 個步驟`, `The plan was updated for your message: ${plan.steps.length} steps`), 'info', true);
+    this.touch(run);
+    return true;
   }
 
   /**
@@ -1099,6 +1153,25 @@ export class Orchestrator {
         this.touch(run);
         const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
         return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how;
+      }
+      case 'reply_user': {
+        const text = String(args.text ?? '').trim().slice(0, 1000);
+        if (!text) throw new Error('text is required');
+        const msgs = run.userMessages ?? [];
+        // The newest message this agent got and has not answered yet.
+        const m = [...msgs].reverse().find((x) => x.deliveredTo?.includes(info.id) && !x.replies?.some((r) => r.agentId === info.id)) ?? msgs[msgs.length - 1];
+        if (!m) throw new Error('There is no message from the user to answer');
+        const changesPlan = args.changes_plan === true;
+        (m.replies ??= []).push({ agentId: info.id, who: `${this.providerName(info.provider)} · ${roleLabel(info.role)}`, text, ts: now(), changesPlan });
+        this.touch(run);
+        if (changesPlan && info.role === 'executor' && run.config.plan.enabled && run.plan) {
+          // Stop this turn right after the answer; the planner updates the plan, then this agent goes on with it.
+          this.amendFor.set(info.id, m.text);
+          this.pausedAgents.add(info.id);
+          setTimeout(() => this.agentAborts.get(info.id)?.abort(), 400);
+          return 'Answer shown to the user. Aivenue now has the planner update the plan for this message: stop here and end your turn; you will get the updated plan to continue with.';
+        }
+        return 'Answer shown to the user. Now follow the message and continue your task.';
       }
       case 'update_process': {
         const pid = Math.round(Number(args.pid));

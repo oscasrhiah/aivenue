@@ -84,7 +84,7 @@ function fakeAgents(orch, script) {
     used[r] = (used[r] ?? 0) + 1;
     const secret = o.bridge.env.AIVENUE_SESSION;
     const done = { lastSeq: (o.seqStart ?? 0) + 1, exitCode: 0, resumed: false, finalText: 'done' };
-    if (typeof step === 'function') return (await step(orch, secret)) ?? done;
+    if (typeof step === 'function') return (await step(orch, secret, o)) ?? done;
     if (step.error) return { ...done, exitCode: 1, finalText: '', error: step.error };
     if (step.nothing) return { ...done, finalText: '' };
     await orch.callTool(secret, step.tool, step.args);
@@ -383,4 +383,52 @@ test('重新診斷門檻留空＝無上限：同一缺陷一直退回實作者�
   assert.equal(r.status, 'completed', r.error);
   assert.deepEqual(routes(r), ['implementer', 'implementer', 'implementer', 'implementer', 'done']);
   assert.equal(r.stages.plan.rounds.length, 1);
+});
+
+test('執行中追加訊息：agent 先回覆；改變需求時計畫者更新計畫，實作者照新計畫繼續', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  // Works until Aivenue stops it (a mid-run message, or after reply_user asked for a plan update).
+  const untilStopped = (o) => new Promise((res) => (o.signal.aborted ? res() : o.signal.addEventListener('abort', () => res(), { once: true })));
+  const stopped = (o) => ({ lastSeq: (o.seqStart ?? 0) + 1, exitCode: 1, resumed: false, finalText: '', error: 'aborted' });
+  let runId;
+  fakeAgents(orch, {
+    planner: [
+      defaults.planner,
+      async (o, secret, a) => {
+        prompts.push(a.prompt);
+        await o.callTool(secret, 'submit_plan', { summary: 'plan v2', markdown: 'plan v2', steps: [{ id: '1', title: 'do it' }, { id: '2', title: 'add dark mode' }], goal });
+      },
+    ],
+    executor: [
+      async (o, secret, a) => {
+        setTimeout(() => o.interject(runId, 'Also add dark mode'), 100);
+        await untilStopped(a);
+        return stopped(a);
+      },
+      async (o, secret, a) => {
+        prompts.push(a.prompt);
+        await o.callTool(secret, 'reply_user', { text: 'Got it: dark mode needs a new step.', changes_plan: true });
+        await untilStopped(a);
+        return stopped(a);
+      },
+      async (o, secret, a) => {
+        prompts.push(a.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'done with dark mode' });
+      },
+    ],
+  });
+  runId = orch.start(config(cwd, { verify: undefined, plan: { enabled: true, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  const r = await settle(orch, runId);
+  assert.equal(r.status, 'completed', r.error);
+  const [answer, amend, after] = prompts;
+  assert.match(answer, /THE USER SENT YOU A MESSAGE[\s\S]*Also add dark mode[\s\S]*reply_user/);
+  assert.match(amend, /changes the task[\s\S]*Also add dark mode/);
+  assert.match(after, /THE PLAN WAS UPDATED[\s\S]*add dark mode/);
+  const m = r.userMessages[0];
+  assert.equal(m.replies?.length, 1);
+  assert.equal(m.replies[0].changesPlan, true);
+  assert.match(m.replies[0].text, /dark mode/);
+  assert.equal(m.planUpdated, true);
+  assert.deepEqual(r.steps.map((x) => x.title), ['do it', 'add dark mode']);
 });

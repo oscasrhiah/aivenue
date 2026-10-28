@@ -4,6 +4,7 @@ import { useT, type T } from '../i18n';
 import { clock, cx, fmtTokens } from '../util';
 import { Markdown } from './Markdown';
 import { Clamp } from './Clamp';
+import { Replies, type Reply } from './Replies';
 import { extensionUse } from '../extensionUse';
 
 function toolVerb(t: T, e: AgentEvent): string {
@@ -141,6 +142,8 @@ export interface SaidMessage {
   ts: number;
   text: string;
   attachments?: Attachment[];
+  replies?: Reply[];
+  planUpdated?: boolean;
 }
 
 export function Transcript({ events, raw = false, limit, said = [] }: { events: AgentEvent[]; raw?: boolean; limit?: number; said?: SaidMessage[] }) {
@@ -156,6 +159,7 @@ export function Transcript({ events, raw = false, limit, said = [] }: { events: 
             <span className="tx-said-who">👤 {t('你（執行中追加）', 'You (sent while working)')}</span>
             {it.said.text && <div className="tx-said-text">{it.said.text}</div>}
             {!!it.said.attachments?.length && <div className="muted tiny">📎 {it.said.attachments.map((a) => a.name).join('、')}</div>}
+            <Replies replies={it.said.replies} planUpdated={it.said.planUpdated} />
           </div>
         ) : (
           <div key={it.e.seq} title={clock(it.e.ts)}>

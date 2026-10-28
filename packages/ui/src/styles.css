@@ -5004,3 +5004,47 @@ textarea.code {
 .am-procs {
   margin-left: auto;
 }
+
+/* The chat (or settings) takes the space under the compact bar, not the whole height: otherwise, in narrow layouts
+   (VS Code panel, split window), the composer at the bottom is pushed out of view by the bar's height. */
+.main > .chat,
+.main > .settings {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+/* Answers to a mid-run message */
+.replies {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.reply {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.reply-who {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.reply-text {
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.reply.plan-updated {
+  color: var(--ok);
+}
+.user-msg-wrap .replies {
+  align-items: flex-end;
+  text-align: right;
+}
+.user-msg-wrap .reply {
+  justify-content: flex-end;
+}
