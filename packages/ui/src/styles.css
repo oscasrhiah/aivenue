@@ -1483,10 +1483,6 @@ p {
   text-decoration: underline;
 }
 
-/* An advisor's answer, nested under the agent that asked. */
-.turn.advisor {
-  border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-}
 
 /* "Add another account" box on a provider row. */
 .account-add {
@@ -4643,4 +4639,204 @@ textarea.code {
   color: var(--muted);
   min-width: 52px;
   flex-shrink: 0;
+}
+
+.shared-view {
+  max-height: 62vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--muted) 6%, transparent);
+}
+
+/* ⇄ run a sub-agent on another provider */
+.switch-prov {
+  position: relative;
+  display: inline-flex;
+}
+.switch-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 280px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+}
+.switch-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.switch-menu button:hover {
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.switch-menu .pad {
+  padding: 8px 10px;
+}
+.btn.small.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+}
+
+/* ---------- Telling blocks apart: who (role bar) and what counts (results stand out, narration steps back) ---------- */
+.rc-plan {
+  --role: #7f77dd;
+}
+.rc-build {
+  --role: #378add;
+}
+.rc-verify {
+  --role: #1d9e75;
+}
+.rc-help {
+  --role: var(--line-strong);
+}
+.turn {
+  border-left: 3px solid color-mix(in srgb, var(--role, var(--line-strong)) 65%, transparent);
+  padding-left: 12px;
+}
+.turn-body {
+  padding-left: 0;
+}
+.subs {
+  margin-left: 4px;
+  padding-left: 0;
+  border-left: 0;
+}
+/* Narration: smaller and quieter than the result. */
+.turn-body .tx-text {
+  font-size: 13px;
+  color: var(--text-2);
+}
+/* Results (plan, verdict, verification, summary): the one framed card of a turn. */
+.turn .block {
+  background: var(--surface);
+  border-color: color-mix(in srgb, var(--role, var(--line-strong)) 35%, var(--line));
+}
+.turn .block .prose,
+.turn .block .md {
+  color: var(--text);
+}
+.block-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+/* Shared notes: one quiet line each, full text on click. */
+.note-line {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+  min-width: 0;
+}
+.note-line .note-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.note-line.open {
+  align-items: flex-start;
+}
+.note-line.open .note-text {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+/* A sub-agent's name, its task on request. */
+.turn-task {
+  display: block;
+  -webkit-line-clamp: unset;
+  margin: -2px 0 6px 0;
+}
+.turn-title {
+  font-weight: 600;
+  color: var(--text);
+}
+.turn-task .link {
+  margin-left: 8px;
+}
+.turn-brief {
+  white-space: pre-wrap;
+  margin-top: 6px;
+  font-size: 12.5px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sunken);
+  color: var(--text-2);
+}
+/* Folded long content. */
+.clamp-body.folded {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent);
+  mask-image: linear-gradient(to bottom, #000 65%, transparent);
+}
+.clamp-toggle {
+  margin-top: 2px;
+}
+/* Agent map: the same role colour, what a helper may do and what it came back with. */
+.am-node {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--role, var(--line-strong)) 65%, transparent);
+}
+.am-node-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.am-tag {
+  font-size: 10.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+}
+.am-tag.warn {
+  color: var(--warn);
+}
+.am-node-result {
+  font-size: 11.5px;
+  color: var(--text-2);
+  margin-top: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.am-node-result.err {
+  color: var(--err);
+}
+.switch-menu button {
+  color: var(--text);
+}
+.switch-prov.wide .switch-menu {
+  left: 0;
+  right: auto;
 }

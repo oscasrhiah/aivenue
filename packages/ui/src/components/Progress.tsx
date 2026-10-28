@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
-import { cx, modelLabel, providerName } from '../util';
+import { cx, modelLabel, providerName, subTitle } from '../util';
 
 type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
 interface Item {
@@ -165,7 +165,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
               <span className="pp-sub">{t('目前', 'Now')}</span>
               {working.map((a) => (
                 <span key={a.id} className="pp-chip" title={a.activity}>
-                  <span className={cx('am-dot', 'live')} /> {providerName(providers, a.provider)} · {a.task}
+                  <span className={cx('am-dot', 'live')} /> {providerName(providers, a.provider)} · {a.role === 'subagent' ? subTitle(a) : a.task}
                 </span>
               ))}
             </div>

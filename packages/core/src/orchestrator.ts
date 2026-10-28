@@ -37,7 +37,7 @@ import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, type ToolDef } from './hubTools';
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
-import { buildHandoff, evidenceStamp, markStale, searchRecords, treeHash, type RecordQuery } from './records';
+import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
@@ -56,6 +56,7 @@ import { codexContext, compactCodexThread, estimateTokens } from './agentContext
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
 import { advisorPairing } from './advisorPairing';
+import { taskTitle } from './taskTitle';
 
 export interface OrchestratorDeps {
   registry: ProviderRegistry;
@@ -72,6 +73,8 @@ export interface OrchestratorDeps {
   github?: () => { gh: boolean; user?: string; mcp: boolean } | undefined;
   /** Through a router provider (OmniRoute): the models that actually answered between two times. */
   servedBy?: (provider: string, model: string | undefined, from: number, to: number) => Promise<string[] | undefined>;
+  /** nvidia-smi's CSV output (tests pass their own). */
+  gpuQuery?: () => string;
 }
 
 class Cancelled extends Error {
@@ -269,7 +272,7 @@ export class Orchestrator {
 
   constructor(private d: OrchestratorDeps) {
     for (const r of d.store.loadAll()) this.runs.set(r.id, r);
-    this.resources = new ResourceManager(d.dataDir);
+    this.resources = new ResourceManager(d.dataDir, d.gpuQuery);
   }
 
   // ---------- public API ----------
@@ -692,8 +695,40 @@ export class Orchestrator {
     this.touch(run);
   }
 
-  /** Run a sub-agent's task again (same provider and task); its parent is told the new id. A running role restarts its turn. */
-  rerunAgent(workflowId: string, agentId: string): string {
+  /**
+   * Providers a sub-agent's task can move to: signed in, other than the one it used, with whether their quota looks
+   * spent (a recent usage-limit error, or the official quota reports the limit reached). Usable ones first.
+   */
+  switchTargets(workflowId: string, agentId: string): { id: string; name: string; quota: 'ok' | 'limited'; note?: string; model?: string }[] {
+    const run = this.runs.get(workflowId);
+    const a = run?.agents[agentId];
+    if (!run || !a) throw new Error(L('找不到這個 agent', 'Agent not found'));
+    const usage = this.d.usage.cachedSummary(this.d.registry.specs());
+    const RECENT = 5 * 3600000;
+    return this.d.registry
+      .list()
+      .filter((p) => p.installed && p.auth.state === 'logged_in' && p.spec.id !== a.provider)
+      .map((p) => {
+        const u = usage.find((x) => x.providerId === p.spec.id);
+        const recent = u?.limitHit && Date.now() - u.limitHit.at < RECENT ? u.limitHit : undefined;
+        const limited = !!recent || !!u?.official?.limitReached;
+        const pinned = run.config.subagents.models?.[p.spec.id];
+        return {
+          id: p.spec.id,
+          name: p.spec.name,
+          quota: limited ? ('limited' as const) : ('ok' as const),
+          note: recent ? L(`${Math.round((Date.now() - recent.at) / 60000)} 分鐘前碰到用量上限`, `hit a usage limit ${Math.round((Date.now() - recent.at) / 60000)} min ago`) : u?.official?.limitReached ? L('官方額度已用完', 'official quota used up') : undefined,
+          model: pinned?.model || this.d.registry.defaults(p.spec.id).model,
+        };
+      })
+      .sort((x, y) => (x.quota === y.quota ? 0 : x.quota === 'ok' ? -1 : 1));
+  }
+
+  /**
+   * Run a sub-agent's task again (same task; same provider, or `provider` to move it to another one, e.g. when its quota
+   * ran out); its parent is told the new id. A running role restarts its turn.
+   */
+  rerunAgent(workflowId: string, agentId: string, provider?: string): string {
     const run = this.runs.get(workflowId);
     const a = run?.agents[agentId];
     if (!run || !a) throw new Error(L('找不到這個 agent', 'Agent not found'));
@@ -708,9 +743,17 @@ export class Orchestrator {
     const parent = a.parentId ? run.agents[a.parentId] : undefined;
     if (!parent || !['running', 'paused', 'queued'].includes(parent.status)) throw new Error(L('它的上層 agent 已經結束，無法交回結果', 'Its parent has finished, so a re-run has nobody to report to'));
     if (['running', 'queued', 'paused'].includes(a.status)) this.stopAgent(workflowId, agentId);
-    const spec = this.subSpecs.get(a.id) ?? { task: a.task, mode: a.readonly ? ('readonly' as const) : ('write' as const) };
-    const child = this.launchChild(run, parent, { provider: a.provider, model: a.model, effort: a.effort, task: spec.task, mode: spec.mode, rerunOf: a.id });
-    this.notifyParent(run, child, `the user re-ran sub-agent ${a.id} as ${child.id}; collect it with wait_subagent {subagent_id: "${child.id}"} (ignore ${a.id}).`);
+    const spec = this.subSpecs.get(a.id) ?? { task: a.brief ?? a.task, mode: a.readonly ? ('readonly' as const) : ('write' as const) };
+    const moved = !!provider && provider !== a.provider;
+    if (moved && !this.d.registry.list().some((p) => p.spec.id === provider && p.installed && p.auth.state === 'logged_in')) throw new Error(L(`${this.providerName(provider!)} 沒有安裝或尚未登入`, `${this.providerName(provider!)} is not installed or not signed in`));
+    // On another provider: that provider's model for sub-agents (or its default), not the old one's.
+    const pinned = moved ? run.config.subagents.models?.[provider!] : undefined;
+    const target = moved
+      ? { provider: provider!, model: pinned?.model || this.d.registry.defaults(provider!).model, effort: pinned?.effort || this.d.registry.defaults(provider!).effort }
+      : { provider: a.provider, model: a.model, effort: a.effort };
+    const child = this.launchChild(run, parent, { ...target, task: spec.task, mode: spec.mode, rerunOf: a.id, title: a.title });
+    if (moved) this.log(run, L(`你把 sub agent「${a.title ?? a.task.slice(0, 40)}」改由 ${this.providerName(provider!)} 重跑`, `You moved sub-agent "${a.title ?? a.task.slice(0, 40)}" to ${this.providerName(provider!)}`), 'info', true);
+    this.notifyParent(run, child, `the user re-ran sub-agent ${a.id}${moved ? ` on another provider (${provider})` : ''} as ${child.id}; collect it with wait_subagent {subagent_id: "${child.id}"} (ignore ${a.id}).`);
     return child.id;
   }
 
@@ -723,6 +766,20 @@ export class Orchestrator {
 
   gpus() {
     return this.resources.gpus();
+  }
+
+  private gpuSeen?: { at: number; has: boolean };
+  /** Whether this computer has an NVIDIA GPU (checked every 5 minutes): GPU tools are only offered when it does. */
+  private hasGpu(): boolean {
+    if (!this.gpuSeen || Date.now() - this.gpuSeen.at > 300000) this.gpuSeen = { at: Date.now(), has: this.resources.gpus().length > 0 };
+    return this.gpuSeen.has;
+  }
+
+  /** The shared context as agents see it through read_context {} (for the user to look at). */
+  sharedContext(id: string): string {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    return overview(run, (aid) => this.events(run.id, aid));
   }
 
   /**
@@ -769,6 +826,8 @@ export class Orchestrator {
       const models = await this.d.registry.listModels(role.provider).catch(() => [] as ModelInfo[]);
       const m = models.find((x) => x.id === model || x.id.endsWith(`/${model}`));
       if (models.length && !m) add('warn', 'model', L(`${label}：${p.spec.name} 的模型清單裡沒有「${model}」`, `${label}: "${model}" is not in ${p.spec.name}'s model list`));
+      else if (m?.tools === false) add('warn', 'model', L(`${label}：模型 ${model} 不支援工具呼叫，Aivenue 的工具（交結果、sub agent、等待條件…）都不能用，只能用文字格式交結果`, `${label}: model ${model} cannot call tools, so Aivenue's tools (submitting, sub-agents, waits…) do not work; it can only answer in text`));
+      else if (m?.reasoning === false && effort) add('warn', 'model', L(`${label}：模型 ${model} 不會思考，思考程度「${effort}」不會有作用`, `${label}: model ${model} does not think, so effort "${effort}" has no effect`));
       else if (m && effort && m.efforts?.length && !m.efforts.includes(effort)) add('warn', 'model', L(`${label}：模型 ${model} 不支援思考程度「${effort}」（支援：${m.efforts.join('、')}）`, `${label}: model ${model} does not take effort "${effort}" (it takes: ${m.efforts.join(', ')})`));
     }
     if (config.verify?.enabled && !config.plan.enabled) add('warn', 'model', L('目標驗收已開啟但沒有計畫階段：驗收者會自己從任務推導驗收指標', 'Goal verification is on without a planning stage: the verifier derives the metrics from the task'));
@@ -849,7 +908,7 @@ export class Orchestrator {
     const run = this.runs.get(s.workflowId);
     const info = run?.agents[s.agentId];
     if (!run || !info) return [];
-    const tools = toolsForRole(info.role, this.canSpawn(run, info), sharingOf(run) !== 'summary', this.crossAdvisor(run));
+    const tools = toolsForRole(info.role, this.canSpawn(run, info), sharingOf(run) !== 'summary', this.crossAdvisor(run), this.hasGpu());
     return s.permission === 'ask' ? [...tools, TOOL_DEFS.approval_prompt] : tools;
   }
 
@@ -1049,7 +1108,7 @@ export class Orchestrator {
       }
       case 'read_context': {
         const id = String(args.agent_id ?? '').trim();
-        if (!id) return overview(run);
+        if (!id) return overview(run, (aid) => this.events(run.id, aid));
         if (id === 'notes') return allNotes(run);
         const target = run.agents[id] ?? Object.values(run.agents).find((a) => a.id.startsWith(id));
         if (!target) throw new Error(`Unknown agent_id ${id}. Call read_context {} to list agents.`);
@@ -1406,7 +1465,7 @@ export class Orchestrator {
       // The planner verifies in its own conversation (it knows why it set each metric); a verifier keeps its own.
       const own = byPlanner && who.provider === run.config.plan.author.provider && run.config.plan.enabled ? run.stages.plan.authorSessionId : stage.authorSessionId;
       const resume = canResume ? own : undefined;
-      const evidence = evidenceStamp(run.config.cwd);
+      const evidence = evidenceStamp(run.config.cwd, run.plan?.goal?.data);
       const r = await this.runRole(run, {
         role: 'verifier',
         roleCfg: who,
@@ -1648,8 +1707,8 @@ export class Orchestrator {
         round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses };
         // Reviews and verifications of the code before this change no longer count.
         if (this.hasEvidence(run)) {
-          const stale = markStale(run, treeHash(run.config.cwd));
-          if (stale) this.log(run, L(`程式碼已變更：${stale} 筆先前的審查／驗收結果標為過期`, `The code changed: ${stale} earlier review / verification result(s) marked stale`));
+          const stale = markStale(run, evidenceStamp(run.config.cwd, run.plan?.goal?.data));
+          if (stale) this.log(run, L(`程式碼、資料或環境已變更：${stale} 筆先前的審查／驗收結果標為需重驗`, `The code, data or environment changed: ${stale} earlier review / verification result(s) need checking again`));
         }
       }
       userFeedback = undefined;
@@ -1679,7 +1738,7 @@ export class Orchestrator {
         const reviewerSpec = this.d.registry.get(cfg.reviewer.provider);
         const reviewerResume = !!(stage.reviewerSessionId && reviewerSpec?.run.resume && reviewerSpec.capabilities?.resume !== false);
         const changes = isPlan ? '' : await this.describeChanges(run);
-        const evidence = isPlan ? undefined : evidenceStamp(run.config.cwd);
+        const evidence = isPlan ? undefined : evidenceStamp(run.config.cwd, run.plan?.goal?.data);
         const rprompt = isPlan
           ? P.planReviewPrompt(run.config, run.plan!, n, prior) + this.subBlock(run, 0)
           : P.codeReviewPrompt(run.config, run.plan, round.submission?.summary ?? '', changes, n, prior) + this.subBlock(run, 0);
@@ -1734,7 +1793,7 @@ export class Orchestrator {
 
       // Rebutted and raised again: an independent ruling on the evidence, not another round of the same argument.
       if (review!.verdict === 'revise') {
-        const disputed = disputedIssues(stage.rounds.filter((r) => r.review).map((r) => ({ issues: r.review!.issues, responses: r.submission?.responses })));
+        const disputed = disputedIssues(stage.rounds.filter((r) => r.review).map((r) => ({ issues: r.review!.issues, responses: r.submission?.responses })), 1);
         if (disputed.length) {
           const rulings = await this.adjudicate(run, key, n, disputed);
           const dismissed = new Set(rulings.filter((x) => x.ruling === 'dismiss').map((x) => x.issue_id));
@@ -2173,13 +2232,28 @@ export class Orchestrator {
       });
       if (!d.allow) throw new Error(d.message ?? 'The user did not allow this sub-agent.');
     }
-    const child = this.launchChild(run, parent, { provider, model, effort, task, mode });
+    const title = typeof args.title === 'string' && args.title.trim() ? args.title.replace(/\s+/g, ' ').trim().slice(0, 60) : undefined;
+    const child = this.launchChild(run, parent, { provider, model, effort, task, mode, title });
     const round = parent.role === 'advisor' ? this.nextFactRound(run, parent, child) : undefined;
     return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default', ...(round ? { fact_finding_round: round } : {}) });
   }
 
-  private launchChild(run: WorkflowRun, parent: AgentRunInfo, o: { provider: string; model?: string; effort?: string; task: string; mode: 'write' | 'readonly'; rerunOf?: string }): AgentRunInfo {
-    const child = this.newAgent(run, { role: 'subagent', provider: o.provider, model: o.model, effort: o.effort, parentId: parent.id, depth: parent.depth + 1, stage: parent.stage, round: parent.round, task: o.task.slice(0, 400), rerunOf: o.rerunOf });
+  private launchChild(run: WorkflowRun, parent: AgentRunInfo, o: { provider: string; model?: string; effort?: string; task: string; mode: 'write' | 'readonly'; rerunOf?: string; title?: string }): AgentRunInfo {
+    const child = this.newAgent(run, {
+      role: 'subagent',
+      provider: o.provider,
+      model: o.model,
+      effort: o.effort,
+      parentId: parent.id,
+      depth: parent.depth + 1,
+      stage: parent.stage,
+      round: parent.round,
+      task: o.task.slice(0, 400),
+      title: o.title ?? taskTitle(o.task),
+      brief: o.task.slice(0, 8000),
+      readonly: o.mode === 'readonly',
+      rerunOf: o.rerunOf,
+    });
     this.subSpecs.set(child.id, { task: o.task, mode: o.mode });
     this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
     const prompt = P.subagentPrompt(run.config.cwd, o.task, roleLabel(parent.role), this.subBlock(run, child.depth));
@@ -2248,7 +2322,7 @@ export class Orchestrator {
 
   /** Re-estimate the shared context (what read_context {} returns), the pie's numerator. */
   private refreshShared(run: WorkflowRun) {
-    run.sharedTokens = sharingOf(run) === 'summary' ? 0 : estimateTokens(overview(run));
+    run.sharedTokens = sharingOf(run) === 'summary' ? 0 : estimateTokens(overview(run, (aid) => this.events(run.id, aid)));
   }
 
   /** Over the auto-compaction threshold: compact before the next agent reads the shared context. */
@@ -2635,7 +2709,7 @@ export class Orchestrator {
     this.log(run, L(`${this.label(asker)} 請教顧問 ${this.providerName(cfg.provider!)}`, `${this.label(asker)} consulted the advisor ${this.providerName(cfg.provider!)}`));
     // Only the latest part of the asker's transcript: the question and context carry the rest, and the advisor is the priciest reader.
     const recent = formatTranscript(this.events(run.id, asker.id), { budget: context ? 12000 : 30000 });
-    const prompt = P.advisorPrompt(run.config, agentLabel(asker), question, context, overview(run), recent, this.subBlock(run, child.depth), factRoundsOf(cfg));
+    const prompt = P.advisorPrompt(run.config, agentLabel(asker), question, context, overview(run, (aid) => this.events(run.id, aid)), recent, this.subBlock(run, child.depth), factRoundsOf(cfg));
     const done = this.invokePausable(run, child, prompt, 'readonly')
       .then((res) => {
         child.status = this.aborted(run) ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';

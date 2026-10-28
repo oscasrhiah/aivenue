@@ -49,6 +49,7 @@ export function goalBlock(goal: GoalSpec | undefined): string {
     goal.expected ? `Expected effect: ${goal.expected}` : '',
     goal.cost ? `Expected cost: ${goal.cost}` : '',
     goal.constraints ? `Constraints: ${goal.constraints}` : '',
+    goal.data?.length ? `Data the results depend on (versions recorded with each result): ${goal.data.join(', ')}` : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -92,7 +93,7 @@ export function subagentBlock(sub: SubagentConfig, depth: number, available: { i
   return [
     '',
     'SUB-AGENTS: You may delegate self-contained sub-tasks to other AI agents with the Aivenue tools:',
-    `- \`spawn_subagent\` {provider, task, mode?: "write"|"readonly", model?, effort?} starts one and returns a subagent_id immediately. Available providers: ${available.map(describe).join(', ')}. Leave model/effort out unless the task clearly needs a different one.`,
+    `- \`spawn_subagent\` {provider, title, task, mode?: "write"|"readonly", model?, effort?} starts one (title: a few words naming the task for the user) and returns a subagent_id immediately. Available providers: ${available.map(describe).join(', ')}. Leave model/effort out unless the task clearly needs a different one.`,
     '- `wait_subagent` {subagent_id} waits up to ~50 seconds and returns its status/result; call it again while it is still running.',
     `- At most ${sub.maxConcurrent} sub-agents run at once. Give each a complete, specific task (it cannot see this conversation). Sub-agents share this working directory, so give parallel sub-agents disjoint files.`,
   ].join('\n');
@@ -110,7 +111,7 @@ export function planDraftPrompt(cfg: WorkflowConfig, sub: string, userFeedback?:
     sub,
     '',
     cfg.verify?.enabled
-      ? 'GOAL VERIFICATION IS ON: also set `goal` — what done means (statement) and measurable acceptance metrics (ids "M1", "M2"…, each with a target and the command or check that measures it), plus the expected effect, cost and constraints. After implementation and code review, a verifier measures every metric; the workflow only ends when all of them are met, so make the targets real and checkable, not wishes. Every acceptance criterion the user stated must be a metric with a target at least as strict as the user\'s; never count "could not be measured" or "reported the failure honestly" as passing.'
+      ? 'GOAL VERIFICATION IS ON: also set `goal` — what done means (statement) and measurable acceptance metrics (ids "M1", "M2"…, each with a target and the command or check that measures it), plus the expected effect, cost, constraints and `data` (the data files or folders the results depend on, if any). After implementation and code review, a verifier measures every metric; the workflow only ends when all of them are met, so make the targets real and checkable, not wishes. Every acceptance criterion the user stated must be a metric with a target at least as strict as the user\'s; never count "could not be measured" or "reported the failure honestly" as passing.'
       : '',
     '',
     'When the plan is ready, call the Aivenue tool `submit_plan` with: summary, markdown (the full plan), steps (short numbered steps with ids "1", "2", ...)' + (cfg.verify?.enabled ? ', goal.' : '.'),

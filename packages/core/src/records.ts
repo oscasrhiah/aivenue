@@ -39,29 +39,38 @@ function environment(): Record<string, string> {
   return env;
 }
 
+/** Size and modification time of every data file (folders walked, up to 20 000 files). */
 function dataStamp(cwd: string, paths: string[]): string {
   const h = createHash('sha1');
-  for (const p of paths) {
+  let left = 20000;
+  const walk = (abs: string, shown: string) => {
+    if (left-- <= 0) return;
+    let st: fs.Stats;
     try {
-      const st = fs.statSync(path.resolve(cwd, p));
-      h.update(`${p}\0${st.size}\0${Math.round(st.mtimeMs)}\n`);
+      st = fs.statSync(abs);
     } catch {
-      h.update(`${p}\0missing\n`);
+      h.update(`${shown}\0missing\n`);
+      return;
     }
-  }
+    if (!st.isDirectory()) return void h.update(`${shown}\0${st.size}\0${Math.round(st.mtimeMs)}\n`);
+    for (const e of fs.readdirSync(abs).sort()) walk(path.join(abs, e), `${shown}/${e}`);
+  };
+  for (const p of paths) walk(path.resolve(cwd, p), p);
   return h.digest('hex').slice(0, 16);
 }
 
 /**
- * Mark reviews and verifications measured on an older version of the code as stale (they need checking again).
- * Returns how many were newly marked.
+ * Mark reviews and verifications measured on another version as stale (they need checking again): the code or its
+ * dependency files changed (the tree), the data the goal names changed, or the environment (OS, runtime, Python / conda
+ * environment, visible GPUs) is not the same. Returns how many were newly marked.
  */
-export function markStale(run: WorkflowRun, currentTree: string): number {
+export function markStale(run: WorkflowRun, now: Pick<EvidenceStamp, 'treeHash' | 'data' | 'env'>): number {
   let n = 0;
+  const differs = (e: EvidenceStamp) => e.treeHash !== now.treeHash || (e.data ?? '') !== (now.data ?? '') || JSON.stringify(e.env) !== JSON.stringify(now.env);
   for (const stage of [run.stages.plan, run.stages.implement, run.stages.verify]) {
     for (const r of stage?.rounds ?? []) {
       for (const res of [r.review, r.verification]) {
-        if (res?.evidence && !res.stale && res.evidence.treeHash !== currentTree && stage !== run.stages.plan) {
+        if (res?.evidence && !res.stale && differs(res.evidence) && stage !== run.stages.plan) {
           res.stale = true;
           n++;
         }

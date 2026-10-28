@@ -36,7 +36,8 @@ const isWin = process.platform === 'win32';
 export class ResourceManager {
   private dir: string;
 
-  constructor(dataDir: string) {
+  /** `query`: nvidia-smi's CSV output (replaced in tests). */
+  constructor(dataDir: string, private query: () => string = nvidiaSmi) {
     this.dir = path.join(dataDir, 'locks');
     fs.mkdirSync(this.dir, { recursive: true });
   }
@@ -44,7 +45,7 @@ export class ResourceManager {
   gpus(): GpuInfo[] {
     let out = '';
     try {
-      out = execFileSync('nvidia-smi', ['--query-gpu=index,name,memory.used,memory.total,utilization.gpu', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      out = this.query();
     } catch {
       return [];
     }
@@ -151,6 +152,10 @@ export class ResourceManager {
       });
     });
   }
+}
+
+function nvidiaSmi(): string {
+  return execFileSync('nvidia-smi', ['--query-gpu=index,name,memory.used,memory.total,utilization.gpu', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
 export function pidAlive(pid: number): boolean {

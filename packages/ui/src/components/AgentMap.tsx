@@ -3,7 +3,9 @@ import type { AgentRunInfo, ProviderInfo, WorkflowRun } from '../../../core/src/
 import { hub, useAgentEvents } from '../api';
 import { failureLabel } from './AgentTurn';
 import { useT } from '../i18n';
-import { agentStatus, cx, elapsed, fmtTokens, modelLabel, providerColor, providerName, roleLabel } from '../util';
+import { agentStatus, cx, elapsed, firstLine, fmtTokens, modelLabel, providerColor, providerName, roleLabel, roleTone, subTitle } from '../util';
+import { Clamp } from './Clamp';
+import { SwitchProvider } from './RunTools';
 import { Markdown } from './Markdown';
 import { Transcript, visible } from './Transcript';
 
@@ -23,8 +25,8 @@ function useTick(on: boolean) {
 
 /** What the agent is for: a sub-agent's task, or its role in the workflow. */
 function titleOf(t: T, a: AgentRunInfo): string {
-  if (a.role === 'subagent') return a.task || 'Sub agent';
-  if (a.role === 'advisor') return `❓ ${a.task || roleLabel(t, a.role)}`;
+  if (a.role === 'subagent') return subTitle(a) || 'Sub agent';
+  if (a.role === 'advisor') return `❓ ${subTitle(a) || roleLabel(t, a.role)}`;
   return `${roleLabel(t, a.role)}${a.round ? ` · ${t(`第 ${a.round} 輪`, `round ${a.round}`)}` : ''}`;
 }
 
@@ -159,8 +161,11 @@ function Dot({ t, agent }: { t: T; agent: AgentRunInfo }) {
 function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; providers: ProviderInfo[]; onOpen: () => void }) {
   const tokens = tokensOf(agent);
   const main = agent.role !== 'subagent' && agent.role !== 'advisor';
+  const files = agent.stats.filesChanged.length;
+  // What a helper came back with, in one line (or why it failed).
+  const outcome = main || isLive(agent) ? '' : agent.status === 'failed' || agent.status === 'cancelled' ? (agent.error ? firstLine(agent.error, 80) : '') : firstLine(agent.finalText, 80);
   return (
-    <button className={cx('am-node', main && 'am-root', isLive(agent) && 'live')} onClick={onOpen} title={titleOf(t, agent)}>
+    <button className={cx('am-node', roleTone(agent.role), main && 'am-root', isLive(agent) && 'live')} onClick={onOpen} title={agent.brief ?? agent.task}>
       <div className="am-node-title">
         <Dot t={t} agent={agent} />
         {/* The round is on the row's label already. */}
@@ -176,8 +181,18 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
         {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : agentStatus(t, agent.status).label}
         {tokens > 0 && ` · ${fmtTokens(tokens)} tokens`}
         {agent.stats.tools > 0 && ` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
+        {files > 0 && ` · ${t(`改 ${files} 檔`, `${files} file(s)`)}`}
       </div>
-      {isLive(agent) && agent.activity && <div className="am-node-doing">{agent.activity.replace(/^\S+\s/, '')}</div>}
+      {!main && (
+        <div className="am-node-tags">
+          <span className="am-tag">{agent.readonly ? t('唯讀', 'read-only') : t('可寫入', 'can write')}</span>
+          {agent.rerunOf && <span className="am-tag">{t('重跑', 're-run')}</span>}
+          {agent.handoff && <span className="am-tag">{t('已交接', 'handed off')}</span>}
+          {agent.failure && agent.status !== 'completed' && <span className="am-tag warn">{agent.failure.kind}</span>}
+        </div>
+      )}
+      {isLive(agent) && (agent.waiting || agent.activity) && <div className="am-node-doing">{agent.waiting ?? agent.activity!.replace(/^\S+\s/, '')}</div>}
+      {outcome && <div className={cx('am-node-result', agent.status === 'failed' && 'err')}>{agent.status === 'completed' ? '↳ ' : '✕ '}{outcome}</div>}
     </button>
   );
 }
@@ -246,8 +261,13 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
 
       {(agent.role === 'subagent' || agent.role === 'advisor') && agent.task && (
         <div className="am-section">
-          <div className="am-label">{agent.role === 'advisor' ? t('問題', 'Question') : t('任務', 'Task')}</div>
-          <div className="am-task">{agent.task}</div>
+          <div className="am-label">
+            {agent.role === 'advisor' ? t('問題', 'Question') : t('任務', 'Task')}
+            {agent.role === 'subagent' && <span className="muted"> · {agent.readonly ? t('唯讀', 'read-only') : t('可寫入', 'can write')}</span>}
+          </div>
+          <Clamp height={110} more={t('展開任務全文', 'Show the full task')}>
+            <div className="am-task">{agent.brief ?? agent.task}</div>
+          </Clamp>
         </div>
       )}
 
@@ -266,7 +286,12 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
           <div className="am-kid-list">
             {kids.map((k) => (
               <button key={k.id} className="am-kid" onClick={() => onOpen(k.id)}>
-                <Dot t={t} agent={k} /> {providerName(providers, k.provider)} · {k.model ? modelLabel(k.model) : t('預設模型', 'default model')} — {titleOf(t, k)}
+                <Dot t={t} agent={k} /> <b>{titleOf(t, k)}</b>
+                <span className="muted">
+                  {' '}
+                  · {providerName(providers, k.provider)} · {k.model ? modelLabel(k.model) : t('預設模型', 'default model')}
+                  {!isLive(k) && firstLine(k.finalText, 60) ? ` — ${firstLine(k.finalText, 60)}` : ''}
+                </span>
               </button>
             ))}
           </div>
@@ -276,7 +301,9 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
       {!isLive(agent) && answer && (
         <div className="am-section">
           <div className="am-label">{t('結果', 'Result')}</div>
-          <Markdown className="am-answer" text={answer.length > 20000 ? answer.slice(0, 20000) + '\n…' : answer} />
+          <Clamp height={260} more={t('展開完整結果', 'Show the full result')}>
+            <Markdown className="am-answer" text={answer.length > 20000 ? answer.slice(0, 20000) + '\n…' : answer} />
+          </Clamp>
         </div>
       )}
       {agent.status === 'failed' && agent.error && <div className="tx-err">✕ {agent.error}</div>}
@@ -332,6 +359,7 @@ function AgentActions({ t, run, agent }: { t: T; run: WorkflowRun; agent: AgentR
               ↻ {agent.role === 'subagent' ? t('重跑', 'Re-run') : t('重新派發', 'Re-dispatch')}
             </button>
           )}
+          {live && agent.role === 'subagent' && parentLive && <SwitchProvider workflowId={agent.workflowId ?? run.id} agentId={agent.id} urgent={agent.failure?.kind === 'quota' || agent.failure?.kind === 'rate_limit'} />}
           {agent.role === 'subagent' && !isLive(agent) && (
             <button className="btn small" onClick={() => act('agents.close')}>
               ✕ {t('關閉', 'Close')}

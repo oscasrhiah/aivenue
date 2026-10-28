@@ -459,6 +459,8 @@ export interface CatalogProvider {
   kind: 'plan' | 'api' | 'local';
   featured: boolean;
   models: CatalogModel[];
+  /** Models without tool calling: not offered (agents need tools), but known, so a model list can say so. */
+  noTools?: string[];
 }
 
 export interface CatalogModel {
@@ -486,6 +488,10 @@ export interface ModelInfo {
   free?: boolean;
   /** What the model reads besides text: "image", "pdf", "audio", "video" (unknown when not set: the provider's profile decides). */
   inputs?: string[];
+  /** Calls tools (false: Aivenue's tools do not work; it answers in text). Unknown when not set. */
+  tools?: boolean;
+  /** Thinks / takes a reasoning effort (false: an effort setting has no effect). Unknown when not set. */
+  reasoning?: boolean;
 }
 
 export interface StageConfig {
@@ -663,6 +669,8 @@ export interface GoalSpec {
   expected?: string;
   cost?: string;
   constraints?: string;
+  /** Data files or folders the results depend on (datasets, fixtures, weights): their version is recorded with every result. */
+  data?: string[];
 }
 
 /** Where a result was measured: the code version, environment and data it applies to. */
@@ -769,6 +777,9 @@ export interface AgentRunInfo {
   handoff?: string;
   /** Started again by the user from this agent. */
   rerunOf?: string;
+  /** A sub-agent's short name (given by its parent, else taken from the task) and its full task. */
+  title?: string;
+  brief?: string;
   /** Its own conversation: tokens in use now and the model's limit (when the CLI reports them). */
   context?: { used?: number; window?: number; estimated?: boolean; compactedAt?: number };
   /** Shared notes / agent results it has already been given (time), so later turns only get what is new. */

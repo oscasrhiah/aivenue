@@ -938,7 +938,17 @@ export function Chat({ id }: { id?: string }) {
                 </div>
               )}
               {run.dryRun && run.preflight && <PreflightList items={run.preflight} showOk />}
-              {run.status === 'interrupted' && <div className="note warn">{t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}</div>}
+              {run.status === 'interrupted' && (
+                <div className="note warn">
+                  {t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}
+                  {(run.waits ?? []).some((w) => w.state === 'waiting' && w.timeoutAt > Date.now()) &&
+                    t(
+                      ` 中斷時有 ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} 個條件等待（${(run.waits ?? []).filter((w) => w.state === 'waiting').map((w) => w.check.slice(0, 40)).join('、')}）：接續時會交給 agent 用同一個 wait_id 繼續等，原本的逾時時間不變。`,
+                      ` ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} condition wait(s) were open; continuing hands them to the agents to keep waiting with the same wait_id and deadline.`,
+                    )}
+                  {!!run.sideEffects?.length && t(` 已做過的 ${run.sideEffects.length} 個對外動作不會重做。`, ` The ${run.sideEffects.length} external action(s) already done will not be repeated.`)}
+                </div>
+              )}
             </div>
           </div>
           <div className="dock">

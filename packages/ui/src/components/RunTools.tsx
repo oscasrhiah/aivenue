@@ -18,6 +18,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
   const t = useT();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState(false);
+  const [shared, setShared] = useState<string>();
   const [note, setNote] = useState<string>();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -52,6 +53,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
       </button>
       {open && (
         <div className="menu">
+          <button onClick={() => (setOpen(false), void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)))}>🧠 {t('檢視共享上下文（agent 看到的內容）', 'View the shared context (what agents see)')}</button>
           <button onClick={() => (setOpen(false), setSearch(true))}>🔎 {t('搜尋紀錄', 'Search records')}</button>
           <button onClick={exportRun}>📦 {t('匯出完整紀錄（遮罩金鑰）', 'Export full records (keys masked)')}</button>
           <button onClick={distil}>📐 {t('把驗證過的規則存成專案 Skill', 'Save verified rules as a project Skill')}</button>
@@ -66,6 +68,20 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
                 {t('好', 'OK')}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {shared !== undefined && (
+        <div className="modal-back" onClick={() => setShared(undefined)}>
+          <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+            <div className="drawer-head wf-modal-head">
+              <h3>{t('共享上下文', 'Shared context')}</h3>
+              <button className="icon-btn" onClick={() => setShared(undefined)} aria-label="close">
+                ✕
+              </button>
+            </div>
+            <div className="muted small">{t(`agent 用 read_context 讀到的完整總覽：目標與差距、目前狀態（等待、GPU 鎖、背景程序）、審查與驗收、交接摘要、專案結構（Graphify）、每個 agent 跑過的指令與結果。約 ${Math.round(shared.length / 4).toLocaleString()} tokens。`, `The full overview agents read with read_context: goal and gap, current status (waits, GPU locks, background processes), reviews and verifications, hand-offs, project structure (Graphify), and every agent's commands and results. About ${Math.round(shared.length / 4).toLocaleString()} tokens.`)}</div>
+            <pre className="shared-view">{shared}</pre>
           </div>
         </div>
       )}
@@ -173,5 +189,68 @@ export function PreflightList({ items, showOk }: { items: PreflightItem[]; showO
           </div>
         ))}
     </div>
+  );
+}
+
+interface SwitchTarget {
+  id: string;
+  name: string;
+  quota: 'ok' | 'limited';
+  note?: string;
+  model?: string;
+}
+
+/** "⇄": run a sub-agent's task again on another signed-in provider (e.g. when its quota ran out). */
+export function SwitchProvider({ workflowId, agentId, compact, urgent }: { workflowId: string; agentId: string; compact?: boolean; urgent?: boolean }) {
+  const t = useT();
+  const [list, setList] = useState<SwitchTarget[]>();
+  const [err, setErr] = useState<string>();
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!list) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setList(undefined);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [list]);
+  const open = () =>
+    list
+      ? setList(undefined)
+      : hub
+          .call<SwitchTarget[]>('agents.switchTargets', { workflowId, agentId })
+          .then((l) => (setErr(undefined), setList(l)))
+          .catch((e) => setErr((e as Error).message));
+  const pick = (id: string) =>
+    hub
+      .call('agents.rerun', { workflowId, agentId, provider: id })
+      .then(() => setList(undefined))
+      .catch((e) => setErr((e as Error).message));
+  const title = t('改用另一家供應商重跑這個 sub agent 的任務（例如額度用完時）', 'Run this sub-agent\'s task again on another provider (e.g. when its quota ran out)');
+  return (
+    <span className={cx('switch-prov', !compact && 'wide')} ref={ref}>
+      {compact ? (
+        <button className={cx('icon-btn tiny', urgent && 'warn-text')} title={title} onClick={open}>
+          ⇄
+        </button>
+      ) : (
+        <button className={cx('btn small', urgent && 'warn')} title={title} onClick={open}>
+          ⇄ {t('換一家重跑', 'Run on another provider')}
+        </button>
+      )}
+      {list && (
+        <div className="menu switch-menu">
+          {list.length === 0 && <div className="muted small pad">{t('沒有其他已登入的供應商', 'No other signed-in provider')}</div>}
+          {list.map((p) => (
+            <button key={p.id} onClick={() => pick(p.id)} title={p.note}>
+              <span className="grow">
+                {p.name}
+                {p.model && <span className="muted"> · {p.model}</span>}
+              </span>
+              <span className={cx('pill', p.quota === 'ok' ? 'ok' : 'warn')}>{p.quota === 'ok' ? t('有額度', 'has quota') : t('額度可能用完', 'quota may be out')}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {err && <span className="err-text small"> {err}</span>}
+    </span>
   );
 }

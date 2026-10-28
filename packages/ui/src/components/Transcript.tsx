@@ -3,6 +3,7 @@ import type { AgentEvent, Attachment } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
 import { clock, cx, fmtTokens } from '../util';
 import { Markdown } from './Markdown';
+import { Clamp } from './Clamp';
 import { extensionUse } from '../extensionUse';
 
 function toolVerb(t: T, e: AgentEvent): string {
@@ -93,7 +94,14 @@ function Line({ e, raw }: { e: AgentEvent; raw: boolean }) {
     case 'tool':
       return <ToolLine e={e} />;
     case 'message':
-      return <Markdown className="tx-text" text={e.text ?? ''} />;
+      // Long narration folds: the card's result block carries what counts.
+      return !raw && (e.text?.length ?? 0) > 600 ? (
+        <Clamp height={150} more={t('展開這段說明', 'Show the rest')}>
+          <Markdown className="tx-text" text={e.text ?? ''} />
+        </Clamp>
+      ) : (
+        <Markdown className="tx-text" text={e.text ?? ''} />
+      );
     case 'thinking':
       return (
         <div className="tx-think" onClick={() => setOpen(!open)}>

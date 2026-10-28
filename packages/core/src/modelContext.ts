@@ -42,7 +42,7 @@ export function lookupContext(catalog: CatalogProvider[], providers: string[], m
  * first (the CLI's own vendor, e.g. "anthropic" for Claude Code), then — only when every other catalog that lists the
  * model agrees — anywhere. Aliases without a version ("opus") resolve to the newest model of that name.
  */
-export function lookupModel(catalog: CatalogProvider[], providers: string[], model: string): { context?: number; inputs?: string[] } {
+export function lookupModel(catalog: CatalogProvider[], providers: string[], model: string): { context?: number; inputs?: string[]; tools?: boolean; reasoning?: boolean } {
   const prefix = model.includes('/') ? model.split('/')[0] : undefined;
   const order = [...new Set([prefix, ...providers].filter((p): p is string => !!p))];
   const wanted = variants(model);
@@ -51,7 +51,8 @@ export function lookupModel(catalog: CatalogProvider[], providers: string[], mod
     if (!cp) continue;
     for (const w of wanted) {
       const hit = cp.models.find((m) => norm(m.id) === w);
-      if (hit) return { context: hit.context || undefined, inputs: hit.inputs };
+      if (hit) return { context: hit.context || undefined, inputs: hit.inputs, tools: true, reasoning: hit.reasoning };
+      if (cp.noTools?.some((id) => norm(id) === w)) return { tools: false };
     }
     // "opus", "sonnet": the newest model whose name carries that word.
     if (!/\d/.test(wanted[0])) {
@@ -61,7 +62,7 @@ export function lookupModel(catalog: CatalogProvider[], providers: string[], mod
         const v = version(norm(m.id).replace(/-\d{8}$/, ''));
         if (!best || newer(v, best.v)) best = { v, m };
       }
-      if (best) return { context: best.m.context || undefined, inputs: best.m.inputs };
+      if (best) return { context: best.m.context || undefined, inputs: best.m.inputs, tools: true, reasoning: best.m.reasoning };
     }
   }
   // Elsewhere only when it is unambiguous: hosts of the same open model often cap it differently.

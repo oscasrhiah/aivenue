@@ -10,7 +10,7 @@ const CUSTOM = '__custom__';
 /** "Claude Opus (claude-opus-5-5) · 1M · 免費" */
 export function modelOptionLabel(t: T, m: ModelInfo): string {
   const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
-  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('⚠ 不能呼叫工具', '⚠ no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
 }
 
 /** What a model reads besides text ("圖片、影片"), or "只有文字"; empty when unknown. */
@@ -68,7 +68,8 @@ export function ModelPicker({
   const [custom, setCustom] = useState(!!model && !known && models.length > 0);
   const current = models.find((m) => m.id === (model || provider?.defaultModel));
   // A listed model's own levels win, even none (e.g. Claude through Antigravity takes no effort); a typed-in model gets the CLI's.
-  const effortsOf = (m?: ModelInfo) => (m ? m.efforts ?? provider?.spec.efforts ?? [] : provider?.spec.efforts ?? []);
+  // A model that does not think takes no effort, whatever the provider offers in general.
+  const effortsOf = (m?: ModelInfo) => (m ? m.efforts ?? (m.reasoning === false ? [] : provider?.spec.efforts ?? []) : provider?.spec.efforts ?? []);
   const efforts = effortsOf(current);
   // Picking a model that takes no effort drops the one chosen before.
   const pick = (next?: string) => onChange({ model: next, effort: effortsOf(models.find((m) => m.id === (next || provider?.defaultModel))).length ? effort : undefined });

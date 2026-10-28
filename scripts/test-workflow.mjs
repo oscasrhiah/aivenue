@@ -187,11 +187,11 @@ const runWith = (over = {}) => ({
 
 test('驗證結果綁定程式版本：程式變了就標為過期', () => {
   const run = runWith();
-  assert.equal(W.markStale(run, 'aaa'), 1);
+  assert.equal(W.markStale(run, { treeHash: 'aaa', env: {} }), 1);
   assert.equal(run.stages.implement.rounds[0].review.stale, undefined);
   assert.equal(run.stages.verify.rounds[0].verification.stale, true);
-  assert.equal(W.markStale(run, 'ccc'), 1);
-  assert.equal(W.markStale(run, 'ccc'), 0);
+  assert.equal(W.markStale(run, { treeHash: 'ccc', env: {} }), 1);
+  assert.equal(W.markStale(run, { treeHash: 'ccc', env: {} }), 0);
 });
 
 test('交接摘要：事實、決策、未解問題分開，並連回證據', () => {

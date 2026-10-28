@@ -43,6 +43,7 @@ const goalSchema = {
     expected: { type: 'string', description: 'Expected effect.' },
     cost: { type: 'string', description: 'Expected cost (time, compute, money).' },
     constraints: { type: 'string', description: 'What must not change or be broken.' },
+    data: { type: 'array', items: { type: 'string' }, description: 'Data files or folders the results depend on (datasets, fixtures, model weights), relative to the working directory. Their version is recorded with every result.' },
   },
   required: ['statement', 'metrics'],
 };
@@ -277,6 +278,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       properties: {
         provider: { type: 'string', description: 'Provider id, see list_providers.' },
         task: { type: 'string', description: 'Complete, self-contained instructions. The sub-agent cannot see your conversation.' },
+        title: { type: 'string', description: 'A short name for the task (a few words, e.g. "Write expense tests"), shown to the user.' },
         mode: { type: 'string', enum: ['write', 'readonly'], description: 'readonly = must not modify files. Default write.' },
         model: { type: 'string', description: 'Optional model id for that provider. Ignored when the user fixed a model for it.' },
         effort: { type: 'string', description: 'Optional reasoning effort (e.g. low, medium, high). Ignored when the user fixed one.' },
@@ -374,7 +376,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   },
 };
 
-export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = false, advisor = false): ToolDef[] {
+export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = false, advisor = false, gpu = true): ToolDef[] {
   const names: string[] = [];
   if (role === 'planner') names.push('submit_plan');
   if (role === 'plan_reviewer' || role === 'code_reviewer') names.push('submit_review');
@@ -385,7 +387,7 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   // The compactor only reads the material in its prompt.
   if (role === 'compactor') return [];
   // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
-  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'gpu_status', 'gpu_acquire', 'gpu_release', 'track_process');
+  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
   if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');
@@ -424,7 +426,7 @@ export function parseGoal(v: any): GoalSpec | undefined {
     ? v.metrics.filter((m: any) => m && typeof m === 'object').map((m: any, i: number) => ({ id: s(m.id) || `M${i + 1}`, name: s(m.name) || s(m.target), target: s(m.target), how: s(m.how) }))
     : [];
   if (!s(v.statement) && !metrics.length) return undefined;
-  return { statement: s(v.statement), metrics, expected: v.expected ? s(v.expected) : undefined, cost: v.cost ? s(v.cost) : undefined, constraints: v.constraints ? s(v.constraints) : undefined };
+  return { statement: s(v.statement), metrics, expected: v.expected ? s(v.expected) : undefined, cost: v.cost ? s(v.cost) : undefined, constraints: v.constraints ? s(v.constraints) : undefined, data: Array.isArray(v.data) ? v.data.map(s).filter(Boolean).slice(0, 20) : undefined };
 }
 
 function parseIssues(v: unknown, prefix = 'R'): ReviewIssue[] {

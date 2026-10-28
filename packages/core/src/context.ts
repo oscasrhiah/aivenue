@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentRunInfo, ContextSharing, SharedNote, WorkflowRun } from './types';
+import { activityBlock, collectActivity, handoffsBlock, knowledgeBlock, statusBlock } from './ledger';
 
 /**
  * Shared context between agents: an overview of the workflow, full transcripts on request,
@@ -51,7 +52,9 @@ function others(run: WorkflowRun, selfId?: string): AgentRunInfo[] {
 
 function noteLine(run: WorkflowRun, n: SharedNote): string {
   const a = run.agents[n.agentId];
-  return `- [${a ? `${ROLE[a.role]} ${a.provider}` : n.by ?? 'agent'}] ${n.text}`;
+  // fact (checked) / inference (a judgement, not verified) / decision, so nobody builds on a guess as if it were checked.
+  const kind = n.kind ? `${n.kind.toUpperCase()} ` : '';
+  return `- ${kind}[${a ? `${a.id.slice(0, 8)} ${ROLE[a.role]} ${a.provider}` : n.by ?? 'agent'}] ${n.text}`;
 }
 
 /** Notes not yet folded into the shared memory (or all of them with `all`), newer than `since`. */
@@ -94,15 +97,27 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   ];
   const memory = run.memory && run.memory.updatedAt > since ? memoryBlock(run) : '';
   const notes = notesBlock(run, { since });
-  if (since && !list.length && !memory && notes === '(no notes yet)') return '\nSHARED CONTEXT: nothing new from the other agents since your last turn.';
-  const lines = [
+  // Where things stand, what was handed over, and what every other agent already ran and learned.
+  const status = statusBlock(run);
+  const handoffs = handoffsBlock(run, since);
+  const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
+  const footer =
+    'Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for an agent\'s full transcript (its messages, commands and their output), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives.';
+  const fixed = [
     '',
-    since ? 'SHARED CONTEXT (only what is new since your last turn):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
+    since ? 'SHARED CONTEXT (only what is new since your last turn, plus the current status):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
+    status,
+    handoffs,
     list.length ? `Agents${since ? ' (new or updated)' : ' so far'}:\n${list.join('\n')}` : since ? '' : 'You are the first agent in this workflow.',
     memory,
     `Shared notes${since ? ' (new)' : ''}:\n${notes}`,
-    'Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review with all issues, all summaries), or `read_context` {agent_id} for an agent\'s full transcript (its messages, commands and their output), whenever a summary is not enough. Use `post_note` {text} to tell all later agents about a decision, a gotcha or where something lives.',
   ];
+  // What is left of this agent's share goes to the project knowledge and the commands others ran.
+  const room = Math.max(3000, (o.maxChars ?? 40000) - fixed.join('\n').length - footer.length - 200);
+  const knowledge = knowledgeBlock(run, act, Math.floor(room * 0.4), !since);
+  const activity = activityBlock(act, room - knowledge.length);
+  if (since && !list.length && !memory && notes === '(no notes yet)' && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
+  const lines = [...fixed, knowledge, activity, footer];
   if (mode === 'full') {
     // The most recent hand-off: whoever worked right before this agent (for a sub-agent, its parent so far).
     const prev = self.parentId ? run.agents[self.parentId] : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
@@ -117,9 +132,11 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   return '\n' + text;
 }
 
-/** Overview for `read_context` without an agent id. */
-export function overview(run: WorkflowRun): string {
+/** Overview for `read_context` without an agent id. `eventsOf` adds the commands every agent ran and the project knowledge. */
+export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => AgentEvent[]): string {
   const parts = [`GOAL:\n${run.config.goal}`];
+  const status = statusBlock(run);
+  if (status) parts.push(status);
   if (run.plan) parts.push(`CURRENT PLAN:\n${run.plan.markdown?.trim() || run.plan.summary}\n\nSteps:\n${run.plan.steps.map((s) => `${s.id}. ${s.title}${s.detail ? ` — ${s.detail}` : ''}`).join('\n')}`);
   if (run.steps.length) parts.push(`STEP PROGRESS:\n${run.steps.map((s) => `${s.id}. ${s.title} [${s.status}]${s.note ? ` — ${s.note}` : ''}`).join('\n')}`);
   for (const key of ['plan', 'implement'] as const) {
@@ -132,8 +149,33 @@ export function overview(run: WorkflowRun): string {
         rows.push(`Review: ${r.review.verdict} — ${r.review.summary}`);
         for (const i of r.review.issues) rows.push(`  ${i.id} [${i.severity}] ${i.title}${i.location ? ` (${i.location})` : ''}${i.detail ? `: ${i.detail}` : ''}`);
       }
+      if (r.route) rows.push(`Routed to ${r.route.to}: ${r.route.reason}`);
       if (rows.length) parts.push(`${key.toUpperCase()} STAGE, ROUND ${r.n}:\n${rows.join('\n')}`);
     }
+  }
+  for (const r of run.stages.verify?.rounds ?? []) {
+    const v = r.verification;
+    if (!v) continue;
+    const ev = v.evidence ? ` (measured on ${v.evidence.commit ? `commit ${v.evidence.commit}, ` : ''}tree ${v.evidence.treeHash}${v.stale ? ', STALE: code changed since' : ''})` : '';
+    parts.push(
+      [
+        `GOAL VERIFICATION ${r.n}: ${v.outcome} — ${v.summary}${ev}`,
+        ...v.metrics.map((m) => `  ${m.id}: ${m.value} (${m.met ? 'met' : 'NOT met'}) — ${m.evidence}`),
+        ...v.issues.map((i) => `  ${i.id} [${i.severity}] ${i.title}${i.detail ? `: ${i.detail}` : ''}`),
+        r.route ? `  Routed to ${r.route.to}: ${r.route.reason}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    );
+  }
+  const handoffs = handoffsBlock(run);
+  if (handoffs) parts.push(handoffs);
+  if (eventsOf) {
+    const act = collectActivity(run, eventsOf);
+    const knowledge = knowledgeBlock(run, act, 12000, true);
+    if (knowledge) parts.push(knowledge);
+    const activity = activityBlock(act, 20000);
+    if (activity) parts.push(activity);
   }
   parts.push(
     `AGENTS:\n${others(run)

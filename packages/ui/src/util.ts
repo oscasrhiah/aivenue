@@ -1,5 +1,6 @@
 import type { AgentRole, AgentStatus, ProviderInfo, StageRun, WorkflowRun, WorkflowStatus } from '../../core/src/types';
 import type { T } from './i18n';
+import { taskTitle } from '../../core/src/taskTitle';
 
 export const roleLabel = (t: T, r: AgentRole): string =>
   ({
@@ -119,4 +120,48 @@ export function providerColor(id: string): string {
 export function saidOwner(run: WorkflowRun, ts: number): string | undefined {
   const working = Object.values(run.agents).filter((a) => !a.parentId && a.startedAt && a.startedAt <= ts && (!a.endedAt || a.endedAt >= ts));
   return working.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]?.id;
+}
+
+/** The colour group of a role (left bar of its card): plan, build, verify, or helpers. A reviewer shares its author's group. */
+export function roleTone(r: AgentRole): string {
+  if (r === 'planner' || r === 'plan_reviewer') return 'rc-plan';
+  if (r === 'executor' || r === 'code_reviewer') return 'rc-build';
+  if (r === 'verifier' || r === 'adjudicator') return 'rc-verify';
+  return 'rc-help';
+}
+
+/** A sub-agent's short name: what its parent called it, else taken from its task. */
+export function subTitle(a: { title?: string; brief?: string; task: string }): string {
+  return a.title || taskTitle(a.brief ?? a.task) || a.task;
+}
+
+/** The first meaningful line of an answer (skips headings and "Done."-style openers), for one-line summaries. */
+export function firstLine(text: string | undefined, max = 90): string {
+  const lines = (text ?? '')
+    .split(/\r?\n/)
+    // Headings and lead-ins ("## Result", "建立的檔案：") say nothing on their own.
+    .filter((l) => !/^\s*#/.test(l) && !/[:：]\s*$/.test(l))
+    .map((l) => l.replace(/^[>*\-\s]+|[*`]+/g, '').trim())
+    .filter((l) => l.length >= 6 && !/^(已完成|完成|done|finished)[。.!！]?$/i.test(l));
+  const l = lines[0] ?? '';
+  return l.length > max ? `${l.slice(0, max - 1)}…` : l;
+}
+
+/**
+ * Whether two texts say much the same (character-pair overlap), e.g. a note that repeats the verdict right below it.
+ * Works for Chinese and English alike.
+ */
+export function similar(a: string, b: string, threshold = 0.5): boolean {
+  const pairs = (s: string) => {
+    const t = s.replace(/\s+/g, '').toLowerCase();
+    const out = new Set<string>();
+    for (let i = 0; i < t.length - 1; i++) out.add(t.slice(i, i + 2));
+    return out;
+  };
+  const x = pairs(a);
+  const y = pairs(b);
+  if (x.size < 8 || y.size < 8) return false;
+  let both = 0;
+  for (const p of x) if (y.has(p)) both++;
+  return both / Math.min(x.size, y.size) >= threshold;
 }

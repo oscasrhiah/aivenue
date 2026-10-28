@@ -360,12 +360,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'agents.events': (p: { workflowId: string; agentId: string }) => orchestrator.events(p.workflowId, p.agentId),
     'agents.stop': (p: { workflowId: string; agentId: string }) => (orchestrator.stopAgent(p.workflowId, p.agentId), true),
     'agents.close': (p: { workflowId: string; agentId: string }) => (orchestrator.closeAgent(p.workflowId, p.agentId), true),
-    'agents.rerun': (p: { workflowId: string; agentId: string }) => orchestrator.rerunAgent(p.workflowId, p.agentId),
+    'agents.rerun': (p: { workflowId: string; agentId: string; provider?: string }) => orchestrator.rerunAgent(p.workflowId, p.agentId, p.provider),
+    'agents.switchTargets': (p: { workflowId: string; agentId: string }) => orchestrator.switchTargets(p.workflowId, p.agentId),
     'workflows.search': (p: { id: string; query: Parameters<Orchestrator['search']>[1] }) => orchestrator.search(p.id, p.query ?? {}),
     'workflows.preflight': (p: { config: WorkflowConfig }) => orchestrator.preflight(p.config),
     'workflows.export': (p: { id: string; mask?: boolean }) => orchestrator.exportRun(p.id, p.mask !== false),
     'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
     'resources.gpus': () => orchestrator.gpus(),
+    'workflows.sharedContext': (p: { id: string }) => orchestrator.sharedContext(p.id),
   };
 
   const readBody = (req: http.IncomingMessage) =>

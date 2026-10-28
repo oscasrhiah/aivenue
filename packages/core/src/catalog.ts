@@ -29,8 +29,6 @@ function trimModels(models: Record<string, any>): CatalogModel[] {
       context: m.limit?.context,
       free: m.cost ? m.cost.input === 0 && m.cost.output === 0 : undefined,
     }))
-    // Coding agents need tool calling.
-    .filter((m) => m.tools)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -64,7 +62,11 @@ export async function loadCatalog(dataDir: string, refresh = false): Promise<Cat
     return i < 0 ? 1000 : i;
   };
   const list: CatalogProvider[] = Object.entries(raw!)
-    .map(([id, p]) => ({ id, name: String(p.name ?? id), env: Array.isArray(p.env) ? p.env : [], api: p.api, npm: p.npm, doc: p.doc, kind: kindOf(id, String(p.name ?? id)), models: trimModels(p.models), featured: rank(id) < 1000 }))
+    .map(([id, p]) => {
+      const all = trimModels(p.models);
+      // Coding agents need tool calling: the rest is only remembered, to tell a model list what they lack.
+      return { id, name: String(p.name ?? id), env: Array.isArray(p.env) ? p.env : [], api: p.api, npm: p.npm, doc: p.doc, kind: kindOf(id, String(p.name ?? id)), models: all.filter((m) => m.tools), noTools: all.filter((m) => !m.tools).map((m) => m.id), featured: rank(id) < 1000 };
+    })
     .filter((p) => p.models.length > 0)
     .sort((a, b) => rank(a.id) - rank(b.id) || a.name.localeCompare(b.name));
   memo = { at: Date.now(), list };

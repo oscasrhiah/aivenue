@@ -369,12 +369,15 @@ export class ProviderRegistry {
     return models.map((m) => {
       const seen = this.measured[`${base.id} ${m.id}`];
       if (seen) m = { ...m, context: seen, contextSource: 'measured' };
-      if ((m.context && m.inputs) || !catalog) return m;
+      if (!catalog) return m;
       const found = lookupModel(catalog, providers, m.id);
       return {
         ...m,
         ...(!m.context && found.context ? { context: found.context, contextSource: 'catalog' as const } : {}),
         inputs: m.inputs ?? found.inputs,
+        // What the model can do, so the menus offer an effort only where it thinks and say when it cannot call tools.
+        tools: m.tools ?? found.tools,
+        reasoning: m.reasoning ?? (m.efforts?.length ? true : found.reasoning),
       };
     });
   }
