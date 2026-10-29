@@ -38,6 +38,9 @@ export class RunStore {
         run.id = id;
         if (run.worktree && !isInside(path.join(path.dirname(this.runsDir), 'worktrees'), run.worktree.path)) run.worktree = undefined;
         if (run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human') {
+          // Kept so it can be resumed where it stopped (by itself, or when the user continues a paused one).
+          run.interruptedFrom = run.status;
+          run.interruptedAt = Date.now();
           run.status = 'interrupted';
           run.pending = undefined;
           for (const a of Object.values(run.agents)) if (a.status === 'running' || a.status === 'paused' || a.status === 'queued') a.status = 'cancelled';

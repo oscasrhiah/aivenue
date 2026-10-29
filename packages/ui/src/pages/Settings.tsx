@@ -76,6 +76,21 @@ function GeneralPane() {
       </section>
       <section className="setting">
         <div>
+          <div className="setting-title">{t('重新啟動後自動接續', 'Resume after a restart')}</div>
+          <div className="muted small">
+            {t(
+              'Aivenue 更新或重新啟動時還在執行的工作流，啟動後從中斷的階段與輪次自動接著做（一天內中斷的、每段對話最新的一則）。暫停中的不會自動接續，按「繼續」才接著做。',
+              'Workflows still running when Aivenue was updated or restarted go on by themselves from the stage and round they stopped in (interrupted within a day, the newest message of each conversation). Paused ones wait until you press Continue.',
+            )}
+          </div>
+        </div>
+        <select value={s.autoResume === false ? 'off' : 'on'} onChange={(e) => saveSettings({ autoResume: e.target.value === 'on' })}>
+          <option value="on">{t('自動接續', 'Resume automatically')}</option>
+          <option value="off">{t('不自動接續（自己按「接續」）', 'Do not (press Resume yourself)')}</option>
+        </select>
+      </section>
+      <section className="setting">
+        <div>
           <div className="setting-title">{t('資料位置', 'Data folder')}</div>
           <div className="muted small">{t('設定、對話紀錄與用量統計存放處', 'Where settings, chat logs and usage stats are stored')}</div>
         </div>

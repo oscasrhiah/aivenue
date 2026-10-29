@@ -31,9 +31,10 @@ const { Orchestrator, RunStore } = mod.exports;
 
 const spec = (id) => ({ id, name: id, command: id, run: { args: [] }, output: 'text' });
 function setup(o = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-orch-'));
+  // `dir`: the same data folder again (Aivenue restarted).
+  const dir = o.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-orch-'));
   const cwd = path.join(dir, 'proj');
-  fs.mkdirSync(cwd);
+  fs.mkdirSync(cwd, { recursive: true });
   const ids = ['fake', 'fake2'];
   const registry = {
     get: (id) => (ids.includes(id) ? spec(id) : undefined),
@@ -57,7 +58,7 @@ function setup(o = {}) {
     gpuQuery: o.gpuQuery ?? (() => { throw new Error('no GPU'); }),
     gpuSmi: o.gpuSmi ?? (() => { throw new Error('no GPU'); }),
   });
-  return { orch, cwd };
+  return { orch, cwd, dir };
 }
 
 // Only the first line names the role (later text may quote other roles: "The CODE REVIEWER found…").
@@ -614,4 +615,96 @@ test('GPU 鎖住的卡上有沒人登記的程序：自動當成鎖卡的 agent 
       process.kill(job.pid);
     } catch {}
   }
+});
+
+test('Aivenue 重新啟動（更新）後：工作流從中斷的輪次接續，審查要求的修正直接交給實作者', async () => {
+  const first = setup();
+  const issue = { id: 'R1', severity: 'major', title: 'missing null check' };
+  let cutOff;
+  const hung = new Promise((r) => (cutOff = r));
+  fakeAgents(first.orch, {
+    code_reviewer: [{ tool: 'submit_review', args: { verdict: 'revise', summary: 'fix it', issues: [issue] } }, defaults.code_reviewer],
+    executor: [
+      defaults.executor,
+      // Fixing R1 when Aivenue is closed: this turn never ends.
+      async () => {
+        cutOff();
+        await new Promise(() => {});
+      },
+    ],
+  });
+  const id = first.orch.start(config(first.cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  await hung;
+  first.orch.d.store.saveNow(first.orch.runs.get(id));
+
+  // A new Aivenue on the same data folder.
+  const second = setup({ dir: first.dir });
+  const loaded = second.orch.runs.get(id);
+  assert.equal(loaded.status, 'interrupted');
+  assert.equal(loaded.interruptedFrom, 'running');
+  const prompts = [];
+  fakeAgents(second.orch, {
+    executor: [
+      async (o, secret, a) => {
+        prompts.push(a.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'fixed R1', responses: [{ issue_id: 'R1', action: 'fixed' }] });
+      },
+    ],
+  });
+  assert.deepEqual(second.orch.autoResume(), [id]);
+  const r = await settle(second.orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(prompts[0], /AIVENUE WAS RESTARTED[\s\S]*R1[\s\S]*missing null check/);
+  // Round 1 (reviewed) is kept; the round that was cut off is done again as round 2.
+  assert.equal(r.stages.implement.rounds.length, 2);
+  assert.equal(r.stages.implement.rounds[0].review.verdict, 'revise');
+  assert.equal(r.stages.implement.rounds[1].review.verdict, 'approve');
+  assert.equal(r.resumes, 1);
+  // The shared context shows where it stands, also after the restart.
+  assert.match(prompts[0], /NOW: implementation stage[\s\S]*Resumed 1 time/);
+});
+
+test('暫停的工作流在重新啟動後不會自動接續，按「繼續」才接著做', async () => {
+  const first = setup();
+  let started;
+  const going = new Promise((r) => (started = r));
+  fakeAgents(first.orch, {
+    executor: [
+      async () => {
+        started();
+        await new Promise(() => {});
+      },
+    ],
+  });
+  const id = first.orch.start(config(first.cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  await going;
+  first.orch.pause(id);
+  first.orch.d.store.saveNow(first.orch.runs.get(id));
+  const second = setup({ dir: first.dir });
+  assert.equal(second.orch.runs.get(id).interruptedFrom, 'paused');
+  assert.deepEqual(second.orch.autoResume(), []);
+  fakeAgents(second.orch, {});
+  second.orch.resumeInterrupted(id);
+  const r = await settle(second.orch, id);
+  assert.equal(r.status, 'completed', r.error);
+});
+
+test('出問題時的詢問可以暫停工作流；按繼續就重試', async () => {
+  const { orch, cwd } = setup();
+  fakeAgents(orch, { executor: [{ error: "You've hit your 5-hour limit · resets 7:30pm (UTC) (exit code 1)" }, { error: 'still limited (exit code 1)' }, defaults.executor] });
+  const id = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  let r = await settle(orch, id);
+  for (let i = 0; i < 200 && !r.pending; i++) await new Promise((res) => setTimeout(res, 50));
+  assert.ok(r.pending.options.some((o) => o.id === 'pause'), JSON.stringify(r.pending.options));
+  orch.decide(id, r.pending.id, 'pause');
+  for (let i = 0; i < 100 && r.status !== 'paused'; i++) await new Promise((res) => setTimeout(res, 20));
+  assert.equal(r.status, 'paused');
+  orch.resume(id, 'quota is back');
+  r = await settle(orch, id);
+  // The retry ran; a question about the next failure may come up again, so answer it with retry until done.
+  for (let i = 0; i < 5 && r.status === 'waiting_human'; i++) {
+    orch.decide(id, r.pending.id, 'retry');
+    r = await settle(orch, id);
+  }
+  assert.equal(r.status, 'completed', r.error);
 });

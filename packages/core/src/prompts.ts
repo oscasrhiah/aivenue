@@ -315,6 +315,18 @@ export function librarianPrompt(goal: string, previous: string | undefined, note
   ].join('\n\n');
 }
 
+/** The first agent after Aivenue restarted (an update) in the middle of a workflow. */
+export function resumeAfterRestartPrompt(o: { submitted?: string; revise?: string }): string {
+  return [
+    'AIVENUE WAS RESTARTED (for example updated) while this workflow was running, and the turn in progress was cut off. Nothing is lost: the files on disk, the plan with its step progress, the reviews, the goal status and the shared notes in the shared context are current.',
+    'Read them first (read_context {topic: "checkpoints"} and {topic: "knowledge"} help), do not redo steps that are already done, check background jobs and waits that may still be running (their wait_id still works), and continue from where it stopped.',
+    o.submitted ? `Before the restart this round had already been submitted: "${o.submitted.slice(0, 1500)}". If that is still complete and correct, submit it again; otherwise finish it first.` : '',
+    o.revise ?? '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 /** After an agent's conversation was compacted: its understanding goes to every other agent too. */
 export function checkpointRequest(): string {
   return 'Your conversation was just compacted. Before you go on, call the Aivenue tool `post_note` {kind: "fact", text: "CHECKPOINT — …"} with one or two paragraphs: what you are working on, what is done and verified, what you learned (where things live, causes of failures, what did not work) and what comes next. Every other agent reads it, and it survives further compactions.';

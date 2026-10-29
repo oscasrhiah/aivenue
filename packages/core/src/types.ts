@@ -459,6 +459,8 @@ export interface AppSettings {
   draft?: Omit<WorkflowConfig, 'goal' | 'title'>;
   /** Minutes a CLI kept between turns may stay idle after its workflow ended (default 5; 0 = until Aivenue closes). Never closed while the workflow runs. */
   cliIdleMinutes?: number;
+  /** Workflows that were running when Aivenue closed (an update, a restart) go on by themselves when it starts again (default on). Paused ones wait for the user. */
+  autoResume?: boolean;
 }
 
 // ---------- Workflow configuration ----------
@@ -1017,6 +1019,11 @@ export interface WorkflowRun {
   contextAsk?: { agentId: string; used: number; window: number; level: number };
   /** The shared notes organized by subject. */
   knowledge?: SharedKnowledge;
+  /** What it was doing when Aivenue closed (it is `interrupted` now), and when. */
+  interruptedFrom?: 'running' | 'paused' | 'waiting_human';
+  interruptedAt?: number;
+  /** Times it was resumed after an interruption. */
+  resumes?: number;
   /** Tokens at which a model's CLI compacted its own conversation in this run (`provider model` → tokens). */
   compactPoints?: Record<string, number>;
   /** Highest ask level already shown per agent conversation (session id), and conversations the user muted. */

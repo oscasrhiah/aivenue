@@ -107,7 +107,11 @@ interface Submission {
 /** How a stage is re-entered after a verification or a re-diagnosis: the first prompt of that pass. */
 interface Entry {
   prompt: () => string;
+  /** Going on after Aivenue restarted (not a new cycle). */
+  resumed?: boolean;
 }
+/** Where a resumed workflow starts: the stage, and what its first agent is told. */
+type ResumeFrom = { stage: StageKey | 'verify'; entry?: Entry };
 
 /** A sub-agent with no sign of life this long is reported to its parent as stalled. */
 const STALL_MS = 10 * 60000;
@@ -385,6 +389,95 @@ export class Orchestrator {
       }
     }
     return run;
+  }
+
+  // ---------- resume after Aivenue restarted ----------
+
+  /**
+   * Where an interrupted workflow goes on: the stage that was running, without the round that was cut off. A round the
+   * reviewer sent back keeps its review, so the author goes straight to fixing it; a submitted round without a review
+   * is handed back to the author to confirm. Goal verification measures again.
+   */
+  private resumePoint(run: WorkflowRun): ResumeFrom | undefined {
+    const order = (['plan', 'implement', 'verify'] as const).filter((k) => (k === 'verify' ? run.config.verify?.enabled : run.config[k].enabled));
+    const running = order.filter((k) => run.stages[k]?.status === 'running');
+    // Several "running" (a re-plan after an earlier implementation): the one whose newest round started last.
+    const lastStart = (k: StageKey | 'verify') => Math.max(0, ...(run.stages[k]?.rounds ?? []).map((r) => run.agents[r.authorAgentId ?? r.reviewerAgentId ?? '']?.startedAt ?? 0));
+    let stage = running.sort((a, b) => lastStart(b) - lastStart(a))[0] ?? order.find((k) => run.stages[k]?.status === 'pending');
+    if (!stage) return order.includes('verify') ? { stage: 'verify' } : undefined;
+    if (stage === 'verify') {
+      const st = run.stages.verify!;
+      if (st.rounds.length && !st.rounds[st.rounds.length - 1].verification) st.rounds.pop();
+      return { stage };
+    }
+    const st = run.stages[stage];
+    const last = st.rounds[st.rounds.length - 1];
+    // Not started yet: it starts as it normally would.
+    if (!last) return { stage };
+    if (last.review?.verdict === 'approve') {
+      // It was approved (perhaps waiting at a gate): go on with the next stage.
+      st.status = 'approved';
+      const next = order[order.indexOf(stage) + 1];
+      if (!next) return undefined;
+      stage = next;
+      return next === 'verify' ? { stage } : { stage, entry: { resumed: true, prompt: () => P.resumeAfterRestartPrompt({}) } };
+    }
+    if (last?.review) {
+      const revise = stage === 'plan' ? P.planRevisePrompt(run.config, last.review) : P.fixPrompt(last.review);
+      return { stage, entry: { resumed: true, prompt: () => P.resumeAfterRestartPrompt({ revise }) } };
+    }
+    // Cut off before its review: the round starts again, and the author confirms what it had submitted.
+    const submitted = last?.submission?.summary;
+    if (last) st.rounds.pop();
+    return { stage, entry: { resumed: true, prompt: () => P.resumeAfterRestartPrompt({ submitted }) } };
+  }
+
+  /** Go on with a workflow Aivenue's restart interrupted, from where it stopped. */
+  resumeInterrupted(id: string): WorkflowRun {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (run.status !== 'interrupted' || this.executions.has(id)) throw new Error(L('只有已中斷的工作流可以接續', 'Only an interrupted workflow can be resumed'));
+    const from = this.resumePoint(run);
+    if (!from) throw new Error(L('這個工作流沒有可以接續的階段，請送出新訊息接著做', 'There is no stage to resume; send a new message to go on'));
+    run.status = 'running';
+    run.endedAt = undefined;
+    run.error = undefined;
+    run.resumes = (run.resumes ?? 0) + 1;
+    const stage = run.stages[from.stage];
+    if (stage) stage.status = 'running';
+    this.aborts.set(id, new AbortController());
+    const name = from.stage === 'plan' ? L('計畫階段', 'planning') : from.stage === 'implement' ? L('實作階段', 'implementation') : L('目標驗收', 'goal verification');
+    this.log(run, L(`Aivenue 重新啟動後，從${name}接續（${run.interruptedFrom === 'paused' ? '原本已暫停' : '原本執行中'}）`, `Resumed after Aivenue restarted, from ${name} (it was ${run.interruptedFrom === 'paused' ? 'paused' : 'running'})`), 'info', true);
+    run.interruptedFrom = undefined;
+    this.touch(run);
+    const execution = this.execute(run, from).finally(() => this.executions.delete(id));
+    this.executions.set(id, execution);
+    return run;
+  }
+
+  /**
+   * At startup: workflows that were running (or waiting for an answer) when Aivenue closed go on by themselves; paused
+   * ones wait for the user. Only recent interruptions (a day), the newest message of each conversation, at most three
+   * resumes each, so a crash does not loop.
+   */
+  autoResume(): string[] {
+    const latest = new Map<string, WorkflowRun>();
+    for (const r of this.runs.values()) {
+      const t = r.config.threadId ?? r.id;
+      if (!latest.has(t) || latest.get(t)!.createdAt < r.createdAt) latest.set(t, r);
+    }
+    const resumed: string[] = [];
+    for (const r of latest.values()) {
+      if (r.status !== 'interrupted' || !r.interruptedFrom || r.interruptedFrom === 'paused') continue;
+      if (now() - (r.interruptedAt ?? 0) > 24 * 3600000 || (r.resumes ?? 0) >= 3) continue;
+      try {
+        this.resumeInterrupted(r.id);
+        resumed.push(r.id);
+      } catch (e) {
+        this.log(r, L(`自動接續失敗：${(e as Error).message}`, `Automatic resume failed: ${(e as Error).message}`), 'warn', true);
+      }
+    }
+    return resumed;
   }
 
   // ---------- pause / resume ----------
@@ -1464,7 +1557,7 @@ export class Orchestrator {
     return note;
   }
 
-  private async execute(run: WorkflowRun) {
+  private async execute(run: WorkflowRun, from?: ResumeFrom) {
     // Git config as it was before any agent ran; describeChanges only runs git while it is unchanged.
     this.gitStamps.set(run.id, gitStamp(run.config.cwd));
     if (run.config.isolation === 'worktree' && !run.worktree) {
@@ -1487,7 +1580,7 @@ export class Orchestrator {
     }
     this.baselines.set(run.id, snapshot(run.config.cwd));
     try {
-      if (run.config.attachments?.length) {
+      if (run.config.attachments?.length && !from) {
         const { attachments, warnings } = await this.d.attachments.prepare(run.config.attachments);
         run.config.attachments = attachments;
         const converted = attachments.filter((a) => a.companion).map((a) => a.name);
@@ -1497,12 +1590,12 @@ export class Orchestrator {
       }
       run.preflight = await this.preflight(run.config);
       for (const p of run.preflight.filter((x) => x.level !== 'ok')) this.log(run, `${L('預檢', 'Preflight')}：${p.message}`, p.level === 'error' ? 'error' : 'warn', true);
-      if (run.config.dryRun) {
+      if (run.config.dryRun && !from) {
         this.dryRun(run);
         return;
       }
       this.startWatchdog(run);
-      await this.cycle(run);
+      await this.cycle(run, from);
       run.status = 'completed';
       this.log(run, run.config.verify?.enabled ? L('工作流完成 ✅ 目標驗收通過', 'Workflow completed ✅ goal verified') : L('工作流完成 ✅', 'Workflow completed ✅'), 'info', true);
     } catch (e) {
@@ -1549,16 +1642,20 @@ export class Orchestrator {
    * structured results: defects and bad evidence go back to the implementer, a missed goal (or the same problem
    * surviving several fixes) back to the planner. Without goal verification it is plan → implement, as before.
    */
-  private async cycle(run: WorkflowRun) {
-    let planEntry: Entry | undefined;
-    let implEntry: Entry | undefined;
+  private async cycle(run: WorkflowRun, from?: ResumeFrom) {
+    let planEntry: Entry | undefined = from?.stage === 'plan' ? from.entry : undefined;
+    let implEntry: Entry | undefined = from?.stage === 'implement' ? from.entry : undefined;
     for (let first = true; ; first = false) {
-      if (first || planEntry) {
+      // A resumed run starts at the stage it stopped in.
+      const skipPlan = first && !!from && from.stage !== 'plan';
+      const skipImpl = first && from?.stage === 'verify';
+      if (!skipPlan && (first || planEntry)) {
         await this.runStage(run, 'plan', planEntry);
-        if (planEntry) implEntry = { prompt: () => P.implementRevisedPrompt(run.plan) };
+        // After a re-plan the implementer gets the revised plan (also after resuming one, once it had implemented).
+        if (planEntry && (!from || run.stages.implement.rounds.length)) implEntry = { prompt: () => P.implementRevisedPrompt(run.plan) };
         planEntry = undefined;
       }
-      const impl = await this.runStage(run, 'implement', implEntry);
+      const impl = skipImpl ? {} : await this.runStage(run, 'implement', implEntry);
       implEntry = undefined;
       if (impl.replan) {
         this.nextCycle(run);
@@ -1749,7 +1846,12 @@ export class Orchestrator {
     // Another pass (after a verification or a re-diagnosis) gets its own rounds.
     const firstN = stage.rounds.length + 1;
     if (entry && stage.roundLimit) stage.roundLimit = Math.max(stage.roundLimit, stage.rounds.length + Math.max(1, cfg.maxRounds));
-    this.log(run, entry ? L(`${stageName}重新開始（第 ${(run.cycles ?? 0) + 1} 輪循環）`, `${stageName} again (cycle ${(run.cycles ?? 0) + 1})`) : L(`${stageName}開始`, `${stageName} started`), 'info', true);
+    this.log(
+      run,
+      entry?.resumed ? L(`${stageName}接續`, `${stageName} resumed`) : entry ? L(`${stageName}重新開始（第 ${(run.cycles ?? 0) + 1} 輪循環）`, `${stageName} again (cycle ${(run.cycles ?? 0) + 1})`) : L(`${stageName}開始`, `${stageName} started`),
+      'info',
+      true,
+    );
     this.touch(run);
 
     let pendingReview: Review | undefined;
@@ -3254,7 +3356,25 @@ export class Orchestrator {
     return files.size ? [...files].map((f) => `- ${f}`).join('\n') + '\n(not a git repository; list collected from agent tool calls)' : '';
   }
 
-  private ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
+  /**
+   * Ask the user. Every question can also pause the workflow (like the pause button): nothing runs until the user
+   * resumes; then a question about a turn without a result retries it (e.g. after a quota reset), any other is asked again.
+   */
+  private async ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
+    const pause = { id: 'pause', label: L('暫停工作流', 'Pause the workflow') };
+    const at = options.findIndex((o) => o.id === 'abort');
+    const withPause = at < 0 ? [...options, pause] : [...options.slice(0, at), pause, ...options.slice(at)];
+    for (;;) {
+      const dec = await this.askOnce(run, stage, message, withPause, allowText);
+      if (dec.optionId !== 'pause') return dec;
+      this.pause(run.id);
+      const note = await this.waitIfPaused(run);
+      const text = [dec.text, note].filter(Boolean).join('\n') || undefined;
+      if (options.some((o) => o.id === 'retry')) return { optionId: 'retry', text };
+    }
+  }
+
+  private askOnce(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
     const wf = this.aborts.get(run.id);
     return new Promise((resolve, reject) => {
       if (!wf || wf.signal.aborted) return reject(new Cancelled());

@@ -110,6 +110,7 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
     "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for an agent's full transcript (its messages, commands and their output), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives, and list what you learned in `findings` when you submit.";
   const head = [
     since ? 'SHARED CONTEXT (only what is new since your last turn, plus the current status):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
+    progressBlock(run),
     'CHECK HERE FIRST: before running a command, reading a file or investigating something, look for it below and call `search_records` {q: "a few keywords"} — another agent may already have done it. Re-run only when files changed since or you need more than what is recorded.',
     status,
     handoffs,
@@ -143,6 +144,23 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   // Still over this agent's share (a huge status or hand-off): keep the start, where the goal and status are.
   if (o.maxChars && text.length > o.maxChars) text = `${text.slice(0, o.maxChars)}\n… (shortened to fit your model; call read_context {} for the rest)`;
   return '\n' + text;
+}
+
+/**
+ * Where the workflow is, always at the top of the shared context: the stage and round, the plan's summary and every
+ * step with its status, and whether it was resumed after Aivenue restarted. Together with the goal status below it,
+ * any agent (also one starting after an update) knows what is done and what comes next.
+ */
+export function progressBlock(run: WorkflowRun): string {
+  const lines: string[] = [];
+  const stage = (['verify', 'implement', 'plan'] as const).find((k) => run.stages[k]?.status === 'running');
+  if (stage) lines.push(`NOW: ${stage === 'verify' ? 'goal verification' : stage === 'plan' ? 'planning' : 'implementation'} stage, round ${run.stages[stage]!.rounds.length || 1}${run.cycles ? `, cycle ${run.cycles + 1}` : ''}.`);
+  if (run.resumes) lines.push(`Resumed ${run.resumes} time(s) after Aivenue restarted (last interruption ${run.interruptedAt ? new Date(run.interruptedAt).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : 'earlier'}): check what was cut off before going on.`);
+  if (run.plan) {
+    lines.push(`PLAN: ${cut(run.plan.summary, 800)}`);
+    if (run.steps?.length) lines.push(`STEPS:\n${run.steps.map((s) => `- ${s.id}. ${oneLine(s.title, 140)} [${s.status}]${s.note ? ` — ${oneLine(s.note, 200)}` : ''}`).join('\n')}`);
+  }
+  return lines.join('\n');
 }
 
 /** Overview for `read_context` without an agent id. `eventsOf` adds the commands every agent ran and the project knowledge. */

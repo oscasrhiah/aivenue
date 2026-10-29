@@ -942,13 +942,24 @@ export function Chat({ id }: { id?: string }) {
               {run.dryRun && run.preflight && <PreflightList items={run.preflight} showOk />}
               {run.status === 'interrupted' && (
                 <div className="note warn">
-                  {t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}
+                  {run.interruptedFrom === 'paused'
+                    ? t('這個工作流在 Aivenue 重新啟動（例如更新）前已暫停。按「繼續」會從暫停的地方接著做，計畫、步驟進度、審查與共用上下文都保留。', 'This workflow was paused before Aivenue restarted (e.g. an update). Continue picks up where it was paused; the plan, step progress, reviews and shared context are kept.')
+                    : run.interruptedFrom
+                      ? t('Aivenue 重新啟動（例如更新）時這個工作流仍在執行，已中斷。按「接續」會從中斷的階段與輪次接著做，計畫、步驟進度、審查與共用上下文都保留。', 'Aivenue restarted (e.g. an update) while this workflow ran, so it was interrupted. Resume picks up from the stage and round it stopped in; the plan, step progress, reviews and shared context are kept.')
+                      : t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}
                   {(run.waits ?? []).some((w) => w.state === 'waiting' && w.timeoutAt > Date.now()) &&
                     t(
                       ` 中斷時有 ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} 個條件等待（${(run.waits ?? []).filter((w) => w.state === 'waiting').map((w) => w.check.slice(0, 40)).join('、')}）：接續時會交給 agent 用同一個 wait_id 繼續等，原本的逾時時間不變。`,
                       ` ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} condition wait(s) were open; continuing hands them to the agents to keep waiting with the same wait_id and deadline.`,
                     )}
                   {!!run.sideEffects?.length && t(` 已做過的 ${run.sideEffects.length} 個對外動作不會重做。`, ` The ${run.sideEffects.length} external action(s) already done will not be repeated.`)}
+                  {!!run.interruptedFrom && (
+                    <div className="row gap" style={{ marginTop: 8 }}>
+                      <button className="btn primary small" onClick={() => hub.call('workflows.resumeInterrupted', { id: run.id }).catch((e) => setError((e as Error).message))}>
+                        {run.interruptedFrom === 'paused' ? t('繼續', 'Continue') : t('接續', 'Resume')}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

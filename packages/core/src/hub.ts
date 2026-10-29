@@ -172,6 +172,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   });
   // Settings → General: how long kept CLIs stay idle after their workflow ended.
   orchestrator.setCliIdleMinutes(settings.get().cliIdleMinutes ?? 5);
+  // Workflows an update or a restart cut off go on by themselves (Settings → General can turn it off).
+  if (settings.get().autoResume !== false) setTimeout(() => orchestrator.autoResume(), 3000);
   void registry.checkAll();
 
   const methods: Record<string, (p: any) => unknown> = {
@@ -362,6 +364,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.cancel': (p: { id: string }) => orchestrator.cancel(p.id),
     'workflows.pause': (p: { id: string }) => orchestrator.pause(p.id),
     'workflows.resume': (p: { id: string; note?: string }) => orchestrator.resume(p.id, p.note),
+    'workflows.resumeInterrupted': (p: { id: string }) => orchestrator.resumeInterrupted(p.id),
     'workflows.say': (p: { id: string; text: string; attachments?: Attachment[] }) => orchestrator.interject(p.id, p.text ?? '', p.attachments ?? []),
     'workflows.continueDenied': (p: { id: string; deniedId: string }) => orchestrator.continueDenied(p.id, p.deniedId),
     'workflows.edit': (p: { id: string; goal: string; config?: WorkflowConfig }) => orchestrator.editAndResend(p.id, p.goal, p.config),
