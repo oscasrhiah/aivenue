@@ -42,7 +42,7 @@ import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification 
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { inspectProcess, parseSize } from './procstat';
-import { backgroundLaunch, findProcesses, type Launch } from './procdetect';
+import { backgroundLaunch, commandOf, findProcesses, isInside, logOf, processCwd, type Launch } from './procdetect';
 import { fileReadOf, ownWorkBlock, POLLING } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
@@ -81,6 +81,8 @@ export interface OrchestratorDeps {
   servedBy?: (provider: string, model: string | undefined, from: number, to: number) => Promise<string[] | undefined>;
   /** nvidia-smi's CSV output (tests pass their own). */
   gpuQuery?: () => string;
+  /** nvidia-smi with any arguments (tests). */
+  gpuSmi?: (args: string[]) => string;
 }
 
 class Cancelled extends Error {
@@ -288,7 +290,7 @@ export class Orchestrator {
 
   constructor(private d: OrchestratorDeps) {
     for (const r of d.store.loadAll()) this.runs.set(r.id, r);
-    this.resources = new ResourceManager(d.dataDir, d.gpuQuery);
+    this.resources = new ResourceManager(d.dataDir, d.gpuQuery, d.gpuSmi);
   }
 
   // ---------- public API ----------
@@ -1086,6 +1088,7 @@ export class Orchestrator {
     this.submissions.set(info.id, sub);
     if (name.startsWith('submit_')) {
       this.requireChildrenSettled(run, info);
+      this.requireBackgroundRegistered(run, info);
       run.lastProgressAt = now();
       this.keepFindings(run, info, args.findings);
     }
@@ -1168,6 +1171,9 @@ export class Orchestrator {
         if (args.expected_size !== undefined && !expected) throw new Error('expected_size must look like "15.6GB", "800MB" or a number of bytes');
         list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now(), log: str('log'), watchFile: str('watch_file'), expectedBytes: expected });
         run.processes = list;
+        // It stands for one launch Aivenue saw but could not find a PID for.
+        const waiting = this.launches.get(info.id);
+        if (waiting?.length) this.launches.set(info.id, waiting.slice(1));
         this.touch(run);
         const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
         return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how;
@@ -2465,6 +2471,36 @@ export class Orchestrator {
     throw new Error(`Your sub-agents ${open.map((a) => `${a.id} (${a.provider})`).join(', ')} are still running. Before you submit: wait for them (wait_subagent), stop them (stop_subagent), or hand them off (stop_subagent {subagent_id, handoff: "who takes over its result"}).`);
   }
 
+  /** Background launches seen in an agent's commands whose process is not registered or found yet (agent id → launches). */
+  private launches = new Map<string, { cmd: string; ts: number }[]>();
+  /** Submissions refused for unregistered background jobs (agent id → times). */
+  private registerRefused = new Map<string, number>();
+
+  /**
+   * Every job an agent started in the background must be registered with track_process before it submits, so the user
+   * sees what it is, how far it is and who cleans it up. Refused at most twice; after that the submission goes through
+   * and the log says what stayed unregistered (a job that ended before anyone found its PID).
+   */
+  private requireBackgroundRegistered(run: WorkflowRun, info: AgentRunInfo) {
+    if (!['executor', 'subagent', 'verifier'].includes(info.role)) return;
+    const mine = info.sessionId ? this.conversationIds(run, info.sessionId) : new Set<string>();
+    mine.add(info.id);
+    const found = (run.processes ?? []).filter((p) => p.detected && mine.has(p.agentId));
+    const pending = [...mine].flatMap((id) => this.launches.get(id) ?? []);
+    if (!found.length && !pending.length) return;
+    const list = [...found.map((p) => `PID ${p.pid}: ${p.purpose}`), ...pending.map((l) => `started \`${l.cmd.length > 160 ? `${l.cmd.slice(0, 159)}…` : l.cmd}\` (Aivenue did not find its PID)`)];
+    const tries = (this.registerRefused.get(info.id) ?? 0) + 1;
+    if (tries > 2) {
+      this.log(run, L(`${this.label(info)} 交結果時仍有 ${list.length} 個背景程序沒有登記：${list.join('；')}`, `${this.label(info)} submitted with ${list.length} background job(s) still unregistered: ${list.join('; ')}`), 'warn', true);
+      for (const id of mine) this.launches.delete(id);
+      return;
+    }
+    this.registerRefused.set(info.id, tries);
+    throw new Error(
+      `Register your background jobs before you submit (required, so the user sees them): ${list.join('; ')}. For each, call track_process {pid, purpose, cleanup: "aivenue"|"agent"|"keep", log or watch_file + expected_size}. A job that already ended is registered too (it shows as ended). Find a PID you do not know with ps / pgrep -f / Get-Process.`,
+    );
+  }
+
   private async waitSubagent(run: WorkflowRun, args: Record<string, unknown>): Promise<string> {
     const id = String(args.subagent_id ?? '');
     const child = run.agents[id];
@@ -2914,6 +2950,16 @@ export class Orchestrator {
     if (!cmd) return;
     this.noteDuplicate(run, info, t.category === 'read' ? `read ${cmd}` : cmd, e.ts);
     if (t.category === 'read') return;
+    // A job started in the background, also when the same line then waits a moment ("… & sleep 10; tail log").
+    const launch = backgroundLaunch(cmd, t.output, t.input);
+    if (launch) {
+      const entry = { cmd: launch.command, ts: e.ts };
+      this.launches.set(info.id, [...(this.launches.get(info.id) ?? []), entry]);
+      void this.adoptProcess(run, info, launch)
+        .then((pid) => pid && this.launches.set(info.id, (this.launches.get(info.id) ?? []).filter((x) => x !== entry)))
+        .catch(() => undefined);
+      return;
+    }
     const countKey = `${info.id}|${cmd}`;
     const count = (this.commandCounts.get(countKey) ?? 0) + 1;
     this.commandCounts.set(countKey, count);
@@ -2923,10 +2969,50 @@ export class Orchestrator {
         this.pollHinted.set(info.id, now());
         this.notify(info.id, P.pollingHint());
       }
-      return;
     }
-    const launch = backgroundLaunch(cmd, t.output, t.input);
-    if (launch) void this.adoptProcess(run, info, launch).catch(() => undefined);
+  }
+
+  /** When each run last looked for GPU jobs nobody registered. */
+  private gpuScanAt = new Map<string, number>();
+
+  /**
+   * Jobs on the GPUs that nobody registered or that Aivenue could not tell from the command (a script that backgrounds
+   * itself, a launcher): every process on a card an agent of this run locked is that agent's; on Linux, one whose
+   * working folder is inside the run's folder belongs to the agent working now. Checked about once a minute.
+   */
+  private async adoptGpuJobs(run: WorkflowRun) {
+    if (now() - (this.gpuScanAt.get(run.id) ?? 0) < 60000) return;
+    this.gpuScanAt.set(run.id, now());
+    let gpus: GpuDetail[];
+    try {
+      gpus = this.resources.gpuDetail();
+    } catch {
+      return; // no nvidia-smi
+    }
+    const tracked = new Set([...this.runs.values()].flatMap((r) => (r.processes ?? []).map((p) => p.pid)));
+    const working = Object.values(run.agents)
+      .filter((a) => a.status === 'running' && a.role !== 'compactor' && a.role !== 'advisor')
+      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
+    for (const g of gpus) {
+      // Another conversation's card is not ours.
+      if (g.lockedBy && g.lockedBy.workflowId !== run.id) continue;
+      for (const app of g.apps) {
+        if (tracked.has(app.pid) || app.pid === process.pid) continue;
+        let agentId = g.lockedBy?.agentId;
+        if (!agentId) {
+          const cwd = processCwd(app.pid);
+          if (cwd && working && [run.config.cwd, ...(run.config.extraDirs ?? [])].some((root) => isInside(root, cwd))) agentId = working.id;
+        }
+        if (!agentId || !run.agents[agentId]) continue;
+        const cmd = (await commandOf(app.pid)) ?? app.name;
+        const short = cmd.length > 140 ? `${cmd.slice(0, 139)}…` : cmd;
+        (run.processes ??= []).push({ pid: app.pid, purpose: `GPU ${g.index}: ${short}`, cleanup: 'keep', agentId, startedAt: now(), alive: pidAlive(app.pid), checkedAt: now(), log: logOf(cmd), detected: true });
+        tracked.add(app.pid);
+        this.log(run, L(`偵測到 GPU ${g.index} 上 ${this.label(run.agents[agentId])} 的程序（PID ${app.pid}），已自動加入追蹤`, `Found ${this.label(run.agents[agentId])}'s job on GPU ${g.index} (PID ${app.pid}); it is tracked now`), 'info', true);
+        this.notify(agentId, `Aivenue found your job on GPU ${g.index} (PID ${app.pid}: ${short}). You must register it: call track_process {pid: ${app.pid}, purpose, cleanup, log} so the user sees what it is and how far it is (your submission is refused until you do).`);
+        this.touch(run);
+      }
+    }
   }
 
   /**
@@ -2955,8 +3041,8 @@ export class Orchestrator {
     this.notify(info.id, P.alreadyDoneHint(what, `${other.id.slice(0, 8)} (${other.role})`, new Date(first.ts).toISOString().slice(11, 16)));
   }
 
-  /** A job the agent started in the background without track_process: find its process and track it like a registered one. */
-  private async adoptProcess(run: WorkflowRun, info: AgentRunInfo, l: Launch) {
+  /** A job the agent started in the background without track_process: find its process and track it like a registered one. Returns its PID. */
+  private async adoptProcess(run: WorkflowRun, info: AgentRunInfo, l: Launch): Promise<number | undefined> {
     const tracked = () => new Set((run.processes ?? []).map((p) => p.pid));
     let pid = l.pid && pidAlive(l.pid) ? l.pid : undefined;
     // It may take a moment to show up (a new terminal window, a slow interpreter).
@@ -2965,15 +3051,18 @@ export class Orchestrator {
       await sleep(wait);
       pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid))?.pid;
     }
-    if (!pid || tracked().has(pid) || !['running', 'paused', 'waiting_human'].includes(run.status)) return;
+    if (!pid || !['running', 'paused', 'waiting_human'].includes(run.status)) return undefined;
+    // Already registered by the agent itself in the meantime.
+    if (tracked().has(pid)) return pid;
     const short = l.command.length > 140 ? `${l.command.slice(0, 139)}…` : l.command;
     (run.processes ??= []).push({ pid, purpose: short, cleanup: 'keep', agentId: info.id, startedAt: now(), alive: true, checkedAt: now(), log: l.log, detected: true });
     this.log(run, L(`偵測到 ${this.label(info)} 在背景啟動的程序（PID ${pid}），已自動加入追蹤`, `Found a background process ${this.label(info)} started (PID ${pid}); it is tracked now`), 'info', true);
     this.notify(
       info.id,
-      `Aivenue found the background process you started (PID ${pid}: ${short}) and now shows it to the user. Call track_process {pid: ${pid}, purpose, cleanup, log or watch_file + expected_size} to describe it and show its progress, and wait for it with wait_for instead of sleep loops.`,
+      `Aivenue found the background process you started (PID ${pid}: ${short}). You must register it: call track_process {pid: ${pid}, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is and how far it is (your submission is refused until you do), and wait for it with wait_for instead of sleep loops.`,
     );
     this.touch(run);
+    return pid;
   }
 
   /** The model limit to size the shared context for: this agent's, or its conversation's earlier reading, or the catalog's. */
@@ -3326,6 +3415,7 @@ export class Orchestrator {
 
   private watch(run: WorkflowRun) {
     if (!['running', 'waiting_human', 'paused'].includes(run.status)) return;
+    void this.adoptGpuJobs(run).catch(() => undefined);
     const lim = run.config.limits;
     // Time and cost: the run stops as incomplete (a cycle limit is checked between cycles).
     const hit = run.status !== 'paused' ? limitHit(lim ? { ...lim, maxCycles: undefined } : undefined, { startedAt: run.createdAt, now: now(), costUsd: this.runCost(run), cycles: 0 }) : undefined;

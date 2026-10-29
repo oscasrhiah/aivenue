@@ -55,6 +55,7 @@ function setup(o = {}) {
     hubUrl: () => 'http://127.0.0.1:1',
     push: () => undefined,
     gpuQuery: o.gpuQuery ?? (() => { throw new Error('no GPU'); }),
+    gpuSmi: o.gpuSmi ?? (() => { throw new Error('no GPU'); }),
   });
   return { orch, cwd };
 }
@@ -472,6 +473,8 @@ test('agent 自己在背景開的程序：沒有 track_process 也會被找到�
   child.unref();
   let found;
   let bgRun;
+  let refused;
+  let registered;
   fakeAgents(orch, {
     executor: [
       async (o, secret, a) => {
@@ -481,6 +484,10 @@ test('agent 自己在背景開的程序：沒有 track_process 也會被找到�
           found = (run.processes ?? []).find((p) => p.detected);
           if (!found) await new Promise((res) => setTimeout(res, 250));
         }
+        // Not registered yet: the submission is refused, naming the job.
+        refused = await o.callTool(secret, 'submit_work', { summary: 'done' }).then(() => '', (e) => e.message);
+        await o.callTool(secret, 'track_process', { pid: found.pid, purpose: 'slow job', cleanup: 'aivenue', log: 'slow.log' });
+        registered = run.processes.find((p) => p.pid === found.pid);
         await o.callTool(secret, 'submit_work', { summary: 'done' });
       },
     ],
@@ -493,6 +500,9 @@ test('agent 自己在背景開的程序：沒有 track_process 也會被找到�
     assert.equal(found.pid, child.pid);
     assert.equal(found.log, 'slow.log');
     assert.equal(found.cleanup, 'keep');
+    assert.match(refused, /Register your background jobs[\s\S]*PID \d+/);
+    assert.equal(registered.purpose, 'slow job');
+    assert.equal(registered.detected, undefined);
   } finally {
     try {
       process.kill(child.pid);
@@ -561,4 +571,47 @@ test('整理員：新筆記滿門檻就依主題整理，附出處；漏掉的�
   assert.match(topic, /SHARED KNOWLEDGE[\s\S]*## Environment and versions[\s\S]*## Not sorted yet[\s\S]*data\/aishell/);
   assert.equal(r.knowledge.notes, 3);
   assert.equal(r.notes.length, 3);
+});
+
+test('GPU 鎖住的卡上有沒人登記的程序：自動當成鎖卡的 agent 的背景程序', async () => {
+  const job = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+  job.unref();
+  const smi = (args) =>
+    args[0].startsWith('--query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature')
+      ? '0, NVIDIA GeForce RTX 5090, 11000, 32607, 100, 69, 447, 00000000:01:00.0\n'
+      : args[0].startsWith('--query-compute-apps')
+        ? `00000000:01:00.0, ${job.pid}, python, 10300\n`
+        : '';
+  const { orch, cwd } = setup({ gpuQuery: () => '0, NVIDIA GeForce RTX 5090, 500, 32607, 0\n', gpuSmi: smi });
+  let found;
+  let rid;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'gpu_acquire', { count: 1 });
+        // The job was started by a script, so nothing in the commands says so: the watchdog finds it on the card.
+        const run = o.runs.get(rid);
+        o.watch(run);
+        for (let i = 0; i < 100 && !found; i++) {
+          found = (run.processes ?? []).find((p) => p.detected);
+          if (!found) await new Promise((r) => setTimeout(r, 100));
+        }
+        await o.callTool(secret, 'track_process', { pid: found.pid, purpose: 'train', cleanup: 'keep' });
+        await o.callTool(secret, 'submit_work', { summary: 'trained' });
+      },
+    ],
+  });
+  try {
+    rid = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+    const r = await settle(orch, rid);
+    assert.equal(r.status, 'completed', r.error);
+    assert.ok(found, 'not adopted');
+    assert.equal(found.pid, job.pid);
+    assert.match(found.purpose, /^GPU 0: /);
+    assert.equal(found.agentId, Object.values(r.agents).find((a) => a.role === 'executor').id);
+  } finally {
+    try {
+      process.kill(job.pid);
+    } catch {}
+  }
 });

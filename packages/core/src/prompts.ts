@@ -296,7 +296,7 @@ export function adjudicatePrompt(cfg: WorkflowConfig, disputes: { id: string; ti
 /** Told to writing agents when the user granted whole-computer access. Prompt rules only: nothing enforces them. */
 /** Implementers, sub-agents and verifiers: background jobs are registered, and waited for with wait_for. */
 export function backgroundRule(): string {
-  return '\n\nBACKGROUND JOBS: register every job you start in the background (nohup, &, a new terminal, tmux, Start-Process) with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees it and its progress. To wait for one, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops: it does not spend your turns, and the user sees what you are waiting for.';
+  return '\n\nBACKGROUND JOBS (REQUIRED): right after you start anything in the background (nohup, &, a new terminal, tmux, Start-Process, a script that backgrounds itself, a run_in_background command), register it with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is, its status and its progress. Aivenue also finds unregistered jobs from your commands and your GPUs, and refuses your submission until every one is registered. To wait for one, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops: it does not spend your turns, and the user sees what you are waiting for.';
 }
 
 /** The librarian: new shared notes merged into the knowledge document, by subject, every line with its sources. */

@@ -240,7 +240,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   track_process: {
     name: 'track_process',
     description:
-      'Register a background process you started (a download, a server, a training job) so the user can see whether it is alive, how far it is and who cleans it up. Give its progress source so the user sees a percentage: watch_file + expected_size for anything that writes a file or folder of known size (a download, extracted data), and log for its output file (redirect stdout/stderr there; a "45%" in it is read as progress). cleanup "aivenue": Aivenue stops it when the workflow ends; "agent": you stop it yourself before you finish; "keep": it is meant to keep running.',
+      'Register a background process you started (a download, a server, a training job) so the user can see whether it is alive, how far it is and who cleans it up. Required for every background job: Aivenue refuses your submission while one is unregistered. Give its progress source so the user sees a percentage: watch_file + expected_size for anything that writes a file or folder of known size (a download, extracted data), and log for its output file (redirect stdout/stderr there; a "45%" in it is read as progress). cleanup "aivenue": Aivenue stops it when the workflow ends; "agent": you stop it yourself before you finish; "keep": it is meant to keep running.',
     inputSchema: {
       type: 'object',
       properties: {

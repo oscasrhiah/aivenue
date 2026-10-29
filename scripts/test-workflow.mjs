@@ -342,6 +342,11 @@ test('背景程序偵測：nohup、&、新終端機、Start-Process 算啟動；
   assert.ok(W.backgroundLaunch('Start-Process python -ArgumentList fake.py -RedirectStandardOutput dl.log -PassThru'));
   assert.ok(W.backgroundLaunch('python serve.py', '', '{"command":"python serve.py","run_in_background":true}'));
   assert.equal(W.backgroundLaunch('until grep -q ^done run.status; do sleep 30; done'), undefined);
+  // Starting a job and then waiting a moment in the same line is still a launch (this was missed before).
+  const both = W.backgroundLaunch('cd /proj && CUDA_VISIBLE_DEVICES=0 nohup python whisper_vf/train.py --epochs 16 > logs/reg2.log 2>&1 & sleep 10; tail -5 logs/reg2.log');
+  assert.equal(both?.key, 'train.py');
+  assert.equal(both?.log, 'logs/reg2.log');
+  assert.equal(W.backgroundLaunch('kill 1234'), undefined);
   assert.equal(W.backgroundLaunch('npm test && npm run build'), undefined);
   assert.equal(W.backgroundLaunch('ls 2>&1 | head'), undefined);
   assert.equal(W.pidFromOutput('started\n12345\n'), 12345);

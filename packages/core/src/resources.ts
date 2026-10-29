@@ -36,8 +36,12 @@ const isWin = process.platform === 'win32';
 export class ResourceManager {
   private dir: string;
 
-  /** `query`: nvidia-smi's CSV output (replaced in tests). */
-  constructor(dataDir: string, private query: () => string = nvidiaSmi) {
+  /** `query`: nvidia-smi's CSV output; `smi`: nvidia-smi with any arguments (both replaced in tests). */
+  constructor(
+    dataDir: string,
+    private query: () => string = nvidiaSmi,
+    private smi: (args: string[]) => string = (args) => execFileSync('nvidia-smi', args, { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }),
+  ) {
     this.dir = path.join(dataDir, 'locks');
     fs.mkdirSync(this.dir, { recursive: true });
   }
@@ -65,7 +69,7 @@ export class ResourceManager {
   gpuDetail(): GpuDetail[] {
     const smi = (args: string[]) => {
       try {
-        return execFileSync('nvidia-smi', args, { encoding: 'utf8', timeout: 10000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        return this.smi(args);
       } catch {
         return '';
       }
