@@ -995,22 +995,33 @@ export function Chat({ id }: { id?: string }) {
   );
 }
 
-/** Opens the agent map; shown when sub-agents are on or anyone was spawned. Counts helpers and shows a pulse while some run. */
+/**
+ * Opens the agent map; shown when sub-agents are on or anyone was spawned. The numbers are what works right now
+ * (sub-agents and advisors, background processes still alive), so a lone main agent never shows one.
+ */
 function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () => void; thread?: boolean }) {
   const t = useT();
   const all = Object.values(run.agents);
   const helpers = all.filter((a) => a.role === 'subagent' || a.role === 'advisor');
   // Also for a conversation of several messages: the map shows every message's agents.
   // Also for background processes: once ended they are listed there, next to the round that started them.
-  const procs = run.processes?.length ?? 0;
-  if (!thread && !run.config.subagents?.enabled && helpers.length === 0 && !procs) return null;
+  const procs = run.processes ?? [];
+  if (!thread && !run.config.subagents?.enabled && helpers.length === 0 && !procs.length) return null;
   const running = helpers.filter((a) => a.status === 'running' || a.status === 'queued').length;
+  const alive = procs.filter((p) => p.alive !== false && !p.endedAt).length;
+  const title = [
+    t('查看所有 agent 與 sub agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing'),
+    helpers.length ? t(`這則訊息的 sub agent／顧問：${running} 個執行中，共 ${helpers.length} 個`, `Sub-agents and advisors in this message: ${running} running of ${helpers.length}`) : '',
+    procs.length ? t(`背景程序：${alive} 個執行中，共 ${procs.length} 個`, `Background processes: ${alive} running of ${procs.length}`) : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   return (
-    <button className="btn small am-open" onClick={onOpen} title={t('查看所有 agent 與 sub agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing')}>
+    <button className="btn small am-open" onClick={onOpen} title={title}>
       {running > 0 && <span className="am-dot live" />}
       Agent map
-      {helpers.length > 0 && <span className="muted">· {helpers.length}</span>}
-      {procs > 0 && <span className="muted" title={`${procs}`}>· ⚙ {procs}</span>}
+      {running > 0 && <span className="muted">· {running}</span>}
+      {alive > 0 && <span className="muted">· ⚙ {alive}</span>}
     </button>
   );
 }

@@ -577,6 +577,41 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
           <option value={0}>{t('不詢問（交給各家 CLI 自己壓縮）', "Never ask (the CLIs compact on their own)")}</option>
         </select>
       </div>
+      <div className="kv">
+        <label>{t('整理共用知識', 'Organize knowledge')}</label>
+        <select disabled={disabled} value={value.organizeEvery ?? 30} onChange={(e) => onChange({ ...value, organizeEvery: Number(e.target.value) })}>
+          {withCurrent([10, 20, 30, 50, 100], value.organizeEvery ?? 30)
+            .filter((n) => n > 0)
+            .map((n) => (
+              <option key={n} value={n}>
+                {t(`每 ${n} 則新筆記整理一次`, `Every ${n} new notes`)}
+                {n === 30 ? t('（預設）', ' (default)') : ''}
+              </option>
+            ))}
+          <option value={0}>{t('不自動整理', 'Never automatically')}</option>
+        </select>
+      </div>
+      <div className="kv">
+        <label>{t('每個 agent 讀入', 'Each agent reads')}</label>
+        <select disabled={disabled} value={value.shareOfWindow ?? 0.5} onChange={(e) => onChange({ ...value, shareOfWindow: Number(e.target.value) })}>
+          {withCurrent([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], value.shareOfWindow ?? 0.5).map((n) => (
+            <option key={n} value={n}>
+              {t(`最多佔它上下文的 ${pct(n)}`, `Up to ${pct(n)} of its context`)}
+              {n === 0.5 ? t('（預設）', ' (default)') : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="muted tiny">
+        {t(
+          '每個 agent 依自己模型能容納的大小讀入共用上下文：目標、狀態與交接一律放最前面，其餘由新到舊放到這個比例為止，放不下的仍可查到。如果某個 CLI 曾在比模型上限更低的大小自己壓縮對話，就以那個大小計算。',
+          'Each agent reads the shared context in proportion to what its model holds: the goal, status and hand-offs always come first, the rest goes in newest first up to this share, and what does not fit can still be looked up. When a CLI has compacted its conversation below its model limit, that size counts instead.',
+        )}{' '}
+        {t(
+          '整理共用知識：壓縮者模型把新的筆記與 findings 依主題（環境、資料、程式結構、已知問題、決策、不可行的做法、進度）整理成一份文件，每一條附出處，原本的筆記不變。',
+          'Organizing: the compactor model sorts new notes and findings by subject (environment, data, code structure, known problems, decisions, approaches that did not work, progress) into one document, each line with its source; the notes stay as they are.',
+        )}
+      </div>
     </section>
   );
 }

@@ -399,6 +399,7 @@ function RoundProcesses({ t, run, agents, onOpen }: { t: T; run: WorkflowRun; ag
             <div className="am-proc-title">{p.purpose}</div>
             <div className="am-proc-meta">
               <span className="am-tag">{kind}</span>
+              {p.detected && <span className="am-tag" title={t('agent 沒有登記它，是 Aivenue 從 agent 執行的指令偵測到的', 'The agent did not register it; Aivenue found it from the commands the agent ran')}>{t('自動偵測', 'detected')}</span>}
               <span className={cx('am-tag', incomplete && 'warn')}>{state}</span>
               {p.lastPercent !== undefined && <span className="am-tag">{Math.round(p.lastPercent)}%</span>}
             </div>

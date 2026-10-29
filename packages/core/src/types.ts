@@ -550,6 +550,25 @@ export interface ContextConfig {
   compactor?: { provider: string; model?: string; effort?: string };
   /** Share of an agent's own window that asks the user about compacting it (default 0.8; 0 = never ask). */
   agentAskAt?: number;
+  /**
+   * Share of each agent's usable window the shared context may fill in its prompt (default 0.5). Newest first after the
+   * goal, status and hand-offs; the rest stays reachable through read_context and search_records.
+   */
+  shareOfWindow?: number;
+  /** Organize the shared notes into a knowledge document every this many new notes (default 30; 0 = never). */
+  organizeEvery?: number;
+}
+
+/** The shared notes and findings organized by subject, with sources (written by the compactor model). */
+export interface SharedKnowledge {
+  doc: string;
+  /** Notes up to this time are in it. */
+  upto: number;
+  updatedAt: number;
+  /** Who wrote it (provider · model). */
+  by?: string;
+  /** Notes organized in total. */
+  notes: number;
 }
 
 export interface SharedMemory {
@@ -808,6 +827,8 @@ export interface AgentRunInfo {
   brief?: string;
   /** Its own conversation: tokens in use now and the model's limit (when the CLI reports them). */
   context?: { used?: number; window?: number; estimated?: boolean; compactedAt?: number };
+  /** Times its CLI compacted its conversation by itself. */
+  selfCompactions?: number;
   /** Shared notes / agent results it has already been given (time), so later turns only get what is new. */
   sharedSeenAt?: number;
   /** Through a router (OmniRoute): the models that actually answered ("groq/llama-4-scout"). */
@@ -994,6 +1015,10 @@ export interface WorkflowRun {
   sharedTokens?: number;
   /** An agent whose own conversation passed the ask threshold: the user decides whether to compact it. */
   contextAsk?: { agentId: string; used: number; window: number; level: number };
+  /** The shared notes organized by subject. */
+  knowledge?: SharedKnowledge;
+  /** Tokens at which a model's CLI compacted its own conversation in this run (`provider model` → tokens). */
+  compactPoints?: Record<string, number>;
   /** Highest ask level already shown per agent conversation (session id), and conversations the user muted. */
   contextAsked?: Record<string, number>;
   contextMuted?: string[];
@@ -1029,6 +1054,8 @@ export interface WorkflowRun {
   }[];
 }
 
+export type CheckShell = 'bash' | 'sh' | 'powershell' | 'cmd';
+
 export interface ConditionWait {
   id: string;
   agentId: string;
@@ -1042,6 +1069,8 @@ export interface ConditionWait {
   lastOutput?: string;
   /** Also take a GPU lock once the condition holds. */
   gpus?: number;
+  /** The shell the check runs in: what the agent asked for, else picked from its syntax (Git Bash first on Windows). */
+  shell?: CheckShell;
   state: 'waiting' | 'met' | 'timeout' | 'cancelled';
 }
 
@@ -1066,6 +1095,8 @@ export interface TrackedProcess {
   endedAt?: number;
   /** The message (workflow) it belongs to, when shown in a conversation of several. */
   workflowId?: string;
+  /** Aivenue found it from the agent's commands (the agent did not register it). */
+  detected?: boolean;
 }
 
 /** A background process as the detail window shows it. */

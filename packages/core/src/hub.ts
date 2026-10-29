@@ -370,6 +370,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return true;
     },
     'workflows.compactShared': (p: { id: string }) => (orchestrator.compactSharedNow(p.id), true),
+    'workflows.organizeShared': async (p: { id: string }) => (await orchestrator.organizeSharedNow(p.id), true),
     'workflows.compactAgent': (p: { id: string; agentId: string }) => (orchestrator.compactAgentNow(p.id, p.agentId), true),
     'workflows.contextAsk': (p: { id: string; action: 'compact' | 'later' | 'mute' }) => (orchestrator.answerContextAsk(p.id, p.action), true),
     'workflows.decide': (p: { id: string; decisionId: string; optionId: string; text?: string }) => orchestrator.decide(p.id, p.decisionId, p.optionId, p.text),

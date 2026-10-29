@@ -136,27 +136,41 @@ export interface RecordQuery {
 
 /**
  * Search a run's records — every agent's messages, tool calls and output, shared notes, reviews and verifications —
- * by text and by role, agent, stage, round, file or issue id.
+ * by text and by role, agent, stage, round, file or issue id. Several words match in any order: records with all of
+ * them first, else those with the most; notes and issues before raw output, newer before older.
  */
 export function searchRecords(run: WorkflowRun, eventsOf: (agentId: string) => AgentEvent[], q: RecordQuery): RecordHit[] {
   const needle = q.q?.trim().toLowerCase();
+  const words = [...new Set((needle ?? '').split(/\s+/).filter(Boolean))];
   const file = q.file?.replace(/\\/g, '/').toLowerCase();
   const issue = q.issueId?.toLowerCase();
-  const hits: RecordHit[] = [];
-  const match = (text: string) => (!needle || text.toLowerCase().includes(needle)) && (!file || text.replace(/\\/g, '/').toLowerCase().includes(file)) && (!issue || text.toLowerCase().includes(issue));
+  const found: { hit: RecordHit; words: number; boost: number; ts: number }[] = [];
+  // How many of the words it has (0 = no match); the filters must all hold.
+  const score = (text: string) => {
+    const t = text.toLowerCase();
+    if (file && !t.replace(/\\/g, '/').includes(file)) return 0;
+    if (issue && !t.includes(issue)) return 0;
+    if (!words.length) return 1;
+    if (t.includes(needle!)) return words.length + 1;
+    return words.filter((w) => t.includes(w)).length;
+  };
+  const add = (hit: Omit<RecordHit, 'text'>, text: string, boost: number, ts: number) => {
+    const n = score(text);
+    if (n) found.push({ hit: { ...hit, text: snippet(text, words.find((w) => text.toLowerCase().includes(w)) ?? needle) }, words: n, boost, ts });
+  };
   const agentOk = (a: AgentRunInfo) => (!q.role || a.role === q.role) && (!q.agentId || a.id === q.agentId) && (!q.stage || a.stage === q.stage) && (!q.round || a.round === q.round);
   for (const a of Object.values(run.agents)) {
     if (!agentOk(a)) continue;
     for (const e of eventsOf(a.id)) {
+      if (!['tool', 'message', 'error', 'info'].includes(e.kind)) continue;
       const text = e.kind === 'tool' ? `${e.tool?.name ?? ''} ${e.tool?.title ?? ''}\n${e.tool?.input ?? ''}\n${e.tool?.output ?? ''}` : (e.text ?? '');
-      if (!text || !['tool', 'message', 'error', 'info'].includes(e.kind) || !match(text)) continue;
-      hits.push({ agentId: a.id, role: a.role, stage: a.stage, round: a.round, seq: e.seq, kind: e.kind === 'tool' ? `tool:${e.tool?.name ?? ''}` : e.kind, text: snippet(text, needle) });
+      if (text) add({ agentId: a.id, role: a.role, stage: a.stage, round: a.round, seq: e.seq, kind: e.kind === 'tool' ? `tool:${e.tool?.name ?? ''}` : e.kind }, text, e.kind === 'message' ? 1 : 0, e.ts);
     }
   }
   for (const n of run.notes ?? []) {
     const a = run.agents[n.agentId];
     if (a && !agentOk(a)) continue;
-    if (match(n.text)) hits.push({ agentId: n.agentId, role: a?.role, stage: a?.stage, round: a?.round, kind: `note${n.kind ? `:${n.kind}` : ''}`, text: snippet(n.text, needle) });
+    add({ agentId: n.agentId, role: a?.role, stage: a?.stage, round: a?.round, kind: `note${n.kind ? `:${n.kind}` : ''}` }, n.text, 2, n.ts);
   }
   for (const [key, st] of Object.entries(run.stages)) {
     if (!st || (q.stage && q.stage !== key)) continue;
@@ -164,11 +178,15 @@ export function searchRecords(run: WorkflowRun, eventsOf: (agentId: string) => A
       if (q.round && q.round !== r.n) continue;
       for (const i of [...(r.review?.issues ?? []), ...(r.verification?.issues ?? [])]) {
         const text = `${i.id} [${i.severity}] ${i.title}${i.location ? ` (${i.location})` : ''}${i.detail ? `\n${i.detail}` : ''}`;
-        if (match(text)) hits.push({ agentId: r.reviewerAgentId, stage: key, round: r.n, kind: 'issue', text: snippet(text, needle) });
+        add({ agentId: r.reviewerAgentId, stage: key, round: r.n, kind: 'issue' }, text, 2, 0);
       }
     }
   }
-  return hits.slice(0, Math.max(1, Math.min(q.limit ?? 50, 200)));
+  // All the words when some record has them all; otherwise the closest ones.
+  const best = Math.max(0, ...found.map((f) => f.words));
+  const keep = best >= words.length ? found.filter((f) => f.words >= words.length) : found;
+  keep.sort((x, y) => y.words - x.words || y.boost - x.boost || y.ts - x.ts);
+  return keep.slice(0, Math.max(1, Math.min(q.limit ?? 50, 200))).map((f) => f.hit);
 }
 
 function snippet(text: string, needle?: string): string {

@@ -36,6 +36,7 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
   const [pinned, setPinned] = useState(false);
   const [hover, setHover] = useState(false);
   const [error, setError] = useState<string>();
+  const [organizing, setOrganizing] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!pinned) return;
@@ -51,6 +52,8 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
   }, [pinned]);
 
   const cfg = run.config.context ?? {};
+  const every = cfg.organizeEvery ?? 30;
+  const fresh = (run.notes ?? []).filter((n) => n.ts > (run.knowledge?.upto ?? 0)).length;
   const cap = cfg.capacity ?? DEFAULT_CAPACITY;
   const at = cfg.compactAt ?? 0.8;
   const summaryOnly = (run.config.contextSharing ?? 'on_demand') === 'summary';
@@ -104,6 +107,31 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
                   {busy && run.compacting?.target === 'shared' ? t('壓縮中…', 'Compacting…') : t('現在壓縮', 'Compact now')}
                 </button>
                 <span className="muted tiny">{t(`壓縮者：${compactor}，約讀 ${fmtTokens(used)} tokens`, `Compactor: ${compactor}, reads about ${fmtTokens(used)} tokens`)}</span>
+              </div>
+              <div className="ctx-head sub">{t('共用知識', 'Shared knowledge')}</div>
+              <div className="muted small">
+                {run.knowledge
+                  ? t(`已把 ${run.knowledge.notes} 則筆記依主題整理（${run.knowledge.by ?? ''}）`, `${run.knowledge.notes} notes organized by subject (${run.knowledge.by ?? ''})`)
+                  : t('還沒整理過。', 'Not organized yet.')}{' '}
+                {t(`新筆記 ${fresh} 則`, `${fresh} new note(s)`)}
+                {every ? t(`，滿 ${every} 則自動整理。`, `; organized automatically at ${every}.`) : t('，不自動整理。', '; not organized automatically.')}
+              </div>
+              <div className="row gap ctx-actions">
+                <button
+                  className="btn small"
+                  disabled={organizing || !fresh}
+                  onClick={() => {
+                    setError(undefined);
+                    setOrganizing(true);
+                    hub
+                      .call('workflows.organizeShared', { id: run.id })
+                      .catch((e) => setError((e as Error).message))
+                      .finally(() => setOrganizing(false));
+                  }}
+                >
+                  {organizing ? t('整理中…', 'Organizing…') : t('現在整理', 'Organize now')}
+                </button>
+                <span className="muted tiny">{t('依主題整理筆記與 findings，每一條附出處；原本的筆記不變', 'Sorts the notes and findings by subject, each line with its source; the notes stay as they are')}</span>
               </div>
             </>
           )}

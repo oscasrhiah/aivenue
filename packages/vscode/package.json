@@ -3,7 +3,7 @@
   "displayName": "Aivenue",
   "description": "讓 Claude Code、Codex、Antigravity、GitHub Copilot、OpenCode 等 AI 工具分工合作：一家規劃一家審查、一家實作一家驗收，還能跨家派 sub agent，全程即時顯示進度。",
   "publisher": "aivenue-local",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "license": "MIT",
   "icon": "icon.png",
   "engines": {

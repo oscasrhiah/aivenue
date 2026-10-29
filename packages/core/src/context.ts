@@ -1,5 +1,6 @@
 import type { AgentEvent, AgentRunInfo, ContextSharing, SharedNote, WorkflowRun } from './types';
-import { activityBlock, collectActivity, handoffsBlock, knowledgeBlock, statusBlock } from './ledger';
+import { activityBlock, collectActivity, fit, handoffsBlock, knowledgeBlock, statusBlock } from './ledger';
+import { buildTopics, topicIndexBlock } from './topics';
 
 /**
  * Shared context between agents: an overview of the workflow, full transcripts on request,
@@ -81,43 +82,55 @@ export function allNotes(run: WorkflowRun): string {
 
 /**
  * The block appended to an agent's prompt (empty in "summary" mode). `since`: a resumed conversation already has
- * everything up to then, so it only gets what is new. `maxChars`: the cap for this agent's model (the rest stays
- * reachable through read_context).
+ * everything up to then, so it only gets what is new. `maxChars`: this agent's share of its model. The goal, status
+ * and hand-offs always come first; the rest fills the share newest first, and what does not fit stays reachable through
+ * read_context and search_records. `recap`: what the agent's own conversation did before its CLI compacted it.
  */
-export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf: (agentId: string) => AgentEvent[], o: { since?: number; maxChars?: number } = {}): string {
+export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf: (agentId: string) => AgentEvent[], o: { since?: number; maxChars?: number; recap?: (budget: number) => string } = {}): string {
   const mode = sharingOf(run);
   if (mode === 'summary') return '';
   const since = o.since ?? 0;
+  const max = o.maxChars ?? 40000;
   const fresh = (a: AgentRunInfo) => a.status === 'running' || (a.endedAt ?? 0) > since;
   const agents = others(run, self.id).filter((a) => a.id !== self.parentId || mode !== 'full');
   const foldedCount = agents.filter((a) => folded(run, a)).length;
   const list = [
     ...(foldedCount && !since ? [`- (${foldedCount} earlier agent(s): see the shared memory below)`] : []),
-    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => `- ${agentLabel(a)} [${a.status}]: ${oneLine(agentResult(run, a), 160) || '—'}`),
+    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => `- ${agentLabel(a)} [${a.status}]: ${cut(agentResult(run, a), 2000) || '—'}`),
   ];
   const memory = run.memory && run.memory.updatedAt > since ? memoryBlock(run) : '';
-  const notes = notesBlock(run, { since });
-  // Where things stand, what was handed over, and what every other agent already ran and learned.
+  const upto = Math.max(run.memory?.upto ?? 0, run.knowledge?.upto ?? 0);
+  const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > since).map((n) => noteLine(run, n));
+  const knowledgeDoc = run.knowledge && run.knowledge.updatedAt > since ? run.knowledge.doc : '';
+  // Always first: where things stand and what was handed over.
   const status = statusBlock(run);
   const handoffs = handoffsBlock(run, since);
   const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
   const footer =
-    'Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for an agent\'s full transcript (its messages, commands and their output), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives.';
-  const fixed = [
-    '',
+    "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for an agent's full transcript (its messages, commands and their output), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives, and list what you learned in `findings` when you submit.";
+  const head = [
     since ? 'SHARED CONTEXT (only what is new since your last turn, plus the current status):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
+    'CHECK HERE FIRST: before running a command, reading a file or investigating something, look for it below and call `search_records` {q: "a few keywords"} — another agent may already have done it. Re-run only when files changed since or you need more than what is recorded.',
     status,
     handoffs,
-    list.length ? `Agents${since ? ' (new or updated)' : ' so far'}:\n${list.join('\n')}` : since ? '' : 'You are the first agent in this workflow.',
-    memory,
-    `Shared notes${since ? ' (new)' : ''}:\n${notes}`,
-  ];
-  // What is left of this agent's share goes to the project knowledge and the commands others ran.
-  const room = Math.max(3000, (o.maxChars ?? 40000) - fixed.join('\n').length - footer.length - 200);
-  const knowledge = knowledgeBlock(run, act, Math.floor(room * 0.4), !since);
-  const activity = activityBlock(act, room - knowledge.length);
-  if (since && !list.length && !memory && notes === '(no notes yet)' && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
-  const lines = [...fixed, knowledge, activity, footer];
+  ]
+    .filter(Boolean)
+    .join('\n');
+  // The rest of the share, newest first in each part: own work after a compaction, notes, agents, memory, then what
+  // the others ran and read.
+  let room = Math.max(4000, max - head.length - footer.length - 400);
+  const take = (text: string) => ((room -= text.length + 1), text);
+  const recap = o.recap ? take(o.recap(Math.floor(room * 0.3))) : '';
+  // The organized knowledge and the table of contents of every record, before the newest raw items.
+  const organized = take(knowledgeDoc ? `SHARED KNOWLEDGE (organized by subject from the shared notes, with sources [n:id]; read_context {topic: "knowledge"} for all of it):\n${cut(knowledgeDoc, Math.floor(room * 0.25))}` : '');
+  const index = take(topicIndexBlock(buildTopics(run, transcriptOf), Math.max(1500, Math.floor(room * 0.06)), since));
+  const noteText = take(notes.length ? fit(notes, Math.floor(room * 0.3), `Shared notes${since ? ' (new)' : ''}:`) : since ? '' : 'Shared notes:\n(no notes yet)');
+  const listText = take(list.length ? fit(list, Math.floor(room * 0.2), `Agents${since ? ' (new or updated)' : ' so far'}:`) : since ? '' : 'You are the first agent in this workflow.');
+  const memText = take(memory ? cut(memory, Math.floor(room * 0.3)) : '');
+  const knowledge = take(knowledgeBlock(run, act, Math.floor(Math.max(0, room) * 0.25), !since));
+  const activity = take(activityBlock(act, Math.max(2000, room)));
+  if (since && !recap && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
+  const lines = ['', head, recap, organized, index, listText, memText, noteText, knowledge, activity, footer];
   if (mode === 'full') {
     // The most recent hand-off: whoever worked right before this agent (for a sub-agent, its parent so far).
     const prev = self.parentId ? run.agents[self.parentId] : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
@@ -127,8 +140,8 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
     }
   }
   let text = lines.filter((l) => l !== '').join('\n');
-  // Over this agent's share of its model: keep the newest part; the rest is one read_context call away.
-  if (o.maxChars && text.length > o.maxChars) text = `SHARED CONTEXT (shortened to fit your model; call read_context {} for the rest):\n…${text.slice(-o.maxChars)}`;
+  // Still over this agent's share (a huge status or hand-off): keep the start, where the goal and status are.
+  if (o.maxChars && text.length > o.maxChars) text = `${text.slice(0, o.maxChars)}\n… (shortened to fit your model; call read_context {} for the rest)`;
   return '\n' + text;
 }
 
@@ -170,7 +183,10 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
   }
   const handoffs = handoffsBlock(run);
   if (handoffs) parts.push(handoffs);
+  if (run.knowledge) parts.push(`SHARED KNOWLEDGE (organized from ${run.knowledge.notes} notes):\n${run.knowledge.doc}`);
   if (eventsOf) {
+    const index = topicIndexBlock(buildTopics(run, eventsOf), 4000);
+    if (index) parts.push(index);
     const act = collectActivity(run, eventsOf);
     const knowledge = knowledgeBlock(run, act, 12000, true);
     if (knowledge) parts.push(knowledge);
@@ -184,7 +200,7 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
   );
   const memory = memoryBlock(run);
   if (memory) parts.push(memory);
-  parts.push(`SHARED NOTES${run.memory ? ' (newer than the shared memory)' : ''}:\n${notesBlock(run)}`);
+  parts.push(`SHARED NOTES${run.memory ? ' (newer than the shared memory)' : ''}${run.knowledge ? ' (also the ones organized into the shared knowledge)' : ''}:\n${notesBlock(run)}`);
   parts.push(`Call read_context {agent_id} for any agent's full transcript${run.memory ? ', or read_context {agent_id: "notes"} for every original note' : ''}.`);
   return parts.join('\n\n');
 }

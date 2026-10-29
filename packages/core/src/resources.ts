@@ -2,7 +2,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { ConditionWait, GpuDetail } from './types';
+import type { CheckShell, ConditionWait, GpuDetail } from './types';
 import { childEnv } from './proc';
 
 /** A GPU as nvidia-smi reports it. */
@@ -149,12 +149,13 @@ export class ResourceManager {
     return freed;
   }
 
-  newWait(agentId: string, a: { check: string; contains?: string; interval_sec?: number; timeout_min?: number; gpus?: number }): ConditionWait {
+  newWait(agentId: string, a: { check: string; contains?: string; interval_sec?: number; timeout_min?: number; gpus?: number; shell?: string }): ConditionWait {
     const now = Date.now();
     return {
       id: `w-${randomUUID().slice(0, 8)}`,
       agentId,
       check: a.check,
+      shell: checkShell(a.check, a.shell),
       contains: a.contains || undefined,
       intervalSec: Math.min(600, Math.max(5, Math.round(a.interval_sec ?? 30))),
       timeoutAt: now + Math.min(7 * 24 * 60, Math.max(1, a.timeout_min ?? 60)) * 60000,
@@ -164,23 +165,74 @@ export class ResourceManager {
     };
   }
 
-  /** Run the condition once (60 s at most). */
-  check(w: ConditionWait, cwd: string): Promise<{ ok: boolean; output: string }> {
+  /**
+   * Run the condition once (60 s at most), in the wait's shell. `broken`: the check itself could not run (a syntax
+   * error, an unknown command), so waiting longer would never help.
+   */
+  check(w: ConditionWait, cwd: string): Promise<{ ok: boolean; output: string; broken?: boolean }> {
     return new Promise((resolve) => {
-      // shell: cmd.exe on Windows (with its quoting rules), /bin/sh elsewhere.
-      const child = spawn(w.check, { shell: true, cwd, env: childEnv(), windowsHide: true });
+      const shell = w.shell ?? checkShell(w.check);
+      const bash = shell === 'bash' && process.platform === 'win32' ? findGitBash() : undefined;
+      const child =
+        shell === 'powershell'
+          ? spawn(process.platform === 'win32' ? 'powershell' : 'pwsh', ['-NoProfile', '-NonInteractive', '-Command', w.check], { cwd, env: childEnv(), windowsHide: true })
+          : shell === 'bash'
+            ? spawn(bash ?? 'bash', ['-c', w.check], { cwd, env: childEnv(), windowsHide: true })
+            : // cmd.exe on Windows (its quoting rules), /bin/sh elsewhere.
+              spawn(w.check, { shell: true, cwd, env: childEnv(), windowsHide: true });
       let out = '';
       const timer = setTimeout(() => child.kill(), 60000);
       child.stdout?.on('data', (d) => (out += d));
       child.stderr?.on('data', (d) => (out += d));
-      child.on('error', (e) => (clearTimeout(timer), resolve({ ok: false, output: e.message })));
+      child.on('error', (e) => (clearTimeout(timer), resolve({ ok: false, output: e.message, broken: true })));
       child.on('close', (code) => {
         clearTimeout(timer);
         const output = out.trim().slice(-2000);
-        resolve({ ok: code === 0 && (!w.contains || output.includes(w.contains)), output });
+        // PowerShell prints False (and still exits 0) for a test that does not hold, e.g. Test-Path.
+        const falsy = shell === 'powershell' && /(^|\n)\s*False\s*$/.test(output);
+        const ok = code === 0 && !falsy && (!w.contains || output.includes(w.contains));
+        resolve({ ok, output, broken: !ok && CHECK_BROKEN.test(output) });
       });
     });
   }
+}
+
+/** What a shell prints when the command itself is wrong, not when the condition is false. */
+const CHECK_BROKEN = /ParserError|Unterminated string|unexpected EOF|syntax error|unexpected token|is not recognized as (an internal|the name)|command not found|CommandNotFoundException|The filename, directory name, or volume label syntax is incorrect/i;
+
+let gitBash: string | null | undefined;
+
+/** Git for Windows' bash (not WSL's): the shell most agent CLIs run their commands in on Windows. */
+export function findGitBash(): string | undefined {
+  if (gitBash !== undefined) return gitBash ?? undefined;
+  const pf = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs')].filter(Boolean) as string[];
+  const candidates = [process.env.CLAUDE_CODE_GIT_BASH_PATH, ...pf.map((d) => path.join(d, 'Git', 'bin', 'bash.exe'))];
+  try {
+    // Next to git.exe: <Git>\cmd\git.exe → <Git>\bin\bash.exe.
+    const git = execFileSync('where', ['git'], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0]?.trim();
+    if (git) candidates.push(path.join(path.dirname(path.dirname(git)), 'bin', 'bash.exe'));
+  } catch {
+    // no git on PATH
+  }
+  gitBash = candidates.find((c) => c && fs.existsSync(c)) ?? null;
+  return gitBash ?? undefined;
+}
+
+const POWERSHELL_SYNTAX = /\b(Test-Path|Get-[A-Z]\w+|Select-String|Where-Object|ForEach-Object|Start-Sleep|Write-(Output|Host)|Measure-Object)\b|\$env:|\$\w+\.\w+\(|\s-(match|notmatch|like|notlike|contains)\s|\$(true|false|null)\b/i;
+const CMD_SYNTAX = /^\s*(if\s+(not\s+)?exist\b|findstr\b|type\s)|%\w+%/i;
+
+/**
+ * The shell a wait's check runs in: the one the agent named, else the one its syntax belongs to. On Windows plain
+ * POSIX-looking commands go to Git Bash when it is there (agents write bash), else PowerShell; elsewhere /bin/sh.
+ */
+export function checkShell(check: string, asked?: string): CheckShell {
+  const a = (asked ?? '').toLowerCase();
+  if (a === 'bash' || a === 'powershell' || a === 'cmd' || a === 'sh') return a === 'cmd' && process.platform !== 'win32' ? 'sh' : (a as CheckShell);
+  if (a === 'pwsh') return 'powershell';
+  if (POWERSHELL_SYNTAX.test(check)) return 'powershell';
+  if (process.platform !== 'win32') return 'sh';
+  if (CMD_SYNTAX.test(check)) return 'cmd';
+  return findGitBash() ? 'bash' : 'powershell';
 }
 
 function nvidiaSmi(): string {

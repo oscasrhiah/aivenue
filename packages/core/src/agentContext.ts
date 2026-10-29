@@ -115,6 +115,6 @@ export function compactCodexThread(spec: ProviderSpec, threadId: string, timeout
         }
       }
     });
-    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'aivenue', title: 'Aivenue', version: '0.2.1' } } });
+    send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'aivenue', title: 'Aivenue', version: '0.2.2' } } });
   });
 }

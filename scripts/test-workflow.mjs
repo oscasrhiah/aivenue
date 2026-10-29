@@ -13,10 +13,14 @@ const bundled = await build({
       export * from './packages/core/src/failures';
       export * from './packages/core/src/records';
       export * from './packages/core/src/bundle';
-      export { ResourceManager, pidAlive } from './packages/core/src/resources';
+      export { ResourceManager, pidAlive, checkShell, findGitBash } from './packages/core/src/resources';
       export { parseVerification, parsePlan, parseRulings, toolsForRole } from './packages/core/src/hubTools';
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
-      export { CliPool } from './packages/core/src/cliPool';`,
+      export { CliPool } from './packages/core/src/cliPool';
+      export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
+      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
+      export { contextBlock } from './packages/core/src/context';
+      export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';`,
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -325,4 +329,137 @@ test('常駐 CLI：設成不自動關閉就一直保留', async () => {
   assert.equal(closed, false);
   pool.closeAll();
   assert.equal(closed, true);
+});
+
+// ---------- shared context ----------
+
+test('背景程序偵測：nohup、&、新終端機、Start-Process 算啟動；等待迴圈不算', () => {
+  const l = W.backgroundLaunch('nohup python train.py --epochs 16 > logs/train.log 2>&1 &', '[1] 204493');
+  assert.equal(l.key, 'train.py');
+  assert.equal(l.log, 'logs/train.log');
+  assert.equal(l.pid, 204493);
+  assert.equal(W.backgroundLaunch('gnome-terminal --title x -- bash -c "python -m asr.train; exec bash"').key, 'asr.train');
+  assert.ok(W.backgroundLaunch('Start-Process python -ArgumentList fake.py -RedirectStandardOutput dl.log -PassThru'));
+  assert.ok(W.backgroundLaunch('python serve.py', '', '{"command":"python serve.py","run_in_background":true}'));
+  assert.equal(W.backgroundLaunch('until grep -q ^done run.status; do sleep 30; done'), undefined);
+  assert.equal(W.backgroundLaunch('npm test && npm run build'), undefined);
+  assert.equal(W.backgroundLaunch('ls 2>&1 | head'), undefined);
+  assert.equal(W.pidFromOutput('started\n12345\n'), 12345);
+});
+
+test('讀檔指令算讀檔；輪詢指令認得出來', () => {
+  assert.equal(W.fileReadOf('cat src/app.ts'), 'src/app.ts');
+  assert.equal(W.fileReadOf('cd "/home/x/proj" && sed -n 1,80p train.py'), 'train.py');
+  assert.equal(W.fileReadOf('head -n 50 README.md'), 'README.md');
+  assert.equal(W.fileReadOf('cat a.ts b.ts'), undefined);
+  assert.equal(W.fileReadOf('cat log | grep x'), undefined);
+  assert.ok(W.POLLING.test('until [ -f runs/x/final.json ]; do sleep 60; done'));
+  assert.ok(W.POLLING.test('sleep 300 && tail -5 train.log'));
+  assert.ok(!W.POLLING.test('python train.py'));
+});
+
+const ev = (ts, category, title, output, status = 'ok') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name: category, category, title, output, status } });
+function sharedRun(cwd) {
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, startedAt: 1, endedAt: 50, stats: {} };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, startedAt: 60, stats: {} };
+  const run = { id: 'r', config: { cwd, goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = {
+    [a1.id]: [
+      ev(10, 'command', 'cat src/model.py', 'class Model:\n    def forward(self): ...'),
+      ev(20, 'command', 'pytest -q', 'FAILED tests/test_a.py::test_x - AssertionError\n' + 'x\n'.repeat(50) + '1 failed, 20 passed'),
+      ev(30, 'command', 'ls data', 'a.wav\nb.wav'),
+      ev(40, 'edit', 'src/model.py', '', 'ok'),
+    ],
+    [a2.id]: [],
+  };
+  return { run, a1, a2, eventsOf: (id) => events[id] ?? [] };
+}
+
+test('共用上下文：讀過的檔案附內容、測試保留失敗細節、改過的檔案標出來', () => {
+  const { run, a2, eventsOf } = sharedRun(os.tmpdir());
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+  assert.match(text, /FILES OTHER AGENTS ALREADY READ/);
+  assert.match(text, /src\/model\.py[^\n]*CHANGED since/);
+  assert.match(text, /pytest -q[\s\S]*FAILED tests\/test_a\.py::test_x[\s\S]*1 failed, 20 passed/);
+  assert.match(text, /ls data/);
+});
+
+test('共用上下文：放不下時目標與狀態留在最前面，較舊的內容先省略', () => {
+  const { run, a2, eventsOf } = sharedRun(os.tmpdir());
+  run.plan = { summary: 's', markdown: 'm', steps: [], goal: { statement: 'WER below 0.30', metrics: [{ id: 'M1', name: 'wer', target: '<0.30', how: 'eval' }] } };
+  for (let i = 0; i < 400; i++) run.notes.push({ id: `n${i}`, agentId: 'aaaaaaaa-111', text: `note number ${i} ${'x'.repeat(80)}`, kind: 'fact', ts: 100 + i });
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 12000 });
+  assert.ok(text.length <= 12000 + 200, `length ${text.length}`);
+  assert.match(text, /Goal that must be met: WER below 0\.30/);
+  assert.match(text, /note number 399/);
+  assert.doesNotMatch(text, /note number 0 /);
+  assert.match(text, /older item\(s\) left out/);
+});
+
+test('紀錄搜尋：多個關鍵字不分順序；筆記排在原始輸出前面', () => {
+  const { run, eventsOf } = sharedRun(os.tmpdir());
+  run.notes.push({ id: 'n1', agentId: 'aaaaaaaa-111', text: 'The forward pass of Model lives in src/model.py', kind: 'fact', ts: 5 });
+  const hits = W.searchRecords(run, eventsOf, { q: 'model forward' });
+  assert.ok(hits.length >= 2, JSON.stringify(hits));
+  assert.equal(hits[0].kind, 'note:fact');
+  assert.ok(hits.some((h) => h.kind.startsWith('tool:')));
+  // No record has every word: the closest ones still come back.
+  assert.ok(W.searchRecords(run, eventsOf, { q: 'forward nonexistentword' }).length >= 1);
+  assert.equal(W.searchRecords(run, eventsOf, { q: 'zzz qqq' }).length, 0);
+});
+
+test('CLI 自己壓縮後：交還它自己讀過的檔案、跑過的指令與回報', () => {
+  const { run, a1, eventsOf } = sharedRun(os.tmpdir());
+  const text = W.ownWorkBlock(run, eventsOf, new Set([a1.id]), ['dataset lives in /data/aishell'], 20000);
+  assert.match(text, /YOUR OWN WORK BEFORE YOUR CONVERSATION WAS COMPACTED/);
+  assert.match(text, /dataset lives in \/data\/aishell/);
+  assert.match(text, /Files you read:[\s\S]*src\/model\.py/);
+  assert.match(text, /Commands you ran:[\s\S]*pytest -q/);
+});
+
+test('主題索引：同一個檔案的讀取、修改、提到它的筆記歸在一起；指令與筆記類型也各成主題', () => {
+  const { run, eventsOf } = sharedRun(os.tmpdir());
+  run.notes.push({ id: 'n1', agentId: 'aaaaaaaa-111', text: 'src/model.py: forward() skips the mask', kind: 'fact', ts: 45 });
+  run.notes.push({ id: 'n2', agentId: 'aaaaaaaa-111', text: 'Use 16 kHz audio', kind: 'decision', ts: 46 });
+  const topics = W.buildTopics(run, eventsOf);
+  const file = topics.get('file:src/model.py');
+  assert.deepEqual(file.items.map((i) => i.what), ['read', 'changed', 'note (fact)']);
+  assert.ok(topics.get('command:pytest -q'));
+  assert.equal(topics.get('decisions').items.length, 1);
+  const detail = W.topicDetail(run, topics, 'model.py');
+  assert.match(detail, /TOPIC file:src\/model\.py[\s\S]*read:[\s\S]*class Model[\s\S]*changed[\s\S]*skips the mask/);
+  assert.match(W.topicDetail(run, topics, 'command:pytest'), /1 failed, 20 passed/);
+  assert.match(W.topicDetail(run, topics, 'nothing-like-this'), /No topic matches/);
+  const index = W.topicIndexBlock(topics, 4000);
+  assert.match(index, /SHARED RECORDS BY TOPIC: 1 files, 2 commands[\s\S]*1 facts, 1 decisions/);
+  assert.match(W.topicList(topics), /FILES:[\s\S]*file:src\/model\.py/);
+  // The shared context carries the table of contents.
+  assert.match(W.contextBlock(run, run.agents['bbbbbbbb-222'], eventsOf, { maxChars: 100000 }), /SHARED RECORDS BY TOPIC/);
+});
+
+test('wait_for 的檢查指令：依語法選 shell（Windows 預設 Git Bash），指令本身壞掉會直接回報', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-wait-'));
+  fs.writeFileSync(path.join(dir, 'train.log'), 'epoch 16\n[done] exp/best.pt\n');
+  const rm = new W.ResourceManager(dir);
+  const win = process.platform === 'win32';
+  const posix = win ? (W.findGitBash() ? 'bash' : 'powershell') : 'sh';
+  assert.equal(W.checkShell("grep -q '^\\[done\\]' train.log"), posix);
+  assert.equal(W.checkShell('[ $(wc -l < train.log) -ge 2 ]'), posix);
+  assert.equal(W.checkShell('Test-Path train.log'), 'powershell');
+  assert.equal(W.checkShell('anything', 'powershell'), 'powershell');
+  if (win) assert.equal(W.checkShell('if exist train.log exit 0'), 'cmd');
+  const run = (check, shell) => rm.check(rm.newWait('a', { check, shell }), dir);
+  // The command from the measured run: bash quoting, which cmd.exe used to break.
+  assert.equal((await run("grep -q '^\\[done\\]' train.log")).ok, true);
+  assert.equal((await run("grep -q '^\\[nope\\]' train.log")).ok, false);
+  if (win || fs.existsSync('/usr/bin/pwsh')) {
+    assert.equal((await run('Test-Path train.log')).ok, true);
+    // PowerShell prints False and still exits 0.
+    assert.equal((await run('Test-Path missing.txt')).ok, false);
+  }
+  if (win) assert.equal((await run('if exist train.log (exit 0) else (exit 1)')).ok, true);
+  // A check that can never run: reported at once instead of waiting until the timeout.
+  const bad = await run('if then fi (');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.broken, true, bad.output);
 });

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { build } from 'esbuild';
+import { spawn } from 'node:child_process';
 
 // 工作流狀態機的回歸測試：真正的 Orchestrator，只把 CLI 換成依角色回應的替身 agent，
 // 用來模擬各種結果、斷線、崩潰、錯誤核准與結果遺失。
@@ -64,7 +65,7 @@ const role = (full) => {
   return roleOf(prompt);
 };
 const roleOf = (prompt) =>
-  /NOW VERIFYING|GOAL VERIFIER/.test(prompt) ? 'verifier' : /ADJUDICATOR/.test(prompt) ? 'adjudicator' : /PLAN REVIEWER/.test(prompt) ? 'plan_reviewer' : /CODE REVIEWER/.test(prompt) ? 'code_reviewer' : /SUB-AGENT/.test(prompt) ? 'subagent' : /PLANNER/.test(prompt) ? 'planner' : 'executor';
+  /organize the shared knowledge/.test(prompt) ? 'librarian' : /NOW VERIFYING|GOAL VERIFIER/.test(prompt) ? 'verifier' : /ADJUDICATOR/.test(prompt) ? 'adjudicator' : /PLAN REVIEWER/.test(prompt) ? 'plan_reviewer' : /CODE REVIEWER/.test(prompt) ? 'code_reviewer' : /SUB-AGENT/.test(prompt) ? 'subagent' : /PLANNER/.test(prompt) ? 'planner' : 'executor';
 
 const goal = { statement: 'tests pass', metrics: [{ id: 'M1', name: 'tests', target: 'all pass', how: 'npm test' }] };
 const verdict = (outcome, met, issues = []) => ({ outcome, summary: outcome, metrics: [{ id: 'M1', value: met ? 'pass' : 'fail', met, evidence: 'npm test' }], issues });
@@ -82,7 +83,8 @@ function fakeAgents(orch, script) {
     const list = script[r] ?? [defaults[r]];
     const step = list[Math.min(used[r] ?? 0, list.length - 1)];
     used[r] = (used[r] ?? 0) + 1;
-    const secret = o.bridge.env.AIVENUE_SESSION;
+    // The compactor runs without Aivenue's tools (no bridge).
+    const secret = o.bridge?.env?.AIVENUE_SESSION;
     const done = { lastSeq: (o.seqStart ?? 0) + 1, exitCode: 0, resumed: false, finalText: 'done' };
     if (typeof step === 'function') return (await step(orch, secret, o)) ?? done;
     if (step.error) return { ...done, exitCode: 1, finalText: '', error: step.error };
@@ -431,4 +433,132 @@ test('執行中追加訊息：agent 先回覆；改變需求時計畫者更新�
   assert.match(m.replies[0].text, /dark mode/);
   assert.equal(m.planUpdated, true);
   assert.deepEqual(r.steps.map((x) => x.title), ['do it', 'add dark mode']);
+});
+
+test('CLI 自己壓縮對話：記下實際上限、交還它做過的事；輪詢提示改用 wait_for；findings 成為共用事實', async () => {
+  const { orch, cwd } = setup();
+  const seen = [];
+  let n = 0;
+  const tool = (o, title, output) => o.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { id: `t${n}`, name: 'bash', category: 'command', title, output, status: 'ok' } }, false);
+  const used = (o, tokens) => o.onEvent({ seq: ++n, ts: Date.now(), kind: 'message', text: '…', context: { used: tokens, window: 1000000 } }, false);
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        tool(a, 'cat src/model.py', 'class Model: pass');
+        used(a, 170000);
+        used(a, 30000); // its CLI compacted the conversation
+        seen.push(await o.callTool(secret, 'post_note', { text: 'checked the data', kind: 'fact' }));
+        tool(a, 'until [ -f done.txt ]; do sleep 5; done', '');
+        seen.push(await o.callTool(secret, 'post_note', { text: 'waited', kind: 'fact' }));
+        await o.callTool(secret, 'submit_work', { summary: 'done', findings: ['The dataset lives in data/aishell (16 kHz wav).'] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(seen[0], /YOUR OWN WORK BEFORE YOUR CONVERSATION WAS COMPACTED[\s\S]*src\/model\.py[\s\S]*class Model/);
+  assert.match(seen[1], /wait_for/);
+  assert.match(seen[0], /CHECKPOINT/);
+  assert.deepEqual(Object.values(r.compactPoints ?? {}), [170000]);
+  assert.ok(r.notes.some((x) => x.kind === 'fact' && /data\/aishell/.test(x.text)));
+  assert.ok(r.log.some((l) => /自己壓縮了對話/.test(l.text)));
+});
+
+test('agent 自己在背景開的程序：沒有 track_process 也會被找到並追蹤', async () => {
+  const { orch, cwd } = setup();
+  const script = path.join(cwd, 'aivenue-slowjob.js');
+  fs.writeFileSync(script, 'setTimeout(() => {}, 60000);');
+  const child = spawn(process.execPath, [script], { detached: true, stdio: 'ignore' });
+  child.unref();
+  let found;
+  let bgRun;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        a.onEvent({ seq: 1, ts: Date.now(), kind: 'tool', tool: { id: 'bg1', name: 'bash', category: 'command', title: 'nohup node aivenue-slowjob.js > slow.log 2>&1 &', output: '', status: 'ok' } }, false);
+        const run = o.runs.get(bgRun);
+        for (let i = 0; i < 120 && !found; i++) {
+          found = (run.processes ?? []).find((p) => p.detected);
+          if (!found) await new Promise((res) => setTimeout(res, 250));
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  try {
+    bgRun = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+    const r = await settle(orch, bgRun, 60000);
+    assert.equal(r.status, 'completed', r.error);
+    assert.ok(found, 'not detected');
+    assert.equal(found.pid, child.pid);
+    assert.equal(found.log, 'slow.log');
+    assert.equal(found.cleanup, 'keep');
+  } finally {
+    try {
+      process.kill(child.pid);
+    } catch {}
+  }
+});
+
+test('別的 agent 跑過、檔案也沒改過的指令又跑一次：提醒先查共享上下文', async () => {
+  const { orch, cwd } = setup();
+  let reply;
+  let n = 100;
+  const tool = (a, title) => a.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { id: `t${n}`, name: 'bash', category: 'command', title, output: '20 passed', status: 'ok' } }, false);
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        tool(a, 'pytest -q');
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+    code_reviewer: [
+      async (o, secret, a) => {
+        tool(a, 'cd /proj && pytest -q');
+        reply = await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(reply, /already did this[\s\S]*pytest -q[\s\S]*search_records/);
+});
+
+test('整理員：新筆記滿門檻就依主題整理，附出處；漏掉的逐字保留；read_context {topic} 拿得到', async () => {
+  const { orch, cwd } = setup();
+  let topic;
+  let librarianPrompt;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'post_note', { text: 'Python 3.11 and torch 2.5 are installed', kind: 'fact' });
+        await o.callTool(secret, 'post_note', { text: 'We keep 16 kHz audio', kind: 'decision' });
+        await o.callTool(secret, 'submit_work', { summary: 'done', findings: ['The dataset is in data/aishell'] });
+      },
+    ],
+    code_reviewer: [
+      async (o, secret) => {
+        // The librarian ran when the implementer's turn ended.
+        for (let i = 0; i < 100 && !topic?.includes('Environment'); i++) {
+          topic = await o.callTool(secret, 'read_context', { topic: 'knowledge' });
+          if (!topic.includes('Environment')) await new Promise((r) => setTimeout(r, 50));
+        }
+        await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+      },
+    ],
+    librarian: [
+      async (o, secret, a) => {
+        librarianPrompt = a.prompt;
+        const ids = [...a.prompt.matchAll(/\[n:(\w+)\]/g)].map((m) => m[1]);
+        // Cites the first two notes only: the third must be kept word for word.
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: `## Environment and versions\n- Python 3.11, torch 2.5 [n:${ids[0]}]\n\n## Decisions\n- 16 kHz audio [n:${ids[1]}]` };
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 3 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(librarianPrompt, /Python 3\.11[\s\S]*16 kHz[\s\S]*data\/aishell/);
+  assert.match(topic, /SHARED KNOWLEDGE[\s\S]*## Environment and versions[\s\S]*## Not sorted yet[\s\S]*data\/aishell/);
+  assert.equal(r.knowledge.notes, 3);
+  assert.equal(r.notes.length, 3);
 });

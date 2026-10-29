@@ -62,6 +62,14 @@ const responsesSchema = {
   },
 };
 
+/** What an agent learned, kept as shared facts for every later agent. */
+const findingsSchema = {
+  type: 'array',
+  description:
+    'What you learned that later agents should not have to find out again: the environment and versions, where things live, the cause of a failure, an approach that did not work and why. One finding per item, as long as needed.',
+  items: { type: 'string' },
+};
+
 export const TOOL_DEFS: Record<string, ToolDef> = {
   submit_plan: {
     name: 'submit_plan',
@@ -82,6 +90,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         },
         goal: goalSchema,
         responses: responsesSchema,
+        findings: findingsSchema,
       },
       required: ['summary', 'markdown', 'steps'],
     },
@@ -95,6 +104,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         verdict: { type: 'string', enum: ['approve', 'revise'] },
         summary: { type: 'string' },
         issues: issuesSchema,
+        findings: findingsSchema,
       },
       required: ['verdict', 'summary', 'issues'],
     },
@@ -127,6 +137,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         },
         issues: issuesSchema,
       },
+        findings: findingsSchema,
       required: ['outcome', 'summary', 'metrics'],
     },
   },
@@ -155,11 +166,11 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   search_records: {
     name: 'search_records',
     description:
-      "Search this workflow's records: every agent's messages, tool calls and their output, shared notes, review and verification issues. Filter by text and/or role, agent, stage, round, file or issue id. Returns matching snippets with the agent id (open one in full with read_context {agent_id}).",
+      "Search this workflow's records before you run a command, read a file or investigate something another agent may already have done: every agent's messages, tool calls and their output, shared notes and findings, review and verification issues. A few keywords in any order (records with all of them first, newest first); filter by role, agent, stage, round, file or issue id. Returns matching snippets with the agent id (open one in full with read_context {agent_id}).",
     inputSchema: {
       type: 'object',
       properties: {
-        q: { type: 'string', description: 'Text to find (case-insensitive).' },
+        q: { type: 'string', description: 'Keywords, any order, case-insensitive (e.g. "dataset path sample rate").' },
         role: { type: 'string', enum: ['planner', 'plan_reviewer', 'executor', 'code_reviewer', 'verifier', 'adjudicator', 'subagent', 'advisor'] },
         agent_id: { type: 'string' },
         stage: { type: 'string', enum: ['plan', 'implement', 'verify'] },
@@ -195,7 +206,8 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       type: 'object',
       properties: {
         wait_id: { type: 'string', description: 'Continue an earlier wait.' },
-        check: { type: 'string', description: 'Shell command; the condition holds when it exits 0.' },
+        check: { type: 'string', description: 'Shell command; the condition holds when it exits 0. Runs in bash (Git Bash on Windows) unless it is clearly PowerShell or cmd syntax, or you set shell.' },
+        shell: { type: 'string', enum: ['auto', 'bash', 'powershell', 'cmd'], description: 'The shell for check (default auto).' },
         contains: { type: 'string', description: 'Also require this text in its output.' },
         interval_sec: { type: 'number', description: 'Default 30 (5–600).' },
         timeout_min: { type: 'number', description: 'Give up after this long (default 60).' },
@@ -275,7 +287,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     description: 'Tell Aivenue you finished implementing: summary of changes and verification, plus responses to review issues if any.',
     inputSchema: {
       type: 'object',
-      properties: { summary: { type: 'string' }, responses: responsesSchema },
+      properties: { summary: { type: 'string' }, responses: responsesSchema, findings: findingsSchema },
       required: ['summary'],
     },
   },
@@ -352,10 +364,11 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   read_context: {
     name: 'read_context',
     description:
-      'Read what other agents in this workflow did. Without agent_id: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s full transcript (its messages, tool calls, commands and their output). Use it when a hand-off summary is not enough.',
+      'Read what other agents in this workflow did. With topic: everything on one subject at once — a file (who read and changed it, what it showed, notes and issues naming it), a command (every run and its output), an issue (its whole history), or "facts", "decisions", "inferences", "checkpoints", "knowledge" (the organized shared knowledge), "index" (every topic). Without arguments: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s full transcript (its messages, tool calls, commands and their output).',
     inputSchema: {
       type: 'object',
       properties: {
+        topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index".' },
         agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
       },
@@ -363,10 +376,10 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   },
   post_note: {
     name: 'post_note',
-    description: 'Share a short note with every later agent in this workflow (e.g. a decision, a gotcha, where something lives). The user sees it too. Say what kind it is: a checked fact, an inference (a judgement not verified) or a decision.',
+    description: 'Share a note with every later agent in this workflow (e.g. a decision, a gotcha, where something lives, what a long command printed). The user sees it too. Say what kind it is: a checked fact, an inference (a judgement not verified) or a decision.',
     inputSchema: {
       type: 'object',
-      properties: { text: { type: 'string', description: 'The note, at most a few sentences.' }, kind: { type: 'string', enum: ['fact', 'inference', 'decision'], description: 'Default inference.' } },
+      properties: { text: { type: 'string', description: 'The note, as long as it needs to be.' }, kind: { type: 'string', enum: ['fact', 'inference', 'decision'], description: 'Default inference.' } },
       required: ['text'],
     },
   },

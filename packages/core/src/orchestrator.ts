@@ -42,6 +42,9 @@ import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification 
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { inspectProcess, parseSize } from './procstat';
+import { backgroundLaunch, findProcesses, type Launch } from './procdetect';
+import { fileReadOf, ownWorkBlock, POLLING } from './ledger';
+import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
 import { classifyTool } from './providers/parsers';
@@ -220,9 +223,14 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 /** Most sub-agents one conversation may start in total. */
 const MAX_SUBAGENTS = 40;
 
-/** Shared context capacity when the user picks none (tokens), and the share of an agent's model it may fill in a prompt. */
+/**
+ * Shared context capacity when the user picks none (tokens), and the share of an agent's usable window it may fill in a
+ * prompt by default (the user can change it).
+ */
 const DEFAULT_CAPACITY = 256_000;
-const SHARE_OF_WINDOW = 0.2;
+const SHARE_OF_WINDOW = 0.5;
+/** New shared notes that make the librarian organize them into the knowledge document (the user can change it). */
+const ORGANIZE_EVERY = 30;
 /** Below this (tokens of material) a summary is not worth it. */
 const MIN_COMPACT_TOKENS = 1000;
 
@@ -1057,12 +1065,20 @@ export class Orchestrator {
     // A CLI kept running after its turn (or a leftover background process) can't act on a finished conversation.
     if (!['running', 'paused', 'waiting_human'].includes(run.status) || !['running', 'queued', 'paused'].includes(info.status)) throw new Error('This agent turn has ended; Aivenue tools are no longer available to it');
     if (!this.toolsFor(secret).some((t) => t.name === name)) throw new Error(`Tool ${name} is not available to the ${info.role} role`);
-    const text = await this.runTool(run, info, name, args);
+    let text = await this.runTool(run, info, name, args);
     // Notices about its sub-agents ride along with the parent's next tool result.
     const notes = this.inbox.get(info.id);
-    if (!notes?.length) return text;
-    this.inbox.delete(info.id);
-    return `${text}\n\nAIVENUE NOTICE (about your sub-agents; decide: retry it, adjust its task, replace it with another provider, or do it yourself):\n${notes.map((n) => `- ${n}`).join('\n')}`;
+    if (notes?.length) {
+      this.inbox.delete(info.id);
+      text += `\n\nAIVENUE NOTICE (about your sub-agents; decide: retry it, adjust its task, replace it with another provider, or do it yourself):\n${notes.map((n) => `- ${n}`).join('\n')}`;
+    }
+    // And Aivenue's own: its work after a compaction, waiting by hand, a background job it found.
+    const own = this.notices.get(info.id);
+    if (own?.length) {
+      this.notices.delete(info.id);
+      text += `\n\nAIVENUE NOTICE:\n${own.join('\n\n')}`;
+    }
+    return text;
   }
 
   private async runTool(run: WorkflowRun, info: AgentRunInfo, name: string, args: Record<string, unknown>): Promise<string> {
@@ -1071,6 +1087,7 @@ export class Orchestrator {
     if (name.startsWith('submit_')) {
       this.requireChildrenSettled(run, info);
       run.lastProgressAt = now();
+      this.keepFindings(run, info, args.findings);
     }
     switch (name) {
       case 'submit_plan': {
@@ -1144,7 +1161,8 @@ export class Orchestrator {
         if (!pid || pid <= 0) throw new Error('pid must be a process id');
         const cleanup = ['aivenue', 'agent', 'keep'].includes(String(args.cleanup)) ? (String(args.cleanup) as 'aivenue') : 'agent';
         const list = (run.processes ??= []).filter((p) => p.pid !== pid);
-        if (list.length >= 50) throw new Error('At most 50 tracked processes');
+        // Long runs start many: the oldest ended ones make room.
+        for (let i = list.findIndex((p) => p.alive === false); list.length >= 300 && i >= 0; i = list.findIndex((p) => p.alive === false)) list.splice(i, 1);
         const str = (k: string) => (typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim().slice(0, 500) : undefined);
         const expected = parseSize(args.expected_size);
         if (args.expected_size !== undefined && !expected) throw new Error('expected_size must look like "15.6GB", "800MB" or a number of bytes');
@@ -1220,6 +1238,12 @@ export class Orchestrator {
         return JSON.stringify(d.allow ? { behavior: 'allow', updatedInput: args.input ?? {} } : { behavior: 'deny', message: d.message ?? 'The user denied this action.' });
       }
       case 'read_context': {
+        const topic = String(args.topic ?? '').trim();
+        if (topic) {
+          if (/^knowledge$/i.test(topic)) return run.knowledge ? `SHARED KNOWLEDGE (organized from ${run.knowledge.notes} notes; newer notes are in the shared context):\n${run.knowledge.doc}` : 'No organized knowledge yet: read the shared notes in the shared context, or read_context {topic: "facts"}.';
+          const topics = buildTopics(run, (aid) => this.events(run.id, aid));
+          return /^index$/i.test(topic) ? topicList(topics) : topicDetail(run, topics, topic);
+        }
         const id = String(args.agent_id ?? '').trim();
         if (!id) return overview(run, (aid) => this.events(run.id, aid));
         if (id === 'notes') return allNotes(run);
@@ -1228,9 +1252,8 @@ export class Orchestrator {
         return `TRANSCRIPT OF ${agentLabel(target)} [${target.status}]\n\n${formatTranscript(this.events(run.id, target.id), { budget: 40000, prompts: args.include_prompts === true })}`;
       }
       case 'post_note': {
-        const text = String(args.text ?? '').trim().slice(0, 2000);
+        const text = String(args.text ?? '').trim();
         if (!text) throw new Error('text is required');
-        if ((run.notes?.length ?? 0) >= 200) throw new Error('This conversation already has 200 shared notes, the limit');
         const kind = ['fact', 'inference', 'decision'].includes(String(args.kind)) ? (String(args.kind) as 'fact') : 'inference';
         (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, kind, ts: now() });
         this.refreshShared(run);
@@ -2003,12 +2026,12 @@ export class Orchestrator {
       info.sessionId = undefined;
       res = await this.invokePausable(run, info, o.prompt, o.mode, undefined, res.lastSeq);
     }
-    let sub = this.collect(info.id, o.expect, res);
+    let sub = this.collect(info.id, o.expect, res, run);
     const spec = this.d.registry.get(info.provider);
     if (!sub && !res.error && res.sessionId && spec?.run.resume && spec.capabilities?.resume !== false && !this.aborted(run)) {
       this.log(run, L(`${this.label(info)} 沒有提交結果，要求補交`, `${this.label(info)} did not submit; asking again`), 'warn');
       res = await this.invokePausable(run, info, P.nudgePrompt(o.expect), o.mode, res.sessionId, res.lastSeq);
-      sub = this.collect(info.id, o.expect, res);
+      sub = this.collect(info.id, o.expect, res, run);
     }
     // A failed turn: what kind of failure decides the recovery (wait and retry, hand over, or ask).
     for (let attempt = 1; !sub && res.error && !this.aborted(run) && !this.stoppedByUser.has(info.id) && !this.redispatch.has(info.id); attempt++) {
@@ -2024,7 +2047,7 @@ export class Orchestrator {
       if (this.aborted(run) || this.stoppedByUser.has(info.id)) break;
       const sid = res.sessionId ?? info.sessionId;
       res = sid && spec?.run.resume && spec.capabilities?.resume !== false ? await this.invokePausable(run, info, P.resumeAfterError(), o.mode, sid, res.lastSeq) : await this.invokePausable(run, info, o.prompt, o.mode, o.resume, res.lastSeq);
-      sub = this.collect(info.id, o.expect, res);
+      sub = this.collect(info.id, o.expect, res, run);
     }
     if (sub) info.failure = undefined;
     // The CLI exited cleanly without the result its role must hand in: the process ended, the task did not.
@@ -2041,6 +2064,7 @@ export class Orchestrator {
     this.cancelChildren(run, info.id);
     this.updateOutputs(run);
     this.refreshShared(run);
+    this.maybeOrganize(run);
     this.checkContextAsk(run, info);
     // A compaction the user asked for while this agent was working runs now that its turn is over.
     const queued = info.sessionId ? this.queuedAgentCompact.get(info.sessionId) : undefined;
@@ -2052,9 +2076,11 @@ export class Orchestrator {
     return { info, res, sub };
   }
 
-  private collect(agentId: string, expect: Expect, res: RunAgentResult): Submission | undefined {
+  private collect(agentId: string, expect: Expect, res: RunAgentResult, run?: WorkflowRun): Submission | undefined {
     const sub = this.submissions.get(agentId) ?? {};
     const json = extractJson(res.finalText) as any;
+    // Findings in a submission given as text (a CLI without Aivenue's tools).
+    if (run?.agents[agentId] && json?.findings) this.keepFindings(run, run.agents[agentId], json.findings);
     if (expect === 'submit_verification') {
       sub.verification ??= parseVerification(json);
       return sub.verification ? sub : undefined;
@@ -2151,7 +2177,19 @@ export class Orchestrator {
       const seenKey = resume ? `${run.id}|${resume}` : undefined;
       const window = plain ? undefined : await this.windowFor(run, info, resume);
       const sharedAt = now();
-      const shared = plain ? '' : contextBlock(run, info, (id) => this.events(run.id, id), { since: seenKey ? this.sharedSeen.get(seenKey) : undefined, maxChars: window ? Math.floor(window * SHARE_OF_WINDOW * 4) : undefined });
+      const share = run.config.context?.shareOfWindow ?? SHARE_OF_WINDOW;
+      const usable = window ? this.usableWindow(info.provider, this.requestedModel.get(info.id) ?? info.model, window) : undefined;
+      // Its CLI compacted this conversation since the last turn: what it read and ran comes back with the shared context.
+      const recapIds = resume && this.recapDue.has(resume) ? this.conversationIds(run, resume) : undefined;
+      const ev = (id: string) => this.events(run.id, id);
+      const shared = plain
+        ? ''
+        : contextBlock(run, info, ev, {
+            since: seenKey ? this.sharedSeen.get(seenKey) : undefined,
+            maxChars: usable ? Math.floor(usable * share * 4) : undefined,
+            recap: recapIds ? (budget) => [ownWorkBlock(run, ev, recapIds, this.findingsOf(run, recapIds), budget), P.checkpointRequest()].filter(Boolean).join('\n') : undefined,
+          });
+      if (recapIds) this.recapDue.delete(resume!);
       // Advisor mode: Claude's own advisor (a CLI flag) or Aivenue's cross-vendor ask_advisor tool.
       const adv = run.config.advisor;
       const nativeAdvisor = plain ? undefined : this.nativeAdvisorFor(run, info, spec.run.advisor ? adv : undefined);
@@ -2181,7 +2219,7 @@ export class Orchestrator {
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills,
+        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,
@@ -2256,7 +2294,9 @@ export class Orchestrator {
     this.trackUsage(info.provider, e, isUpdate, this.usageModel(info));
     // The model the CLI reports it is actually using (an alias like "opus" resolves to the full id).
     if (e.kind === 'session' && e.text?.trim() && !/\s/.test(e.text.trim())) info.model = e.text.trim();
-    // How full its own conversation is (and the model's limit), as the CLI reports it.
+    // How full its own conversation is (and the model's limit), as the CLI reports it. A sharp drop: the CLI compacted it.
+    const usedBefore = info.context?.used;
+    if (!isUpdate && e.context?.used && usedBefore && usedBefore > 20000 && e.context.used < usedBefore * 0.6 && info.role !== 'compactor') this.onSelfCompaction(run, info, usedBefore);
     if (!isUpdate && e.context && (e.context.used || e.context.window)) info.context = { ...info.context, ...(e.context.used ? { used: e.context.used } : {}), ...(e.context.window ? { window: e.context.window } : {}) };
     // The CLI's own limit beats the catalog in the model menus from now on.
     if (!isUpdate && e.context?.window) for (const m of new Set([this.requestedModel.get(info.id), info.model])) this.d.registry.noteContext(info.provider, m, e.context.window);
@@ -2284,6 +2324,8 @@ export class Orchestrator {
       });
       if (!inside && !(run.outsideChanges ??= []).includes(abs) && run.outsideChanges.length < 500) run.outsideChanges.push(abs);
     }
+    if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && e.tool.category === 'edit') this.lastEditAt.set(run.id, e.ts);
+    if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'read')) this.watchCommand(run, info, e);
     const act = activityOf(e);
     if (act && !(isUpdate && e.tool?.status !== 'running')) info.activity = act;
     this.d.push({ topic: 'agentEvent', data: { workflowId: run.id, agentId: info.id, event: e } });
@@ -2480,7 +2522,18 @@ export class Orchestrator {
   private async runCompactor(run: WorkflowRun, who: { provider: string; model?: string; effort?: string }, prompt: string, task: string): Promise<string> {
     const def = this.d.registry.defaults(who.provider);
     const info = this.newAgent(run, { role: 'compactor', provider: who.provider, model: who.model || def.model, effort: who.effort || def.effort, depth: 0, task });
-    const res = await this.invoke(run, info, prompt, 'readonly');
+    let res: RunAgentResult;
+    try {
+      res = await this.invoke(run, info, prompt, 'readonly');
+    } catch (e) {
+      // Never left showing as running.
+      info.status = 'failed';
+      info.error = (e as Error).message;
+      info.endedAt = now();
+      info.activity = undefined;
+      this.touch(run);
+      throw e;
+    }
     info.status = res.error && !res.finalText.trim() ? 'failed' : 'completed';
     info.error = res.error;
     info.endedAt = now();
@@ -2509,6 +2562,68 @@ export class Orchestrator {
     const ids = Object.values(run.stages).flatMap((s) => s.rounds.flatMap((r) => r.review?.issues.map((i) => i.id) ?? []));
     const issueIds = ids.filter((id) => new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(material));
     return [...new Set([...paths, ...issueIds])].slice(0, 60);
+  }
+
+  /** Runs organizing a conversation's shared notes (one at a time). */
+  private organizing = new Map<string, Promise<void>>();
+
+  /** Enough new notes since the last time: organize them into the knowledge document, in the background. */
+  private maybeOrganize(run: WorkflowRun) {
+    const every = run.config.context?.organizeEvery ?? ORGANIZE_EVERY;
+    if (!every || sharingOf(run) === 'summary' || this.organizing.has(run.id)) return;
+    const fresh = (run.notes ?? []).filter((n) => n.ts > (run.knowledge?.upto ?? 0));
+    if (fresh.length < every) return;
+    this.organizeNow(run);
+  }
+
+  /** Organize the shared notes now (also from the user). */
+  organizeNow(run: WorkflowRun): Promise<void> {
+    const busy = this.organizing.get(run.id);
+    if (busy) return busy;
+    const p = this.organize(run)
+      .catch((e) => this.log(run, L(`整理共用知識失敗：${(e as Error).message}`, `Organizing the shared knowledge failed: ${(e as Error).message}`), 'warn', true))
+      .finally(() => {
+        this.organizing.delete(run.id);
+        this.touch(run);
+      });
+    this.organizing.set(run.id, p);
+    return p;
+  }
+
+  /**
+   * The librarian: the compactor model merges the new notes into the knowledge document by subject, each line with
+   * its sources. Every new note must be cited; the ones it leaves out are kept word for word. The notes stay as they are.
+   */
+  private async organize(run: WorkflowRun) {
+    const fresh = (run.notes ?? []).filter((n) => n.ts > (run.knowledge?.upto ?? 0));
+    if (!fresh.length) return;
+    const who = this.compactorFor(run);
+    if (!who) throw new Error(L('沒有已登入的 CLI 可以整理', 'No signed-in CLI can organize it'));
+    const label = this.compactorLabel(who);
+    const list = fresh.map((n) => `[n:${n.id}] (${n.kind ?? 'inference'}, ${run.agents[n.agentId] ? agentLabel(run.agents[n.agentId]) : n.by ?? n.agentId}) ${n.text}`).join('\n\n');
+    const doc = await this.runCompactor(run, who, P.librarianPrompt(run.config.goal, run.knowledge?.doc, list), L(`整理 ${fresh.length} 則共用筆記`, `Organize ${fresh.length} shared notes`));
+    const missing = fresh.filter((n) => !doc.includes(`n:${n.id}`));
+    const final = missing.length ? `${doc.trim()}\n\n## Not sorted yet\n${missing.map((n) => `- ${n.text.replace(/\n/g, ' ')} [n:${n.id}]`).join('\n')}` : doc.trim();
+    run.knowledge = { doc: final, upto: Math.max(...fresh.map((n) => n.ts)), updatedAt: now(), by: label, notes: (run.knowledge?.notes ?? 0) + fresh.length };
+    this.refreshShared(run);
+    const sections = (final.match(/^## /gm) ?? []).length;
+    this.log(
+      run,
+      L(
+        `已整理共用知識：${fresh.length} 則新筆記整理成 ${sections} 個主題（${label}）${missing.length ? `，${missing.length} 則沒被整理進去的逐字保留` : ''}。原本的筆記不變，agent 可用 read_context {topic: "knowledge"} 讀取。`,
+        `Shared knowledge organized: ${fresh.length} new notes into ${sections} subjects (${label})${missing.length ? `; ${missing.length} it left out were kept word for word` : ''}. The notes stay as they are; agents read it with read_context {topic: "knowledge"}.`,
+      ),
+      'info',
+      true,
+    );
+  }
+
+  /** Organize the shared notes now, from the user (resolves when done). */
+  async organizeSharedNow(id: string): Promise<void> {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    if (!(run.notes ?? []).some((n) => n.ts > (run.knowledge?.upto ?? 0))) throw new Error(L('沒有新的共用筆記需要整理', 'There are no new shared notes to organize'));
+    await this.organizeNow(run);
   }
 
   /** Compact the shared context now (one at a time per conversation). */
@@ -2600,13 +2715,15 @@ export class Orchestrator {
     if (!sid || !c?.used || !c.window || info.role === 'compactor') return;
     const askAt = run.config.context?.agentAskAt ?? 0.8;
     if (!askAt) return;
-    const ratio = c.used / c.window;
+    // Up to where its CLI compacted before, when that is below the model's limit: it compacts there by itself.
+    const window = this.usableWindow(info.provider, this.requestedModel.get(info.id) ?? info.model, c.window);
+    const ratio = c.used / window;
     if (ratio < askAt || (run.contextMuted ?? []).includes(sid)) return;
     const level = ratio >= 0.9 && askAt < 0.9 ? 0.9 : askAt;
     if (((run.contextAsked ??= {})[sid] ?? 0) >= level) return;
     run.contextAsked[sid] = level;
-    run.contextAsk = { agentId: info.id, used: c.used, window: c.window, level };
-    this.log(run, L(`${this.label(info)} 的對話已用 ${Math.round(ratio * 100)}%（${fmtK(c.used)} / ${fmtK(c.window)}）`, `${this.label(info)}'s conversation is ${Math.round(ratio * 100)}% full (${fmtK(c.used)} / ${fmtK(c.window)})`), 'warn', true);
+    run.contextAsk = { agentId: info.id, used: c.used, window, level };
+    this.log(run, L(`${this.label(info)} 的對話已用 ${Math.round(ratio * 100)}%（${fmtK(c.used)} / ${fmtK(window)}）`, `${this.label(info)}'s conversation is ${Math.round(ratio * 100)}% full (${fmtK(c.used)} / ${fmtK(window)})`), 'warn', true);
     this.touch(run);
   }
 
@@ -2680,6 +2797,7 @@ export class Orchestrator {
       await this.pool.closeSessions([sid]);
       if (res.error) throw new Error(res.error);
       info.context = { ...info.context, used: undefined, compactedAt: now() };
+      this.recapDue.add(sid);
     } else {
       // Not compactable from outside: a hand-off summary, and the next turn starts a fresh conversation from it.
       if (!who) throw new Error(L('沒有已登入的 CLI 可以整理交接摘要', 'No signed-in CLI can write the hand-off summary'));
@@ -2692,6 +2810,9 @@ export class Orchestrator {
       if (stage && reviewer) (stage.reviewerSessionId = undefined), (stage.reviewerHandoff = summary);
       else if (stage) (stage.authorSessionId = undefined), (stage.authorHandoff = summary);
       for (const a of turns) a.sessionId = undefined;
+      // Every other agent gets it too, as a shared note (written by a model from the transcript: not checked).
+      (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text: `Hand-off summary of ${agentLabel(info)}, written when its conversation was compacted:\n${summary}`, kind: 'inference', ts: now() });
+      this.refreshShared(run);
       after = estimateTokens(summary);
       info.context = { ...info.context, used: after, compactedAt: now() };
     }
@@ -2701,6 +2822,158 @@ export class Orchestrator {
       'info',
       true,
     );
+  }
+
+  /** Tokens at which each model's CLI compacted its own conversation: what it can really hold (`provider model` → tokens). */
+  private compactPoints = new Map<string, number>();
+  private compactPointsLoaded = false;
+  /** Conversations (session ids) compacted by their CLI: their next prompt gets their own earlier work back. */
+  private recapDue = new Set<string>();
+  /** Aivenue's notices for an agent, sent with its next Aivenue tool result. */
+  private notices = new Map<string, string[]>();
+  /** Commands already looked at (agent|tool id), how often each agent ran each one, and when it was last told to use wait_for. */
+  private seenCommands = new Set<string>();
+  private commandCounts = new Map<string, number>();
+  private pollHinted = new Map<string, number>();
+  /** Per run: who first ran each command or read each file, and when anything was last edited (for "already done"). */
+  private doneBy = new Map<string, { agentId: string; ts: number }>();
+  private lastEditAt = new Map<string, number>();
+  private dupHinted = new Map<string, number>();
+
+  private notify(agentId: string, text: string) {
+    this.notices.set(agentId, [...(this.notices.get(agentId) ?? []), text]);
+  }
+
+  /**
+   * The part of a model's window it can really use: up to where its CLI compacted before (in any run), when that is
+   * below the model's stated limit. A 1M model whose CLI compacts at 170K holds 170K.
+   */
+  private usableWindow(provider: string, model: string | undefined, window: number): number {
+    if (!this.compactPointsLoaded) {
+      this.compactPointsLoaded = true;
+      for (const r of this.runs.values()) for (const [k, v] of Object.entries(r.compactPoints ?? {})) this.compactPoints.set(k, Math.max(this.compactPoints.get(k) ?? 0, v));
+    }
+    const point = this.compactPoints.get(`${provider} ${model ?? ''}`);
+    return point && point < window ? point : window;
+  }
+
+  /** Every turn of one conversation (the agents that ran on this session). */
+  private conversationIds(run: WorkflowRun, sessionId: string): Set<string> {
+    return new Set(Object.values(run.agents).filter((a) => a.sessionId === sessionId).map((a) => a.id));
+  }
+
+  /** What these agents reported as findings or notes. */
+  private findingsOf(run: WorkflowRun, ids: Set<string>): string[] {
+    return (run.notes ?? []).filter((n) => ids.has(n.agentId)).map((n) => n.text);
+  }
+
+  /** Findings in a submission become shared facts for every later agent (each once). */
+  private keepFindings(run: WorkflowRun, info: AgentRunInfo, raw: unknown) {
+    const list = (Array.isArray(raw) ? raw : typeof raw === 'string' ? [raw] : []).map((x) => (typeof x === 'string' ? x : JSON.stringify(x)).trim()).filter(Boolean);
+    if (!list.length) return;
+    const have = new Set((run.notes ?? []).filter((n) => n.agentId === info.id).map((n) => n.text));
+    for (const text of list) if (!have.has(text)) (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, kind: 'fact', ts: now() });
+    this.refreshShared(run);
+    this.touch(run);
+  }
+
+  /**
+   * The agent's CLI compacted its conversation by itself: remember how much it really holds (for the shared share and
+   * the compaction ask), and give it back what it had read and run, so it does not read and run it all again.
+   */
+  private onSelfCompaction(run: WorkflowRun, info: AgentRunInfo, from: number) {
+    const key = `${info.provider} ${this.requestedModel.get(info.id) ?? info.model ?? ''}`;
+    const point = Math.max(this.compactPoints.get(key) ?? 0, from);
+    this.compactPoints.set(key, point);
+    (run.compactPoints ??= {})[key] = point;
+    info.selfCompactions = (info.selfCompactions ?? 0) + 1;
+    const ids = info.sessionId ? this.conversationIds(run, info.sessionId) : new Set<string>();
+    ids.add(info.id);
+    if (info.sessionId) this.recapDue.add(info.sessionId);
+    const recap = ownWorkBlock(run, (id) => this.events(run.id, id), ids, this.findingsOf(run, ids), 40000);
+    if (recap) this.notify(info.id, recap);
+    this.notify(info.id, P.checkpointRequest());
+    this.log(
+      run,
+      L(
+        `${this.label(info)} 的 CLI 自己壓縮了對話（約 ${fmtK(from)} tokens）：之後以這個大小作為它實際能用的上限，並把它先前讀過的檔案和跑過的指令交還給它`,
+        `${this.label(info)}'s CLI compacted its conversation by itself (about ${fmtK(from)} tokens): that is used as its real limit from now on, and it gets back the files it read and the commands it ran`,
+      ),
+      'info',
+      true,
+    );
+  }
+
+  /** A finished command: waiting by hand gets a pointer to wait_for, and a job it started in the background is tracked. */
+  private watchCommand(run: WorkflowRun, info: AgentRunInfo, e: AgentEvent) {
+    const t = e.tool!;
+    const seen = `${info.id}|${t.id}`;
+    if (this.seenCommands.has(seen)) return;
+    this.seenCommands.add(seen);
+    const cmd = (t.title || t.input || '').replace(/\s+/g, ' ').trim();
+    if (!cmd) return;
+    this.noteDuplicate(run, info, t.category === 'read' ? `read ${cmd}` : cmd, e.ts);
+    if (t.category === 'read') return;
+    const countKey = `${info.id}|${cmd}`;
+    const count = (this.commandCounts.get(countKey) ?? 0) + 1;
+    this.commandCounts.set(countKey, count);
+    // Sleep loops, or the same look at a log or a process again and again.
+    if (POLLING.test(cmd) || (count >= 4 && /\b(tail|cat|head|ls|du|wc|nvidia-smi|ps)\b|\.(log|out)\b/.test(cmd))) {
+      if (now() - (this.pollHinted.get(info.id) ?? 0) > 20 * 60000) {
+        this.pollHinted.set(info.id, now());
+        this.notify(info.id, P.pollingHint());
+      }
+      return;
+    }
+    const launch = backgroundLaunch(cmd, t.output, t.input);
+    if (launch) void this.adoptProcess(run, info, launch).catch(() => undefined);
+  }
+
+  /**
+   * The same command or file read another agent already did, with no file edited since: point it to the shared
+   * context (at most every 10 minutes per agent), so it learns to look there first.
+   */
+  private noteDuplicate(run: WorkflowRun, info: AgentRunInfo, cmd: string, ts: number) {
+    const file = cmd.startsWith('read ') ? cmd.slice(5) : fileReadOf(cmd);
+    const key = `${run.id}|${file ? `read ${file.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()}` : cmd.replace(/^(cd\s+("[^"]*"|'[^']*'|\S+)\s*(&&|;)\s*)+/i, '').toLowerCase()}`;
+    const first = this.doneBy.get(key);
+    if (!first) {
+      this.doneBy.set(key, { agentId: info.id, ts });
+      return;
+    }
+    const other = run.agents[first.agentId];
+    const same = !other || other.id === info.id || (!!info.sessionId && other.sessionId === info.sessionId);
+    const edited = (this.lastEditAt.get(run.id) ?? 0) > first.ts;
+    if (edited || same) {
+      this.doneBy.set(key, { agentId: info.id, ts });
+      return;
+    }
+    // Waiting on a job is not a repeat (its output changes); POLLING handles that.
+    if (POLLING.test(cmd) || now() - (this.dupHinted.get(info.id) ?? 0) < 10 * 60000) return;
+    this.dupHinted.set(info.id, now());
+    const what = file ? `read ${file}` : `ran \`${cmd.length > 160 ? `${cmd.slice(0, 159)}…` : cmd}\``;
+    this.notify(info.id, P.alreadyDoneHint(what, `${other.id.slice(0, 8)} (${other.role})`, new Date(first.ts).toISOString().slice(11, 16)));
+  }
+
+  /** A job the agent started in the background without track_process: find its process and track it like a registered one. */
+  private async adoptProcess(run: WorkflowRun, info: AgentRunInfo, l: Launch) {
+    const tracked = () => new Set((run.processes ?? []).map((p) => p.pid));
+    let pid = l.pid && pidAlive(l.pid) ? l.pid : undefined;
+    // It may take a moment to show up (a new terminal window, a slow interpreter).
+    for (const wait of [1500, 5000, 15000]) {
+      if (pid || !l.key) break;
+      await sleep(wait);
+      pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid))?.pid;
+    }
+    if (!pid || tracked().has(pid) || !['running', 'paused', 'waiting_human'].includes(run.status)) return;
+    const short = l.command.length > 140 ? `${l.command.slice(0, 139)}…` : l.command;
+    (run.processes ??= []).push({ pid, purpose: short, cleanup: 'keep', agentId: info.id, startedAt: now(), alive: true, checkedAt: now(), log: l.log, detected: true });
+    this.log(run, L(`偵測到 ${this.label(info)} 在背景啟動的程序（PID ${pid}），已自動加入追蹤`, `Found a background process ${this.label(info)} started (PID ${pid}); it is tracked now`), 'info', true);
+    this.notify(
+      info.id,
+      `Aivenue found the background process you started (PID ${pid}: ${short}) and now shows it to the user. Call track_process {pid: ${pid}, purpose, cleanup, log or watch_file + expected_size} to describe it and show its progress, and wait for it with wait_for instead of sleep loops.`,
+    );
+    this.touch(run);
   }
 
   /** The model limit to size the shared context for: this agent's, or its conversation's earlier reading, or the catalog's. */
@@ -2937,12 +3210,13 @@ export class Orchestrator {
     if (!w) {
       const check = String(args.check ?? '').trim();
       if (!check) throw new Error('check is required');
-      w = this.resources.newWait(info.id, { check: check.slice(0, 2000), contains: typeof args.contains === 'string' ? args.contains.slice(0, 300) : undefined, interval_sec: Number(args.interval_sec) || undefined, timeout_min: Number(args.timeout_min) || undefined, gpus: Number(args.gpus) || undefined });
+      w = this.resources.newWait(info.id, { check: check.slice(0, 2000), contains: typeof args.contains === 'string' ? args.contains.slice(0, 300) : undefined, interval_sec: Number(args.interval_sec) || undefined, timeout_min: Number(args.timeout_min) || undefined, gpus: Number(args.gpus) || undefined, shell: typeof args.shell === 'string' ? args.shell : undefined });
       run.waits = [...(run.waits ?? []).filter((x) => x.state === 'waiting').slice(-49), w];
     }
     // After a restart another turn of the agent continues it.
     w.agentId = info.id;
     let gpus: number[] | undefined;
+    let broken = false;
     const until = now() + 50000;
     info.waiting = L(`等待條件：${w.check.slice(0, 80)}${w.gpus ? `（之後鎖定 ${w.gpus} 張 GPU）` : ''}`, `Waiting for: ${w.check.slice(0, 80)}${w.gpus ? ` (then lock ${w.gpus} GPU)` : ''}`);
     this.touch(run);
@@ -2956,6 +3230,12 @@ export class Orchestrator {
           const c = await this.resources.check(w, run.config.cwd);
           w.lastCheck = now();
           w.lastOutput = c.output.slice(-500);
+          // The check itself is wrong: waiting longer would never help.
+          if (c.broken) {
+            w.state = 'cancelled';
+            broken = true;
+            break;
+          }
           if (c.ok && !w.gpus) w.state = 'met';
           else if (c.ok) {
             const got = this.resources.acquire({ workflowId: run.id, agentId: info.id }, w.gpus!);
@@ -2979,9 +3259,18 @@ export class Orchestrator {
       this.touch(run);
     }
     const left = Math.max(0, Math.round((w.timeoutAt - now()) / 60000));
+    if (broken)
+      return JSON.stringify({
+        wait_id: w.id,
+        status: 'check_error',
+        shell: w.shell,
+        last_output: w.lastOutput,
+        hint: `The check command itself failed in ${w.shell}, so it could never hold. Fix it (or pass shell: "bash", "powershell" or "cmd") and call wait_for again with a new check.`,
+      });
     return JSON.stringify({
       wait_id: w.id,
       status: w.state,
+      shell: w.shell,
       last_output: w.lastOutput,
       ...(gpus ? { gpus, hint: `Run your job with CUDA_VISIBLE_DEVICES=${gpus.join(',')}; call gpu_release when it is done.` } : {}),
       ...(w.state === 'waiting' ? { minutes_left: left, hint: 'Not yet. Call wait_for {wait_id} again to keep waiting.' } : {}),
