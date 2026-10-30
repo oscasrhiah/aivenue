@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName, subTitle } from '../util';
-import { AgentWindow, GpuWindow, ProcessWindow } from './DetailWindows';
+import { AgentWindow, GpuWindow, ProcessWindow, Window } from './DetailWindows';
 
 type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
 interface Item {
@@ -101,6 +101,58 @@ export function goalGap(run: WorkflowRun) {
   return { rows, met: rows.filter((r) => r.met).length, stale: !!last?.stale, last };
 }
 
+/** Every acceptance metric in full: target, how it is measured, the latest value and its evidence. */
+export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => void }) {
+  const t = useT();
+  const gap = goalGap(run);
+  const goal = run.plan?.goal;
+  return (
+    <Window title={t(`驗收目標 · ${gap.met}/${gap.rows.length} 項達成`, `Acceptance goal · ${gap.met}/${gap.rows.length} met`)} onClose={onClose}>
+      {goal?.statement && <div className="gw-statement">{goal.statement}</div>}
+      <div className="muted small gw-meta">
+        {gap.last ? t(`最新驗收：${outcomeText(t, gap.last)}`, `Latest verification: ${outcomeText(t, gap.last)}`) : t('還沒有驗收過', 'Not verified yet')}
+        {(run.cycles ?? 0) > 0 && t(` · 第 ${(run.cycles ?? 0) + 1} 輪循環`, ` · cycle ${(run.cycles ?? 0) + 1}`)}
+        {gap.stale && <span className="badge warn">{t('程式碼在量測之後改過，要重新驗證', 'Code changed since; needs checking again')}</span>}
+      </div>
+      <div className="gw-list">
+        {gap.rows.map((m) => (
+          <div key={m.id} className={cx('gw-metric', m.met === true ? 'ok' : m.met === false ? 'no' : 'todo')}>
+            <div className="gw-head">
+              <span className="pp-icon">{m.met === true ? '✓' : m.met === false ? '✕' : '·'}</span>
+              <b>{m.id}</b> {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
+              <span className={cx('badge', m.met === true ? 'ok' : m.met === false ? 'err' : undefined)}>{m.met === true ? t('達標', 'met') : m.met === false ? t('未達標', 'not met') : t('尚未量測', 'not measured')}</span>
+            </div>
+            {m.target && (
+              <div className="gw-row">
+                <span className="muted">{t('目標', 'Target')}</span>
+                <span>{m.target}</span>
+              </div>
+            )}
+            {m.value !== undefined && (
+              <div className="gw-row">
+                <span className="muted">{t('量測值', 'Measured')}</span>
+                <span>{m.value}</span>
+              </div>
+            )}
+            {m.how && (
+              <div className="gw-row">
+                <span className="muted">{t('量測方式', 'How')}</span>
+                <span>{m.how}</span>
+              </div>
+            )}
+            {m.evidence && (
+              <div className="gw-row">
+                <span className="muted">{t('證據', 'Evidence')}</span>
+                <span>{m.evidence}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Window>
+  );
+}
+
 /** What holds the workflow up right now, in words (empty when nothing does). */
 export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): string[] {
   const out: string[] = [];
@@ -120,7 +172,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
   const t = useT();
   const [open, setOpen] = useState(run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human');
   // A detail window opened from a tag: an agent, the GPUs or a background process.
-  const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number }>();
+  const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number } | { goal: true }>();
   const items = buildItems(run, providers, t);
   if (!items.length) return null;
   const done = items.filter((i) => i.state === 'done' || i.state === 'skipped').length;
@@ -132,38 +184,27 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
   const runningProcs = (run.processes ?? []).filter((p) => p.alive);
   return (
     <div className="progress-panel">
-      <button className="pp-head" onClick={() => setOpen(!open)}>
-        <span className="pp-title">{t('進度', 'Progress')}</span>
-        <span className="muted small">
-          {done}/{items.length}
-          {gap.rows.length > 0 && ` · ${t('目標', 'goal')} ${gap.met}/${gap.rows.length}`}
-          {!open && block.length ? ` · ⏸ ${block[0]}` : !open && current ? ` · ${current.label}` : ''}
-        </span>
-        <span className="pp-chev">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (gap.rows.length > 0 || working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || runningProcs.length > 0) && (
+      <div className="pp-headrow">
+        <button className="pp-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+          <span className="pp-chev">{open ? '▾' : '▸'}</span>
+          <span className="pp-title">{t('進度', 'Progress')}</span>
+          <span className="muted small pp-summary">
+            {done}/{items.length}
+            {!open && block.length ? ` · ⏸ ${block[0]}` : !open && current ? ` · ${current.label}` : ''}
+          </span>
+        </button>
+        {gap.rows.length > 0 && (
+          <button className={cx('pp-goal-btn', gap.met === gap.rows.length && 'ok', gap.stale && 'warn')} onClick={() => setDetail({ goal: true })} title={t('點一下查看每個驗收目標的目標值、最新量測與證據', 'Click to see each acceptance metric: target, latest measurement and evidence')}>
+            🎯 {t('目標', 'Goal')} {gap.met}/{gap.rows.length}
+            {gap.stale && <span className="badge warn">{t('過期', 'stale')}</span>}
+          </button>
+        )}
+      </div>
+      {open && (
+        // The expanded part scrolls inside itself, so the message box never moves however much is in it.
+        <div className="pp-body">
+      {(working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || runningProcs.length > 0) && (
         <div className="pp-status">
-          {gap.rows.length > 0 && (
-            <div className="pp-goal">
-              <div className="pp-sub">
-                {t('距離目標', 'Gap to the goal')} · {gap.met}/{gap.rows.length} {t('項達成', 'met')}
-                {(run.cycles ?? 0) > 0 && <span className="muted"> · {t(`第 ${(run.cycles ?? 0) + 1} 輪循環`, `cycle ${(run.cycles ?? 0) + 1}`)}</span>}
-                {gap.stale && <span className="badge warn" title={t('程式碼在量測之後改過，這份結果要重新驗證', 'The code changed after this was measured; it needs checking again')}>{t('過期', 'stale')}</span>}
-              </div>
-              {gap.rows.map((m) => (
-                <div key={m.id} className={cx('pp-metric', m.met === true ? 'ok' : m.met === false ? 'no' : 'todo')} title={m.evidence || m.how}>
-                  <span className="pp-icon">{m.met === true ? '✓' : m.met === false ? '✕' : '·'}</span>
-                  <span className="pp-label">
-                    {m.id} {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
-                  </span>
-                  <span className="pp-meta">
-                    {m.value !== undefined ? `${m.value}` : t('尚未量測', 'not measured')}
-                    {m.target ? ` / ${m.target}` : ''}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
           {working.length > 0 && (
             <div className="pp-now">
               <span className="pp-sub">{t('目前', 'Now')}</span>
@@ -207,7 +248,6 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
           )}
         </div>
       )}
-      {open && (
         <div className="pp-list">
           {items.map((i) => (
             <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
@@ -217,7 +257,9 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             </div>
           ))}
         </div>
+        </div>
       )}
+      {detail && 'goal' in detail && <GoalWindow run={run} onClose={() => setDetail(undefined)} />}
       {detail && 'agent' in detail && <AgentWindow run={run} agentId={detail.agent} providers={providers} onClose={() => setDetail(undefined)} />}
       {detail && 'gpu' in detail && <GpuWindow run={run} providers={providers} onClose={() => setDetail(undefined)} />}
       {detail && 'pid' in detail && <ProcessWindow run={run} pid={detail.pid} providers={providers} onClose={() => setDetail(undefined)} />}

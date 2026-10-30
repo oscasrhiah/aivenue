@@ -5048,3 +5048,103 @@ textarea.code {
 .user-msg-wrap .reply {
   justify-content: flex-end;
 }
+
+/* Progress panel: the goal in its own window; the expanded part scrolls inside itself */
+.pp-headrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 10px;
+}
+.pp-headrow .pp-head {
+  flex: 1;
+  min-width: 0;
+}
+.pp-headrow .pp-chev {
+  margin-left: 0;
+}
+.pp-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-goal-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2, transparent);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.pp-goal-btn:hover {
+  border-color: var(--accent);
+}
+.pp-goal-btn.ok {
+  color: var(--ok);
+}
+.pp-body {
+  max-height: min(42vh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pp-body .pp-list {
+  max-height: none;
+  overflow: visible;
+}
+.pp-body .pp-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gw-statement {
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+.gw-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.gw-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+.gw-metric {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+.gw-metric.ok {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+.gw-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.gw-head .badge {
+  margin-left: auto;
+}
+.gw-row {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}

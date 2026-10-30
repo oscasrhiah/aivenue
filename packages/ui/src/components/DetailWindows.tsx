@@ -6,7 +6,7 @@ import { agentStatus, cx, elapsed, modelLabel, providerColor, providerName, role
 import { Transcript } from './Transcript';
 
 /** A small window over the conversation (Esc or a click outside closes it). */
-function Window({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
+export function Window({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
   useEffect(() => {
     // Esc closes only this window, not one it was opened from (e.g. the agent map).
     const onKey = (e: KeyboardEvent) => {
