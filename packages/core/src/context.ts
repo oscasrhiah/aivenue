@@ -8,8 +8,10 @@ import { buildTopics, topicIndexBlock } from './topics';
  */
 
 export const DEFAULT_SHARING: ContextSharing = 'on_demand';
-/** Most characters of the previous agent's transcript inlined in "full" mode (prompts go through stdin, so no command-line limit). */
-export const FULL_BUDGET = 1_000_000;
+/** One page of an agent's conversation through read_context {agent_id}. */
+export const TRANSCRIPT_PAGE = 40000;
+/** Notes that are an agent's hand-off (also organized by the librarian), shown as hand-offs rather than as notes. */
+export const HANDOFF_NOTE = /^HAND-OFF\b/;
 export const sharingOf = (run: WorkflowRun): ContextSharing => run.config.contextSharing ?? DEFAULT_SHARING;
 
 const ROLE: Record<AgentRunInfo['role'], string> = {
@@ -32,6 +34,12 @@ const cut = (s: string | undefined, n: number) => {
 
 const oneLine = (s: string | undefined, n: number) => cut((s ?? '').replace(/\s+/g, ' '), n);
 
+/** A note that passes on what the user asked or said. */
+const USER_SAID = /\b(the )?user (said|says|asked|asks|wants|prefers|requested|instructed|told|requires|chose)\b|\buser'?s? (instruction|request|preference|requirement)|使用者|用戶/i;
+
+/** A role in English, for text that goes to the models. */
+export const roleName = (role: AgentRunInfo['role']) => ROLE[role];
+
 export function agentLabel(a: AgentRunInfo): string {
   return `${a.id} — ${ROLE[a.role]} (${a.provider}${a.model ? `, ${a.model}` : ''})${a.round && a.role !== 'subagent' ? `, round ${a.round}` : ''}`;
 }
@@ -42,6 +50,32 @@ export function agentResult(run: WorkflowRun, a: AgentRunInfo): string {
   if (round?.reviewerAgentId === a.id && round.review) return `verdict ${round.review.verdict}, ${round.review.issues.length} issue(s): ${round.review.summary}`;
   if (round?.authorAgentId === a.id && round.submission) return round.submission.plan ? `plan: ${round.submission.plan.summary}` : round.submission.summary;
   return a.finalText ?? '';
+}
+
+/**
+ * What an agent handed to whoever takes over: the hand-off it wrote with its submission, or, when it wrote none (it
+ * failed, was stopped, or its CLI ignored the field), one put together from what it did. No model call either way.
+ */
+export function handoverOf(run: WorkflowRun, a: AgentRunInfo, events: AgentEvent[]): { text: string; auto: boolean } {
+  if (a.handover?.text && !a.handover.auto) return { text: a.handover.text, auto: false };
+  const lines: string[] = [];
+  if (a.status === 'failed' || a.status === 'cancelled') lines.push(`It ended ${a.status === 'failed' ? 'with an error' : 'stopped'}${a.error ? `: ${cut(a.error, 600)}` : ''}.`);
+  const result = agentResult(run, a);
+  if (result) lines.push(`What it reported:\n${cut(result, 4000)}`);
+  if (a.stats?.filesChanged?.length) lines.push(`Files it changed: ${a.stats.filesChanged.slice(-40).join(', ')}${a.stats.filesChanged.length > 40 ? ` (+${a.stats.filesChanged.length - 40} more)` : ''}`);
+  const tools = events.filter((e) => e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'edit'));
+  if (tools.length) lines.push(`Its last commands and edits:\n${tools.slice(-8).map((e) => `- ${oneLine(e.tool!.title || e.tool!.input, 200)} → ${e.tool!.status}${e.tool!.status === 'error' && e.tool!.output ? `: ${oneLine(e.tool!.output, 300)}` : ''}`).join('\n')}`);
+  return { text: lines.join('\n') || '(it did nothing that was recorded)', auto: true };
+}
+
+/**
+ * One agent in the directory of the shared context: who, where, its state, what it handed over (the first line, or
+ * all of it in "full" sharing).
+ */
+function directoryLine(run: WorkflowRun, a: AgentRunInfo, resultChars: number, handoverChars = 300): string {
+  const where = a.stage && a.role !== 'subagent' ? `, ${a.stage} stage` : a.parentId ? `, sub-agent of ${a.parentId.slice(0, 8)}` : '';
+  const h = a.handover?.text && !a.handover.auto ? `\n  hand-off: ${handoverChars > 300 ? cut(a.handover.text, handoverChars).replace(/\n/g, '\n    ') : oneLine(a.handover.text, handoverChars)}` : '';
+  return `- ${agentLabel(a)}${where} [${a.status}]: ${cut(agentResult(run, a), resultChars) || '—'}${h}`;
 }
 
 /** Agents other than `self`, oldest first. */
@@ -92,22 +126,27 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const since = o.since ?? 0;
   const max = o.maxChars ?? 40000;
   const fresh = (a: AgentRunInfo) => a.status === 'running' || (a.endedAt ?? 0) > since;
-  const agents = others(run, self.id).filter((a) => a.id !== self.parentId || mode !== 'full');
+  const agents = others(run, self.id);
   const foldedCount = agents.filter((a) => folded(run, a)).length;
   const list = [
     ...(foldedCount && !since ? [`- (${foldedCount} earlier agent(s): see the shared memory below)`] : []),
-    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => `- ${agentLabel(a)} [${a.status}]: ${cut(agentResult(run, a), 2000) || '—'}`),
+    // "full": every agent's whole hand-off (organized by the agent itself), not only the one right before.
+    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => (mode === 'full' ? directoryLine(run, a, 2000, 4000) : directoryLine(run, a, 1200))),
   ];
   const memory = run.memory && run.memory.updatedAt > since ? memoryBlock(run) : '';
   const upto = Math.max(run.memory?.upto ?? 0, run.knowledge?.upto ?? 0);
-  const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > since).map((n) => noteLine(run, n));
+  // Hand-offs come as hand-offs (the agent directory, the one before this agent in full); notes from an earlier
+  // message only when they are decisions or the user's instructions, the rest is in the organized knowledge and searchable.
+  const inPrompt = (n: SharedNote) => !HANDOFF_NOTE.test(n.text) && (!n.carried || n.kind === 'decision' || USER_SAID.test(n.text));
+  const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > since && inPrompt(n)).map((n) => noteLine(run, n));
+  const carriedOut = !since ? (run.notes ?? []).filter((n) => n.carried && !inPrompt(n) && !HANDOFF_NOTE.test(n.text)).length : 0;
   const knowledgeDoc = run.knowledge && run.knowledge.updatedAt > since ? run.knowledge.doc : '';
   // Always first: where things stand and what was handed over.
   const status = statusBlock(run);
   const handoffs = handoffsBlock(run, since);
   const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
   const footer =
-    "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for an agent's full transcript (its messages, commands and their output), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives, and list what you learned in `findings` when you submit.";
+    "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for any agent's conversation (its messages, commands and their output; part \"messages\" or \"tools\", page 2 for older parts), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives. When you submit, list what you learned in `findings` and write your `handoff` for the agent who takes over: the state, what is open, what to do next and where to look.";
   const head = [
     since ? 'SHARED CONTEXT (only what is new since your last turn, plus the current status):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
     progressBlock(run),
@@ -121,25 +160,25 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   // the others ran and read.
   let room = Math.max(4000, max - head.length - footer.length - 400);
   const take = (text: string) => ((room -= text.length + 1), text);
+  // Whoever worked right before this agent hands over what it wrote for the next one, not its raw conversation: that
+  // stays in the shared records (read_context {agent_id}). A sub-agent has its task from its parent instead.
+  const prev = self.parentId ? undefined : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
+  const handover = prev && fresh(prev) ? handoverOf(run, prev, transcriptOf(prev.id)) : undefined;
+  const handoverText = take(handover
+    ? `HAND-OFF FROM THE AGENT BEFORE YOU — ${agentLabel(prev!)} [${prev!.status}]${handover.auto ? ' (it wrote none; put together by Aivenue from what it did)' : ''}:\n${cut(handover.text, Math.max(6000, Math.floor(room * 0.4)))}\nIts whole conversation is in the shared records: read_context {agent_id: "${prev!.id}"} (part "messages" for what it said, "tools" for its commands and their output).`
+    : '');
   const recap = o.recap ? take(o.recap(Math.floor(room * 0.3))) : '';
   // The organized knowledge and the table of contents of every record, before the newest raw items.
   const organized = take(knowledgeDoc ? `SHARED KNOWLEDGE (organized by subject from the shared notes, with sources [n:id]; read_context {topic: "knowledge"} for all of it):\n${cut(knowledgeDoc, Math.floor(room * 0.25))}` : '');
   const index = take(topicIndexBlock(buildTopics(run, transcriptOf), Math.max(1500, Math.floor(room * 0.06)), since));
-  const noteText = take(notes.length ? fit(notes, Math.floor(room * 0.3), `Shared notes${since ? ' (new)' : ''}:`) : since ? '' : 'Shared notes:\n(no notes yet)');
-  const listText = take(list.length ? fit(list, Math.floor(room * 0.2), `Agents${since ? ' (new or updated)' : ' so far'}:`) : since ? '' : 'You are the first agent in this workflow.');
+  const carriedText = carriedOut ? `(${carriedOut} more notes from earlier messages of this conversation are in the shared records${run.knowledge ? ", organized in the shared knowledge" : ""}: search_records {q} or read_context {topic: "facts"} when you need one.)` : '';
+  const noteText = take([notes.length ? fit(notes, Math.floor(room * 0.3), `Shared notes${since ? ' (new)' : ''}:`) : since ? '' : 'Shared notes:\n(no notes yet)', carriedText].filter(Boolean).join('\n'));
+  const listText = take(list.length ? fit(list, Math.floor(room * 0.2), `Agents${since ? ' (new or updated)' : ' so far'} — read_context {agent_id} for any one's whole conversation:`) : since ? '' : 'You are the first agent in this workflow.');
   const memText = take(memory ? cut(memory, Math.floor(room * 0.3)) : '');
   const knowledge = take(knowledgeBlock(run, act, Math.floor(Math.max(0, room) * 0.25), !since));
   const activity = take(activityBlock(act, Math.max(2000, room)));
-  if (since && !recap && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
-  const lines = ['', head, recap, organized, index, listText, memText, noteText, knowledge, activity, footer];
-  if (mode === 'full') {
-    // The most recent hand-off: whoever worked right before this agent (for a sub-agent, its parent so far).
-    const prev = self.parentId ? run.agents[self.parentId] : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
-    if (prev && fresh(prev)) {
-      const budget = Math.max(4000, Math.min(FULL_BUDGET, (o.maxChars ?? FULL_BUDGET) - lines.join('\n').length));
-      lines.push(`\nFULL TRANSCRIPT OF THE PREVIOUS AGENT (${agentLabel(prev)}):\n${formatTranscript(transcriptOf(prev.id), { budget })}`);
-    }
-  }
+  if (since && !handoverText && !recap && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
+  const lines = ['', head, handoverText, recap, organized, index, listText, memText, noteText, knowledge, activity, footer];
   let text = lines.filter((l) => l !== '').join('\n');
   // Still over this agent's share (a huge status or hand-off): keep the start, where the goal and status are.
   if (o.maxChars && text.length > o.maxChars) text = `${text.slice(0, o.maxChars)}\n… (shortened to fit your model; call read_context {} for the rest)`;
@@ -223,32 +262,74 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
   return parts.join('\n\n');
 }
 
-/** An agent's run as readable text: messages, tool calls with input/output, results. Keeps the latest part when over budget. */
-export function formatTranscript(events: AgentEvent[], o: { budget: number; prompts?: boolean }): string {
+/**
+ * A tool call's input without its JSON wrapping: the arguments the title does not already show, as `name: value`.
+ * Raw JSON of every call was the most repeated part of transcripts, for the compactor and for read_context.
+ */
+export function toolInputText(title: string, input: string | undefined, max = 1200): string {
+  const raw = (input ?? '').trim();
+  if (!raw || raw === title.trim()) return '';
+  let obj: unknown;
+  try {
+    obj = JSON.parse(raw);
+  } catch {
+    return cut(raw, max);
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return cut(raw, max);
+  const parts = Object.entries(obj as Record<string, unknown>)
+    .map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)] as const)
+    .filter(([, v]) => v !== undefined && v !== '' && v !== '{}' && v !== '[]' && !title.includes(v.trim()));
+  return cut(parts.map(([k, v]) => `${k}: ${cut(v, 600)}`).join('\n    '), max);
+}
+
+/**
+ * An agent's run as readable text: messages, tool calls with input/output, results. `part`: only messages or only
+ * tool calls. Over budget it is paged from the end: page 1 is the newest part, page 2 the one before it…
+ */
+export function formatTranscript(events: AgentEvent[], o: { budget: number; prompts?: boolean; part?: 'all' | 'messages' | 'tools'; page?: number }): string {
   const out: string[] = [];
+  const messages = o.part !== 'tools';
+  const tools = o.part !== 'messages';
+  let last = '';
+  let repeats = 0;
   for (const e of events) {
     switch (e.kind) {
       case 'prompt':
-        if (o.prompts) out.push(`[Instructions from Aivenue]\n${cut(e.text, 3000)}`);
+        if (o.prompts && messages) out.push(`[Instructions from Aivenue]\n${cut(e.text, 3000)}`);
         break;
       case 'message':
-        out.push(`[Agent] ${cut(e.text, 4000)}`);
+        if (messages) out.push(`[Agent] ${cut(e.text, 4000)}`);
         break;
-      case 'tool':
-        if (!e.tool) break;
-        out.push(
-          [`[Tool ${e.tool.name}] ${e.tool.title} → ${e.tool.status}`, e.tool.input ? `  input: ${cut(e.tool.input, 1200)}` : '', e.tool.output ? `  output: ${cut(e.tool.output, 2000)}` : ''].filter(Boolean).join('\n'),
-        );
+      case 'tool': {
+        if (!e.tool || !tools) break;
+        // The same call with the same output again (polling a log, re-reading a file): once, with a count.
+        const key = `${e.tool.name}|${e.tool.title}|${e.tool.input ?? ''}|${e.tool.output ?? ''}`;
+        if (key === last && out.length) {
+          repeats++;
+          out[out.length - 1] = out[out.length - 1].replace(/\n  \(same call again ×\d+\)$/, '') + `\n  (same call again ×${repeats})`;
+          break;
+        }
+        last = key;
+        repeats = 0;
+        const input = toolInputText(e.tool.title, e.tool.input);
+        out.push([`[Tool ${e.tool.name}] ${e.tool.title} → ${e.tool.status}`, input ? `  input: ${input}` : '', e.tool.output ? `  output: ${cut(e.tool.output, 2000)}` : ''].filter(Boolean).join('\n'));
         break;
+      }
       case 'result':
-        if (e.text?.trim()) out.push(`[Final] ${cut(e.text, 4000)}`);
+        if (e.text?.trim() && messages) out.push(`[Final] ${cut(e.text, 4000)}`);
         break;
       case 'error':
         out.push(`[Error] ${cut(e.text, 1000)}`);
         break;
     }
   }
-  let text = out.join('\n\n');
-  if (text.length > o.budget) text = `(earlier part omitted — ${text.length - o.budget} chars)\n…${text.slice(-o.budget)}`;
-  return text || '(no activity recorded)';
+  const text = out.join('\n\n');
+  if (!text) return '(no activity recorded)';
+  if (text.length <= o.budget) return o.page && o.page > 1 ? '(the whole conversation fits on page 1)' : text;
+  const pages = Math.ceil(text.length / o.budget);
+  const page = Math.max(1, Math.floor(o.page ?? 1));
+  if (page > pages) return `(there are only ${pages} pages)`;
+  const end = text.length - (page - 1) * o.budget;
+  const start = Math.max(0, end - o.budget);
+  return [`(page ${page} of ${pages}${page < pages ? `; page ${page + 1} for the part before this` : ''})`, start > 0 ? '…' + text.slice(start, end) : text.slice(start, end), end < text.length ? `… (newer part: page ${page - 1})` : ''].filter(Boolean).join('\n');
 }

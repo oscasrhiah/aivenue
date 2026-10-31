@@ -261,18 +261,25 @@ function Notes({ run, agentId, against }: { run: WorkflowRun; agentId: string; a
     <div className="notes">
       {notes.map((n) => {
         const shown = open.has(n.id);
+        // The agent's hand-off for whoever takes over: labelled as such, without the prefix the models read.
+        const handoff = /^HAND-OFF\b/.test(n.text);
+        const text = handoff ? n.text.replace(/^HAND-OFF \([^)]*\):\s*/, '') : n.text;
         // A note that repeats the result shown in this card adds nothing on screen (agents still get it).
-        const same = against.some((x) => x && similar(n.text, x));
+        const same = against.some((x) => x && similar(text, x));
         return (
           <div
             key={n.id}
             className={cx('note-line', shown && 'open')}
-            title={t('分享給後面所有 agent 的筆記；點一下展開或收起', 'Shared with every later agent; click to expand or collapse')}
+            title={
+              handoff
+                ? t('這個 agent 寫給接手者的交接：下一個 agent 讀這份，而不是它的整段對話；點一下展開或收起', "This agent's hand-off: the next agent reads this instead of its whole conversation; click to expand or collapse")
+                : t('分享給後面所有 agent 的筆記；點一下展開或收起', 'Shared with every later agent; click to expand or collapse')
+            }
             onClick={() => setOpen((s) => new Set(s.has(n.id) ? [...s].filter((x) => x !== n.id) : [...s, n.id]))}
           >
-            <span className="note-pin">📌</span>
-            {NOTE_KIND(t, n.kind) && <span className={cx('pill', n.kind === 'fact' ? 'ok' : n.kind === 'decision' ? '' : 'warn')}>{NOTE_KIND(t, n.kind)}</span>}
-            <span className="note-text">{shown ? n.text : same ? t('筆記（與這張卡片的結果相同）', 'Note (same as this card\'s result)') : n.text}</span>
+            <span className="note-pin">{handoff ? '🤝' : '📌'}</span>
+            {handoff ? <span className="pill">{t('交接', 'Hand-off')}</span> : NOTE_KIND(t, n.kind) && <span className={cx('pill', n.kind === 'fact' ? 'ok' : n.kind === 'decision' ? '' : 'warn')}>{NOTE_KIND(t, n.kind)}</span>}
+            <span className="note-text">{shown ? text : same ? t('筆記（與這張卡片的結果相同）', 'Note (same as this card\'s result)') : text}</span>
           </div>
         );
       })}

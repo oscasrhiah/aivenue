@@ -19,7 +19,8 @@ const bundled = await build({
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
-      export { contextBlock } from './packages/core/src/context';
+      export { contextBlock, formatTranscript, handoverOf, toolInputText } from './packages/core/src/context';
+      export { groupFolders } from './packages/core/src/outputs';
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';`,
     resolveDir: process.cwd(),
   },
@@ -467,4 +468,83 @@ test('wait_for 的檢查指令：依語法選 shell（Windows 預設 Git Bash）
   const bad = await run('if then fi (');
   assert.equal(bad.ok, false);
   assert.equal(bad.broken, true, bad.output);
+});
+
+test('交接：下一個 agent 拿到前一個自己寫的交接，不是它的原始對話', () => {
+  const { run, a1, a2, eventsOf } = sharedRun(os.tmpdir());
+  run.config.contextSharing = 'full';
+  a1.handover = { text: 'Fixed the mask in src/model.py; test_x still fails on padding, look at collate() next.', ts: 55 };
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+  assert.match(text, /HAND-OFF FROM THE AGENT BEFORE YOU — aaaaaaaa-111 — implementer[\s\S]*look at collate\(\) next/);
+  assert.match(text, /read_context \{agent_id: "aaaaaaaa-111"\}/);
+  assert.doesNotMatch(text, /FULL TRANSCRIPT/);
+  // The directory shows who it is and the first line of what it handed over.
+  assert.match(text, /Agents so far[^\n]*:\n- aaaaaaaa-111 — implementer[\s\S]*hand-off: Fixed the mask/);
+});
+
+test('交接：沒寫交接時 Aivenue 用它的結果與最後的指令湊一份，不另外呼叫模型', () => {
+  const { run, a1, a2, eventsOf } = sharedRun(os.tmpdir());
+  a1.status = 'failed';
+  a1.error = 'CLI exited 1';
+  a1.stats = { filesChanged: ['src/model.py'] };
+  const h = W.handoverOf(run, a1, eventsOf(a1.id));
+  assert.equal(h.auto, true);
+  assert.match(h.text, /ended with an error: CLI exited 1[\s\S]*Files it changed: src\/model\.py[\s\S]*pytest -q → ok/);
+  assert.match(W.contextBlock(run, a2, eventsOf, { maxChars: 200000 }), /it wrote none; put together by Aivenue/);
+});
+
+test('共用筆記：交接筆記不重複出現；上一則訊息的筆記只帶決策與使用者指示', () => {
+  const { run, a2, eventsOf } = sharedRun(os.tmpdir());
+  run.notes.push(
+    { id: 'h1', agentId: 'aaaaaaaa-111', text: 'HAND-OFF (implement stage, round 1, implementer): all done', kind: 'fact', ts: 51 },
+    { id: 'c1', agentId: 'old', text: 'epoch 12 reached loss 0.4', kind: 'fact', ts: 5, carried: true },
+    { id: 'c2', agentId: 'old', text: 'Use 16 kHz audio everywhere', kind: 'decision', ts: 6, carried: true },
+    { id: 'c3', agentId: 'old', text: '使用者指示：套件裝在 Pytorch 環境', kind: 'fact', ts: 7, carried: true },
+    { id: 'n9', agentId: 'aaaaaaaa-111', text: 'fresh fact of this message', kind: 'fact', ts: 52 },
+  );
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+  const notes = text.slice(text.indexOf('Shared notes'));
+  assert.doesNotMatch(notes.split('\nAgents')[0], /HAND-OFF \(implement/);
+  assert.doesNotMatch(text, /epoch 12 reached/);
+  assert.match(text, /Use 16 kHz audio/);
+  assert.match(text, /套件裝在 Pytorch 環境/);
+  assert.match(text, /fresh fact of this message/);
+  assert.match(text, /1 more notes from earlier messages/);
+});
+
+test('讀別人的對話：工具參數不帶 JSON 外殼、重複呼叫合併、可只看訊息或指令、可分頁', () => {
+  const tool = (ts, title, input, output) => ({ seq: ts, ts, kind: 'tool', tool: { id: 't' + ts, name: 'bash', category: 'command', title, input, output, status: 'ok' } });
+  const events = [
+    { seq: 1, ts: 1, kind: 'message', text: 'I will check the log' },
+    tool(2, 'tail -5 train.log', JSON.stringify({ command: 'tail -5 train.log', description: 'Show the end of the log' }), 'epoch 3'),
+    tool(3, 'tail -5 train.log', JSON.stringify({ command: 'tail -5 train.log', description: 'Show the end of the log' }), 'epoch 3'),
+    tool(4, 'tail -5 train.log', JSON.stringify({ command: 'tail -5 train.log', description: 'Show the end of the log' }), 'epoch 3'),
+    { seq: 5, ts: 5, kind: 'result', text: 'Training is at epoch 3' },
+  ];
+  const all = W.formatTranscript(events, { budget: 40000 });
+  assert.doesNotMatch(all, /"command"/);
+  assert.match(all, /input: description: Show the end of the log/);
+  assert.match(all, /same call again ×2/);
+  assert.equal((all.match(/\[Tool bash\]/g) ?? []).length, 1);
+  assert.doesNotMatch(W.formatTranscript(events, { budget: 40000, part: 'messages' }), /\[Tool/);
+  assert.doesNotMatch(W.formatTranscript(events, { budget: 40000, part: 'tools' }), /\[Agent\]/);
+  const long = Array.from({ length: 30 }, (_, i) => ({ seq: i, ts: i, kind: 'message', text: `message ${i} ${'y'.repeat(200)}` }));
+  const p1 = W.formatTranscript(long, { budget: 2000 });
+  const p2 = W.formatTranscript(long, { budget: 2000, page: 2 });
+  assert.match(p1, /page 1 of \d+; page 2 for the part before this[\s\S]*message 29/);
+  assert.doesNotMatch(p2, /message 29/);
+  assert.match(W.formatTranscript(long, { budget: 2000, page: 99 }), /there are only \d+ pages/);
+});
+
+test('產生的檔案：同一個資料夾大量變動合併成一列，記檔案數與總大小', () => {
+  const files = [
+    ...Array.from({ length: 300 }, (_, i) => ({ path: `data/train/${i}.npy`, abs: '', status: 'added', size: 10 })),
+    ...Array.from({ length: 3 }, (_, i) => ({ path: `src/f${i}.py`, abs: '', status: 'modified', size: 1 })),
+  ];
+  const out = W.groupFolders('/proj', files);
+  assert.equal(out.length, 4);
+  const g = out.find((f) => f.count);
+  assert.equal(g.path, 'data/train/');
+  assert.equal(g.count, 300);
+  assert.equal(g.size, 3000);
 });

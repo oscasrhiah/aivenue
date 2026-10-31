@@ -1010,7 +1010,7 @@ export function RoleSettings({
           <div className="seg wide">
             {(['summary', 'on_demand', 'full'] as ContextSharing[]).map((m) => (
               <button key={m} disabled={readOnly} className={cx((draft.contextSharing ?? 'on_demand') === m && 'on')} onClick={() => set({ contextSharing: m })}>
-                {{ summary: t('只交摘要', 'Summaries'), on_demand: t('摘要＋可查閱', 'Summaries + lookup'), full: t('完整紀錄', 'Full transcript') }[m]}
+                {{ summary: t('只交摘要', 'Summaries'), on_demand: t('摘要＋可查閱', 'Summaries + lookup'), full: t('完整交接', 'Full hand-offs') }[m]}
               </button>
             ))}
           </div>
@@ -1019,7 +1019,7 @@ export function RoleSettings({
               {
                 summary: t('agent 之間只交接計畫、審查意見與摘要；最省 context。', 'Agents only hand over the plan, reviews and summaries; uses the least context.'),
                 on_demand: t('每個 agent 會看到其他人做了什麼與共用筆記，需要時可用 read_context 讀任何人的完整紀錄（回覆、指令與輸出），也能用 post_note 留筆記給後面的人。', 'Each agent sees who did what plus shared notes, can read anyone\'s full transcript (replies, commands, output) with read_context when needed, and can leave notes with post_note.'),
-                full: t('另外把上一棒的完整紀錄直接附給下一棒（最多 100 萬字）；細節最完整，但會用掉較多 context 與額度，紀錄很長時可能超過部分模型的 context 上限。', 'Also hands the previous agent\'s full transcript to the next one (up to 1M characters); most detail, but uses more context and quota, and very long transcripts may exceed some models\' context window.'),
+                full: t('另外附上每個 agent 自己寫的完整交接（不只前一棒），不是原始對話；細節較多，也會多用一些 context。任何人的完整對話仍用 read_context 查。', 'Also includes every agent\'s whole hand-off (not only the previous one), written by the agent itself rather than its raw conversation; more detail for a bit more context. Anyone\'s whole conversation is still one read_context away.'),
               }[draft.contextSharing ?? 'on_demand']
             }
           </div>

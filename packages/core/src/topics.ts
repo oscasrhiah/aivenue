@@ -74,7 +74,7 @@ export function buildTopics(run: WorkflowRun, eventsOf: (agentId: string) => Age
   }
   // Notes by kind, and also under every file they name.
   for (const n of run.notes ?? []) {
-    const kind: TopicKind = /^\s*CHECKPOINT\b/i.test(n.text) || /^Hand-off summary of /.test(n.text) ? 'checkpoint' : (n.kind ?? 'inference');
+    const kind: TopicKind = /^\s*CHECKPOINT\b/i.test(n.text) || /^Hand-off summary of /.test(n.text) || /^HAND-OFF\b/.test(n.text) ? 'checkpoint' : (n.kind ?? 'inference');
     const item = { ts: n.ts, agentId: n.agentId, what: `note (${kind})`, text: n.text };
     add(`${kind}s`, kind, `${kind}s`, item);
     for (const f of new Set(n.text.match(PATHS) ?? [])) if (topics.has(fileKey(f))) add(fileKey(f), 'file', rel(f), item);

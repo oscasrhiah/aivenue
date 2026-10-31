@@ -11,7 +11,7 @@ const fmt = (n: number) => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : n 
 function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) {
   const t = useT();
   const [preview, setPreview] = useState<{ text?: string; truncated?: boolean; error?: string } | null>(null);
-  const isImg = IMG.test(f.path) && !/\.svg$/i.test(f.path);
+  const isImg = !f.count && IMG.test(f.path) && !/\.svg$/i.test(f.path);
   const gone = f.status === 'deleted';
   const toggle = async () => {
     if (preview) return setPreview(null);
@@ -27,11 +27,14 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
       <div className="out-head">
         <span className={cx('out-status', f.status)}>{label}</span>
         {isImg && !gone ? <img className="out-thumb" src={fileUrl(f.abs)} alt="" onClick={() => onImage(fileUrl(f.abs))} /> : null}
-        <span className={cx('out-path', gone && 'gone')}>{f.path}</span>
+        <span className={cx('out-path', gone && 'gone')}>
+          {f.path}
+          {f.count ? <span className="muted"> {t(`（${f.count.toLocaleString()} 個檔案）`, ` (${f.count.toLocaleString()} files)`)}</span> : null}
+        </span>
         <span className="muted tiny">{fmt(f.size)}</span>
         {!gone && (
           <span className="out-actions">
-            {!isImg && (
+            {!isImg && !f.count && (
               <button className="link" onClick={toggle}>
                 {preview ? t('收起', 'Hide') : t('預覽', 'Preview')}
               </button>
@@ -69,7 +72,8 @@ export function Outputs({ run, onImage }: { run: WorkflowRun; onImage: (src: str
   const list = run.outputs ?? [];
   if (!list.length) return null;
   const shown = all ? list : list.slice(0, 12);
-  const counts = { added: list.filter((f) => f.status === 'added').length, modified: list.filter((f) => f.status === 'modified').length, deleted: list.filter((f) => f.status === 'deleted').length };
+  const n = (status: OutputFile['status']) => list.filter((f) => f.status === status).reduce((sum, f) => sum + (f.count ?? 1), 0);
+  const counts = { added: n('added'), modified: n('modified'), deleted: n('deleted') };
   return (
     <div className="outputs">
       <div className="outputs-head fold-head" onClick={() => setOpen(!open)}>

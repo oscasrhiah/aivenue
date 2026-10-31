@@ -57,7 +57,7 @@ import { autoAssign, DEFAULT_AUTO } from './assign';
 import { diffSnapshots, snapshot, type Snapshot } from './outputs';
 import { captureScreenshot, isLoopbackUrl, resolveTarget } from './screenshot';
 import { CliPool } from './cliPool';
-import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf } from './context';
+import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf, HANDOFF_NOTE, TRANSCRIPT_PAGE, roleName } from './context';
 import { codexContext, compactCodexThread, estimateTokens } from './agentContext';
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
@@ -689,7 +689,10 @@ export class Orchestrator {
       const a = prev.agents[agentId];
       return a ? `${roleLabel(a.role)} ${a.provider}` : undefined;
     };
-    run.notes = (prev.notes ?? []).map((n) => ({ ...n, by: n.by ?? label(n.agentId) }));
+    // Every note goes along (searchable, and organized in the knowledge document that goes along too), but only
+    // decisions and the user's instructions are put in prompts again: the rest was about the earlier message.
+    run.notes = (prev.notes ?? []).map((n) => ({ ...n, by: n.by ?? label(n.agentId), carried: true }));
+    if (prev.knowledge) run.knowledge = { ...prev.knowledge };
     if (prev.sideEffects?.length) run.sideEffects = [...prev.sideEffects];
     const waits = (prev.waits ?? []).filter((w) => w.state === 'waiting' && w.timeoutAt > now());
     if (waits.length) run.waits = waits.map((w) => ({ ...w }));
@@ -1184,6 +1187,7 @@ export class Orchestrator {
       this.requireBackgroundRegistered(run, info);
       run.lastProgressAt = now();
       this.keepFindings(run, info, args.findings);
+      this.keepHandover(run, info, args.handoff);
     }
     switch (name) {
       case 'submit_plan': {
@@ -1348,7 +1352,10 @@ export class Orchestrator {
         if (id === 'notes') return allNotes(run);
         const target = run.agents[id] ?? Object.values(run.agents).find((a) => a.id.startsWith(id));
         if (!target) throw new Error(`Unknown agent_id ${id}. Call read_context {} to list agents.`);
-        return `TRANSCRIPT OF ${agentLabel(target)} [${target.status}]\n\n${formatTranscript(this.events(run.id, target.id), { budget: 40000, prompts: args.include_prompts === true })}`;
+        const part = args.part === 'messages' || args.part === 'tools' ? args.part : 'all';
+        const page = Number(args.page) > 1 ? Math.floor(Number(args.page)) : 1;
+        const handover = target.handover?.text && !target.handover.auto && page === 1 && part !== 'tools' ? `ITS HAND-OFF:\n${target.handover.text}\n\n` : '';
+        return `${part === 'all' ? 'CONVERSATION' : part === 'messages' ? 'MESSAGES' : 'TOOL CALLS'} OF ${agentLabel(target)} [${target.status}]\n\n${handover}${formatTranscript(this.events(run.id, target.id), { budget: TRANSCRIPT_PAGE, prompts: args.include_prompts === true, part, page })}`;
       }
       case 'post_note': {
         const text = String(args.text ?? '').trim();
@@ -1479,7 +1486,7 @@ export class Orchestrator {
   isOutputFile(abs: string): boolean {
     const p = path.resolve(abs);
     for (const r of this.runs.values()) {
-      if (r.outputs?.some((o) => o.status !== 'deleted' && path.resolve(o.abs) === p)) return true;
+      if (r.outputs?.some((o) => o.status !== 'deleted' && (path.resolve(o.abs) === p || (!!o.count && isInside(path.resolve(o.abs), p))))) return true;
       if (r.screenshots?.some((s) => path.resolve(s.path) === p)) return true;
     }
     return false;
@@ -2189,6 +2196,7 @@ export class Orchestrator {
     const json = extractJson(res.finalText) as any;
     // Findings in a submission given as text (a CLI without Aivenue's tools).
     if (run?.agents[agentId] && json?.findings) this.keepFindings(run, run.agents[agentId], json.findings);
+    if (run?.agents[agentId] && json?.handoff) this.keepHandover(run, run.agents[agentId], json.handoff);
     if (expect === 'submit_verification') {
       sub.verification ??= parseVerification(json);
       return sub.verification ? sub : undefined;
@@ -3011,6 +3019,23 @@ export class Orchestrator {
     if (!list.length) return;
     const have = new Set((run.notes ?? []).filter((n) => n.agentId === info.id).map((n) => n.text));
     for (const text of list) if (!have.has(text)) (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, kind: 'fact', ts: now() });
+    this.refreshShared(run);
+    this.touch(run);
+  }
+
+  /**
+   * The hand-off an agent wrote with its submission: the next agent gets it instead of the agent's conversation, and
+   * it is a shared note too (labelled with the agent and its role), so the librarian organizes it and search finds it.
+   */
+  private keepHandover(run: WorkflowRun, info: AgentRunInfo, raw: unknown) {
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text || info.handover?.text === text) return;
+    info.handover = { text, ts: now() };
+    const note = `HAND-OFF (${info.stage && info.role !== 'subagent' ? `${info.stage} stage, round ${info.round ?? 1}, ` : ''}${roleName(info.role)}): ${text}`;
+    const notes = (run.notes ??= []);
+    const old = notes.findIndex((n) => n.agentId === info.id && HANDOFF_NOTE.test(n.text));
+    if (old >= 0) notes[old] = { ...notes[old], text: note, ts: now() };
+    else notes.push({ id: randomUUID().slice(0, 8), agentId: info.id, text: note, kind: 'fact', ts: now() });
     this.refreshShared(run);
     this.touch(run);
   }

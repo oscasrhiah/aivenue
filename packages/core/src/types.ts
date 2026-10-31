@@ -625,6 +625,8 @@ export interface SharedNote {
   kind?: 'fact' | 'inference' | 'decision';
   /** Who wrote it, kept when the note carries over to a follow-up message (its agent is in the earlier workflow). */
   by?: string;
+  /** Came from an earlier message of the conversation: searchable, but only decisions and the user's instructions go into prompts. */
+  carried?: boolean;
 }
 
 export interface SubagentConfig {
@@ -772,6 +774,8 @@ export interface OutputFile {
   abs: string;
   status: 'added' | 'modified' | 'deleted';
   size: number;
+  /** A folder standing for this many files that changed the same way (a dataset, a cache), instead of one row each. */
+  count?: number;
 }
 
 export type AttachmentKind = 'text' | 'image' | 'image-other' | 'pdf' | 'office' | 'legacy-office' | 'notebook' | 'archive' | 'audio' | 'video' | 'binary';
@@ -822,6 +826,8 @@ export interface AgentRunInfo {
   closed?: boolean;
   /** A sub-agent its parent handed off instead of waiting for it: who takes over its result. */
   handoff?: string;
+  /** What it wrote for whoever takes over its work (with its submission); `auto` when Aivenue put it together because it wrote none. */
+  handover?: { text: string; ts: number; auto?: boolean };
   /** Started again by the user from this agent. */
   rerunOf?: string;
   /** A sub-agent's short name (given by its parent, else taken from the task) and its full task. */

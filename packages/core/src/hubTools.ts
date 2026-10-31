@@ -70,6 +70,13 @@ const findingsSchema = {
   items: { type: 'string' },
 };
 
+/** What the agent hands over to whoever takes over its work: written by the agent itself, shown to the next agent instead of its raw conversation. */
+const handoffSchema = {
+  type: 'string',
+  description:
+    'Your hand-off to the agent who takes over after you (it reads this instead of your whole conversation, which stays in the shared records): what you did and why, the state things are in now (what works, what is verified and how), what is still open or broken (exact errors), what the next agent should do or watch out for, and where to look (files, commands, logs). Write it for someone who has not seen your conversation.',
+};
+
 export const TOOL_DEFS: Record<string, ToolDef> = {
   submit_plan: {
     name: 'submit_plan',
@@ -91,6 +98,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         goal: goalSchema,
         responses: responsesSchema,
         findings: findingsSchema,
+        handoff: handoffSchema,
       },
       required: ['summary', 'markdown', 'steps'],
     },
@@ -105,6 +113,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         summary: { type: 'string' },
         issues: issuesSchema,
         findings: findingsSchema,
+        handoff: handoffSchema,
       },
       required: ['verdict', 'summary', 'issues'],
     },
@@ -136,8 +145,9 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
           },
         },
         issues: issuesSchema,
-      },
         findings: findingsSchema,
+        handoff: handoffSchema,
+      },
       required: ['outcome', 'summary', 'metrics'],
     },
   },
@@ -287,7 +297,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     description: 'Tell Aivenue you finished implementing: summary of changes and verification, plus responses to review issues if any.',
     inputSchema: {
       type: 'object',
-      properties: { summary: { type: 'string' }, responses: responsesSchema, findings: findingsSchema },
+      properties: { summary: { type: 'string' }, responses: responsesSchema, findings: findingsSchema, handoff: handoffSchema },
       required: ['summary'],
     },
   },
@@ -364,13 +374,15 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   read_context: {
     name: 'read_context',
     description:
-      'Read what other agents in this workflow did. With topic: everything on one subject at once — a file (who read and changed it, what it showed, notes and issues naming it), a command (every run and its output), an issue (its whole history), or "facts", "decisions", "inferences", "checkpoints", "knowledge" (the organized shared knowledge), "index" (every topic). Without arguments: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s full transcript (its messages, tool calls, commands and their output).',
+      'Read what other agents in this workflow did. With topic: everything on one subject at once — a file (who read and changed it, what it showed, notes and issues naming it), a command (every run and its output), an issue (its whole history), or "facts", "decisions", "inferences", "checkpoints", "knowledge" (the organized shared knowledge), "index" (every topic). Without arguments: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s conversation (its messages, tool calls, commands and their output), newest part first; part "messages" or "tools" for only one kind, page 2, 3… for older parts.',
     inputSchema: {
       type: 'object',
       properties: {
         topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index".' },
         agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
+        part: { type: 'string', enum: ['all', 'messages', 'tools'], description: 'With agent_id: only its messages (what it said and concluded) or only its tool calls with their output. Default all.' },
+        page: { type: 'number', description: 'With agent_id: 1 (default) is the newest part of the conversation, 2 the part before it, and so on.' },
       },
     },
   },
