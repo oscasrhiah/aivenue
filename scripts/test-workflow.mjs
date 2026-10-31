@@ -21,6 +21,7 @@ const bundled = await build({
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
       export { contextBlock, formatTranscript, handoverOf, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
+      export { codexContext } from './packages/core/src/agentContext';
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';`,
     resolveDir: process.cwd(),
   },
@@ -554,4 +555,23 @@ test('交接：agent 寫的交接不限長度，完整交給下一個 agent', ()
   const long = 'detail '.repeat(5000) + 'THE-LAST-LINE';
   a1.handover = { text: long, ts: 55 };
   assert.match(W.contextBlock(run, a2, eventsOf, { maxChars: 200000 }), /THE-LAST-LINE/);
+});
+
+test('Codex 沒指定模型時：從它的對話紀錄讀出實際用的模型（最新一輪的 turn_context）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-home-'));
+  const dir = path.join(home, 'sessions', '2026', '10', '31');
+  fs.mkdirSync(dir, { recursive: true });
+  const tid = '01a18c40-f070-7170-a305-0132299ac492';
+  const line = (type, payload) => JSON.stringify({ type, payload });
+  fs.writeFileSync(
+    path.join(dir, `rollout-2026-10-31T10-00-00-${tid}.jsonl`),
+    [
+      line('turn_context', { model: 'gpt-6.0', effort: 'low' }),
+      line('event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 1000 }, model_context_window: 400000 } }),
+      line('turn_context', { model: 'gpt-6.1-sol', effort: 'medium' }),
+      line('event_msg', { type: 'token_count', info: { last_token_usage: { input_tokens: 28800 }, model_context_window: 475000 } }),
+    ].join('\n') + '\n',
+  );
+  const spec = { id: 'codex~work', name: 'Codex', command: 'codex', run: { args: [] }, output: 'codex-jsonl', accounts: { env: 'CODEX_HOME', home: '~/.codex' }, accountOf: 'codex', accountHome: home };
+  assert.deepEqual(W.codexContext(spec, tid), { used: 28800, window: 475000, model: 'gpt-6.1-sol' });
 });

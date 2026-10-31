@@ -324,6 +324,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       return registry.list();
     },
     'providers.delete': (p: { id: string }) => registry.remove(p.id),
+    'providers.setOrder': (p: { ids: string[] }) => registry.setOrder(p.ids),
     'providers.addAccount': (p: { id: string; name: string }) => registry.addAccount(p.id, p.name),
     'providers.removeAccount': (p: { id: string; deleteData?: boolean }) => registry.removeAccount(p.id, !!p.deleteData),
     'providers.reset': (p: { id: string }) => {

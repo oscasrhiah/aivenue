@@ -1055,6 +1055,17 @@ p {
   resize: vertical;
 }
 
+/* "Use … instead": the quotas left, quieter than the provider's name; a tool's account menu opens under its button. */
+.switch-left {
+  opacity: 0.7;
+  font-size: 0.92em;
+}
+.switch-menu.left {
+  left: 0;
+  right: auto;
+  min-width: 340px;
+}
+
 /* ---- composer ---- */
 .dock {
   padding: 8px 0 18px;
@@ -2577,6 +2588,26 @@ textarea.code {
   cursor: pointer;
 }
 
+.prow-grip {
+  cursor: grab;
+  color: var(--muted);
+  letter-spacing: -3px;
+  padding: 4px 2px;
+  user-select: none;
+  align-self: center;
+}
+.prow-grip:active {
+  cursor: grabbing;
+}
+.prow.dragging {
+  opacity: 0.45;
+}
+.prow.drop-before {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.prow.drop-after {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 .prow-head:hover {
   background: color-mix(in srgb, var(--text) 3%, transparent);
 }

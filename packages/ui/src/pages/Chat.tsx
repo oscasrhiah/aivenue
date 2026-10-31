@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
-import { fileUrl, hub, useHostInfo, useProviders, useThreads, useWorkflow, useWorkflows } from '../api';
+import { fileUrl, hub, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
+import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
@@ -114,17 +115,26 @@ function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
   const t = useT();
   const [text, setText] = useState('');
   const [error, setError] = useState<string>();
+  const providers = useProviders();
+  const usage = useUsage();
   const choose = (optionId: string) => hub.call('workflows.decide', { id: run.id, decisionId: d.id, optionId, text }).catch((e) => setError(e.message));
+  // "Use … instead": one button per tool, its accounts in a menu with the quota each has left.
+  const switches = d.options.filter((o) => o.id.startsWith('switch:'));
+  const at = d.options.findIndex((o) => o.id.startsWith('switch:'));
   return (
     <div className="decision">
       <div className="decision-q">{d.message}</div>
       {d.allowText && <textarea rows={2} placeholder={t('（選填）給 agent 的意見…', '(Optional) a note for the agent…')} value={text} onChange={(e) => setText(e.target.value)} />}
       <div className="row gap wrap">
-        {d.options.map((o, i) => (
-          <button key={o.id} className={cx('btn', i === 0 && 'primary', o.id === 'abort' && 'danger')} onClick={() => choose(o.id)}>
-            {o.label}
-          </button>
-        ))}
+        {d.options.map((o, i) =>
+          o.id.startsWith('switch:') ? (
+            i === at && <SwitchChoices key="switch" options={switches} providers={providers} usage={usage} onChoose={choose} first={at === 0} />
+          ) : (
+            <button key={o.id} className={cx('btn', i === 0 && 'primary', o.id === 'abort' && 'danger')} onClick={() => choose(o.id)}>
+              {o.label}
+            </button>
+          ),
+        )}
       </div>
       {error && <div className="note err">{error}</div>}
     </div>

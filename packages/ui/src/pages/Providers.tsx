@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type HTMLAttributes } from 'react';
 import type { AgentEvent, ProviderInfo, ProviderSpec, TestResult } from '../../../core/src/types';
 import { hub, mergeEvent, useHostInfo, useProviders } from '../api';
 import { Transcript } from '../components/Transcript';
@@ -154,7 +154,7 @@ function SpecEditor({ initial, isNew, onClose }: { initial: ProviderSpec; isNew:
   );
 }
 
-function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
+function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; drag?: DragProps }) {
   const t = useT();
   const { busy, error, run } = useAction();
   const [open, setOpen] = useState(false);
@@ -188,8 +188,13 @@ function ProviderRow({ p, secure }: { p: ProviderInfo; secure: boolean }) {
   const ready = p.installed && p.auth.state === 'logged_in';
 
   return (
-    <div className={cx('prow', open && 'open')}>
+    <div className={cx('prow', open && 'open', drag?.dragging && 'dragging', drag?.over)} {...drag?.row}>
       <div className="prow-head" onClick={() => setOpen(!open)}>
+        {drag && (
+          <span className="prow-grip" title={t('拖動調整順序', 'Drag to reorder')} aria-hidden="true" onClick={(e) => e.stopPropagation()} {...drag.grip}>
+            ⋮⋮
+          </span>
+        )}
         <span className="mark lg" style={{ background: providerColor(s.id) }} />
         <div className="grow">
           <div className="prow-name">
@@ -453,9 +458,67 @@ export function AgyWarning() {
   );
 }
 
+type DragProps = {
+  dragging: boolean;
+  over?: 'drop-before' | 'drop-after';
+  row: HTMLAttributes<HTMLDivElement> & { draggable: boolean };
+  grip: HTMLAttributes<HTMLSpanElement>;
+};
+
+/**
+ * Drag the providers into the order you want (by the ⋮⋮ grip): every menu that lists them follows it. The new order
+ * shows at once and is saved in Aivenue's provider settings.
+ */
+function useProviderOrder(providers: ProviderInfo[]) {
+  const [local, setLocal] = useState<string[]>();
+  const [dragId, setDragId] = useState<string>();
+  const [armed, setArmed] = useState<string>();
+  const [over, setOver] = useState<{ id: string; after: boolean }>();
+  // The saved order arrived (or a provider was added or removed): drop the optimistic one.
+  const key = providers.map((p) => p.spec.id).join('|');
+  useEffect(() => setLocal(undefined), [key]);
+  const ids = local ?? providers.map((p) => p.spec.id);
+  const list = ids.map((id) => providers.find((p) => p.spec.id === id)).filter((p): p is ProviderInfo => !!p);
+  const end = () => (setDragId(undefined), setOver(undefined), setArmed(undefined));
+  const props = (id: string): DragProps => ({
+    dragging: dragId === id,
+    over: over?.id === id && dragId && dragId !== id ? (over.after ? 'drop-after' : 'drop-before') : undefined,
+    row: {
+      // Only from the grip, so text in an open row can still be selected.
+      draggable: armed === id,
+      onDragStart: (e) => {
+        setDragId(id);
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', id);
+      },
+      onDragOver: (e) => {
+        if (!dragId) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        const after = e.clientY > r.top + r.height / 2;
+        if (over?.id !== id || over.after !== after) setOver({ id, after });
+      },
+      onDrop: (e) => {
+        e.preventDefault();
+        if (!dragId || dragId === id) return end();
+        const next = ids.filter((x) => x !== dragId);
+        const at = next.indexOf(id) + (over?.id === id && over.after ? 1 : 0);
+        next.splice(at, 0, dragId);
+        setLocal(next);
+        end();
+        hub.call('providers.setOrder', { ids: next }).catch(() => setLocal(undefined));
+      },
+      onDragEnd: end,
+    },
+    grip: { onMouseDown: () => setArmed(id), onMouseUp: () => setArmed(undefined) },
+  });
+  return { list, props };
+}
+
 export function ProvidersPane() {
   const t = useT();
   const providers = useProviders();
+  const order = useProviderOrder(providers);
   const host = useHostInfo();
   const [adding, setAdding] = useState(false);
   const [checking, setChecking] = useState(false);
@@ -486,8 +549,8 @@ export function ProvidersPane() {
         </div>
       </div>
       <div className="plist">
-        {providers.map((p) => (
-          <ProviderRow key={p.spec.id} p={p} secure={host?.secureSecrets ?? true} />
+        {order.list.map((p) => (
+          <ProviderRow key={p.spec.id} p={p} secure={host?.secureSecrets ?? true} drag={order.props(p.spec.id)} />
         ))}
       </div>
       {missing.length > 0 && (

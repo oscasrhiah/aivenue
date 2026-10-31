@@ -58,7 +58,7 @@ import { diffSnapshots, snapshot, type Snapshot } from './outputs';
 import { captureScreenshot, isLoopbackUrl, resolveTarget } from './screenshot';
 import { CliPool } from './cliPool';
 import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf, HANDOFF_NOTE, TRANSCRIPT_PAGE, roleName } from './context';
-import { codexContext, compactCodexThread, estimateTokens } from './agentContext';
+import { codexContext, compactCodexThread, estimateTokens, opencodeModel } from './agentContext';
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
 import { advisorPairing } from './advisorPairing';
@@ -2142,7 +2142,7 @@ export class Orchestrator {
     o: { role: AgentRole; roleCfg: RoleConfig; stage: PhaseKey; round: number; prompt: string; mode: 'write' | 'readonly'; resume?: string; expect: Expect; task: string },
   ): Promise<{ info: AgentRunInfo; res: RunAgentResult; sub?: Submission }> {
     const def = this.d.registry.defaults(o.roleCfg.provider);
-    const info = this.newAgent(run, { role: o.role, provider: o.roleCfg.provider, model: o.roleCfg.model || def.model, effort: o.roleCfg.effort || def.effort, stage: o.stage, round: o.round, depth: 0, task: o.task });
+    const info = this.newAgent(run, { role: o.role, provider: o.roleCfg.provider, model: o.roleCfg.model || def.model, modelDefault: !o.roleCfg.model || undefined, effort: o.roleCfg.effort || def.effort, stage: o.stage, round: o.round, depth: 0, task: o.task });
     let res = await this.invokePausable(run, info, o.prompt, o.mode, o.resume);
     // A conversation carried over from the previous message that the CLI no longer has: start a fresh one.
     if (o.resume && run.carriedSessions?.includes(o.resume) && res.error && !res.finalText.trim() && !this.aborted(run)) {
@@ -2385,7 +2385,7 @@ export class Orchestrator {
       keptAlive = !!res.keptAlive;
       if (res.sessionId) info.sessionId = res.sessionId;
       if (res.sessionId && !plain && !res.error) this.sharedSeen.set(`${run.id}|${res.sessionId}`, sharedAt);
-      await this.readAgentContext(info, spec, res.sessionId);
+      await this.readAgentContext(info, spec, res.sessionId, run.config.cwd);
       const served = await this.d.servedBy?.(spec.accountOf ?? spec.id, this.requestedModel.get(info.id) ?? info.model, turnStart, now()).catch(() => undefined);
       if (served) info.servedBy = [...new Set([...(info.servedBy ?? []), ...served])];
       info.resumed = info.resumed || res.resumed;
@@ -2535,6 +2535,7 @@ export class Orchestrator {
       role: 'subagent',
       provider: o.provider,
       model: o.model,
+      modelDefault: !o.model || undefined,
       effort: o.effort,
       parentId: parent.id,
       depth: parent.depth + 1,
@@ -2680,7 +2681,7 @@ export class Orchestrator {
   /** Run the compactor (no tools, nothing but the prompt) and return its text. */
   private async runCompactor(run: WorkflowRun, who: { provider: string; model?: string; effort?: string }, prompt: string, task: string): Promise<string> {
     const def = this.d.registry.defaults(who.provider);
-    const info = this.newAgent(run, { role: 'compactor', provider: who.provider, model: who.model || def.model, effort: who.effort || def.effort, depth: 0, task });
+    const info = this.newAgent(run, { role: 'compactor', provider: who.provider, model: who.model || def.model, modelDefault: !who.model || undefined, effort: who.effort || def.effort, depth: 0, task });
     let res: RunAgentResult;
     try {
       res = await this.invoke(run, info, prompt, 'readonly');
@@ -3019,6 +3020,9 @@ export class Orchestrator {
     );
   }
 
+  /** The model each OpenCode session used, when none was given (it is not in OpenCode's output). */
+  private sessionModels = new Map<string, string>();
+
   /** Tokens at which each model's CLI compacted its own conversation: what it can really hold (`provider model` → tokens). */
   private compactPoints = new Map<string, number>();
   private compactPointsLoaded = false;
@@ -3267,14 +3271,21 @@ export class Orchestrator {
   }
 
   /** After a turn: Codex's reading from its rollout file, and a catalog limit when the CLI gave none. */
-  private async readAgentContext(info: AgentRunInfo, spec: ProviderSpec, sessionId?: string) {
+  private async readAgentContext(info: AgentRunInfo, spec: ProviderSpec, sessionId?: string, cwd = process.cwd()) {
     if (spec.output === 'codex-jsonl' && sessionId) {
       try {
-        const c = codexContext(spec, sessionId);
-        if (c) info.context = { ...info.context, ...c };
+        const { model, ...c } = codexContext(spec, sessionId) ?? {};
+        if (c.used || c.window) info.context = { ...info.context, ...c };
+        // The model Codex ran: its own default when none was given.
+        if (model && !this.requestedModel.get(info.id)) info.model = model;
       } catch {
         // no reading this time
       }
+    }
+    // OpenCode's output names no model: when none was given, ask it which one the session used (once per session).
+    if (spec.output === 'opencode-json' && sessionId && !this.requestedModel.get(info.id)) {
+      const known = this.sessionModels.get(sessionId) ?? (await opencodeModel(spec, sessionId, cwd).catch(() => undefined));
+      if (known) (this.sessionModels.set(sessionId, known), (info.model = known));
     }
     if (info.context?.used && !info.context.window) {
       const w = await this.catalogWindow(info.provider, this.requestedModel.get(info.id) ?? info.model);
@@ -3360,6 +3371,7 @@ export class Orchestrator {
       role: 'advisor',
       provider: cfg.provider!,
       model: cfg.model || def.model,
+      modelDefault: !cfg.model || undefined,
       effort: cfg.effort || def.effort,
       parentId: asker.id,
       // Same level as the asker: the advisor works on its behalf, so it may send helpers just as the asker could.

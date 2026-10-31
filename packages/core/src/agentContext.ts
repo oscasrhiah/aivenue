@@ -42,8 +42,8 @@ function codexRollout(home: string, threadId: string): string | undefined {
   return undefined;
 }
 
-/** Codex's latest context reading for a thread: tokens of the last model call and the model's window. */
-export function codexContext(spec: ProviderSpec, threadId: string): { used?: number; window?: number } | undefined {
+/** Codex's latest context reading for a thread: tokens of the last model call, the model's window, and the model. */
+export function codexContext(spec: ProviderSpec, threadId: string): { used?: number; window?: number; model?: string } | undefined {
   const file = codexRollout(codexHome(spec), threadId);
   if (!file) return undefined;
   // The reading is near the end; the file can be large, so read only its tail.
@@ -53,19 +53,68 @@ export function codexContext(spec: ProviderSpec, threadId: string): { used?: num
     const len = Math.min(size, 512 * 1024);
     const buf = Buffer.alloc(len);
     fs.readSync(fd, buf, 0, len, size - len);
-    const lines = buf.toString('utf8').split('\n').filter((l) => l.includes('"token_count"'));
-    for (const line of lines.reverse()) {
+    const lines = buf.toString('utf8').split('\n');
+    // Each turn starts with its turn_context, which names the model it runs (its own default when none was given).
+    let model: string | undefined;
+    for (const line of [...lines].reverse()) {
+      if (!line.includes('"turn_context"')) continue;
       try {
-        const info = JSON.parse(line).payload?.info;
-        if (info) return { used: info.last_token_usage?.input_tokens, window: info.model_context_window };
+        model = JSON.parse(line).payload?.model;
+        if (model) break;
       } catch {
         // a line cut by the tail read
       }
     }
-    return undefined;
+    for (const line of lines.filter((l) => l.includes('"token_count"')).reverse()) {
+      try {
+        const info = JSON.parse(line).payload?.info;
+        if (info) return { used: info.last_token_usage?.input_tokens, window: info.model_context_window, model };
+      } catch {
+        // a line cut by the tail read
+      }
+    }
+    return model ? { model } : undefined;
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/**
+ * The model an OpenCode session used ("provider/model"), from `opencode session export` (older CLIs: `opencode
+ * export`): its JSON output has no model, so a session on OpenCode's own default would otherwise show none.
+ */
+export function opencodeModel(spec: ProviderSpec, sessionId: string, cwd: string, timeoutMs = 20000): Promise<string | undefined> {
+  const cmd = resolveCommand(specCommand(spec));
+  if (!cmd || !/^[\w-]+$/.test(sessionId)) return Promise.resolve(undefined);
+  const run = (args: string[]) =>
+    new Promise<string>((resolve) => {
+      let out = '';
+      const child = spawnResolved(cmd, args, { cwd, env: childEnv({ ...(spec.run.env ?? {}), ...accountEnv(spec) }), stdio: ['ignore', 'pipe', 'ignore'] });
+      const timer = setTimeout(() => child.kill(), timeoutMs);
+      child.stdout?.on('data', (d: Buffer) => (out += d.toString('utf8')));
+      child.on('error', () => (clearTimeout(timer), resolve('')));
+      child.on('close', () => (clearTimeout(timer), resolve(out)));
+    });
+  const pick = (text: string): string | undefined => {
+    const start = text.indexOf('{');
+    if (start < 0) return undefined;
+    let data: any;
+    try {
+      data = JSON.parse(text.slice(start));
+    } catch {
+      return undefined;
+    }
+    // New CLIs: info.model { id, providerID }; older ones: messages[].info { providerID, modelID }.
+    const m = data?.info?.model;
+    if (m?.id) return m.providerID ? `${m.providerID}/${m.id}` : m.id;
+    for (const msg of [...(data?.messages ?? [])].reverse()) {
+      const i = msg?.info ?? msg;
+      if (i?.model?.id) return i.model.providerID ? `${i.model.providerID}/${i.model.id}` : i.model.id;
+      if (i?.modelID) return i.providerID ? `${i.providerID}/${i.modelID}` : i.modelID;
+    }
+    return undefined;
+  };
+  return run(['session', 'export', sessionId]).then(async (out) => pick(out) ?? pick(await run(['export', sessionId])));
 }
 
 /** Compact a Codex thread with app-server's thread/compact/start; resolves when the compaction turn completes. */

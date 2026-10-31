@@ -797,6 +797,11 @@ export interface AgentRunInfo {
   role: AgentRole;
   provider: string;
   model?: string;
+  /**
+   * No model was chosen for it, so it runs the default (Aivenue's provider default or the CLI's own); `model` is then
+   * that default, or what the CLI reports it used.
+   */
+  modelDefault?: boolean;
   effort?: string;
   parentId?: string;
   depth: number;

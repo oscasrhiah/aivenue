@@ -17,6 +17,8 @@ interface StoredProviders {
   settings: Record<string, { authMode: AuthMode; baseUrl?: string; defaultModel?: string; defaultEffort?: string }>;
   /** Extra accounts of tools that can run several side by side (spec.accounts). */
   accounts: { providerId: string; slug: string; name: string }[];
+  /** The order the user dragged the providers into (ids); the ones not in it keep their usual place after these. */
+  order?: string[];
 }
 
 /** Environment that points a CLI at an extra account's config folder (empty for the default account). */
@@ -202,6 +204,7 @@ export class ProviderRegistry {
         hidden: Array.isArray(raw.hidden) ? raw.hidden : [],
         settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : {},
         accounts: Array.isArray(raw.accounts) ? raw.accounts : [],
+        order: Array.isArray(raw.order) ? raw.order.filter((x: unknown) => typeof x === 'string') : undefined,
       };
     } catch {
       // first run
@@ -544,8 +547,22 @@ export class ProviderRegistry {
     return this.specs().find((s) => s.id === id);
   }
 
+  /** The providers in the order the user set (Providers page, dragged); every list and menu shows them so. */
+  private ordered(): ProviderSpec[] {
+    const all = this.specs();
+    const order = this.stored.order ?? [];
+    const rank = (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
+    return all.map((s, i) => ({ s, i })).sort((a, b) => rank(a.s.id) - rank(b.s.id) || a.i - b.i).map((x) => x.s);
+  }
+
+  setOrder(ids: string[]): void {
+    this.stored.order = ids.filter((id, i) => typeof id === 'string' && ids.indexOf(id) === i);
+    this.save();
+    this.onChange();
+  }
+
   list(): ProviderInfo[] {
-    return this.specs().map((spec) => {
+    return this.ordered().map((spec) => {
       const builtin = BUILTIN_PROVIDERS.find((b) => b.id === spec.id);
       const resolved = resolveCommand(specCommand(spec));
       return {

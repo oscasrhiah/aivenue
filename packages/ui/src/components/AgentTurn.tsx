@@ -386,8 +386,8 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           {roleLabel(t, agent.role)}
           {agent.round && agent.role !== 'subagent' && agent.role !== 'advisor' ? ` · ${t(`第 ${agent.round} 輪`, `round ${agent.round}`)}` : ''}
           {' · '}
-          <span className="turn-model" title={[agent.model ?? t('供應商預設模型', 'Provider default model'), snapText].filter(Boolean).join('\n')}>
-            {agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}
+          <span className="turn-model" title={[agent.model ? `${agent.modelDefault ? t('預設模型：', 'Default model: ') : ''}${agent.model}` : t('供應商預設模型', 'Provider default model'), snapText].filter(Boolean).join('\n')}>
+            {!agent.model ? t('預設模型', 'default model') : agent.modelDefault ? `${t('預設模型', 'default model')} · ${modelLabel(agent.model)}` : modelLabel(agent.model)}
           </span>
           {agent.servedBy?.length ? (
             <span className="turn-served" title={t(`實際回答的模型：${agent.servedBy.join('、')}`, `Models that actually answered: ${agent.servedBy.join(', ')}`)}>
