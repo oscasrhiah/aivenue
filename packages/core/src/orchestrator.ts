@@ -442,11 +442,36 @@ export class Orchestrator {
     return { stage, entry: { resumed: true, prompt: () => P.resumeAfterRestartPrompt({ submitted }) } };
   }
 
-  /** Go on with a workflow Aivenue's restart interrupted, from where it stopped. */
+  /**
+   * The stage a stopped workflow stopped in: stopping marks the running stage and the ones still to come "cancelled",
+   * so it is the one whose newest round started last. Only the newest message of a conversation goes on.
+   */
+  private stoppedStage(run: WorkflowRun): StageKey | 'verify' | undefined {
+    if (run.status !== 'cancelled' || run.replacedBy) return undefined;
+    const thread = run.config.threadId ?? run.id;
+    if ([...this.runs.values()].some((r) => (r.config.threadId ?? r.id) === thread && r.createdAt > run.createdAt)) return undefined;
+    const cut = (['plan', 'implement', 'verify'] as const).filter((k) => run.stages[k]?.status === 'cancelled');
+    const lastStart = (k: StageKey | 'verify') => Math.max(0, ...(run.stages[k]?.rounds ?? []).map((r) => run.agents[r.authorAgentId ?? r.reviewerAgentId ?? '']?.startedAt ?? 0));
+    return [...cut].sort((a, b) => lastStart(b) - lastStart(a))[0];
+  }
+
+  /**
+   * Go on with a workflow from where it stopped: one Aivenue's restart interrupted, or one that was stopped (by the
+   * user, or by an Aivenue before 0.2.4 closing, which saved its paused and running workflows as stopped).
+   */
   resumeInterrupted(id: string): WorkflowRun {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
-    if (run.status !== 'interrupted' || this.executions.has(id)) throw new Error(L('只有已中斷的工作流可以接續', 'Only an interrupted workflow can be resumed'));
+    const stopped = this.stoppedStage(run);
+    if ((run.status !== 'interrupted' && !stopped) || this.executions.has(id)) throw new Error(L('只有已中斷或已停止的工作流可以接續', 'Only an interrupted or stopped workflow can be resumed'));
+    if (stopped) {
+      // Back to how an interruption leaves it: the stage it stopped in was running, the later ones still to come.
+      for (const k of ['plan', 'implement', 'verify'] as const) {
+        const st = run.stages[k];
+        if (st?.status === 'cancelled') st.status = k === stopped ? 'running' : 'pending';
+      }
+    }
+    const wasStopped = !!stopped;
     const from = this.resumePoint(run);
     if (!from) throw new Error(L('這個工作流沒有可以接續的階段，請送出新訊息接著做', 'There is no stage to resume; send a new message to go on'));
     run.status = 'running';
@@ -457,7 +482,14 @@ export class Orchestrator {
     if (stage) stage.status = 'running';
     this.aborts.set(id, new AbortController());
     const name = from.stage === 'plan' ? L('計畫階段', 'planning') : from.stage === 'implement' ? L('實作階段', 'implementation') : L('目標驗收', 'goal verification');
-    this.log(run, L(`Aivenue 重新啟動後，從${name}接續（${run.interruptedFrom === 'paused' ? '原本已暫停' : '原本執行中'}）`, `Resumed after Aivenue restarted, from ${name} (it was ${run.interruptedFrom === 'paused' ? 'paused' : 'running'})`), 'info', true);
+    this.log(
+      run,
+      wasStopped
+        ? L(`從停止的地方接續：${name}`, `Resumed from where it was stopped: ${name}`)
+        : L(`Aivenue 重新啟動後，從${name}接續（${run.interruptedFrom === 'paused' ? '原本已暫停' : '原本執行中'}）`, `Resumed after Aivenue restarted, from ${name} (it was ${run.interruptedFrom === 'paused' ? 'paused' : 'running'})`),
+      'info',
+      true,
+    );
     run.interruptedFrom = undefined;
     this.touch(run);
     const execution = this.execute(run, from).finally(() => this.executions.delete(id));

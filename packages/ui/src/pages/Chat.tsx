@@ -951,6 +951,18 @@ export function Chat({ id }: { id?: string }) {
                 </div>
               )}
               {run.dryRun && run.preflight && <PreflightList items={run.preflight} showOk />}
+              {run.status === 'cancelled' &&
+                Object.values(run.stages).some((s) => s?.status === 'cancelled') &&
+                !summaries.some((s) => (s.threadId ?? s.id) === threadKey && s.createdAt > run.createdAt) && (
+                  <div className="note">
+                    {t('這個工作流已停止。可以從停下的階段與輪次接著做，計畫、步驟進度、審查與共用上下文都保留；也可以在下方輸入訊息，用相同設定接續。', 'This workflow was stopped. It can go on from the stage and round it stopped in, keeping the plan, step progress, reviews and shared context; or send a message below to continue with the same setup.')}
+                    <div className="row gap" style={{ marginTop: 8 }}>
+                      <button className="btn small" onClick={() => hub.call('workflows.resumeInterrupted', { id: run.id }).catch((e) => setError((e as Error).message))}>
+                        {t('從停止的地方接續', 'Resume from where it stopped')}
+                      </button>
+                    </div>
+                  </div>
+                )}
               {run.status === 'interrupted' && (
                 <div className="note warn">
                   {run.interruptedFrom === 'paused'
