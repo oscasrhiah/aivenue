@@ -534,8 +534,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     orchestrator,
     close: () =>
       new Promise((resolve) => {
-        // Stop agent processes so no CLI keeps running after the app exits.
-        for (const r of orchestrator.runs.values()) if (r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human') orchestrator.cancel(r.id);
+        // Stop agent processes so no CLI keeps running after the app exits; the workflows stay resumable.
+        orchestrator.suspendAll();
         clearInterval(usageTimer);
         orchestrator.shutdown();
         extensions.shutdown();

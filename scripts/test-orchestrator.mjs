@@ -726,6 +726,35 @@ test('暫停的工作流在重新啟動後不會自動接續，按「繼續」�
   assert.equal(r.status, 'completed', r.error);
 });
 
+test('Aivenue 關閉（例如重新安裝 VS Code 套件）時，暫停的工作流不會被存成已取消，重新啟動後可以繼續', async () => {
+  const first = setup();
+  let started;
+  const going = new Promise((r) => (started = r));
+  fakeAgents(first.orch, {
+    executor: [
+      async (_orch, _secret, o) => {
+        started();
+        await new Promise((res) => o.signal?.addEventListener('abort', res));
+        return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: 'Cancelled' };
+      },
+    ],
+  });
+  const id = first.orch.start(config(first.cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  await going;
+  first.orch.pause(id);
+  // What the hub does when the app closes; the stopping of its agents settles after it.
+  first.orch.suspendAll();
+  await settle(first.orch, id);
+  await new Promise((res) => setTimeout(res, 600));
+  const second = setup({ dir: first.dir });
+  assert.equal(second.orch.runs.get(id).status, 'interrupted');
+  assert.equal(second.orch.runs.get(id).interruptedFrom, 'paused');
+  fakeAgents(second.orch, {});
+  second.orch.resumeInterrupted(id);
+  const r = await settle(second.orch, id);
+  assert.equal(r.status, 'completed', r.error);
+});
+
 test('出問題時的詢問可以暫停工作流；按繼續就重試', async () => {
   const { orch, cwd } = setup();
   fakeAgents(orch, { executor: [{ error: "You've hit your 5-hour limit · resets 7:30pm (UTC) (exit code 1)" }, { error: 'still limited (exit code 1)' }, defaults.executor] });

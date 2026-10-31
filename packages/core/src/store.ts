@@ -16,6 +16,8 @@ export class RunStore {
   private presetsFile: string;
   private events = new Map<string, AgentEvent[]>();
   private saveTimers = new Map<string, NodeJS.Timeout>();
+  /** Set at app shutdown: what is on disk then stays, later saves (the stopping of its agents) are dropped. */
+  private frozen = false;
 
   constructor(dataDir: string) {
     this.runsDir = path.join(dataDir, 'runs');
@@ -55,7 +57,7 @@ export class RunStore {
   }
 
   save(run: WorkflowRun): void {
-    if (this.saveTimers.has(run.id)) return;
+    if (this.frozen || this.saveTimers.has(run.id)) return;
     this.saveTimers.set(
       run.id,
       setTimeout(() => {
@@ -66,6 +68,7 @@ export class RunStore {
   }
 
   saveNow(run: WorkflowRun): void {
+    if (this.frozen) return;
     const t = this.saveTimers.get(run.id);
     if (t) {
       clearTimeout(t);
@@ -75,6 +78,12 @@ export class RunStore {
     const file = path.join(this.runDir(run.id), 'run.json');
     fs.writeFileSync(file + '.tmp', JSON.stringify(run));
     fs.renameSync(file + '.tmp', file);
+  }
+
+  /** App shutdown: write what is waiting to be saved, then keep the files as they are. */
+  freeze(runs: WorkflowRun[]): void {
+    for (const r of runs) if (this.saveTimers.has(r.id)) this.saveNow(r);
+    this.frozen = true;
   }
 
   appendEvent(runId: string, agentId: string, e: AgentEvent, isUpdate: boolean): void {

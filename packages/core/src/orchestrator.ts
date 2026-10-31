@@ -1477,6 +1477,18 @@ export class Orchestrator {
   /** Model each agent was started with (agent.model later shows what the CLI reports it actually uses). */
   private requestedModel = new Map<string, string | undefined>();
 
+  /**
+   * App shutdown (an update, a reload of VS Code): workflows still running, paused or waiting for an answer are saved as
+   * they are, so the next start can go on with them (running ones by themselves, paused ones when the user continues);
+   * only then are their agents stopped, without that being saved as a cancel.
+   */
+  suspendAll(): void {
+    const live = [...this.runs.values()].filter((r) => r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human');
+    for (const r of live) this.d.store.saveNow(r);
+    this.d.store.freeze([...this.runs.values()]);
+    for (const r of live) this.cancel(r.id);
+  }
+
   /** Close every CLI kept running for later turns (app shutdown). */
   shutdown() {
     this.pool.closeAll();
