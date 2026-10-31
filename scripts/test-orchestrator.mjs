@@ -574,6 +574,43 @@ test('整理員：新筆記滿門檻就依主題整理，附出處；漏掉的�
   assert.equal(r.notes.length, 3);
 });
 
+test('壓縮者額度用完：錯誤訊息不會被當成整理結果，問使用者換別的 agent，換了就重做', async () => {
+  const { orch, cwd } = setup();
+  let calls = 0;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'post_note', { text: 'Python 3.11 is installed', kind: 'fact' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+    librarian: [
+      // Claude Code out of quota: the error also comes back as the reply text.
+      async () => (calls++, { lastSeq: 1, exitCode: 1, resumed: false, finalText: "You've hit your 5-hour limit", error: "You've hit your 5-hour limit" }),
+      async (o, secret, a) => {
+        calls++;
+        const id = a.prompt.match(/\[n:(\w+)\]/)[1];
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: `## Environment and versions\n- Python 3.11 [n:${id}]` };
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  await orch.organizeNow(r);
+  assert.equal(r.knowledge, undefined);
+  assert.equal(r.compactFailed?.job, 'organize');
+  assert.equal(r.compactFailed?.provider, 'fake');
+  assert.match(r.compactFailed?.error ?? '', /5-hour limit/);
+  assert.equal(Object.values(r.agents).find((a) => a.role === 'compactor').status, 'failed');
+
+  orch.answerCompactFailed(r.id, { provider: 'fake2' });
+  assert.equal(r.compactFailed, undefined);
+  assert.deepEqual(r.config.context.compactor, { provider: 'fake2' });
+  await orch.organizeNow(r);
+  assert.match(r.knowledge?.doc ?? '', /Python 3\.11/);
+  assert.equal(calls, 2);
+});
+
 test('GPU 鎖住的卡上有沒人登記的程序：自動當成鎖卡的 agent 的背景程序', async () => {
   const job = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
   job.unref();

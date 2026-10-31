@@ -376,6 +376,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.organizeShared': async (p: { id: string }) => (await orchestrator.organizeSharedNow(p.id), true),
     'workflows.compactAgent': (p: { id: string; agentId: string }) => (orchestrator.compactAgentNow(p.id, p.agentId), true),
     'workflows.contextAsk': (p: { id: string; action: 'compact' | 'later' | 'mute' }) => (orchestrator.answerContextAsk(p.id, p.action), true),
+    'workflows.compactFailed': (p: { id: string; pick?: { provider: string; model?: string; effort?: string } }) => (orchestrator.answerCompactFailed(p.id, p.pick), true),
     'workflows.decide': (p: { id: string; decisionId: string; optionId: string; text?: string }) => orchestrator.decide(p.id, p.decisionId, p.optionId, p.text),
     'workflows.approve': (p: { id: string; approvalId: string; decision: 'allow' | 'always' | 'deny'; message?: string }) => orchestrator.approve(p.id, p.approvalId, p.decision, p.message),
     'workflows.worktree': (p: { id: string; action: 'apply' | 'discard' | 'keep' }) => orchestrator.worktreeAction(p.id, p.action),

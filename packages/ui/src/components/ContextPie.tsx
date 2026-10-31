@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AgentRunInfo, ProviderInfo, WorkflowRun } from '../../../core/src/types';
+import type { AgentRunInfo, ProviderInfo, RoleConfig, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
+import { ProviderSelect } from './RoleSettings';
 import { useT } from '../i18n';
 import { cx, fmtTokens, providerName, roleLabel } from '../util';
 
@@ -166,6 +167,52 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
         </div>
       )}
     </span>
+  );
+}
+
+/** Asked when the compactor model failed (out of quota, signed out…): hand the compaction to another CLI. */
+export function CompactFailedAsk({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
+  const t = useT();
+  const ask = run.compactFailed;
+  const ready = providers.filter((p) => p.installed && p.auth.state === 'logged_in');
+  const [pick, setPick] = useState<RoleConfig | null>(null);
+  // A fresh ask starts from a signed-in CLI other than the one that failed.
+  useEffect(() => {
+    const other = ready.find((p) => p.spec.id !== ask?.provider) ?? ready[0];
+    setPick(other ? { provider: other.spec.id } : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask?.at]);
+  if (!ask) return null;
+  const agent = ask.agentId ? run.agents[ask.agentId] : undefined;
+  const title =
+    ask.job === 'organize'
+      ? t('整理共用知識失敗', 'Organizing the shared knowledge failed')
+      : ask.job === 'agent' && agent
+        ? t(`壓縮「${roleLabel(t, agent.role)} · ${providerName(providers, agent.provider)}」的對話失敗`, `Compacting ${roleLabel(t, agent.role)} · ${providerName(providers, agent.provider)}'s conversation failed`)
+        : t('壓縮共用上下文失敗', 'Compacting the shared context failed');
+  const answer = (p?: RoleConfig | null) => hub.call('workflows.compactFailed', { id: run.id, pick: p ?? undefined }).catch(() => undefined);
+  return (
+    <div className="modal-back">
+      <div className="modal ctx-ask" role="alertdialog" aria-modal="true">
+        <h3>{title}</h3>
+        <p>
+          {t(`壓縮者 ${ask.by} 沒有完成：`, `The compactor ${ask.by} did not finish: `)}
+          <span className="err-text">{ask.error}</span>
+        </p>
+        <p className="muted small">
+          {t('原本的內容沒有被替換。要換成別的 agent 來處理壓縮嗎？選定後這段對話之後的壓縮也都交給它。', 'Nothing was replaced. Hand the compaction to another agent? It also handles later compactions in this conversation.')}
+        </p>
+        <ProviderSelect value={pick} providers={providers} onChange={setPick} />
+        <div className="row gap end">
+          <button className="btn ghost" onClick={() => answer()}>
+            {t('先不用', 'Not now')}
+          </button>
+          <button className="btn primary" disabled={!pick?.provider} onClick={() => answer(pick)}>
+            {t('換成這個 agent 壓縮', 'Compact with this agent')}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

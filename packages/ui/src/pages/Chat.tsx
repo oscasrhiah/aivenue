@@ -10,7 +10,7 @@ import { PreflightList, RunMenu } from '../components/RunTools';
 import { Replies, type Reply } from '../components/Replies';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
-import { ContextAsk, ContextPie } from '../components/ContextPie';
+import { CompactFailedAsk, ContextAsk, ContextPie } from '../components/ContextPie';
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
@@ -932,6 +932,7 @@ export function Chat({ id }: { id?: string }) {
               <Approvals run={run} providers={providers} />
               <WorktreeCard run={run} />
               <ContextAsk run={run} providers={providers} />
+              <CompactFailedAsk run={run} providers={providers} />
               {run.pending && <Decision run={run} d={run.pending} />}
               {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
               {run.status === 'incomplete' && (

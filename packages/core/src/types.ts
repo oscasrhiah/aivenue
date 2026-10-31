@@ -1023,6 +1023,8 @@ export interface WorkflowRun {
   sharedTokens?: number;
   /** An agent whose own conversation passed the ask threshold: the user decides whether to compact it. */
   contextAsk?: { agentId: string; used: number; window: number; level: number };
+  /** A compaction whose compactor model failed (out of quota, signed out…): the user may hand it to another CLI. */
+  compactFailed?: { job: 'agent' | 'shared' | 'organize'; agentId?: string; provider: string; by: string; error: string; at: number };
   /** The shared notes organized by subject. */
   knowledge?: SharedKnowledge;
   /** What it was doing when Aivenue closed (it is `interrupted` now), and when. */

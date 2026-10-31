@@ -244,6 +244,16 @@ const MIN_COMPACT_TOKENS = 1000;
 // OmniRoute (when on and connected) first: compaction needs no tools, so a free model does, and the result is checked anyway.
 const AUTO_COMPACTORS: { provider: string; model?: string }[] = [{ provider: 'omniroute' }, { provider: 'claude', model: 'haiku' }, { provider: 'codex' }, { provider: 'antigravity' }, { provider: 'copilot' }, { provider: 'qwen' }, { provider: 'opencode' }];
 
+/** The compactor model itself failed (out of quota, signed out…), so another CLI could do the job. */
+class CompactorError extends Error {
+  constructor(
+    message: string,
+    readonly who: { provider: string; model?: string },
+  ) {
+    super(message);
+  }
+}
+
 /** 158000 → "158K". */
 const fmtK = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
 
@@ -2647,7 +2657,10 @@ export class Orchestrator {
     // The last try did not shrink it: wait until there is clearly more to condense.
     const noGain = this.noGainAt.get(run.id);
     if (noGain && size < noGain * 1.2) return;
-    await this.compactShared(run, 'auto').catch((e) => this.log(run, L(`共用上下文自動壓縮失敗：${(e as Error).message}`, `Automatic compaction of the shared context failed: ${(e as Error).message}`), 'warn', true));
+    await this.compactShared(run, 'auto').catch((e) => {
+      this.log(run, L(`共用上下文自動壓縮失敗：${(e as Error).message}`, `Automatic compaction of the shared context failed: ${(e as Error).message}`), 'warn', true);
+      this.askOtherCompactor(run, e, 'shared');
+    });
   }
 
   /** Who condenses: the user's pick, else a mid-priced model of a signed-in CLI. */
@@ -2680,12 +2693,14 @@ export class Orchestrator {
       this.touch(run);
       throw e;
     }
-    info.status = res.error && !res.finalText.trim() ? 'failed' : 'completed';
+    // Any error fails it, text or not: a CLI out of quota answers with the error as its text ("You've hit your limit"),
+    // which would otherwise become the summary and replace the conversation it was meant to condense.
+    info.status = res.error || !res.finalText.trim() ? 'failed' : 'completed';
     info.error = res.error;
     info.endedAt = now();
     info.activity = undefined;
     this.touch(run);
-    if (!res.finalText.trim()) throw new Error(res.error ?? L('壓縮者沒有回覆內容', 'The compactor returned nothing'));
+    if (res.error || !res.finalText.trim()) throw new CompactorError(res.error ?? L('壓縮者沒有回覆內容', 'The compactor returned nothing'), who);
     return res.finalText.trim();
   }
 
@@ -2727,7 +2742,10 @@ export class Orchestrator {
     const busy = this.organizing.get(run.id);
     if (busy) return busy;
     const p = this.organize(run)
-      .catch((e) => this.log(run, L(`整理共用知識失敗：${(e as Error).message}`, `Organizing the shared knowledge failed: ${(e as Error).message}`), 'warn', true))
+      .catch((e) => {
+        this.log(run, L(`整理共用知識失敗：${(e as Error).message}`, `Organizing the shared knowledge failed: ${(e as Error).message}`), 'warn', true);
+        this.askOtherCompactor(run, e, 'organize');
+      })
       .finally(() => {
         this.organizing.delete(run.id);
         this.touch(run);
@@ -2777,7 +2795,10 @@ export class Orchestrator {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
     if (sharingOf(run) === 'summary') throw new Error(L('這段對話的共用上下文是「只交摘要」，沒有需要壓縮的內容', 'This conversation shares summaries only; there is nothing to compact'));
-    void this.compactShared(run, 'manual').catch((e) => this.log(run, L(`壓縮共用上下文失敗：${(e as Error).message}`, `Compacting the shared context failed: ${(e as Error).message}`), 'warn', true));
+    void this.compactShared(run, 'manual').catch((e) => {
+      this.log(run, L(`壓縮共用上下文失敗：${(e as Error).message}`, `Compacting the shared context failed: ${(e as Error).message}`), 'warn', true);
+      this.askOtherCompactor(run, e, 'shared');
+    });
   }
 
   private compactShared(run: WorkflowRun, reason: 'auto' | 'manual'): Promise<void> {
@@ -2885,6 +2906,31 @@ export class Orchestrator {
     this.touch(run);
   }
 
+  /**
+   * The compactor model failed (out of quota, signed out…): ask the user whether another CLI should do it. Nothing was
+   * replaced, so the conversation or shared context stays as it was until then.
+   */
+  private askOtherCompactor(run: WorkflowRun, e: unknown, job: 'agent' | 'shared' | 'organize', agentId?: string) {
+    if (!(e instanceof CompactorError) || run.status === 'cancelled' || /^(已取消|Cancelled)$/.test(e.message)) return;
+    run.compactFailed = { job, agentId, provider: e.who.provider, by: this.compactorLabel(e.who), error: e.message, at: now() };
+    this.touch(run);
+  }
+
+  /** The user's answer: hand the compaction to this CLI (also for later ones in this run), or leave it. */
+  answerCompactFailed(id: string, pick?: { provider: string; model?: string; effort?: string }): void {
+    const run = this.runs.get(id);
+    const ask = run?.compactFailed;
+    if (!run || !ask) return;
+    run.compactFailed = undefined;
+    this.touch(run);
+    if (!pick?.provider) return;
+    run.config.context = { ...run.config.context, compactor: pick };
+    this.log(run, L(`改由 ${this.compactorLabel(pick)} 處理壓縮`, `Compaction now handled by ${this.compactorLabel(pick)}`), 'info', true);
+    if (ask.job === 'agent' && ask.agentId) this.compactAgentNow(id, ask.agentId);
+    else if (ask.job === 'organize') void this.organizeNow(run);
+    else this.compactSharedNow(id);
+  }
+
   /** Compact one agent's own conversation: right away, or before its next turn when it is working right now. */
   compactAgentNow(id: string, agentId: string): void {
     const run = this.runs.get(id);
@@ -2903,7 +2949,10 @@ export class Orchestrator {
   private startAgentCompaction(run: WorkflowRun, info: AgentRunInfo): Promise<void> {
     const sid = info.sessionId!;
     const p = this.doCompactAgent(run, info)
-      .catch((e) => this.log(run, L(`壓縮 ${this.label(info)} 的對話失敗：${(e as Error).message}`, `Compacting ${this.label(info)}'s conversation failed: ${(e as Error).message}`), 'warn', true))
+      .catch((e) => {
+        this.log(run, L(`壓縮 ${this.label(info)} 的對話失敗：${(e as Error).message}`, `Compacting ${this.label(info)}'s conversation failed: ${(e as Error).message}`), 'warn', true);
+        this.askOtherCompactor(run, e, 'agent', info.id);
+      })
       .finally(() => {
         this.agentCompactions.delete(sid);
         if (run.compacting?.target === info.id) run.compacting = undefined;

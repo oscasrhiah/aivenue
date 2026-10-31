@@ -127,7 +127,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   );
 }
 
-function ProviderSelect({ value, providers, onChange, disabled }: { value: RoleConfig | null; providers: ProviderInfo[]; onChange: (v: RoleConfig | null) => void; disabled?: boolean }) {
+export function ProviderSelect({ value, providers, onChange, disabled }: { value: RoleConfig | null; providers: ProviderInfo[]; onChange: (v: RoleConfig | null) => void; disabled?: boolean }) {
   const t = useT();
   const info = providers.find((p) => p.spec.id === value?.provider);
   const inherit = info?.defaultModel || info?.defaultEffort ? t(`供應商預設（${[info.defaultModel, info.defaultEffort].filter(Boolean).join(' · ')}）`, `Provider default (${[info.defaultModel, info.defaultEffort].filter(Boolean).join(' · ')})`) : undefined;
