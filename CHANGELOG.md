@@ -7,7 +7,7 @@
 > ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
 
 - **交接改成前一個 agent 自己整理，不再把它的整段對話塞給下一個**：實測 11 個工作流，提示詞有 74% 是共享內容，其中約一半是「前一個 agent 的完整對話」（verifier、code reviewer 幾乎每次都有，單次最多 16 萬字元），而且大多和共用筆記重複。現在：
-  - 交結果（`submit_plan`／`submit_work`／`submit_review`／`submit_verification`）時多一個 `handoff` 欄位，由 agent 自己寫給接手的人：做了什麼、現在的狀態、還沒解決的問題、下一步與該去哪裡看。
+  - 交結果（`submit_plan`／`submit_work`／`submit_review`／`submit_verification`）時多一個 `handoff` 欄位，由 agent 自己寫給接手的人：做了什麼、現在的狀態、還沒解決的問題、下一步與該去哪裡看。交接不限長度，會完整交給下一個 agent，重點是交代清楚。
   - 下一個 agent 拿到的是這份交接，並附上「完整對話用 `read_context {agent_id}` 查」。完整對話仍然存在共用紀錄裡，需要時才讀。
   - 沒寫交接時（中途失敗、被停止、CLI 沒照做），Aivenue 用它的回報、改過的檔案與最後幾個指令湊一份，不另外呼叫模型。
   - 交接同時存成標明 agent 與角色的共用筆記，整理員會把它整理進共用知識；對話裡顯示為「🤝 交接」。

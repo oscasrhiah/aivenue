@@ -74,7 +74,7 @@ const findingsSchema = {
 const handoffSchema = {
   type: 'string',
   description:
-    'Your hand-off to the agent who takes over after you (it reads this instead of your whole conversation, which stays in the shared records): what you did and why, the state things are in now (what works, what is verified and how), what is still open or broken (exact errors), what the next agent should do or watch out for, and where to look (files, commands, logs). Write it for someone who has not seen your conversation.',
+    'Your hand-off to the agent who takes over after you (it reads this instead of your whole conversation, which stays in the shared records): what you did and why, the state things are in now (what works, what is verified and how), what is still open or broken (exact errors), what the next agent should do or watch out for, and where to look (files, commands, logs). Write it for someone who has not seen your conversation, as long as it needs to be: there is no length limit, and saying clearly everything that is handed over matters more than keeping it short.',
 };
 
 export const TOOL_DEFS: Record<string, ToolDef> = {

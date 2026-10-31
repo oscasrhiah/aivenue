@@ -72,9 +72,9 @@ export function handoverOf(run: WorkflowRun, a: AgentRunInfo, events: AgentEvent
  * One agent in the directory of the shared context: who, where, its state, what it handed over (the first line, or
  * all of it in "full" sharing).
  */
-function directoryLine(run: WorkflowRun, a: AgentRunInfo, resultChars: number, handoverChars = 300): string {
+function directoryLine(run: WorkflowRun, a: AgentRunInfo, resultChars: number, whole = false): string {
   const where = a.stage && a.role !== 'subagent' ? `, ${a.stage} stage` : a.parentId ? `, sub-agent of ${a.parentId.slice(0, 8)}` : '';
-  const h = a.handover?.text && !a.handover.auto ? `\n  hand-off: ${handoverChars > 300 ? cut(a.handover.text, handoverChars).replace(/\n/g, '\n    ') : oneLine(a.handover.text, handoverChars)}` : '';
+  const h = a.handover?.text && !a.handover.auto ? `\n  hand-off: ${whole ? a.handover.text.trim().replace(/\n/g, '\n    ') : oneLine(a.handover.text, 300)}` : '';
   return `- ${agentLabel(a)}${where} [${a.status}]: ${cut(agentResult(run, a), resultChars) || '—'}${h}`;
 }
 
@@ -131,7 +131,7 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const list = [
     ...(foldedCount && !since ? [`- (${foldedCount} earlier agent(s): see the shared memory below)`] : []),
     // "full": every agent's whole hand-off (organized by the agent itself), not only the one right before.
-    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => (mode === 'full' ? directoryLine(run, a, 2000, 4000) : directoryLine(run, a, 1200))),
+    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => (mode === 'full' ? directoryLine(run, a, 2000, true) : directoryLine(run, a, 1200))),
   ];
   const memory = run.memory && run.memory.updatedAt > since ? memoryBlock(run) : '';
   const upto = Math.max(run.memory?.upto ?? 0, run.knowledge?.upto ?? 0);
@@ -165,7 +165,7 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const prev = self.parentId ? undefined : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
   const handover = prev && fresh(prev) ? handoverOf(run, prev, transcriptOf(prev.id)) : undefined;
   const handoverText = take(handover
-    ? `HAND-OFF FROM THE AGENT BEFORE YOU — ${agentLabel(prev!)} [${prev!.status}]${handover.auto ? ' (it wrote none; put together by Aivenue from what it did)' : ''}:\n${cut(handover.text, Math.max(6000, Math.floor(room * 0.4)))}\nIts whole conversation is in the shared records: read_context {agent_id: "${prev!.id}"} (part "messages" for what it said, "tools" for its commands and their output).`
+    ? `HAND-OFF FROM THE AGENT BEFORE YOU — ${agentLabel(prev!)} [${prev!.status}]${handover.auto ? ' (it wrote none; put together by Aivenue from what it did)' : ''}:\n${handover.auto ? cut(handover.text, Math.max(6000, Math.floor(room * 0.4))) : handover.text.trim()}\nIts whole conversation is in the shared records: read_context {agent_id: "${prev!.id}"} (part "messages" for what it said, "tools" for its commands and their output).`
     : '');
   const recap = o.recap ? take(o.recap(Math.floor(room * 0.3))) : '';
   // The organized knowledge and the table of contents of every record, before the newest raw items.

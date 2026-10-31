@@ -548,3 +548,10 @@ test('產生的檔案：同一個資料夾大量變動合併成一列，記檔�
   assert.equal(g.count, 300);
   assert.equal(g.size, 3000);
 });
+
+test('交接：agent 寫的交接不限長度，完整交給下一個 agent', () => {
+  const { run, a1, a2, eventsOf } = sharedRun(os.tmpdir());
+  const long = 'detail '.repeat(5000) + 'THE-LAST-LINE';
+  a1.handover = { text: long, ts: 55 };
+  assert.match(W.contextBlock(run, a2, eventsOf, { maxChars: 200000 }), /THE-LAST-LINE/);
+});
