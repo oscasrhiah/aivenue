@@ -372,6 +372,8 @@ export interface ProviderInfo {
   defaultEffort?: string;
   /** The colour the user picked for it ("#rrggbb"), shown wherever it appears; none: its usual colour. */
   color?: string;
+  /** The most of each quota window a workflow may use, in percent, by window ("10080:" = weekly); see quotaWindowKey. */
+  quotaCaps?: Record<string, number>;
 }
 
 export type AuthMode = 'subscription' | 'api';
@@ -983,7 +985,8 @@ export interface HumanDecision {
   id: string;
   stage: PhaseKey | 'run';
   message: string;
-  options: { id: string; label: string }[];
+  /** `input`: picking it opens a number box beside the button; the number is sent as the decision's text. */
+  options: { id: string; label: string; input?: { min: number; max: number; value?: number; suffix?: string } }[];
   allowText: boolean;
 }
 

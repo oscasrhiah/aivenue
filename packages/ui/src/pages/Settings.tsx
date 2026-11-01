@@ -102,7 +102,7 @@ function GeneralPane() {
 }
 
 /** A quota window shown the way the vendors' own apps do: the share that is LEFT, with the used share as detail. */
-function Meter({ used, label, sub, detail }: { used: number; label: string; sub?: string; detail?: string }) {
+function Meter({ used, label, sub, detail, cap, children }: { used: number; label: string; sub?: string; detail?: string; cap?: number; children?: React.ReactNode }) {
   const t = useT();
   const left = Math.max(0, Math.min(100, 100 - used));
   const level = left <= 10 ? 'err' : left <= 30 ? 'warn' : '';
@@ -114,15 +114,60 @@ function Meter({ used, label, sub, detail }: { used: number; label: string; sub?
       </div>
       <div className="meter-track">
         <div className={cx('meter-fill', level)} style={{ width: `${left}%` }} />
+        {cap !== undefined && <div className="meter-cap" style={{ left: `${Math.max(0, 100 - cap)}%` }} title={`${cap}%`} />}
       </div>
       <div className="muted tiny">
         {t(`已用 ${Math.max(0, Math.min(100, used)).toFixed(0)}%`, `${Math.max(0, Math.min(100, used)).toFixed(0)}% used`)}
         {sub ? ` · ${sub}` : ''}
       </div>
       {detail && <div className="muted tiny">{detail}</div>}
+      {children}
     </div>
   );
 }
+
+/** The most of one quota window workflows may use: past it, they stop and ask (empty = no cap). */
+function CapInput({ providerId, window, cap, used }: { providerId: string; window: string; cap?: number; used: number }) {
+  const t = useT();
+  const [value, setValue] = useState(cap === undefined ? '' : String(cap));
+  const [error, setError] = useState<string>();
+  useEffect(() => setValue(cap === undefined ? '' : String(cap)), [cap]);
+  const save = (text: string) => {
+    const n = text.trim() === '' ? undefined : Number(text);
+    if (n === cap) return setError(undefined);
+    if (n !== undefined && !(n > 0 && n <= 100)) return setError(t('請輸入 1 到 100', 'Enter 1 to 100'));
+    hub
+      .call('providers.setQuotaCap', { id: providerId, window, percent: n })
+      .then(() => setError(undefined))
+      .catch((e) => setError((e as Error).message));
+  };
+  return (
+    <div className="cap-row tiny">
+      <span className="muted">{t('上限：用到', 'Cap: stop at')}</span>
+      <input
+        type="number"
+        className="cap-input"
+        min={1}
+        max={100}
+        placeholder={t('不限', 'none')}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={() => save(value)}
+        onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+        aria-label={t('用量上限（百分比）', 'Usage cap (percent)')}
+      />
+      <span className="muted">{t('% 時暫停工作並問你', '% used, then pause and ask')}</span>
+      {cap !== undefined && used >= cap && <span className="err-text">{t('已達上限', 'At the cap')}</span>}
+      {cap !== undefined && (
+        <button className="link tiny" onClick={() => (setValue(''), save(''))}>
+          {t('取消上限', 'Remove the cap')}
+        </button>
+      )}
+      {error && <span className="err-text">{error}</span>}
+    </div>
+  );
+}
+
 
 /** Antigravity's quota needs a Google sign-in of its own; this connects or disconnects it. */
 function AntigravityConnect({ connected, error }: { connected: boolean; error?: string }) {
@@ -169,7 +214,7 @@ function AntigravityConnect({ connected, error }: { connected: boolean; error?: 
   );
 }
 
-function UsageCard({ u, name, drag }: { u: ProviderUsage; name: string; drag?: DragProps }) {
+function UsageCard({ u, name, drag, caps }: { u: ProviderUsage; name: string; drag?: DragProps; caps?: Record<string, number> }) {
   const t = useT();
   const max = Math.max(1, ...u.daily.map((d) => d.input + d.output + d.cached));
   const windowLabel = (m: number) => (m >= 43200 ? t('每月', 'Monthly') : m >= 10080 ? t('每週', 'Weekly') : m >= 1440 ? t(`${Math.round(m / 1440)} 天`, `${Math.round(m / 1440)}-day`) : t(`${Math.round(m / 60)} 小時`, `${Math.round(m / 60)}-hour`));
@@ -190,7 +235,9 @@ function UsageCard({ u, name, drag }: { u: ProviderUsage; name: string; drag?: D
       {u.official ? (
         <div className="stack">
           {u.official.windows.map((w) => (
-            <Meter key={`${w.minutes}-${w.label ?? ''}`} used={w.usedPercent} label={w.label ?? t(`${windowLabel(w.minutes)}額度`, `${windowLabel(w.minutes)} limit`)} sub={resets(w.resetsAt)} detail={w.detail} />
+            <Meter key={`${w.minutes}-${w.label ?? ''}`} used={w.usedPercent} label={w.label ?? t(`${windowLabel(w.minutes)}額度`, `${windowLabel(w.minutes)} limit`)} sub={resets(w.resetsAt)} detail={w.detail} cap={caps?.[`${w.minutes}:${w.label ?? ''}`]}>
+              <CapInput providerId={u.providerId} window={`${w.minutes}:${w.label ?? ''}`} cap={caps?.[`${w.minutes}:${w.label ?? ''}`]} used={w.usedPercent} />
+            </Meter>
           ))}
           {u.official.limitReached && <div className="note warn small">{t('目前已達用量上限，要等上面的重置時間。', 'The plan limit is reached right now; wait for the reset time above.')}</div>}
           {!!u.official.resetCredits && <div className="muted tiny">{t(`帳號還有 ${u.official.resetCredits} 次免費「額度重置」可用（在 Codex 裡使用）。`, `The account has ${u.official.resetCredits} free limit reset(s) left (use them in Codex).`)}</div>}
@@ -337,7 +384,7 @@ function UsagePane() {
       </div>
       <div className="ugrid">
         {order.list.map((u) => (
-          <UsageCard key={u.providerId} u={u} name={providerName(providers, u.providerId)} drag={order.props(u.providerId)} />
+          <UsageCard key={u.providerId} u={u} name={providerName(providers, u.providerId)} drag={order.props(u.providerId)} caps={providers.find((p) => p.spec.id === u.providerId)?.quotaCaps} />
         ))}
       </div>
     </div>

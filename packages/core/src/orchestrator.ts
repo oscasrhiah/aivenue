@@ -49,7 +49,7 @@ import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
 import { classifyTool } from './providers/parsers';
 import { L } from './i18n';
-import { LIMIT_PATTERN, type UsageTracker } from './usage';
+import { LIMIT_PATTERN, quotaWindowKey, quotaWindowName, type UsageTracker } from './usage';
 import type { CapabilityStore, ResolvedMcpServer } from './capabilities';
 import { attachmentsBlock, isImage, type AttachmentStore } from './attachments';
 import { profileForInputs } from './readability';
@@ -305,6 +305,8 @@ export class Orchestrator {
   constructor(private d: OrchestratorDeps) {
     for (const r of d.store.loadAll()) this.runs.set(r.id, r);
     this.resources = new ResourceManager(d.dataDir, d.gpuQuery, d.gpuSmi);
+    this.capTimer = setInterval(() => void this.checkCaps().catch(() => undefined), 60000);
+    this.capTimer.unref?.();
   }
 
   // ---------- public API ----------
@@ -615,10 +617,15 @@ export class Orchestrator {
    */
   private async invokePausable(run: WorkflowRun, info: AgentRunInfo, prompt: string, mode: 'write' | 'readonly', resume?: string, seqStart?: number): Promise<RunAgentResult> {
     await this.waitIfPaused(run);
+    // Its account is at a usage cap the user set: the user decides first (it may move to another provider).
+    if (await this.capGate(run, info)) resume = undefined;
     let res = await this.invoke(run, info, prompt, mode, resume, seqStart);
     while (this.pausedAgents.delete(info.id) && !this.aborted(run)) {
       info.status = 'paused';
       this.touch(run);
+      // Stopped at a usage cap: moved to another provider, it starts the turn over in a fresh conversation there.
+      const moved = await this.capGate(run, info);
+      if (moved) resume = undefined;
       // It asked the user something: the user decides (as long as they need), then it goes on with the answer.
       const question = this.questions.get(info.id);
       this.questions.delete(info.id);
@@ -626,7 +633,7 @@ export class Orchestrator {
       const said = this.agentNotes.get(info.id);
       this.agentNotes.delete(info.id);
       const note = [said, await this.waitIfPaused(run)].filter(Boolean).join('\n') || undefined;
-      const session = res.sessionId ?? info.sessionId;
+      const session = moved ? undefined : (res.sessionId ?? info.sessionId);
       const spec = this.d.registry.get(info.provider);
       const canResume = !!(session && spec?.run.resume && spec.capabilities?.resume !== false);
       // It replied that the message changes the plan: the planner updates it, then this agent goes on with that.
@@ -661,14 +668,144 @@ export class Orchestrator {
   /** One question at a time per workflow (sub-agents may ask while another waits). */
   private askLocks = new Map<string, Promise<unknown>>();
 
-  /** Show an agent's question as a decision (its options, plus a box for any other answer) and wait for the answer. */
-  private async askUserFor(run: WorkflowRun, info: AgentRunInfo, q: { question: string; options: string[] }): Promise<string> {
+  /** Runs `fn` once no other question of this workflow is waiting for the user. */
+  private async oneAsk<T>(run: WorkflowRun, fn: () => Promise<T>): Promise<T> {
     const before = this.askLocks.get(run.id) ?? Promise.resolve();
     let done!: () => void;
     const mine = new Promise<void>((r) => (done = r));
     this.askLocks.set(run.id, before.then(() => mine));
     await before.catch(() => undefined);
     try {
+      return await fn();
+    } finally {
+      done();
+    }
+  }
+
+  private capTimer?: NodeJS.Timeout;
+
+  /** A quota window of the account at or past the cap the user set for it on the Usage page (none: go on). */
+  private async capHit(providerId: string, refresh = false): Promise<{ key: string; name: string; used: number; cap: number; resetsAt?: number } | undefined> {
+    const caps = this.d.registry.quotaCaps?.(providerId) ?? {};
+    if (!Object.keys(caps).length) return undefined;
+    const spec = this.d.registry.get(providerId);
+    if (!spec?.quota) return undefined;
+    const u = (await this.d.usage.summary([spec], { refresh }).catch(() => this.d.usage.cachedSummary([spec])))[0];
+    for (const w of u?.official?.windows ?? []) {
+      const cap = caps[quotaWindowKey(w)];
+      // A window past its reset time starts over (the reading is older than that).
+      if (cap === undefined || w.usedPercent < cap || (w.resetsAt && w.resetsAt <= Date.now())) continue;
+      return { key: quotaWindowKey(w), name: quotaWindowName(w), used: w.usedPercent, cap, resetsAt: w.resetsAt };
+    }
+    return undefined;
+  }
+
+  /** Working agents on an account past a usage cap (checked every minute) stop; capGate then asks the user. */
+  private async checkCaps(): Promise<void> {
+    const hits = new Map<string, boolean>();
+    for (const run of this.runs.values()) {
+      if (run.status !== 'running') continue;
+      for (const a of Object.values(run.agents)) {
+        if (a.status !== 'running' || a.role === 'compactor' || this.pausedAgents.has(a.id)) continue;
+        if (!hits.has(a.provider)) hits.set(a.provider, !!(await this.capHit(a.provider)));
+        if (!hits.get(a.provider)) continue;
+        this.log(run, L(`${this.label(a)} 的帳號已達你設的用量上限，先停下`, `${this.label(a)}'s account reached the usage cap you set; stopping it`), 'warn', true);
+        this.pausedAgents.add(a.id);
+        this.agentAborts.get(a.id)?.abort();
+      }
+    }
+  }
+
+  /**
+   * The agent's account is at a usage cap the user set: the workflow waits for the user before the agent goes on —
+   * move it to another provider, raise the cap, pause, or end the workflow. True when it moved to another provider
+   * (its conversation stays behind; the turn starts over there).
+   */
+  private async capGate(run: WorkflowRun, info: AgentRunInfo): Promise<boolean> {
+    if (info.role === 'compactor') return false;
+    let moved = false;
+    let refresh = false;
+    for (;;) {
+      if (this.aborted(run) || !(await this.capHit(info.provider, refresh))) return moved;
+      refresh = false;
+      const got = await this.oneAsk(run, async () => {
+        // Another agent's answer may have settled it meanwhile (a higher cap, another provider).
+        const hit = await this.capHit(info.provider);
+        if (!hit || this.aborted(run)) return undefined;
+        const name = this.providerName(info.provider);
+        const who = `${name} · ${roleLabel(info.role)}`;
+        const used = Math.round(hit.used);
+        const when = hit.resetsAt ? L(`，${new Date(hit.resetsAt).toLocaleString()} 重置`, `; it resets ${new Date(hit.resetsAt).toLocaleString()}`) : '';
+        const example = Math.min(100, Math.ceil(hit.cap / 10) * 10 + 10);
+        this.log(run, L(`${name} 的${hit.name}已用 ${used}%，達到你設的上限 ${hit.cap}%：${who} 先停下`, `${name}'s ${hit.name} is ${used}% used, at the cap of ${hit.cap}% you set: ${who} stops`), 'warn', true);
+        const dec = await this.ask(
+          run,
+          info.stage ?? 'run',
+          L(
+            `${name} 的${hit.name}已用 ${used}%，達到你設的上限 ${hit.cap}%${when}。${who} 要怎麼繼續？`,
+            `${name}'s ${hit.name} is ${used}% used, at the cap of ${hit.cap}% you set${when}. How should ${who} go on?`,
+          ),
+          [
+            ...this.switchOptions(info.provider).map((o) => ({ ...o, label: L(`換成 ${this.providerName(o.id.slice(7))} 繼續`, `Go on with ${this.providerName(o.id.slice(7))}`) })),
+            { id: 'raise', label: L(`調整上限（目前 ${hit.cap}%）`, `Change the cap (now ${hit.cap}%)`), input: { min: 1, max: 100, value: example, suffix: '%' } },
+            { id: 'retry', label: L('重新查詢額度後繼續', 'Check the quota again and go on') },
+            { id: 'abort', label: L('結束工作流', 'End the workflow') },
+          ],
+          true,
+        );
+        return { dec, hit };
+      });
+      if (!got) continue;
+      const { dec, hit } = got;
+      if (dec.optionId === 'abort') throw new Cancelled();
+      if (dec.optionId === 'raise') {
+        const n = Number((dec.text ?? '').match(/\d+(?:\.\d+)?/)?.[0]);
+        if (n > 0 && n <= 100) {
+          this.d.registry.setQuotaCap(info.provider, hit.key, n);
+          this.log(run, L(`${this.providerName(info.provider)} 的${hit.name}上限改為 ${n}%`, `${this.providerName(info.provider)}'s ${hit.name} cap is now ${n}%`), 'info', true);
+        } else this.log(run, L('沒有讀到 1 到 100 之間的數字，上限沒有改', 'No number from 1 to 100 was given; the cap is unchanged'), 'warn', true);
+        continue;
+      }
+      if (dec.optionId.startsWith('switch:')) {
+        this.moveAgent(run, info, dec.optionId.slice(7));
+        moved = true;
+        continue;
+      }
+      // "Check again" (also after a pause): read the quota anew.
+      refresh = true;
+    }
+  }
+
+  /** An agent stopped at a usage cap goes on with another provider (its default model); its role keeps that provider. */
+  private moveAgent(run: WorkflowRun, info: AgentRunInfo, provider: string) {
+    const old = info.provider;
+    const def = this.d.registry.defaults(provider);
+    info.provider = provider;
+    info.model = def.model;
+    info.modelDefault = true;
+    info.effort = def.effort;
+    info.sessionId = undefined;
+    this.requestedModel.set(info.id, info.model);
+    for (const key of ['plan', 'implement'] as StageKey[]) {
+      if (info.stage !== key) continue;
+      const cfg = run.config[key];
+      const stage = run.stages[key];
+      if ((info.role === 'planner' || info.role === 'executor') && cfg.author.provider === old) {
+        cfg.author = { provider };
+        stage.authorSessionId = undefined;
+      }
+      if ((info.role === 'plan_reviewer' || info.role === 'code_reviewer') && cfg.reviewer?.provider === old) {
+        cfg.reviewer = { provider };
+        stage.reviewerSessionId = undefined;
+      }
+    }
+    this.log(run, L(`${roleLabel(info.role)}改由 ${this.providerName(provider)} 繼續（${this.providerName(old)} 已達用量上限）`, `${this.providerName(provider)} goes on as the ${roleLabel(info.role)} (${this.providerName(old)} is at its usage cap)`), 'info', true);
+    this.touch(run);
+  }
+
+  /** Show an agent's question as a decision (its options, plus a box for any other answer) and wait for the answer. */
+  private async askUserFor(run: WorkflowRun, info: AgentRunInfo, q: { question: string; options: string[] }): Promise<string> {
+    return this.oneAsk(run, async () => {
       const who = `${this.providerName(info.provider)} · ${roleLabel(info.role)}`;
       this.log(run, L(`${who} 有問題要問你`, `${who} has a question for you`), 'warn', true);
       const options = q.options.map((label, i) => ({ id: `answer:${i}`, label }));
@@ -686,9 +823,7 @@ export class Orchestrator {
       (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, kind: 'decision', text: `The user answered ${who}'s question "${q.question.slice(0, 600)}": ${answer.slice(0, 1200)}`, ts: now() });
       this.touch(run);
       return answer;
-    } finally {
-      done();
-    }
+    });
   }
 
   /** Agents that replied that a message changes the plan: the message the planner must take in. */
@@ -1589,6 +1724,7 @@ export class Orchestrator {
 
   /** Close every CLI kept running for later turns (app shutdown). */
   shutdown() {
+    clearInterval(this.capTimer);
     this.pool.closeAll();
   }
 
@@ -3609,7 +3745,7 @@ export class Orchestrator {
    * Ask the user. Every question can also pause the workflow (like the pause button): nothing runs until the user
    * resumes; then a question about a turn without a result retries it (e.g. after a quota reset), any other is asked again.
    */
-  private async ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
+  private async ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true): Promise<{ optionId: string; text?: string }> {
     const pause = { id: 'pause', label: L('暫停工作流', 'Pause the workflow') };
     const at = options.findIndex((o) => o.id === 'abort');
     const withPause = at < 0 ? [...options, pause] : [...options.slice(0, at), pause, ...options.slice(at)];
@@ -3623,7 +3759,7 @@ export class Orchestrator {
     }
   }
 
-  private askOnce(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: { id: string; label: string }[], allowText = true): Promise<{ optionId: string; text?: string }> {
+  private askOnce(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true): Promise<{ optionId: string; text?: string }> {
     const wf = this.aborts.get(run.id);
     return new Promise((resolve, reject) => {
       if (!wf || wf.signal.aborted) return reject(new Cancelled());

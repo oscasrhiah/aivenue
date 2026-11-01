@@ -326,6 +326,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'providers.delete': (p: { id: string }) => registry.remove(p.id),
     'providers.setOrder': (p: { ids: string[] }) => registry.setOrder(p.ids),
     'providers.setColor': (p: { id: string; color?: string }) => registry.setColor(p.id, p.color),
+    'providers.setQuotaCap': (p: { id: string; window: string; percent?: number }) => registry.setQuotaCap(p.id, p.window, p.percent),
     'providers.addAccount': (p: { id: string; name: string }) => registry.addAccount(p.id, p.name),
     'providers.removeAccount': (p: { id: string; deleteData?: boolean }) => registry.removeAccount(p.id, !!p.deleteData),
     'providers.reset': (p: { id: string }) => {

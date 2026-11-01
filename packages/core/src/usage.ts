@@ -30,6 +30,22 @@ function day(ts = Date.now()): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+type QuotaWindow = NonNullable<ProviderUsage['official']>['windows'][number];
+
+/** Names one quota window of an account, for the usage caps the user sets per window ("10080:" = the weekly one). */
+export function quotaWindowKey(w: Pick<QuotaWindow, 'minutes' | 'label'>): string {
+  return `${w.minutes}:${w.label ?? ''}`;
+}
+
+/** "5 小時額度", "每週額度", "每月額度" or the window's own label (a model). */
+export function quotaWindowName(w: Pick<QuotaWindow, 'minutes' | 'label'>): string {
+  if (w.label) return w.label;
+  const m = w.minutes;
+  const zh = m >= 40000 ? '每月' : m >= 10080 ? '每週' : m >= 1440 ? `${Math.round(m / 1440)} 天` : `${Math.round(m / 60)} 小時`;
+  const en = m >= 40000 ? 'monthly' : m >= 10080 ? 'weekly' : m >= 1440 ? `${Math.round(m / 1440)}-day` : `${Math.round(m / 60)}-hour`;
+  return L(`${zh}額度`, `${en} limit`);
+}
+
 /** Messages CLIs print when a plan/rate limit is reached. */
 export const LIMIT_PATTERN = /usage limit|rate[ _-]?limit|quota|429|resource[_ ]exhausted|too many requests|limit reached|exceeded your|額度|配額/i;
 

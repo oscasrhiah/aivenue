@@ -36,8 +36,13 @@ function setup(o = {}) {
   const cwd = path.join(dir, 'proj');
   fs.mkdirSync(cwd, { recursive: true });
   const ids = o.ids ?? ['fake', 'fake2'];
+  // `caps`: usage caps per provider ({ fake: { '10080:': 80 } }); `windows`: its quota windows, read each time.
+  const caps = o.caps ?? {};
+  const withQuota = (id) => (o.windows ? { ...spec(id), quota: { reader: 'test' } } : spec(id));
   const registry = {
-    get: (id) => (ids.includes(id) ? spec(id) : undefined),
+    get: (id) => (ids.includes(id) ? withQuota(id) : undefined),
+    quotaCaps: (id) => caps[id] ?? {},
+    setQuotaCap: (id, w, p) => ((caps[id] ??= {})[w] = p),
     list: () => ids.map((id) => ({ spec: spec(id), installed: true, auth: { state: 'logged_in' } })),
     specs: () => ids.map(spec),
     defaults: () => ({}),
@@ -48,7 +53,7 @@ function setup(o = {}) {
   const orch = new Orchestrator({
     registry,
     store: new RunStore(path.join(dir, 'home')),
-    usage: { recordRun() {}, recordError() {}, recordUsage() {}, cachedSummary: () => [] },
+    usage: { recordRun() {}, recordError() {}, recordUsage() {}, cachedSummary: () => [], summary: async (specs) => specs.map((s) => ({ providerId: s.id, official: o.windows ? { windows: o.windows(s.id), updatedAt: Date.now(), source: 'codex-live' } : undefined })) },
     capabilities: { serversFor: async () => [], skillsBlock: () => '', instructionsFor: () => undefined, skillsDir: dir },
     attachments: { prepare: async (a) => ({ attachments: a ?? [], warnings: [] }), adopt: (_id, a) => a ?? [], runDir: () => dir },
     dataDir: path.join(dir, 'home'),
@@ -58,7 +63,7 @@ function setup(o = {}) {
     gpuQuery: o.gpuQuery ?? (() => { throw new Error('no GPU'); }),
     gpuSmi: o.gpuSmi ?? (() => { throw new Error('no GPU'); }),
   });
-  return { orch, cwd, dir };
+  return { orch, cwd, dir, caps };
 }
 
 // Only the first line names the role (later text may quote other roles: "The CODE REVIEWER found…").
@@ -891,4 +896,69 @@ test('出問題時的詢問可以暫停工作流；按繼續就重試', async ()
     r = await settle(orch, id);
   }
   assert.equal(r.status, 'completed', r.error);
+});
+
+const noPlan = { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } };
+const waitPending = async (orch, id) => {
+  const r = orch.runs.get(id);
+  for (let i = 0; i < 200 && !r.pending; i++) await new Promise((res) => setTimeout(res, 25));
+  return r;
+};
+
+test('帳號達到你設的用量上限：agent 開始前停下問你；輸入新的百分比調整上限後繼續', async () => {
+  let used = 85;
+  const { orch, cwd, caps } = setup({ caps: { fake: { '10080:': 80 } }, windows: (id) => (id === 'fake' ? [{ minutes: 10080, usedPercent: used }] : []) });
+  const calls = fakeAgents(orch, {});
+  const id = orch.start(config(cwd, noPlan)).id;
+  let r = await waitPending(orch, id);
+  assert.equal(r.status, 'waiting_human');
+  assert.match(r.pending.message, /每週額度已用 85%，達到你設的上限 80%/);
+  const ids = r.pending.options.map((o) => o.id);
+  assert.ok(ids.includes('switch:fake2') && ids.includes('raise') && ids.includes('pause') && ids.includes('abort'), ids.join());
+  assert.deepEqual(r.pending.options.find((o) => o.id === 'raise').input, { min: 1, max: 100, value: 90, suffix: '%' });
+  assert.equal(r.pending.allowText, true);
+  assert.equal(calls.length, 0, 'the agent must not start past the cap');
+  orch.decide(id, r.pending.id, 'raise', '90');
+  r = await settle(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(caps.fake['10080:'], 90);
+  assert.equal(Object.values(r.agents).find((a) => a.role === 'executor').provider, 'fake');
+});
+
+test('帳號達到用量上限：選換別的 agent，這個角色之後都改用它', async () => {
+  const { orch, cwd } = setup({ caps: { fake: { '300:': 50 } }, windows: (id) => (id === 'fake' ? [{ minutes: 300, usedPercent: 60, resetsAt: Date.now() + 3600000 }] : []) });
+  fakeAgents(orch, {});
+  const id = orch.start(config(cwd, noPlan)).id;
+  let r = await waitPending(orch, id);
+  assert.match(r.pending.message, /5 小時額度已用 60%/);
+  orch.decide(id, r.pending.id, 'switch:fake2');
+  r = await settle(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(Object.values(r.agents).find((a) => a.role === 'executor').provider, 'fake2');
+  assert.equal(r.config.implement.author.provider, 'fake2');
+});
+
+test('工作中途用量超過上限：agent 被停下並問你；選結束就結束工作流', async () => {
+  let used = 10;
+  const { orch, cwd } = setup({ caps: { fake: { '43200:': 70 } }, windows: (id) => (id === 'fake' ? [{ minutes: 43200, usedPercent: used }] : []) });
+  let started = false;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        started = true;
+        await new Promise((res) => opts.signal?.addEventListener('abort', res));
+        return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: 'Cancelled' };
+      },
+    ],
+  });
+  const id = orch.start(config(cwd, noPlan)).id;
+  for (let i = 0; i < 200 && !started; i++) await new Promise((res) => setTimeout(res, 25));
+  assert.ok(started);
+  used = 75;
+  await orch.checkCaps();
+  let r = await waitPending(orch, id);
+  assert.match(r.pending.message, /每月額度已用 75%，達到你設的上限 70%/);
+  orch.decide(id, r.pending.id, 'abort');
+  r = await settle(orch, id);
+  assert.equal(r.status, 'cancelled');
 });

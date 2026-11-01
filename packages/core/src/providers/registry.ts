@@ -14,7 +14,7 @@ interface StoredProviders {
   /** Built-in ids the user removed. */
   hidden: string[];
   /** Per-provider user choices that are not part of the spec. */
-  settings: Record<string, { authMode: AuthMode; baseUrl?: string; defaultModel?: string; defaultEffort?: string; color?: string }>;
+  settings: Record<string, { authMode: AuthMode; baseUrl?: string; defaultModel?: string; defaultEffort?: string; color?: string; caps?: Record<string, number> }>;
   /** Extra accounts of tools that can run several side by side (spec.accounts). */
   accounts: { providerId: string; slug: string; name: string }[];
   /** The order the user dragged the providers into (ids); the ones not in it keep their usual place after these. */
@@ -564,6 +564,27 @@ export class ProviderRegistry {
     this.onChange();
   }
 
+  /**
+   * The most of one quota window (quotaWindowKey) the user lets Aivenue use, in percent; none removes the cap. A
+   * workflow stops and asks once the account's window is used this far.
+   */
+  setQuotaCap(id: string, window: string, percent?: number): void {
+    if (!this.get(id)) throw new Error(L('找不到這個供應商', 'Provider not found'));
+    if (percent !== undefined && !(Number.isFinite(percent) && percent > 0 && percent <= 100)) throw new Error(L('上限要是 1 到 100 之間的百分比', 'The cap must be a percentage from 1 to 100'));
+    const cur = this.stored.settings[id] ?? { authMode: this.authMode(id) };
+    const caps = { ...cur.caps };
+    if (percent === undefined) delete caps[window];
+    else caps[window] = Math.round(percent * 10) / 10;
+    this.stored.settings[id] = { ...cur, caps: Object.keys(caps).length ? caps : undefined };
+    this.save();
+    this.onChange();
+  }
+
+  /** The usage caps the user set for a provider or account, by quota window. */
+  quotaCaps(id: string): Record<string, number> {
+    return this.stored.settings[id]?.caps ?? {};
+  }
+
   setOrder(ids: string[]): void {
     this.stored.order = ids.filter((id, i) => typeof id === 'string' && ids.indexOf(id) === i);
     this.save();
@@ -593,6 +614,7 @@ export class ProviderRegistry {
         defaultModel: this.stored.settings[spec.id]?.defaultModel,
         defaultEffort: this.stored.settings[spec.id]?.defaultEffort,
         color: this.stored.settings[spec.id]?.color,
+        quotaCaps: this.stored.settings[spec.id]?.caps,
       };
     });
   }

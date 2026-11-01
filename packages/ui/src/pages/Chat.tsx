@@ -118,7 +118,10 @@ function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
   const [error, setError] = useState<string>();
   const providers = useProviders();
   const usage = useUsage();
-  const choose = (optionId: string) => hub.call('workflows.decide', { id: run.id, decisionId: d.id, optionId, text }).catch((e) => setError(e.message));
+  const choose = (optionId: string, value = text) => hub.call('workflows.decide', { id: run.id, decisionId: d.id, optionId, text: value }).catch((e) => setError(e.message));
+  // An option that takes a number (e.g. a new usage cap): its box opens beside the button.
+  const [entering, setEntering] = useState<string>();
+  const [num, setNum] = useState('');
   // "Use … instead": one button per tool, its accounts in a menu with the quota each has left.
   const switches = d.options.filter((o) => o.id.startsWith('switch:'));
   const at = d.options.findIndex((o) => o.id.startsWith('switch:'));
@@ -130,6 +133,36 @@ function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
         {d.options.map((o, i) =>
           o.id.startsWith('switch:') ? (
             i === at && <SwitchChoices key="switch" options={switches} providers={providers} usage={usage} onChoose={choose} first={at === 0} />
+          ) : o.input ? (
+            <span key={o.id} className={cx('choice-input', entering === o.id && 'open')}>
+              <button
+                className={cx('btn', i === 0 && 'primary', entering === o.id && 'active')}
+                onClick={() => {
+                  setEntering(entering === o.id ? undefined : o.id);
+                  setNum(String(o.input!.value ?? ''));
+                }}
+              >
+                {o.label}
+              </button>
+              {entering === o.id && (
+                <form
+                  className="row gap"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const n = Number(num);
+                    if (!(n >= o.input!.min && n <= o.input!.max)) return setError(t(`請輸入 ${o.input!.min} 到 ${o.input!.max}`, `Enter ${o.input!.min} to ${o.input!.max}`));
+                    setError(undefined);
+                    choose(o.id, [num, text.trim()].filter(Boolean).join('\n'));
+                  }}
+                >
+                  <input type="number" className="choice-num" autoFocus min={o.input.min} max={o.input.max} value={num} onChange={(e) => setNum(e.target.value)} aria-label={o.label} />
+                  {o.input.suffix && <span className="muted">{o.input.suffix}</span>}
+                  <button type="submit" className="btn primary">
+                    {t('確定', 'OK')}
+                  </button>
+                </form>
+              )}
+            </span>
           ) : (
             <button key={o.id} className={cx('btn', i === 0 && 'primary', o.id === 'abort' && 'danger')} onClick={() => choose(o.id)}>
               {o.label}
@@ -944,7 +977,7 @@ export function Chat({ id }: { id?: string }) {
               <WorktreeCard run={run} />
               <ContextAsk run={run} providers={providers} />
               <CompactFailedAsk run={run} providers={providers} />
-              {run.pending && <Decision run={run} d={run.pending} />}
+              {run.pending && <Decision key={run.pending.id} run={run} d={run.pending} />}
               {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
               {run.status === 'incomplete' && (
                 <div className="note warn">

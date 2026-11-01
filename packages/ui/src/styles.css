@@ -2682,11 +2682,37 @@ textarea.code {
 }
 
 .meter-track {
+  position: relative;
   height: 6px;
   border-radius: 999px;
   background: var(--sunken);
   overflow: hidden;
   margin: 4px 0 2px;
+}
+
+/* Where the user's usage cap falls on the "left" bar. */
+.meter-cap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--err);
+  box-shadow: 0 0 0 1px var(--bg);
+}
+
+.cap-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cap-row input.cap-input {
+  width: 64px;
+  padding: 2px 6px;
+  font-size: 12px;
 }
 
 .meter-fill {
@@ -5215,4 +5241,23 @@ textarea.code {
   border-radius: 6px;
   background: var(--surface);
   cursor: pointer;
+}
+
+/* A decision option that takes a number: the box opens beside its button. */
+.choice-input {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  max-width: 100%;
+  gap: 6px;
+}
+
+.choice-input.open {
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+}
+
+.choice-input input.choice-num {
+  width: 72px;
 }
