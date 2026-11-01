@@ -357,6 +357,7 @@ export function fullAccessRule(cwd: string): string {
 export function externalRule(github?: { gh: boolean; user?: string; mcp: boolean }): string {
   const lines = [
     '',
+    'QUESTIONS FOR THE USER: when you need the user to decide something or give something only they have (a permission such as deleting caches, missing data, a rule only they can set), call the Aivenue tool `ask_user` {question, options} and then end your turn; the answer comes in your next message. A question written only in your reply or report is never shown to the user as a question, and the workflow goes on as if they had said nothing. Do not ask again what the user already answered (see the decisions in the shared notes).',
     'EXTERNAL ACTIONS: before anything that changes something outside this computer — git push, creating/merging/closing a pull request, commenting on or creating/closing an issue, publishing a release, triggering a deployment or workflow, any other write to GitHub or another service — call the Aivenue tool `confirm_external_action` {kind, target, details} and wait for the answer. Only do it if it is approved, exactly as described; if it is denied, do not do it and say so in your report. Reading (git fetch/pull/status/log, viewing PRs, issues or CI) needs no approval. Local commits need no approval either.',
   ];
   if (github?.user && github.gh)
@@ -411,6 +412,16 @@ export function planUpdatedPrompt(plan: PlanDoc | undefined): string {
     '',
     'When finished, call `submit_work` with a summary of what you changed and how you verified it.',
     FALLBACK('submit_work', WORK_SHAPE),
+  ].join('\n');
+}
+
+export function userAnswerPrompt(question: string, answer: string): string {
+  return [
+    'THE USER ANSWERED YOUR QUESTION.',
+    `Your question: ${question}`,
+    `Their answer: ${answer}`,
+    '',
+    'Act on it and continue the task exactly where you left off, then finish as instructed before (including calling the Aivenue submit tool if you were asked to).',
   ].join('\n');
 }
 

@@ -35,7 +35,7 @@ function setup(o = {}) {
   const dir = o.dir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-orch-'));
   const cwd = path.join(dir, 'proj');
   fs.mkdirSync(cwd, { recursive: true });
-  const ids = ['fake', 'fake2'];
+  const ids = o.ids ?? ['fake', 'fake2'];
   const registry = {
     get: (id) => (ids.includes(id) ? spec(id) : undefined),
     list: () => ids.map((id) => ({ spec: spec(id), installed: true, auth: { state: 'logged_in' } })),
@@ -197,6 +197,90 @@ test('反駁後又被提出 → 第三方裁定駁回 → 通過', async () => {
   assert.ok(calls.includes('adjudicator'));
   assert.equal(r.rulings.length, 1);
   assert.equal(r.stages.implement.rounds.at(-1).review.verdict, 'approve');
+});
+
+test('裁定者額度用完 → 改由另一家裁定，不會沒裁定就繼續', async () => {
+  const { orch, cwd } = setup({ ids: ['fake', 'fake2', 'fake3', 'fake4'] });
+  const issue = { tool: 'submit_review', args: { verdict: 'revise', summary: 'no', issues: [{ id: 'R1', severity: 'major', title: 'use a mutex' }] } };
+  const rebut = { tool: 'submit_work', args: { summary: 'no change', responses: [{ issue_id: 'R1', action: 'rebutted', note: 'single thread' }] } };
+  const judges = [];
+  const calls = fakeAgents(orch, {
+    code_reviewer: [issue],
+    executor: [defaults.executor, rebut, rebut],
+    adjudicator: [
+      async (o, secret, opts) => {
+        judges.push(opts.spec.id);
+        if (opts.spec.id === 'fake3') return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: "You've hit your usage limit. Upgrade to Pro or try again at 5:44 PM." };
+        await o.callTool(secret, 'submit_ruling', { rulings: [{ issue_id: 'R1', ruling: 'dismiss', reason: 'single-threaded' }] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.deepEqual(judges, ['fake3', 'fake4']);
+  assert.equal(r.rulings.length, 1);
+  assert.ok(calls.filter((c) => c === 'adjudicator').length === 2);
+  assert.equal(r.stages.implement.rounds.at(-1).review.verdict, 'approve');
+});
+
+test('agent 用 ask_user 問問題 → 跳出決定（選項＋自行輸入）→ 帶著回答繼續', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'ask_user', { question: '磁碟不夠，可以刪 pip 快取嗎？', options: ['刪 pip 快取', '刪 uv 快取'] });
+        await new Promise((res) => opts.signal?.addEventListener('abort', res));
+        return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: 'Cancelled' };
+      },
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'cleared the pip cache' });
+      },
+    ],
+  });
+  const id = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  let r = orch.runs.get(id);
+  for (let i = 0; i < 200 && !r.pending; i++) await new Promise((res) => setTimeout(res, 25));
+  assert.equal(r.status, 'waiting_human');
+  assert.match(r.pending.message, /磁碟不夠/);
+  assert.deepEqual(r.pending.options.map((o) => o.label).slice(0, 2), ['刪 pip 快取', '刪 uv 快取']);
+  assert.equal(r.pending.allowText, true);
+  orch.decide(id, r.pending.id, 'answer:0', '不要碰 huggingface 快取');
+  r = await settle(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(prompts[1], /THE USER ANSWERED[\s\S]*刪 pip 快取 — 不要碰 huggingface 快取/);
+  assert.ok(r.notes.some((n) => n.kind === 'decision' && /刪 pip 快取/.test(n.text)));
+});
+
+test('下一輪不接續上一輪的 CLI 對話：開新對話，帶最近的對話紀錄；完整紀錄用 read_context {topic: "log"} 翻頁', async () => {
+  const { orch, cwd } = setup();
+  const seen = [];
+  let logText = '';
+  const issue = { tool: 'submit_review', args: { verdict: 'revise', summary: 'no', issues: [{ id: 'R1', severity: 'major', title: 'add a test' }] } };
+  fakeAgents(orch, {
+    code_reviewer: [issue, defaults.code_reviewer],
+    executor: [
+      async (o, secret, opts) => {
+        seen.push(opts);
+        await o.callTool(secret, 'submit_work', { summary: 'first try' });
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'done', sessionId: 'sess-1' };
+      },
+      async (o, secret, opts) => {
+        seen.push(opts);
+        logText = await o.callTool(secret, 'read_context', { topic: 'log' });
+        await o.callTool(secret, 'submit_work', { summary: 'added the test' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].resumeSessionId, undefined);
+  assert.match(seen[1].prompt, /GOAL:[\s\S]*RECENT CONVERSATION[\s\S]*first try/);
+  assert.match(seen[1].prompt, /add a test/);
+  assert.match(String(logText), /CONVERSATION LOG — page 1 of 1[\s\S]*first try/);
 });
 
 test('結果遺失：程序結束卻沒交結果 → 不算成功，由使用者決定', async () => {

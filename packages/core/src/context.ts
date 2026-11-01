@@ -171,14 +171,18 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   // The organized knowledge and the table of contents of every record, before the newest raw items.
   const organized = take(knowledgeDoc ? `SHARED KNOWLEDGE (organized by subject from the shared notes, with sources [n:id]; read_context {topic: "knowledge"} for all of it):\n${cut(knowledgeDoc, Math.floor(room * 0.25))}` : '');
   const index = take(topicIndexBlock(buildTopics(run, transcriptOf), Math.max(1500, Math.floor(room * 0.06)), since));
+  // The newest of the raw conversation log (every agent and the user); the rest is one read_context away.
+  const log = since ? [] : conversationLog(run, transcriptOf, 400);
+  const recent = log.slice(-LOG_PAGE);
+  const logText = take(recent.length ? fit(recent, Math.floor(room * 0.3), `RECENT CONVERSATION (the newest ${recent.length} of ${log.length} entries of the full conversation log; read_context {topic: "log", page: 2} for older ones):`) : '');
   const carriedText = carriedOut ? `(${carriedOut} more notes from earlier messages of this conversation are in the shared records${run.knowledge ? ", organized in the shared knowledge" : ""}: search_records {q} or read_context {topic: "facts"} when you need one.)` : '';
   const noteText = take([notes.length ? fit(notes, Math.floor(room * 0.3), `Shared notes${since ? ' (new)' : ''}:`) : since ? '' : 'Shared notes:\n(no notes yet)', carriedText].filter(Boolean).join('\n'));
   const listText = take(list.length ? fit(list, Math.floor(room * 0.2), `Agents${since ? ' (new or updated)' : ' so far'} — read_context {agent_id} for any one's whole conversation:`) : since ? '' : 'You are the first agent in this workflow.');
   const memText = take(memory ? cut(memory, Math.floor(room * 0.3)) : '');
   const knowledge = take(knowledgeBlock(run, act, Math.floor(Math.max(0, room) * 0.25), !since));
   const activity = take(activityBlock(act, Math.max(2000, room)));
-  if (since && !handoverText && !recap && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
-  const lines = ['', head, handoverText, recap, organized, index, listText, memText, noteText, knowledge, activity, footer];
+  if (since && !handoverText && !recap && !logText && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
+  const lines = ['', head, handoverText, recap, logText, organized, index, listText, memText, noteText, knowledge, activity, footer];
   let text = lines.filter((l) => l !== '').join('\n');
   // Still over this agent's share (a huge status or hand-off): keep the start, where the goal and status are.
   if (o.maxChars && text.length > o.maxChars) text = `${text.slice(0, o.maxChars)}\n… (shortened to fit your model; call read_context {} for the rest)`;
@@ -200,6 +204,41 @@ export function progressBlock(run: WorkflowRun): string {
     if (run.steps?.length) lines.push(`STEPS:\n${run.steps.map((s) => `- ${s.id}. ${oneLine(s.title, 140)} [${s.status}]${s.note ? ` — ${oneLine(s.note, 200)}` : ''}`).join('\n')}`);
   }
   return lines.join('\n');
+}
+
+/** Entries of the conversation log in one page of read_context {topic: "log"}, and in an agent's prompt. */
+export const LOG_PAGE = 100;
+
+/**
+ * The conversation log: everything said and run in this workflow, every agent and the user, oldest first, one line
+ * each. Kept apart from the organized shared context; an agent gets the newest entries and pages back for more.
+ */
+export function conversationLog(run: WorkflowRun, transcriptOf: (agentId: string) => AgentEvent[], entryChars = 600): string[] {
+  const rows: { ts: number; text: string }[] = [];
+  const at = (ts: number) => new Date(ts).toISOString().slice(5, 16).replace('T', ' ');
+  for (const a of Object.values(run.agents)) {
+    if (a.role === 'test' || a.role === 'compactor') continue;
+    const who = `${a.id.slice(0, 8)} ${ROLE[a.role]} ${a.provider}${a.stage ? ` ${a.stage}#${a.round ?? ''}` : ''}`;
+    for (const e of transcriptOf(a.id)) {
+      if (e.kind === 'message' && e.text?.trim()) rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} said: ${oneLine(e.text, entryChars)}` });
+      else if (e.kind === 'tool' && e.tool && e.tool.status !== 'running')
+        rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} ${e.tool.name}: ${oneLine(e.tool.title || e.tool.input, 200)} → ${e.tool.status}${e.tool.status === 'error' && e.tool.output ? ` (${oneLine(e.tool.output, 200)})` : ''}` });
+      else if (e.kind === 'error' && e.text?.trim()) rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} error: ${oneLine(e.text, 300)}` });
+    }
+    if (a.endedAt && a.status !== 'running') rows.push({ ts: a.endedAt, text: `[${at(a.endedAt)}] ${who} ended [${a.status}]: ${oneLine(agentResult(run, a), entryChars) || '—'}` });
+  }
+  for (const m of run.userMessages ?? []) rows.push({ ts: m.ts, text: `[${at(m.ts)}] USER: ${oneLine(m.text, entryChars * 2)}` });
+  for (const n of run.notes ?? []) if (n.kind === 'decision') rows.push({ ts: n.ts, text: `[${at(n.ts)}] DECISION: ${oneLine(n.text, entryChars * 2)}` });
+  return rows.sort((x, y) => x.ts - y.ts).map((r) => r.text);
+}
+
+/** One page of the conversation log (page 1 = the newest entries). */
+export function logPage(entries: string[], page: number): string {
+  const pages = Math.max(1, Math.ceil(entries.length / LOG_PAGE));
+  const p = Math.min(Math.max(1, page), pages);
+  const end = entries.length - (p - 1) * LOG_PAGE;
+  const part = entries.slice(Math.max(0, end - LOG_PAGE), end);
+  return [`CONVERSATION LOG — page ${p} of ${pages} (${entries.length} entries, oldest first on each page; page 1 is the newest${p < pages ? `, read_context {topic: "log", page: ${p + 1}} for older` : ''}):`, ...(part.length ? part : ['(empty)'])].join('\n');
 }
 
 /** Overview for `read_context` without an agent id. `eventsOf` adds the commands every agent ran and the project knowledge. */

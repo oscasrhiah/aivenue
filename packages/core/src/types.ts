@@ -561,6 +561,12 @@ export interface ContextConfig {
   shareOfWindow?: number;
   /** Organize the shared notes into a knowledge document every this many new notes (default 30; 0 = never). */
   organizeEvery?: number;
+  /**
+   * Go on in the same CLI conversation round after round (default false). Off, every turn starts a new conversation
+   * with the goal, plan, progress, hand-offs and the newest 100 entries of the conversation log; a long loop then does
+   * not send its whole history with every model call.
+   */
+  keepSessions?: boolean;
 }
 
 /** The shared notes and findings organized by subject, with sources (written by the compactor model). */

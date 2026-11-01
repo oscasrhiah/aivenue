@@ -264,6 +264,19 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       required: ['pid', 'purpose', 'cleanup'],
     },
   },
+  ask_user: {
+    name: 'ask_user',
+    description:
+      'Ask the user for a decision or for something only they can give (a permission, a missing input, a choice between approaches). The question is shown to them as a decision with your options and a box for any other answer. After calling it, stop and end your turn: the answer comes in your next message. Never only write a question in your reply or report — the user is not asked it and the workflow goes on without an answer. Do not ask about things you can decide or check yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'What you need decided, with the facts the user needs to decide (in the language of the goal).' },
+        options: { type: 'array', items: { type: 'string' }, description: 'Up to 6 short answers to choose from (the user can also write their own).' },
+      },
+      required: ['question'],
+    },
+  },
   reply_user: {
     name: 'reply_user',
     description:
@@ -378,11 +391,11 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     inputSchema: {
       type: 'object',
       properties: {
-        topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index".' },
+        topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index", or "log" for the full conversation log of every agent and the user (with page: 1 = the newest 100 entries, 2 the 100 before…).' },
         agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
         part: { type: 'string', enum: ['all', 'messages', 'tools'], description: 'With agent_id: only its messages (what it said and concluded) or only its tool calls with their output. Default all.' },
-        page: { type: 'number', description: 'With agent_id: 1 (default) is the newest part of the conversation, 2 the part before it, and so on.' },
+        page: { type: 'number', description: 'With agent_id or topic "log": 1 (default) is the newest part, 2 the part before it, and so on.' },
       },
     },
   },
@@ -436,7 +449,7 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
   if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', 'update_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
   if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
-  if (role !== 'test' && role !== 'advisor' && role !== 'adjudicator') names.push('reply_user');
+  if (role !== 'test' && role !== 'advisor' && role !== 'adjudicator') names.push('reply_user', 'ask_user');
   if (role === 'test') names.push('list_providers');
   else names.push('capture_screenshot');
   // Anything that changes GitHub or another outside service needs the user's OK first (the advisor only advises).

@@ -57,7 +57,7 @@ import { autoAssign, DEFAULT_AUTO } from './assign';
 import { diffSnapshots, snapshot, type Snapshot } from './outputs';
 import { captureScreenshot, isLoopbackUrl, resolveTarget } from './screenshot';
 import { CliPool } from './cliPool';
-import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf, HANDOFF_NOTE, TRANSCRIPT_PAGE, roleName } from './context';
+import { agentLabel, agentResult, allNotes, contextBlock, formatTranscript, overview, sharingOf, HANDOFF_NOTE, TRANSCRIPT_PAGE, roleName, conversationLog, logPage } from './context';
 import { codexContext, compactCodexThread, estimateTokens, opencodeModel } from './agentContext';
 import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, safeGit } from './worktree';
 import * as P from './prompts';
@@ -619,6 +619,10 @@ export class Orchestrator {
     while (this.pausedAgents.delete(info.id) && !this.aborted(run)) {
       info.status = 'paused';
       this.touch(run);
+      // It asked the user something: the user decides (as long as they need), then it goes on with the answer.
+      const question = this.questions.get(info.id);
+      this.questions.delete(info.id);
+      const answer = question ? await this.askUserFor(run, info, question) : undefined;
       const said = this.agentNotes.get(info.id);
       this.agentNotes.delete(info.id);
       const note = [said, await this.waitIfPaused(run)].filter(Boolean).join('\n') || undefined;
@@ -631,12 +635,60 @@ export class Orchestrator {
       const updated = amend ? await this.amendPlan(run, amend) : false;
       const extra = updated ? `\n\n${P.planUpdatedPrompt(run.plan)}` : note ? `\n\n${P.userMessagePrompt(note, { planner: info.role === 'executor' && run.config.plan.enabled && !!run.plan })}` : '';
       const since = now();
-      res = canResume
+      res = question && answer !== undefined
+        ? canResume
+          ? await this.invoke(run, info, P.userAnswerPrompt(question.question, answer) + extra, mode, session, res.lastSeq)
+          : await this.invoke(run, info, `${prompt}\n\n${P.userAnswerPrompt(question.question, answer)}${extra}`, mode, resume, res.lastSeq)
+        : canResume
         ? await this.invoke(run, info, (updated ? '' : P.resumeAfterPause()) + extra, mode, session, res.lastSeq)
         : await this.invoke(run, info, prompt + extra, mode, resume, res.lastSeq);
       if (note && !updated) this.autoReply(run, info, since);
     }
     return res;
+  }
+
+  /**
+   * Whether a role goes on in its CLI conversation from the round before. Off by default: each turn starts a new one
+   * with the brief and the newest of the conversation log, so a loop of many rounds does not resend its whole history
+   * with every model call. (A turn that was paused, asked the user or failed still goes on in its own conversation.)
+   */
+  private keepsSessions(run: WorkflowRun): boolean {
+    return run.config.context?.keepSessions === true;
+  }
+
+  /** Questions agents asked the user with ask_user, answered once their turn has stopped. */
+  private questions = new Map<string, { question: string; options: string[] }>();
+  /** One question at a time per workflow (sub-agents may ask while another waits). */
+  private askLocks = new Map<string, Promise<unknown>>();
+
+  /** Show an agent's question as a decision (its options, plus a box for any other answer) and wait for the answer. */
+  private async askUserFor(run: WorkflowRun, info: AgentRunInfo, q: { question: string; options: string[] }): Promise<string> {
+    const before = this.askLocks.get(run.id) ?? Promise.resolve();
+    let done!: () => void;
+    const mine = new Promise<void>((r) => (done = r));
+    this.askLocks.set(run.id, before.then(() => mine));
+    await before.catch(() => undefined);
+    try {
+      const who = `${this.providerName(info.provider)} · ${roleLabel(info.role)}`;
+      this.log(run, L(`${who} 有問題要問你`, `${who} has a question for you`), 'warn', true);
+      const options = q.options.map((label, i) => ({ id: `answer:${i}`, label }));
+      const dec = await this.ask(
+        run,
+        info.stage ?? 'run',
+        L(`${who} 問你：${q.question}`, `${who} asks: ${q.question}`),
+        [...(options.length ? options : [{ id: 'answer', label: L('送出回覆（寫在下面）', 'Send the answer (write it below)') }]), { id: 'abort', label: L('中止工作流', 'Stop the workflow') }],
+        true,
+      );
+      if (dec.optionId === 'abort') throw new Cancelled();
+      const picked = options.find((o) => o.id === dec.optionId)?.label;
+      const answer = [picked, dec.text].filter(Boolean).join(' — ') || L('（沒有填寫內容）', '(no text given)');
+      // Kept as a decision, so later agents and rounds do not ask the same again.
+      (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, kind: 'decision', text: `The user answered ${who}'s question "${q.question.slice(0, 600)}": ${answer.slice(0, 1200)}`, ts: now() });
+      this.touch(run);
+      return answer;
+    } finally {
+      done();
+    }
   }
 
   /** Agents that replied that a message changes the plan: the message the planner must take in. */
@@ -661,7 +713,7 @@ export class Orchestrator {
     const stage = run.stages.plan;
     this.log(run, L('你追加的訊息改變了需求：請計畫者更新計畫', 'Your message changes the task: the planner updates the plan'), 'info', true);
     const spec = this.d.registry.get(cfg.author.provider);
-    const resume = stage.authorSessionId && spec?.run.resume && spec.capabilities?.resume !== false ? stage.authorSessionId : undefined;
+    const resume = this.keepsSessions(run) && stage.authorSessionId && spec?.run.resume && spec.capabilities?.resume !== false ? stage.authorSessionId : undefined;
     const prompt = resume ? P.amendPlanPrompt(message) : `${P.planDraftPrompt(run.config, '')}\n\nCURRENT PLAN:\n${P.planBlock(run.plan)}\n\n${P.amendPlanPrompt(message)}`;
     const n = stage.rounds.length + 1;
     const round: Round = { n, userFeedback: message };
@@ -1317,6 +1369,19 @@ export class Orchestrator {
         const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
         return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how;
       }
+      case 'ask_user': {
+        const question = String(args.question ?? '').trim().slice(0, 3000);
+        if (!question) throw new Error('question is required');
+        const options = (Array.isArray(args.options) ? args.options : [])
+          .map((x: unknown) => String(x ?? '').trim().slice(0, 200))
+          .filter(Boolean)
+          .slice(0, 6);
+        this.questions.set(info.id, { question, options });
+        // Its turn stops here; the answer starts the next one (no tool call has to stay open while the user decides).
+        this.pausedAgents.add(info.id);
+        setTimeout(() => this.agentAborts.get(info.id)?.abort(), 400);
+        return 'Your question is shown to the user as a decision. Stop here and end your turn now; their answer comes in your next message.';
+      }
       case 'reply_user': {
         const text = String(args.text ?? '').trim().slice(0, 1000);
         if (!text) throw new Error('text is required');
@@ -1385,6 +1450,7 @@ export class Orchestrator {
       case 'read_context': {
         const topic = String(args.topic ?? '').trim();
         if (topic) {
+          if (/^log$/i.test(topic)) return logPage(conversationLog(run, (aid) => this.events(run.id, aid)), Number(args.page) || 1);
           if (/^knowledge$/i.test(topic)) return run.knowledge ? `SHARED KNOWLEDGE (organized from ${run.knowledge.notes} notes; newer notes are in the shared context):\n${run.knowledge.doc}` : 'No organized knowledge yet: read the shared notes in the shared context, or read_context {topic: "facts"}.';
           const topics = buildTopics(run, (aid) => this.events(run.id, aid));
           return /^index$/i.test(topic) ? topicList(topics) : topicDetail(run, topics, topic);
@@ -1769,7 +1835,7 @@ export class Orchestrator {
     let verification: Verification | undefined;
     for (;;) {
       const spec = this.d.registry.get(who.provider);
-      const canResume = !!(spec?.run.resume && spec.capabilities?.resume !== false);
+      const canResume = !!(this.keepsSessions(run) && spec?.run.resume && spec.capabilities?.resume !== false);
       // The planner verifies in its own conversation (it knows why it set each metric); a verifier keeps its own.
       const own = byPlanner && who.provider === run.config.plan.author.provider && run.config.plan.enabled ? run.stages.plan.authorSessionId : stage.authorSessionId;
       const resume = canResume ? own : undefined;
@@ -1849,7 +1915,7 @@ export class Orchestrator {
   private async adjudicate(run: WorkflowRun, key: StageKey, round: number, disputed: ReviewIssue[]) {
     const cfg = run.config[key];
     const stage = run.stages[key];
-    const provider = this.otherVendor(run, cfg.author.provider, [cfg.reviewer?.provider]);
+    let provider = this.otherVendor(run, cfg.author.provider, [cfg.reviewer?.provider]);
     const history = (i: ReviewIssue) =>
       stage.rounds
         .filter((r) => r.review)
@@ -1861,19 +1927,58 @@ export class Orchestrator {
         .filter(Boolean)
         .join('\n');
     this.log(run, L(`審查者與作者對 ${disputed.map((i) => i.id).join('、')} 意見不合，交由 ${this.providerName(provider)} 依證據裁定`, `The reviewer and the author disagree on ${disputed.map((i) => i.id).join(', ')}; ${this.providerName(provider)} rules on the evidence`), 'warn', true);
-    const r = await this.runRole(run, {
-      role: 'adjudicator',
-      roleCfg: { provider },
-      stage: key,
-      round,
-      prompt: P.adjudicatePrompt(run.config, disputed.map((i) => ({ id: i.id, title: i.title, history: history(i) }))),
-      mode: 'readonly',
-      expect: 'submit_ruling',
-      task: L('依證據裁定爭議', 'Rule on the disputes'),
-    });
-    const rulings = (r.sub?.rulings ?? []).filter((x) => disputed.some((i) => i.id === x.issue_id));
+    // An adjudicator that cannot run (out of quota, signed out…) hands over to another provider; when none is left,
+    // the user decides. Carrying on without a ruling would only send the same dispute round again and again.
+    const tried: string[] = [];
+    let r: Awaited<ReturnType<Orchestrator['runRole']>>;
+    let rulings: { issue_id: string; ruling: 'uphold' | 'dismiss'; reason: string }[] = [];
+    for (;;) {
+      r = await this.runRole(run, {
+        role: 'adjudicator',
+        roleCfg: { provider },
+        stage: key,
+        round,
+        prompt: P.adjudicatePrompt(run.config, disputed.map((i) => ({ id: i.id, title: i.title, history: history(i) }))),
+        mode: 'readonly',
+        expect: 'submit_ruling',
+        task: L('依證據裁定爭議', 'Rule on the disputes'),
+      });
+      rulings = (r.sub?.rulings ?? []).filter((x) => disputed.some((i) => i.id === x.issue_id));
+      const failure = r.info.failure;
+      if (rulings.length || r.sub || this.aborted(run) || this.stoppedByUser.has(r.info.id) || !failure || !recoveryFor(failure.kind, 99, L).failover) break;
+      tried.push(provider);
+      const next = this.otherVendor(run, cfg.author.provider, [cfg.reviewer?.provider, ...tried]);
+      if (!tried.includes(next) && next !== cfg.author.provider) {
+        this.log(run, L(`${this.providerName(provider)} 無法裁定（${failure.action}），改由 ${this.providerName(next)} 裁定`, `${this.providerName(provider)} could not rule (${failure.action}); ${this.providerName(next)} rules instead`), 'warn', true);
+        provider = next;
+        continue;
+      }
+      const dec = await this.ask(
+        run,
+        key,
+        L(
+          `裁定者無法執行（${tried.map((p) => this.providerName(p)).join('、')}：${failure.message.slice(0, 200)}）。審查者與作者對 ${disputed.map((i) => i.id).join('、')} 的爭議要怎麼處理？`,
+          `The adjudicator could not run (${tried.map((p) => this.providerName(p)).join(', ')}: ${failure.message.slice(0, 200)}). What to do about the dispute on ${disputed.map((i) => i.id).join(', ')}?`,
+        ),
+        [
+          ...this.switchOptions('').filter((o) => !tried.includes(o.id.slice(7))),
+          { id: 'retry', label: L('再試一次', 'Try again') },
+          { id: 'keep', label: L('維持審查者的意見（作者繼續修改）', "Keep the reviewer's view (the author keeps fixing)") },
+          { id: 'dismiss', label: L('駁回這些問題（作者的說法成立）', "Dismiss them (the author's case stands)") },
+          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+        ],
+      );
+      if (dec.optionId === 'abort') throw new Cancelled();
+      if (dec.optionId.startsWith('switch:')) {
+        provider = dec.optionId.slice(7);
+        continue;
+      }
+      if (dec.optionId === 'retry') continue;
+      if (dec.optionId === 'dismiss') rulings = disputed.map((i) => ({ issue_id: i.id, ruling: 'dismiss' as const, reason: L('你決定駁回', 'Dismissed by you') }));
+      break;
+    }
     if (!rulings.length) {
-      this.log(run, L('裁定者沒有交出裁定，爭議的問題維持原狀', 'The adjudicator gave no ruling; the disputed issues stay'), 'warn', true);
+      this.log(run, r.info.failure ? L(`裁定者無法執行（${r.info.failure.action}），爭議的問題維持原狀`, `The adjudicator could not run (${r.info.failure.action}); the disputed issues stay`) : L('裁定者沒有交出裁定，爭議的問題維持原狀', 'The adjudicator gave no ruling; the disputed issues stay'), 'warn', true);
       return [];
     }
     for (const x of rulings) {
@@ -1932,6 +2037,20 @@ export class Orchestrator {
         if (dec.optionId === 'accept') break;
         stage.roundLimit += 2;
         if (dec.text) userFeedback = dec.text;
+      } else if (!stage.roundLimit && stage.rounds.length && stage.rounds.length % 10 === 0) {
+        // No limit: still check in every 10 rounds, so a loop that is going nowhere does not burn quota for hours.
+        const tokens = Object.values(run.agents)
+          .filter((a) => a.stage === key)
+          .reduce((sum, a) => sum + (a.tokens ? a.tokens.input + a.tokens.output + a.tokens.cached : 0), 0);
+        const used = tokens ? L(`，這個階段已用約 ${(tokens / 1e6).toFixed(1)}M tokens`, `, about ${(tokens / 1e6).toFixed(1)}M tokens so far in this stage`) : '';
+        const dec = await this.ask(run, key, L(`${stageName}已進行 ${stage.rounds.length} 輪，審查仍未通過${used}。要繼續嗎？（可以在下面寫給作者與審查者的指示）`, `${stageName} has gone ${stage.rounds.length} rounds without approval${used}. Go on? (You can write instructions for the author and the reviewer below.)`), [
+          { id: 'more', label: L('再進行 10 輪', 'Go 10 more rounds') },
+          { id: 'accept', label: L('視為通過，繼續', 'Accept and continue') },
+          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+        ]);
+        if (dec.optionId === 'abort') throw new Cancelled();
+        if (dec.optionId === 'accept') break;
+        if (dec.text) userFeedback = dec.text;
       }
 
       const n = stage.rounds.length + 1;
@@ -1944,7 +2063,7 @@ export class Orchestrator {
       const subText = this.subBlock(run, 0);
       const buildPrompt = () => {
         const authorSpec = this.d.registry.get(cfg.author.provider);
-        const resume = !!(stage.authorSessionId && authorSpec?.run.resume && authorSpec.capabilities?.resume !== false);
+        const resume = !!(this.keepsSessions(run) && stage.authorSessionId && authorSpec?.run.resume && authorSpec.capabilities?.resume !== false);
         if (entry && n === firstN) {
           if (resume) return { resume, prompt: entry.prompt() };
           const base = isPlan
@@ -2051,7 +2170,7 @@ export class Orchestrator {
       const reviewerTried = new Set<string>();
       for (;;) {
         const reviewerSpec = this.d.registry.get(cfg.reviewer.provider);
-        const reviewerResume = !!(stage.reviewerSessionId && reviewerSpec?.run.resume && reviewerSpec.capabilities?.resume !== false);
+        const reviewerResume = !!(this.keepsSessions(run) && stage.reviewerSessionId && reviewerSpec?.run.resume && reviewerSpec.capabilities?.resume !== false);
         const changes = isPlan ? '' : await this.describeChanges(run);
         const evidence = isPlan ? undefined : evidenceStamp(run.config.cwd, run.plan?.goal?.data);
         const rprompt = isPlan
