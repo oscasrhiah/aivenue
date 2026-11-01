@@ -80,90 +80,92 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
       </button>
       {open && (
         <div className="ctx-pop" role="dialog">
-          <div className="ctx-head">{t('Aivenue 共用上下文', 'Aivenue shared context')}</div>
-          {summaryOnly ? (
-            <div className="muted small">{t('這段對話設為「只交摘要」，agent 之間不共用上下文。', 'This conversation shares summaries only; agents share no context.')}</div>
-          ) : (
-            <>
-              <div className="ctx-big">
-                {t(`已用 ${Math.round(pct)}%`, `${Math.round(pct)}% used`)} <span className="muted small">（{fmtTokens(used)} / {fmtTokens(cap)}，{t('估計', 'estimated')}）</span>
-              </div>
-              <div className="ctx-bar">
-                <div className={cx('ctx-bar-fill', level(pct))} style={{ width: `${pct}%` }} />
-                <div className="ctx-bar-mark" style={{ left: `${at * 100}%` }} title={t('自動壓縮門檻', 'Auto-compaction threshold')} />
-              </div>
-              <div className="muted small">
-                {used >= cap * at
-                  ? t('已超過自動壓縮門檻，下一個 agent 開始前會先壓縮。', 'Over the threshold: compacted before the next agent starts.')
-                  : t(`再約 ${fmtTokens(cap * at - used)} 會自動壓縮（${Math.round(at * 100)}%）。`, `Compacts automatically in about ${fmtTokens(cap * at - used)} (${Math.round(at * 100)}%).`)}
-              </div>
-              {run.memory && (
-                <div className="muted small">
-                  {t(`上次壓縮：約 ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)}（${run.memory.by ?? ''}）`, `Last compaction: about ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)} (${run.memory.by ?? ''})`)}
-                  {run.memory.kept?.length ? t(`，逐字保留 ${run.memory.kept.length} 項`, `, ${run.memory.kept.length} item(s) kept verbatim`) : ''}
+          <div className="ctx-pop-body">
+            <div className="ctx-head">{t('Aivenue 共用上下文', 'Aivenue shared context')}</div>
+            {summaryOnly ? (
+              <div className="muted small">{t('這段對話設為「只交摘要」，agent 之間不共用上下文。', 'This conversation shares summaries only; agents share no context.')}</div>
+            ) : (
+              <>
+                <div className="ctx-big">
+                  {t(`已用 ${Math.round(pct)}%`, `${Math.round(pct)}% used`)} <span className="muted small">（{fmtTokens(used)} / {fmtTokens(cap)}，{t('估計', 'estimated')}）</span>
                 </div>
-              )}
-              <div className="row gap ctx-actions">
-                <button className="btn small" disabled={busy || !used} onClick={() => call('workflows.compactShared', { id: run.id })}>
-                  {busy && run.compacting?.target === 'shared' ? t('壓縮中…', 'Compacting…') : t('現在壓縮', 'Compact now')}
-                </button>
-                <span className="muted tiny">{t(`壓縮者：${compactor}，約讀 ${fmtTokens(used)} tokens`, `Compactor: ${compactor}, reads about ${fmtTokens(used)} tokens`)}</span>
-              </div>
-              <div className="ctx-head sub">{t('共用知識', 'Shared knowledge')}</div>
-              <div className="muted small">
-                {run.knowledge
-                  ? t(`已把 ${run.knowledge.notes} 則筆記依主題整理（${run.knowledge.by ?? ''}）`, `${run.knowledge.notes} notes organized by subject (${run.knowledge.by ?? ''})`)
-                  : t('還沒整理過。', 'Not organized yet.')}{' '}
-                {t(`新筆記 ${fresh} 則`, `${fresh} new note(s)`)}
-                {every ? t(`，滿 ${every} 則自動整理。`, `; organized automatically at ${every}.`) : t('，不自動整理。', '; not organized automatically.')}
-              </div>
-              <div className="row gap ctx-actions">
-                <button
-                  className="btn small"
-                  disabled={organizing || !fresh}
-                  onClick={() => {
-                    setError(undefined);
-                    setOrganizing(true);
-                    hub
-                      .call('workflows.organizeShared', { id: run.id })
-                      .catch((e) => setError((e as Error).message))
-                      .finally(() => setOrganizing(false));
-                  }}
-                >
-                  {organizing ? t('整理中…', 'Organizing…') : t('現在整理', 'Organize now')}
-                </button>
-                <span className="muted tiny">{t('依主題整理筆記與 findings，每一條附出處；原本的筆記不變', 'Sorts the notes and findings by subject, each line with its source; the notes stay as they are')}</span>
-              </div>
-            </>
-          )}
-          <div className="ctx-head sub">{t('各 agent 自己的對話', "Each agent's own conversation")}</div>
-          {conversations(run).length === 0 && <div className="muted small">{t('還沒有 agent 的對話。', 'No agent conversation yet.')}</div>}
-          {conversations(run).map((a) => {
-            const c = a.context;
-            const p = c?.used && c.window ? Math.min(100, (c.used / c.window) * 100) : undefined;
-            const compactingThis = run.compacting?.target === a.id;
-            return (
-              <div key={a.id} className="ctx-agent">
-                <span className="grow">
-                  {roleLabel(t, a.role)} · {providerName(providers, a.provider)}
-                  <span className={cx('small', p !== undefined ? level(p) && `${level(p)}-text` : 'muted')}>
-                    {' '}
-                    {p !== undefined
-                      ? `${Math.round(p)}%（${fmtTokens(c!.used!)} / ${fmtTokens(c!.window!)}）`
-                      : c?.compactedAt
-                        ? t('已壓縮，下一輪更新', 'compacted; updates next turn')
-                        : c?.used
-                          ? `${fmtTokens(c.used)} · ${t('上限無法取得', 'limit unknown')}`
-                          : t('無法取得', 'unknown')}
+                <div className="ctx-bar">
+                  <div className={cx('ctx-bar-fill', level(pct))} style={{ width: `${pct}%` }} />
+                  <div className="ctx-bar-mark" style={{ left: `${at * 100}%` }} title={t('自動壓縮門檻', 'Auto-compaction threshold')} />
+                </div>
+                <div className="muted small">
+                  {used >= cap * at
+                    ? t('已超過自動壓縮門檻，下一個 agent 開始前會先壓縮。', 'Over the threshold: compacted before the next agent starts.')
+                    : t(`再約 ${fmtTokens(cap * at - used)} 會自動壓縮（${Math.round(at * 100)}%）。`, `Compacts automatically in about ${fmtTokens(cap * at - used)} (${Math.round(at * 100)}%).`)}
+                </div>
+                {run.memory && (
+                  <div className="muted small">
+                    {t(`上次壓縮：約 ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)}（${run.memory.by ?? ''}）`, `Last compaction: about ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)} (${run.memory.by ?? ''})`)}
+                    {run.memory.kept?.length ? t(`，逐字保留 ${run.memory.kept.length} 項`, `, ${run.memory.kept.length} item(s) kept verbatim`) : ''}
+                  </div>
+                )}
+                <div className="row gap ctx-actions">
+                  <button className="btn small" disabled={busy || !used} onClick={() => call('workflows.compactShared', { id: run.id })}>
+                    {busy && run.compacting?.target === 'shared' ? t('壓縮中…', 'Compacting…') : t('現在壓縮', 'Compact now')}
+                  </button>
+                  <span className="muted tiny">{t(`壓縮者：${compactor}，約讀 ${fmtTokens(used)} tokens`, `Compactor: ${compactor}, reads about ${fmtTokens(used)} tokens`)}</span>
+                </div>
+                <div className="ctx-head sub">{t('共用知識', 'Shared knowledge')}</div>
+                <div className="muted small">
+                  {run.knowledge
+                    ? t(`已把 ${run.knowledge.notes} 則筆記依主題整理（${run.knowledge.by ?? ''}）`, `${run.knowledge.notes} notes organized by subject (${run.knowledge.by ?? ''})`)
+                    : t('還沒整理過。', 'Not organized yet.')}{' '}
+                  {t(`新筆記 ${fresh} 則`, `${fresh} new note(s)`)}
+                  {every ? t(`，滿 ${every} 則自動整理。`, `; organized automatically at ${every}.`) : t('，不自動整理。', '; not organized automatically.')}
+                </div>
+                <div className="row gap ctx-actions">
+                  <button
+                    className="btn small"
+                    disabled={organizing || !fresh}
+                    onClick={() => {
+                      setError(undefined);
+                      setOrganizing(true);
+                      hub
+                        .call('workflows.organizeShared', { id: run.id })
+                        .catch((e) => setError((e as Error).message))
+                        .finally(() => setOrganizing(false));
+                    }}
+                  >
+                    {organizing ? t('整理中…', 'Organizing…') : t('現在整理', 'Organize now')}
+                  </button>
+                  <span className="muted tiny">{t('依主題整理筆記與 findings，每一條附出處；原本的筆記不變', 'Sorts the notes and findings by subject, each line with its source; the notes stay as they are')}</span>
+                </div>
+              </>
+            )}
+            <div className="ctx-head sub">{t('各 agent 自己的對話', "Each agent's own conversation")}</div>
+            {conversations(run).length === 0 && <div className="muted small">{t('還沒有 agent 的對話。', 'No agent conversation yet.')}</div>}
+            {conversations(run).map((a) => {
+              const c = a.context;
+              const p = c?.used && c.window ? Math.min(100, (c.used / c.window) * 100) : undefined;
+              const compactingThis = run.compacting?.target === a.id;
+              return (
+                <div key={a.id} className="ctx-agent">
+                  <span className="grow">
+                    {roleLabel(t, a.role)} · {providerName(providers, a.provider)}
+                    <span className={cx('small', p !== undefined ? level(p) && `${level(p)}-text` : 'muted')}>
+                      {' '}
+                      {p !== undefined
+                        ? `${Math.round(p)}%（${fmtTokens(c!.used!)} / ${fmtTokens(c!.window!)}）`
+                        : c?.compactedAt
+                          ? t('已壓縮，下一輪更新', 'compacted; updates next turn')
+                          : c?.used
+                            ? `${fmtTokens(c.used)} · ${t('上限無法取得', 'limit unknown')}`
+                            : t('無法取得', 'unknown')}
+                    </span>
                   </span>
-                </span>
-                <button className="btn tiny" disabled={busy} title={methodOf(t, providers, a.provider)} onClick={() => call('workflows.compactAgent', { id: run.id, agentId: a.id })}>
-                  {compactingThis ? t('壓縮中…', 'Compacting…') : t('壓縮', 'Compact')}
-                </button>
-              </div>
-            );
-          })}
-          {error && <div className="note err small">{error}</div>}
+                  <button className="btn tiny" disabled={busy} title={methodOf(t, providers, a.provider)} onClick={() => call('workflows.compactAgent', { id: run.id, agentId: a.id })}>
+                    {compactingThis ? t('壓縮中…', 'Compacting…') : t('壓縮', 'Compact')}
+                  </button>
+                </div>
+              );
+            })}
+            {error && <div className="note err small">{error}</div>}
+          </div>
         </div>
       )}
     </span>

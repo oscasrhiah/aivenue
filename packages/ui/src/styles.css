@@ -3903,11 +3903,18 @@ textarea.code {
   border: 1px solid var(--line-strong);
   border-radius: 12px;
   box-shadow: var(--shadow-lg);
+  text-align: left;
+}
+
+/* A fixed-height popover: a long list of agents scrolls inside it instead of running off the screen. */
+.ctx-pop-body {
+  max-height: min(480px, calc(100vh - 120px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 7px;
-  text-align: left;
 }
 
 /* Bridge the gap so moving the mouse from the pie to the popover keeps it open. */
