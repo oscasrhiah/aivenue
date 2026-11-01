@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus } from '../../core/src/types';
+import { setPickedColors } from './util';
 
 type Listener = (data: any) => void;
 
@@ -162,7 +163,10 @@ export function useGithub(): GithubStatus {
 }
 
 export function useProviders(): ProviderInfo[] {
-  return useSynced<ProviderInfo[]>('providers.list', undefined, 'providers', [])[0];
+  const list = useSynced<ProviderInfo[]>('providers.list', undefined, 'providers', [])[0];
+  // The colours the user picked, for providerColor() everywhere.
+  setPickedColors(list);
+  return list;
 }
 
 export function useWorkflows(): WorkflowSummary[] {

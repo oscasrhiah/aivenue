@@ -109,11 +109,21 @@ export function cx(...parts: (string | false | undefined | null)[]): string {
 }
 
 const FIXED: Record<string, string> = { claude: '#d97757', codex: '#6b6b6b', gemini: '#4285f4', qwen: '#615ced', kimi: '#1f1f1f', copilot: '#8250df' };
-export function providerColor(id: string): string {
+/** Colours the user picked (Settings → Providers), kept up to date by useProviders. */
+const picked = new Map<string, string>();
+export function setPickedColors(list: { spec: { id: string }; color?: string }[]) {
+  picked.clear();
+  for (const p of list) if (p.color) picked.set(p.spec.id, p.color);
+}
+/** The usual colour, before any the user picked. */
+export function defaultProviderColor(id: string): string {
   if (FIXED[id]) return FIXED[id];
   let h = 0;
   for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return `hsl(${h % 360} 45% 50%)`;
+}
+export function providerColor(id: string): string {
+  return picked.get(id) ?? defaultProviderColor(id);
 }
 
 /** The top-level agent that was working when the user sent a mid-run message (its message is shown among its steps). */

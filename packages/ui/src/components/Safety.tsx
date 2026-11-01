@@ -3,6 +3,7 @@ import type { PermissionLevel, ProviderInfo, WorkflowRun } from '../../../core/s
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerName } from '../util';
+import { ask } from './Ask';
 
 export const PERMISSION_ICON: Record<PermissionLevel, string> = { plan: '📋', ask: '✋', edit: '✏️', auto: '⚡', full: '🛑' };
 
@@ -257,7 +258,7 @@ export function WorktreeCard({ run }: { run: WorkflowRun }) {
   if (wt.state !== 'active') return <div className="note">🧪 {wt.note}</div>;
   if (!finished) return null;
   const act = async (action: 'apply' | 'keep' | 'discard') => {
-    if (action === 'discard' && !confirm(t('捨棄隔離副本中的所有變更？', 'Discard all changes in the isolated copy?'))) return;
+    if (action === 'discard' && !(await ask(t('捨棄隔離副本中的所有變更？', 'Discard all changes in the isolated copy?'), { danger: true }))) return;
     setBusy(true);
     setError(undefined);
     try {

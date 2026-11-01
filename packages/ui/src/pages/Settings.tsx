@@ -4,6 +4,7 @@ import { hub, useHostInfo, useProviders, useUsage } from '../api';
 import { ACCENTS, saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, fmtTokens, modelLabel, providerColor, providerName } from '../util';
 import { ProvidersPane } from './Providers';
+import { useDragOrder, type DragProps } from '../components/DragOrder';
 import { CapabilitiesPane } from './Capabilities';
 
 type Tab = 'general' | 'providers' | 'capabilities' | 'usage';
@@ -168,14 +169,19 @@ function AntigravityConnect({ connected, error }: { connected: boolean; error?: 
   );
 }
 
-function UsageCard({ u, name }: { u: ProviderUsage; name: string }) {
+function UsageCard({ u, name, drag }: { u: ProviderUsage; name: string; drag?: DragProps }) {
   const t = useT();
   const max = Math.max(1, ...u.daily.map((d) => d.input + d.output + d.cached));
   const windowLabel = (m: number) => (m >= 43200 ? t('每月', 'Monthly') : m >= 10080 ? t('每週', 'Weekly') : m >= 1440 ? t(`${Math.round(m / 1440)} 天`, `${Math.round(m / 1440)}-day`) : t(`${Math.round(m / 60)} 小時`, `${Math.round(m / 60)}-hour`));
   const resets = (ts?: number) => (ts ? t(`重置於 ${new Date(ts).toLocaleString()}`, `Resets ${new Date(ts).toLocaleString()}`) : undefined);
   return (
-    <div className="ucard">
+    <div className={cx('ucard', drag?.dragging && 'dragging', drag?.over)} {...drag?.row}>
       <div className="row gap">
+        {drag && (
+          <span className="prow-grip" title={t('拖動調整順序', 'Drag to reorder')} aria-hidden="true" {...drag.grip}>
+            ⋮⋮
+          </span>
+        )}
         <span className="mark lg" style={{ background: providerColor(u.providerId) }} />
         <strong className="grow">{name}</strong>
         {u.official?.plan && <span className="tag">{u.official.plan}</span>}
@@ -299,6 +305,17 @@ function UsagePane() {
   // Pushed updates (a run just finished) are newer than our last fetch.
   const usage = fresh && (pushed[0]?.checkedAt ?? 0) <= (fresh[0]?.checkedAt ?? 0) ? fresh : pushed;
   const checkedAt = usage[0]?.checkedAt;
+  // The cards follow the providers' order, and dragging them changes it (in Settings → Providers too).
+  const ids = providers.map((p) => p.spec.id);
+  const rank = (id: string) => (ids.includes(id) ? ids.indexOf(id) : ids.length);
+  const sorted = [...usage].sort((a, b) => rank(a.providerId) - rank(b.providerId));
+  const order = useDragOrder(sorted, (u) => u.providerId, (next) => {
+    // The cards take the places the same providers had; the others (no card) stay where they are.
+    const slots = ids.filter((id) => next.includes(id));
+    let k = 0;
+    const full = ids.map((id) => (slots.includes(id) ? next.filter((x) => ids.includes(x))[k++] : id));
+    return hub.call('providers.setOrder', { ids: [...full, ...next.filter((x) => !ids.includes(x))] });
+  }, 'x');
   return (
     <div className="pane">
       <div className="pane-head">
@@ -319,8 +336,8 @@ function UsagePane() {
         </div>
       </div>
       <div className="ugrid">
-        {usage.map((u) => (
-          <UsageCard key={u.providerId} u={u} name={providerName(providers, u.providerId)} />
+        {order.list.map((u) => (
+          <UsageCard key={u.providerId} u={u} name={providerName(providers, u.providerId)} drag={order.props(u.providerId)} />
         ))}
       </div>
     </div>

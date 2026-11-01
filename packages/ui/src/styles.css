@@ -5179,3 +5179,33 @@ textarea.code {
   margin-top: 4px;
   overflow-wrap: anywhere;
 }
+
+.modal.ask {
+  width: min(460px, 94vw);
+}
+
+.ask-text {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
+
+.ucard.dragging {
+  opacity: 0.45;
+}
+.ucard.drop-before {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.ucard.drop-after {
+  box-shadow: inset -3px 0 0 var(--accent);
+}
+
+.color-pick {
+  width: 36px;
+  height: 26px;
+  padding: 0 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+}

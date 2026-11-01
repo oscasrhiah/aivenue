@@ -1,4 +1,4 @@
-import { useEffect, useState, type HTMLAttributes } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentEvent, ProviderInfo, ProviderSpec, TestResult } from '../../../core/src/types';
 import { hub, mergeEvent, useHostInfo, useProviders } from '../api';
 import { Transcript } from '../components/Transcript';
@@ -6,6 +6,8 @@ import { ModelPicker } from '../components/ModelPicker';
 import { CatalogPicker } from '../components/CatalogPicker';
 import { useT } from '../i18n';
 import { cx, elapsed, providerColor } from '../util';
+import { useDragOrder, type DragProps } from '../components/DragOrder';
+import { ask } from '../components/Ask';
 
 /** English copies of the built-in providers' notes (specs are user data and stay as written). */
 const EN_NOTES: Record<string, { description?: string; login?: string; api?: string }> = {
@@ -152,6 +154,20 @@ function SpecEditor({ initial, isNew, onClose }: { initial: ProviderSpec; isNew:
       </div>
     </div>
   );
+}
+
+/** "#rrggbb" for the colour input, also from the hsl() of an id without a fixed colour. */
+function toHex(color: string): string {
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color;
+  const m = color.match(/hsl\((\d+)\s+(\d+)%\s+(\d+)%\)/);
+  if (!m) return '#888888';
+  const [h, s, l] = [Number(m[1]), Number(m[2]) / 100, Number(m[3]) / 100];
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const c = l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
 }
 
 function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; drag?: DragProps }) {
@@ -330,6 +346,23 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
           </div>
           <div className="muted tiny">{t('沒有指定模型的角色（包含自動指派與 sub agent）會使用這組預設。', 'Used by roles that do not pick a model, including auto assignment and sub-agents.')}</div>
 
+          <div className="row gap wrap">
+            <span>{t('顏色', 'Colour')}</span>
+            <input
+              type="color"
+              className="color-pick"
+              value={toHex(providerColor(s.id))}
+              title={t('執行頁面、Agent map 與用量頁面都用這個顏色標示', 'Marks it on the run page, the agent map and the usage page')}
+              onChange={(e) => void hub.call('providers.setColor', { id: s.id, color: e.target.value })}
+            />
+            {p.color && (
+              <button className="btn ghost small" onClick={() => void hub.call('providers.setColor', { id: s.id })}>
+                {t('恢復預設', 'Reset')}
+              </button>
+            )}
+            <span className="muted tiny">{t('執行時這個帳號的 agent 會用這個顏色標示。', "Its agents are marked with this colour while they work.")}</span>
+          </div>
+
           {s.accounts && !s.accountOf && <AddAccount providerId={s.id} name={s.name} />}
           {s.accountHome && <div className="muted tiny mono">{t(`這個帳號的登入資料：${s.accountHome}`, `This account's sign-in data: ${s.accountHome}`)}</div>}
 
@@ -341,9 +374,9 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
               <span className="grow" />
               <button
                 className="btn ghost danger"
-                onClick={() => {
-                  if (!confirm(t(`移除帳號「${s.accountName}」？`, `Remove the account "${s.accountName}"?`))) return;
-                  const deleteData = confirm(t('也要刪除這個帳號在這台電腦上的登入資料嗎？（按「取消」會保留，之後重新加入同名帳號不用再登入）', 'Also delete this account\'s sign-in data on this computer? (Cancel keeps it, so re-adding the account later needs no new sign-in)'));
+                onClick={async () => {
+                  if (!(await ask(t(`移除帳號「${s.accountName}」？`, `Remove the account "${s.accountName}"?`), { danger: true }))) return;
+                  const deleteData = (await ask(t('也要刪除這個帳號在這台電腦上的登入資料嗎？（保留的話，之後重新加入同名帳號不用再登入）', 'Also delete this account\'s sign-in data on this computer? (If kept, re-adding the account later needs no new sign-in)'), { ok: t('刪除登入資料', 'Delete sign-in data'), cancel: t('保留', 'Keep'), danger: true }));
                   void call('delete', 'providers.removeAccount', { id: s.id, deleteData });
                 }}
               >
@@ -368,8 +401,8 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
               <button
                 className="btn ghost"
                 title={p.uninstallCommand}
-                onClick={() =>
-                  confirm(t(`解除安裝 ${s.name}？\n\n會在終端機執行：${p.uninstallCommand}\n登入資料與設定不會刪除，之後重新安裝即可再用。`, `Uninstall ${s.name}?\n\nThis runs in a terminal: ${p.uninstallCommand}\nSign-in data and settings are kept, so reinstalling brings it back.`)) &&
+                onClick={async () =>
+                  (await ask(t(`解除安裝 ${s.name}？\n\n會在終端機執行：${p.uninstallCommand}\n登入資料與設定不會刪除，之後重新安裝即可再用。`, `Uninstall ${s.name}?\n\nThis runs in a terminal: ${p.uninstallCommand}\nSign-in data and settings are kept, so reinstalling brings it back.`), { danger: true })) &&
                   call('uninstall', 'providers.uninstall', { id: s.id })
                 }
               >
@@ -382,7 +415,7 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
               </button>
             )}
             {!managed && (
-              <button className="btn ghost danger" onClick={() => confirm(t(`移除 ${s.name}？`, `Remove ${s.name}?`)) && call('delete', 'providers.delete', { id: s.id })}>
+              <button className="btn ghost danger" onClick={async () => (await ask(t(`移除 ${s.name}？`, `Remove ${s.name}?`), { danger: true })) && call('delete', 'providers.delete', { id: s.id })}>
                 {t('移除', 'Remove')}
               </button>
             )}
@@ -458,67 +491,12 @@ export function AgyWarning() {
   );
 }
 
-type DragProps = {
-  dragging: boolean;
-  over?: 'drop-before' | 'drop-after';
-  row: HTMLAttributes<HTMLDivElement> & { draggable: boolean };
-  grip: HTMLAttributes<HTMLSpanElement>;
-};
-
-/**
- * Drag the providers into the order you want (by the ⋮⋮ grip): every menu that lists them follows it. The new order
- * shows at once and is saved in Aivenue's provider settings.
- */
-function useProviderOrder(providers: ProviderInfo[]) {
-  const [local, setLocal] = useState<string[]>();
-  const [dragId, setDragId] = useState<string>();
-  const [armed, setArmed] = useState<string>();
-  const [over, setOver] = useState<{ id: string; after: boolean }>();
-  // The saved order arrived (or a provider was added or removed): drop the optimistic one.
-  const key = providers.map((p) => p.spec.id).join('|');
-  useEffect(() => setLocal(undefined), [key]);
-  const ids = local ?? providers.map((p) => p.spec.id);
-  const list = ids.map((id) => providers.find((p) => p.spec.id === id)).filter((p): p is ProviderInfo => !!p);
-  const end = () => (setDragId(undefined), setOver(undefined), setArmed(undefined));
-  const props = (id: string): DragProps => ({
-    dragging: dragId === id,
-    over: over?.id === id && dragId && dragId !== id ? (over.after ? 'drop-after' : 'drop-before') : undefined,
-    row: {
-      // Only from the grip, so text in an open row can still be selected.
-      draggable: armed === id,
-      onDragStart: (e) => {
-        setDragId(id);
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', id);
-      },
-      onDragOver: (e) => {
-        if (!dragId) return;
-        e.preventDefault();
-        const r = e.currentTarget.getBoundingClientRect();
-        const after = e.clientY > r.top + r.height / 2;
-        if (over?.id !== id || over.after !== after) setOver({ id, after });
-      },
-      onDrop: (e) => {
-        e.preventDefault();
-        if (!dragId || dragId === id) return end();
-        const next = ids.filter((x) => x !== dragId);
-        const at = next.indexOf(id) + (over?.id === id && over.after ? 1 : 0);
-        next.splice(at, 0, dragId);
-        setLocal(next);
-        end();
-        hub.call('providers.setOrder', { ids: next }).catch(() => setLocal(undefined));
-      },
-      onDragEnd: end,
-    },
-    grip: { onMouseDown: () => setArmed(id), onMouseUp: () => setArmed(undefined) },
-  });
-  return { list, props };
-}
 
 export function ProvidersPane() {
   const t = useT();
   const providers = useProviders();
-  const order = useProviderOrder(providers);
+  // Drag the providers into the order you want (by the ⋮⋮ grip): every menu that lists them, and the usage page, follow it.
+  const order = useDragOrder(providers, (p) => p.spec.id, (ids) => hub.call('providers.setOrder', { ids }));
   const host = useHostInfo();
   const [adding, setAdding] = useState(false);
   const [checking, setChecking] = useState(false);

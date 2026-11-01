@@ -370,6 +370,8 @@ export interface ProviderInfo {
   /** Used when a role does not pick its own model / effort (also in auto assignment). */
   defaultModel?: string;
   defaultEffort?: string;
+  /** The colour the user picked for it ("#rrggbb"), shown wherever it appears; none: its usual colour. */
+  color?: string;
 }
 
 export type AuthMode = 'subscription' | 'api';

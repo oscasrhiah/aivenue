@@ -17,6 +17,7 @@ import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type R
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
+import { ask } from '../components/Ask';
 
 type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
@@ -846,13 +847,13 @@ export function Chat({ id }: { id?: string }) {
               📁
             </button>
             {active ? (
-              <button className="btn small danger" onClick={() => confirm(t('停止這個工作流？正在執行的 agent 會被中止。', 'Stop this workflow? Running agents will be terminated.')) && hub.call('workflows.cancel', { id: run.id })}>
+              <button className="btn small danger" onClick={async () => (await ask(t('停止這個工作流？正在執行的 agent 會被中止。', 'Stop this workflow? Running agents will be terminated.'), { danger: true })) && hub.call('workflows.cancel', { id: run.id })}>
                 {t('停止', 'Stop')}
               </button>
             ) : (
-              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} onClick={() => {
+              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} onClick={async () => {
                   const ids = thread?.ids ?? [run.id];
-                  if (!confirm(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息與紀錄？（不會動到專案檔案）`, `Delete this chat's ${ids.length} messages and logs? (project files are not touched)`) : t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)'))) return;
+                  if (!(await ask(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息與紀錄？（不會動到專案檔案）`, `Delete this chat's ${ids.length} messages and logs? (project files are not touched)`) : t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)'), { danger: true }))) return;
                   void ids.reduce((p, rid) => p.then(() => hub.call('workflows.delete', { id: rid })), Promise.resolve<unknown>(undefined)).then(() => navigate('new'));
                 }}>
                 🗑

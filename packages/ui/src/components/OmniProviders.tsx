@@ -3,6 +3,7 @@ import type { ExtensionStatus } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT } from '../i18n';
 import { cx } from '../util';
+import { ask } from './Ask';
 
 type Line = [zh: string, en: string];
 
@@ -163,7 +164,7 @@ function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNull
           <button className="btn small ghost" disabled={busy || c.test?.state === 'testing'} onClick={() => run(() => hub.call('extensions.omniTest', { id: c.id }))}>
             {t('重新測試', 'Check again')}
           </button>
-          <button className="btn small ghost danger" disabled={busy} onClick={() => confirm(t(`移除 ${p.name} 的連線？`, `Remove the ${p.name} connection?`)) && run(() => hub.call('extensions.omniDisconnect', { id: c.id }))}>
+          <button className="btn small ghost danger" disabled={busy} onClick={async () => (await ask(t(`移除 ${p.name} 的連線？`, `Remove the ${p.name} connection?`), { danger: true })) && run(() => hub.call('extensions.omniDisconnect', { id: c.id }))}>
             {t('移除', 'Remove')}
           </button>
           {c.test?.state === 'fail' && c.test.message && <div className="err-text tiny omni-conn-msg">{c.test.message}</div>}

@@ -6,6 +6,7 @@ import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
 import { ExtensionGuide } from '../components/ExtensionGuide';
 import { OmniProviders } from '../components/OmniProviders';
+import { ask } from '../components/Ask';
 
 const ROLES: InstructionRole[] = ['all', 'planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent'];
 
@@ -357,7 +358,7 @@ function ServerRow({ s }: { s: McpServerConfig }) {
           <button className="btn small ghost" onClick={() => setEditing(true)}>
             {t('編輯', 'Edit')}
           </button>
-          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={() => confirm(t(`刪除 ${s.id}？`, `Delete ${s.id}?`)) && hub.call('capabilities.deleteServer', { id: s.id })}>
+          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={async () => (await ask(t(`刪除 ${s.id}？`, `Delete ${s.id}?`), { danger: true })) && hub.call('capabilities.deleteServer', { id: s.id })}>
             ✕
           </button>
         </div>
@@ -552,7 +553,7 @@ function SkillRow({ s }: { s: SkillInfo }) {
           <button className="btn small ghost" onClick={() => hub.call('skills.openFolder', { name: s.name })}>
             {t('資料夾', 'Folder')}
           </button>
-          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={() => confirm(t(`刪除 skill「${s.name}」與其檔案？`, `Delete skill "${s.name}" and its files?`)) && hub.call('skills.delete', { name: s.name })}>
+          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={async () => (await ask(t(`刪除 skill「${s.name}」與其檔案？`, `Delete skill "${s.name}" and its files?`), { danger: true })) && hub.call('skills.delete', { name: s.name })}>
             ✕
           </button>
         </div>

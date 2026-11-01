@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useConnection, useThreads } from './api';
 import logo from './assets/logo.svg';
+import { AskHost } from './components/Ask';
 import { SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
@@ -126,6 +127,7 @@ export function App() {
           {route.page === 'settings' && <Settings tab={route.tab} backHref={lastChat} />}
         </main>
       </div>
+      <AskHost />
     </SettingsProvider>
   );
 }

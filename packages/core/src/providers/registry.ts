@@ -14,7 +14,7 @@ interface StoredProviders {
   /** Built-in ids the user removed. */
   hidden: string[];
   /** Per-provider user choices that are not part of the spec. */
-  settings: Record<string, { authMode: AuthMode; baseUrl?: string; defaultModel?: string; defaultEffort?: string }>;
+  settings: Record<string, { authMode: AuthMode; baseUrl?: string; defaultModel?: string; defaultEffort?: string; color?: string }>;
   /** Extra accounts of tools that can run several side by side (spec.accounts). */
   accounts: { providerId: string; slug: string; name: string }[];
   /** The order the user dragged the providers into (ids); the ones not in it keep their usual place after these. */
@@ -555,6 +555,15 @@ export class ProviderRegistry {
     return all.map((s, i) => ({ s, i })).sort((a, b) => rank(a.s.id) - rank(b.s.id) || a.i - b.i).map((x) => x.s);
   }
 
+  /** The colour the user picked for a provider or account ("#rrggbb"); none gives back its usual one. */
+  setColor(id: string, color?: string): void {
+    if (!this.get(id)) throw new Error(L('找不到這個供應商', 'Provider not found'));
+    if (color && !/^#[0-9a-f]{6}$/i.test(color)) throw new Error(L('顏色格式不正確', 'Invalid colour'));
+    this.stored.settings[id] = { ...(this.stored.settings[id] ?? { authMode: this.authMode(id) }), color: color?.toLowerCase() || undefined };
+    this.save();
+    this.onChange();
+  }
+
   setOrder(ids: string[]): void {
     this.stored.order = ids.filter((id, i) => typeof id === 'string' && ids.indexOf(id) === i);
     this.save();
@@ -583,6 +592,7 @@ export class ProviderRegistry {
         baseUrl: this.stored.settings[spec.id]?.baseUrl,
         defaultModel: this.stored.settings[spec.id]?.defaultModel,
         defaultEffort: this.stored.settings[spec.id]?.defaultEffort,
+        color: this.stored.settings[spec.id]?.color,
       };
     });
   }
