@@ -69,7 +69,7 @@ export function markStale(run: WorkflowRun, now: Pick<EvidenceStamp, 'treeHash' 
   const differs = (e: EvidenceStamp) => e.treeHash !== now.treeHash || (e.data ?? '') !== (now.data ?? '') || JSON.stringify(e.env) !== JSON.stringify(now.env);
   for (const stage of [run.stages.plan, run.stages.implement, run.stages.verify]) {
     for (const r of stage?.rounds ?? []) {
-      for (const res of [r.review, r.verification]) {
+      for (const res of [r.review, r.verification] as ({ evidence?: EvidenceStamp; stale?: boolean } | undefined)[]) {
         if (res?.evidence && !res.stale && differs(res.evidence) && stage !== run.stages.plan) {
           res.stale = true;
           n++;

@@ -901,6 +901,8 @@ export interface PlanStep {
   detail?: string;
   status: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped';
   note?: string;
+  /** The latest code review sent this step back: the ids of its issues (cleared when a review approves). */
+  rework?: string[];
 }
 
 export interface PlanDoc {
@@ -917,12 +919,16 @@ export interface ReviewIssue {
   title: string;
   detail?: string;
   location?: string;
+  /** The plan step it belongs to (its id), when the reviewer named one. */
+  step?: string;
 }
 
 export interface Review {
   verdict: 'approve' | 'revise';
   summary: string;
   issues: ReviewIssue[];
+  /** A code reviewer's reading of the acceptance metrics this round (progress only; goal verification still decides). */
+  goal?: { id: string; value: string; met: boolean; evidence: string }[];
   /** The code version the review looked at. */
   evidence?: EvidenceStamp;
   stale?: boolean;

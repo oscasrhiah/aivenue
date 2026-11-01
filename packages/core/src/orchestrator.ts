@@ -47,6 +47,7 @@ import { fileReadOf, ownWorkBlock, POLLING } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
+import { skillsReminder } from './capabilities';
 import { classifyTool } from './providers/parsers';
 import { L } from './i18n';
 import { LIMIT_PATTERN, quotaWindowKey, quotaWindowName, type UsageTracker } from './usage';
@@ -1953,6 +1954,22 @@ export class Orchestrator {
     return Object.values(run.agents).reduce((sum, a) => sum + (a.costUsd ?? 0), 0);
   }
 
+  /** A code review's issues reopen the plan steps they belong to; an approval closes them again. */
+  private markRework(run: WorkflowRun, review: Review) {
+    const back = new Map<string, string[]>();
+    if (review.verdict === 'revise') for (const i of review.issues) if (i.step) back.set(i.step, [...(back.get(i.step) ?? []), i.id]);
+    for (const st of run.steps) {
+      const ids = back.get(st.id);
+      if (ids) {
+        st.rework = ids;
+        if (st.status === 'done') st.status = 'in_progress';
+      } else if (st.rework) {
+        st.rework = undefined;
+        if (review.verdict === 'approve' || st.status === 'in_progress') st.status = 'done';
+      }
+    }
+  }
+
   /** Goal verification: the planner or an independent verifier measures every metric; the router decides what is next. */
   private async runVerify(run: WorkflowRun, vcfg: VerifyConfig): Promise<{ route: RouteDecision; verification: Verification }> {
     const stage = (run.stages.verify ??= { key: 'verify', status: 'pending', rounds: [], roundLimit: 999 });
@@ -2359,6 +2376,7 @@ export class Orchestrator {
       }
       if (accepted) break;
       round.review = review;
+      if (key === 'implement') this.markRework(run, review!);
       this.touch(run);
 
       // Rebutted and raised again: an independent ruling on the evidence, not another round of the same argument.
@@ -2589,6 +2607,8 @@ export class Orchestrator {
       const caps = this.d.capabilities;
       // Skills are announced once per conversation; a resumed session already has them.
       const skills = resume ? '' : caps.skillsBlock(info.role, run.config.cwd);
+      // A resumed conversation gets the names again: after a long run or a compaction the index is easy to lose.
+      const skillsAgain = resume && !plain ? skillsReminder(caps.skillsBlock(info.role, run.config.cwd)) : '';
       // Shown on the agent's header: skills it follows the whole time (they never show up as a file it reads).
       const always = [...skills.matchAll(/ALWAYS ON — (\S+) \(Ponytail, ([^)]*)\)/g)].map((m) => `${m[1]} · ${m[2].split(' — ')[0]}`);
       if (always.length) info.alwaysOn = always;
@@ -2644,7 +2664,7 @@ export class Orchestrator {
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills,
+        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills + skillsAgain,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,

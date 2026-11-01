@@ -16,6 +16,7 @@ const issuesSchema = {
       title: { type: 'string' },
       detail: { type: 'string' },
       location: { type: 'string', description: 'File/line or plan step the issue refers to.' },
+      step: { type: 'string', description: 'Code review: the id of the plan step this issue belongs to ("1", "2"…), if any.' },
     },
     required: ['id', 'severity', 'title'],
   },
@@ -112,6 +113,20 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         verdict: { type: 'string', enum: ['approve', 'revise'] },
         summary: { type: 'string' },
         issues: issuesSchema,
+        goal: {
+          type: 'array',
+          description: 'Code review with acceptance metrics only: where each metric stands now (progress shown to the user; it does not decide approval).',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'The metric id from the goal ("M1"…).' },
+              value: { type: 'string', description: 'What you found, or "not measured".' },
+              met: { type: 'boolean' },
+              evidence: { type: 'string', description: 'The command or file:line it rests on.' },
+            },
+            required: ['id', 'value', 'met'],
+          },
+        },
         findings: findingsSchema,
         handoff: handoffSchema,
       },
@@ -498,6 +513,7 @@ function parseIssues(v: unknown, prefix = 'R'): ReviewIssue[] {
         title: s(i?.title) || s(i?.detail).slice(0, 80),
         detail: i?.detail ? s(i.detail) : undefined,
         location: i?.location ? s(i.location) : undefined,
+        step: i?.step ? s(i.step).replace(/^(step|s)s*/i, '').slice(0, 40) : undefined,
       }))
     : [];
 }
@@ -535,7 +551,10 @@ export function parseReview(v: any): Review | undefined {
   const verdict = s(v.verdict).toLowerCase();
   if (!['approve', 'approved', 'revise', 'reject', 'changes_requested'].includes(verdict)) return undefined;
   const issues = parseIssues(v.issues);
-  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues };
+  const goal = Array.isArray(v.goal)
+    ? v.goal.filter((m: any) => m && typeof m === 'object' && s(m.id)).map((m: any) => ({ id: s(m.id), value: s(m.value), met: m.met === true || s(m.met).toLowerCase() === 'true', evidence: s(m.evidence) }))
+    : [];
+  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}) };
 }
 
 export function parseWork(v: any): { summary: string; responses?: IssueResponse[] } | undefined {

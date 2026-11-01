@@ -49,10 +49,10 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
           key: `step-${s.id}`,
           // Steps reported without a plan use free-form ids and often repeat the note as the title.
           label: /^\d/.test(s.id) ? `${s.id}. ${s.title}` : s.title,
-          meta: s.note && !s.title.includes(s.note.slice(0, 20)) ? s.note : undefined,
+          meta: s.rework?.length ? t(`審查退回，需修正：${s.rework.join('、')}`, `Sent back by the review: ${s.rework.join(', ')}`) : s.note && !s.title.includes(s.note.slice(0, 20)) ? s.note : undefined,
           sub: true,
           // Agents don't always mark their last steps done; once the stage is approved they are.
-          state: s.status === 'done' || (s.status === 'in_progress' && st.status === 'approved') ? 'done' : s.status === 'in_progress' ? 'active' : s.status === 'blocked' ? 'failed' : s.status === 'skipped' ? 'skipped' : 'pending',
+          state: s.rework?.length && st.status !== 'approved' ? 'failed' : s.status === 'done' || (s.status === 'in_progress' && st.status === 'approved') ? 'done' : s.status === 'in_progress' ? 'active' : s.status === 'blocked' ? 'failed' : s.status === 'skipped' ? 'skipped' : 'pending',
         });
     if (cfg.reviewer)
       items.push({
@@ -92,13 +92,17 @@ export function goalGap(run: WorkflowRun) {
   const metrics = run.plan?.goal?.metrics ?? [];
   const checks = (run.stages.verify?.rounds ?? []).flatMap((r) => (r.verification ? [r.verification] : []));
   const last = checks[checks.length - 1];
+  // A code review newer than the last verification also reads the metrics: that is the progress shown.
+  const review = [...(run.stages.implement?.rounds ?? [])].reverse().find((r) => r.review?.goal?.length)?.review;
+  const byReview = !!review && (!last || (review.evidence?.at ?? 0) > (last.evidence?.at ?? 0));
+  const reading = byReview ? { metrics: review!.goal!, stale: review!.stale } : last;
   // The planner's metrics, plus what the verifier measured besides them (the user's own criteria, "U1"…).
-  const extra = (last?.metrics ?? []).filter((m) => !metrics.some((x) => x.id === m.id)).map((m) => ({ id: m.id, name: '', target: '', how: '' }));
+  const extra = (reading?.metrics ?? []).filter((m) => !metrics.some((x) => x.id === m.id)).map((m) => ({ id: m.id, name: '', target: '', how: '' }));
   const rows = [...metrics, ...extra].map((m) => {
-    const got = last?.metrics.find((x) => x.id === m.id);
+    const got = reading?.metrics.find((x) => x.id === m.id);
     return { ...m, value: got?.value, met: got?.met, evidence: got?.evidence };
   });
-  return { rows, met: rows.filter((r) => r.met).length, stale: !!last?.stale, last };
+  return { rows, met: rows.filter((r) => r.met).length, stale: !!reading?.stale, last, byReview };
 }
 
 /** Every acceptance metric in full: target, how it is measured, the latest value and its evidence. */
@@ -110,7 +114,12 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
     <Window title={t(`驗收目標 · ${gap.met}/${gap.rows.length} 項達成`, `Acceptance goal · ${gap.met}/${gap.rows.length} met`)} onClose={onClose}>
       {goal?.statement && <div className="gw-statement">{goal.statement}</div>}
       <div className="muted small gw-meta">
-        {gap.last ? t(`最新驗收：${outcomeText(t, gap.last)}`, `Latest verification: ${outcomeText(t, gap.last)}`) : t('還沒有驗收過', 'Not verified yet')}
+        {gap.byReview
+          ? t('下面是最近一輪程式碼審查的進度讀數（正式結果以目標驗收為準）', 'Below: progress as read by the latest code review (goal verification has the final say)')
+          : gap.last
+            ? t(`最新驗收：${outcomeText(t, gap.last)}`, `Latest verification: ${outcomeText(t, gap.last)}`)
+            : t('還沒有驗收過', 'Not verified yet')}
+        {gap.byReview && gap.last && t(` · 上次驗收：${outcomeText(t, gap.last)}`, ` · last verification: ${outcomeText(t, gap.last)}`)}
         {(run.cycles ?? 0) > 0 && t(` · 第 ${(run.cycles ?? 0) + 1} 輪循環`, ` · cycle ${(run.cycles ?? 0) + 1}`)}
         {gap.stale && <span className="badge warn">{t('程式碼在量測之後改過，要重新驗證', 'Code changed since; needs checking again')}</span>}
       </div>

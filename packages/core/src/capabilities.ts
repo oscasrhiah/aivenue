@@ -57,6 +57,21 @@ export interface ExtraSkill {
   always?: string;
   /** For an always-on skill: its instructions, put in the prompt so no agent skips reading them. */
   body?: string;
+  /** What SKILL.md covers (its section headings), so an agent can judge it without opening it. */
+  outline?: string;
+}
+
+/** The section headings of a SKILL.md, short enough for the skills index. */
+export function skillOutline(file: string): string {
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+  const heads = [...text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').matchAll(/^#{2,3}\s+(.+?)\s*#*\r?$/gm)].map((m) => m[1].replace(/[*_`]/g, '').trim()).filter(Boolean);
+  const out = heads.slice(0, 8).join('; ');
+  return out.length > 220 ? out.slice(0, 217) + '…' : out + (heads.length > 8 ? '; …' : '');
 }
 
 function countFiles(dir: string): number {
@@ -260,7 +275,7 @@ export class CapabilityStore {
     const names = new Set(own.map((s) => s.name));
     // The project's own skills (<cwd>/.aivenue/skills) come first: they outrank general ones.
     const project = role === 'advisor' || !cwd ? [] : projectSkills(cwd);
-    const skills: ExtraSkill[] = [...project, ...own.filter((s) => !project.some((p) => p.name === s.name)).map((s) => ({ name: s.name, description: s.description, path: s.path })), ...extra.filter((s) => !names.has(s.name) && !project.some((p) => p.name === s.name))];
+    const skills: ExtraSkill[] = [...project, ...own.filter((s) => !project.some((p) => p.name === s.name)).map((s) => ({ name: s.name, description: s.description, path: s.path, outline: skillOutline(s.path) })), ...extra.filter((s) => !names.has(s.name) && !project.some((p) => p.name === s.name))];
     const always = skills.filter((s) => s.always);
     const rules = role === 'advisor' ? '' : (this.extraRules?.(role, cwd) ?? '');
     if (!skills.length && !rules) return '';
@@ -268,8 +283,8 @@ export class CapabilityStore {
       '',
       ...(skills.length
         ? [
-            'SKILLS: The user provides these skills. When one is relevant to what you are doing, read its SKILL.md first and follow it (files next to SKILL.md may be referenced by it):',
-            ...skills.map((s) => `- ${s.name}: ${s.always ? `[ALWAYS ON: ${s.always}] ` : ''}${s.description || '(no description)'} — ${s.path}`),
+            'SKILLS: The user wrote or chose these skills: tested ways of doing particular kinds of work (steps, conventions, checks, pitfalls) that you would otherwise have to work out yourself. Whether to use one is your call. Reading one costs a single file read, so when a skill touches the kind of work in front of you — even partly — it is usually worth opening its SKILL.md before you start; if it turns out not to fit, ignore it and go on. Files next to SKILL.md may be referenced by it. Each entry: name, what it is for, what it covers, where it is.',
+            ...skills.flatMap((s) => [`- ${s.name}: ${s.always ? `[ALWAYS ON: ${s.always}] ` : ''}${s.description || '(no description)'} — ${s.path}`, ...(s.outline ? [`    covers: ${s.outline}`] : [])]),
             'Reading a skill is not following it: when you apply one, call the Aivenue tool `report_skill_use` {name, version?, reason, deliverables, verification, verified} — once applied, and again with verified=true after you checked it. If two skills conflict, the order is: the user\'s instructions, then project skills (in the working folder), then the skills above in the order listed; follow the higher one and say in report_skill_use which one you set aside and why.',
           ]
         : []),
@@ -278,6 +293,12 @@ export class CapabilityStore {
       ...(rules ? [rules] : []),
     ].join('\n');
   }
+}
+
+/** One line for a resumed conversation: the skills are still there (the full index came in its first turn). */
+export function skillsReminder(block: string): string {
+  const names = [...block.matchAll(/^- ([\w.-]+): /gm)].map((m) => m[1]);
+  return names.length ? `\nSKILLS (listed in full earlier in this conversation) are still available: ${names.join(', ')}. Open one's SKILL.md if it fits what you are doing now.` : '';
 }
 
 /** Skills in a project's .aivenue/skills folder (for example the rules Aivenue distilled from its workflows). */
@@ -289,7 +310,7 @@ function projectSkills(cwd: string): ExtraSkill[] {
     const file = path.join(dir, e.name, 'SKILL.md');
     if (!e.isDirectory() || !fs.existsSync(file)) continue;
     const fm = parseFrontmatter(fs.readFileSync(file, 'utf8'));
-    out.push({ name: e.name, description: `[PROJECT] ${fm.description ?? ''}`, path: file });
+    out.push({ name: e.name, description: `[PROJECT] ${fm.description ?? ''}`, path: file, outline: skillOutline(file) });
   }
   return out;
 }
