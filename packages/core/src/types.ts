@@ -761,6 +761,12 @@ export interface WorkflowConfig {
   dryRun?: boolean;
   /** The flow mode the role layout was set from (flowMode.ts); absent = custom settings. */
   flow?: 'standard';
+  /**
+   * Security check for this workflow only: its code reviewer also reviews the change with the bundled Cloudflare
+   * security-audit skill, in guidance mode and statically (docs/next-task-security-audit-skill.md). Needs a code
+   * reviewer; off by default and not kept as the default for new conversations.
+   */
+  securityReview?: boolean;
 }
 
 /**
@@ -1016,6 +1022,24 @@ export interface Review {
   /** The code version the review looked at. */
   evidence?: EvidenceStamp;
   stale?: boolean;
+  /**
+   * Suspicions the source does not settle (e.g. a security check's "needs validation"): no severity, not a defect.
+   * They never send the work back and never clear an issue; reviews saved before this field have none.
+   */
+  needsValidation?: NeedsValidation[];
+}
+
+/** One suspicion a review could not confirm from the source. */
+export interface NeedsValidation {
+  id: string;
+  /** What is suspected. */
+  title: string;
+  /** Where in the code (file:line), when it is tied to one place. */
+  location?: string;
+  /** The evidence that is missing (a fact outside the source, or a behaviour only running it would show). */
+  missing: string;
+  /** How it could be confirmed safely. */
+  how: string;
 }
 
 export interface IssueResponse {

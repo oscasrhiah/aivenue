@@ -14,12 +14,12 @@ const bundled = await build({
       export * from './packages/core/src/records';
       export * from './packages/core/src/bundle';
       export { ResourceManager, pidAlive, checkShell, findGitBash } from './packages/core/src/resources';
-      export { parseVerification, parsePlan, parseRulings, toolsForRole } from './packages/core/src/hubTools';
+      export { parseVerification, parsePlan, parseReview, parseRulings, toolsForRole } from './packages/core/src/hubTools';
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
-      export { contextBlock, conversationLog, formatTranscript, handoverOf, shownElsewhere, toolInputText } from './packages/core/src/context';
+      export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
@@ -28,7 +28,7 @@ const bundled = await build({
       export { capture, cliEnv, consoleCodePage, decodeShellOutput } from './packages/core/src/proc';
       export { runAgent } from './packages/core/src/agentRunner';
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
-      export { draftInit } from './packages/ui/src/draftInit';
+      export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export * as P from './packages/core/src/prompts';`,
     resolveDir: process.cwd(),
   },
@@ -1188,5 +1188,73 @@ test('wait_for：Windows PowerShell 5.1 以主控台代碼頁輸出的中文，�
   const f = await rm.check(rm.newWait('a', { check: "Write-Error '找不到檔案' 2>$null; Test-Path 'C:\\no\\such\\file'", shell: 'powershell' }), dir);
   assert.equal(f.ok, false);
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- 安全檢查：內建的 security-audit skill 與設定 ----------
+
+test('安全檢查：內建的 security-audit 有 SKILL.md、全部參考文件與授權，來源固定在一個 commit', () => {
+  const root = path.join(process.cwd(), 'packages', 'core', 'bundled');
+  const dir = path.join(root, 'security-audit', 'skills', 'security-audit');
+  const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+  assert.match(skill, /^---\nname: security-audit\n/);
+  assert.match(fs.readFileSync(path.join(root, 'security-audit', 'LICENSE'), 'utf8'), /^MIT License/);
+  assert.match(fs.readFileSync(path.join(root, 'README.md'), 'utf8'), /\| `security-audit\/` \| https:\/\/github\.com\/cloudflare\/security-audit-skill \| `c1c8a8c1471069fb0e188eeaff69b8e8db6564a8` \| MIT/);
+  // Every companion file SKILL.md links to is there, except the full-audit tools Aivenue leaves out (README says so).
+  const omitted = new Set(['report-schema.json', 'validate-findings.cjs', 'validate-coverage-ledger.cjs']);
+  const linked = [...skill.matchAll(/\]\(([A-Z0-9-]+\.md)\)/g)].map((m) => m[1]);
+  assert.ok(linked.length >= 5, linked.join(','));
+  for (const f of new Set(linked)) assert.ok(fs.existsSync(path.join(dir, f)), f);
+  for (const f of omitted) assert.ok(!fs.existsSync(path.join(dir, f)), `${f} is left out`);
+  // No script is shipped with it.
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => !f.endsWith('.md')), []);
+});
+
+test('安全檢查的指示：指定 guidance 模式、只做靜態檢查、需執行才能確認的列為待驗證且不給嚴重度', () => {
+  const rule = W.P.securityReviewRule('/x/SKILL.md');
+  assert.match(rule, /^\n\nSECURITY CHECK \(the user turned it on for this workflow\)/);
+  assert.ok(rule.includes('Read /x/SKILL.md, then only the companion files next to it that fit what this change touches'));
+  assert.match(rule, /do not ask which mode to use, do not run the full audit workflow, and do not create an output directory/);
+  assert.match(rule, /Do not run the target's code, builds, tests or tools to confirm a security issue, do not probe deployed or external services, and do not spend paid API quota/);
+  assert.ok(rule.includes('Say how far the evidence goes. Separate what the source itself shows'));
+  assert.ok(rule.includes('put it in needs_validation (title, location, missing: what the source shows and what it does not, how: a safe way to confirm it), with no severity'));
+  assert.match(rule, /report the proven part in issues and the rest in needs_validation, and do not list the same thing in both/);
+});
+
+test('安全檢查只套用在這段對話：存成新對話的預設時拿掉；完整電腦存取也回到完全 Auto', () => {
+  const d = { permission: 'full', securityReview: true, cwd: 'C:/p', implement: { enabled: true } };
+  assert.deepEqual(W.forNewConversations(d), { permission: 'auto', cwd: 'C:/p', implement: { enabled: true } });
+  assert.deepEqual(W.forNewConversations({ permission: 'auto', cwd: 'C:/p' }), { permission: 'auto', cwd: 'C:/p' });
+  assert.equal(d.securityReview, true, 'the conversation keeps its own setting');
+});
+
+// ---------- 審查的「待驗證」：獨立欄位，不給嚴重度，不進路由 ----------
+
+test('待驗證：submit_review 的 needs_validation 另外保存，不混進 issues；舊審查沒有這個欄位照常解析', () => {
+  const r = W.parseReview({
+    verdict: 'revise',
+    summary: 's',
+    issues: [{ id: 'R1', severity: 'major', title: 'path traversal', location: 'src/a.js:3' }],
+    needs_validation: [
+      { title: 'header trusted for the admin check', location: 'src/a.js:9', missing: 'the code trusts it; whether a client can set it depends on the proxy', how: 'check the deployment config for a proxy that overwrites it' },
+      { id: 'V7', title: 'second', missing: 'm', how: 'h' },
+      { missing: 'no title: dropped', how: 'h' },
+    ],
+  });
+  assert.equal(r.issues.length, 1);
+  assert.deepEqual(r.issues.map((i) => i.id), ['R1']);
+  assert.deepEqual(r.needsValidation.map((n) => n.id), ['V1', 'V7']);
+  assert.equal(r.needsValidation[0].location, 'src/a.js:9');
+  assert.equal('severity' in r.needsValidation[0], false);
+  const old = W.parseReview({ verdict: 'approve', summary: 'ok', issues: [] });
+  assert.equal('needsValidation' in old, false);
+  // The fallback JSON shape every reviewer gets names the field.
+  assert.match(W.P.codeReviewPrompt({ goal: 'g', title: 't', cwd: '.' }, undefined, 'w', 'c', 1), /"needs_validation": \[\{"id": "V1", "title": string, "location": string, "missing": string, "how": string\}\]/);
+});
+
+test('待驗證：read_context 的總覽把它和已確認問題分開，標成未確認', () => {
+  const run = { id: 'r', config: { cwd: '.', goal: 'g' }, agents: {}, notes: [], steps: [], stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, review: { verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'major', title: 'traversal' }], needsValidation: [{ id: 'V1', title: 'header trusted', missing: 'proxy unknown', how: 'check config' }] } }] }, verify: { rounds: [] } } };
+  const text = W.overview(run);
+  assert.match(text, /R1 \[major\] traversal/);
+  assert.match(text, /V1 \[needs validation, not confirmed\] header trusted — missing: proxy unknown — to confirm: check config/);
 });
 

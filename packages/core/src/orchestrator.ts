@@ -98,6 +98,8 @@ export interface OrchestratorDeps {
   /** nvidia-smi's CSV output (tests pass their own). */
   /** The platform the agents' CLIs run on (default: this process's); tests set another one. */
   platform?: NodeJS.Platform;
+  /** Path of the bundled security-audit SKILL.md, for a workflow's security check (undefined: not shipped). */
+  securityAudit?: () => string | undefined;
   gpuQuery?: () => string;
   /** nvidia-smi with any arguments (tests). */
   gpuSmi?: (args: string[]) => string;
@@ -1594,6 +1596,9 @@ export class Orchestrator {
       else if (m && effort && m.efforts?.length && !m.efforts.includes(effort)) add('warn', 'model', L(`${label}：模型 ${model} 不支援思考程度「${effort}」（支援：${m.efforts.join('、')}）`, `${label}: model ${model} does not take effort "${effort}" (it takes: ${m.efforts.join(', ')})`));
     }
     if (config.verify?.enabled && !config.plan.enabled) add('warn', 'model', L('目標驗收已開啟但沒有計畫階段：驗收者會自己從任務推導驗收指標', 'Goal verification is on without a planning stage: the verifier derives the metrics from the task'));
+    if (config.securityReview && (!config.implement.enabled || !config.implement.reviewer))
+      add('warn', 'model', L('安全檢查已開啟，但這次沒有程式審查者，所以不會執行：要啟用實作階段並設定程式審查者', 'The security check is on, but this workflow has no code reviewer, so it will not run: enable the implement stage with a code reviewer'));
+    else if (config.securityReview && !this.d.securityAudit?.()) add('warn', 'model', L('安全檢查已開啟，但這個版本沒有附 security-audit skill，所以不會執行', 'The security check is on, but this build does not ship the security-audit skill, so it will not run'));
     // tools
     const git = await capture('git', ['--version'], { timeoutMs: 10000 }).catch(() => undefined);
     if (git?.code === 0) add('ok', 'tool', `git ${/(\d+\.\d+\.\d+)/.exec(git.stdout)?.[1] ?? ''}`.trim());
@@ -3020,8 +3025,10 @@ export class Orchestrator {
       };
       if (!plain) for (const m of run.userMessages ?? []) if (!(m.deliveredTo ??= []).includes(info.id)) m.deliveredTo.push(info.id);
       const projectMemory = plain ? '' : this.memoryFor(run, info, resume, !!recapIds);
+      // The workflow's security check: only its code reviewer, once per conversation (docs/next-task-security-audit-skill.md).
+      const securitySkill = !plain && !resume && info.role === 'code_reviewer' && run.config.securityReview ? this.d.securityAudit?.() : undefined;
       // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + P.doneEffectsBlock(run.sideEffects);
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + P.doneEffectsBlock(run.sideEffects);
       // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
       const turn = promptTurn(
         [
@@ -3047,7 +3054,8 @@ export class Orchestrator {
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,
         systemPrompt,
-        skillsDir: skills && !plain ? caps.skillsDir : undefined,
+        // Readable for CLIs that confine file access: the skills announced, and the security-audit skill (kept there too).
+        skillsDir: (skills || securitySkill) && !plain ? caps.skillsDir : undefined,
         permission: run.config.permission,
         attachDir: attached.length ? this.d.attachments.runDir(run.id) : undefined,
         // Media the model takes natively ride along as files (images; video and audio too when it reads them).

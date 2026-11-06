@@ -1,4 +1,4 @@
-import type { AgentRole, GoalSpec, IssueResponse, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
+import type { AgentRole, GoalSpec, IssueResponse, NeedsValidation, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
 
 export interface ToolDef {
   name: string;
@@ -113,6 +113,22 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         verdict: { type: 'string', enum: ['approve', 'revise'] },
         summary: { type: 'string' },
         issues: issuesSchema,
+        needs_validation: {
+          type: 'array',
+          description:
+            'Optional. Suspicions the source alone does not settle: not defects and without severity, so they do not ask for changes. Put a problem the source proves in issues instead; never list the same thing in both.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: '"V1", "V2", ...' },
+              title: { type: 'string', description: 'What is suspected.' },
+              location: { type: 'string', description: 'file:line, when it is tied to one place.' },
+              missing: { type: 'string', description: 'The evidence that is missing: what the source does show, and what it does not.' },
+              how: { type: 'string', description: 'How it could be confirmed safely.' },
+            },
+            required: ['title', 'missing', 'how'],
+          },
+        },
         goal: {
           type: 'array',
           description: 'Code review with acceptance metrics only: where each metric stands now (progress shown to the user; it does not decide approval).',
@@ -554,7 +570,23 @@ export function parseReview(v: any): Review | undefined {
   const goal = Array.isArray(v.goal)
     ? v.goal.filter((m: any) => m && typeof m === 'object' && s(m.id)).map((m: any) => ({ id: s(m.id), value: s(m.value), met: m.met === true || s(m.met).toLowerCase() === 'true', evidence: s(m.evidence) }))
     : [];
-  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}) };
+  const needsValidation = parseNeedsValidation(v.needs_validation ?? v.needsValidation);
+  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}), ...(needsValidation.length ? { needsValidation } : {}) };
+}
+
+/** A review's "needs validation" list: kept apart from its issues (no severity, never routed). */
+export function parseNeedsValidation(v: unknown): NeedsValidation[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((x: any) => x && typeof x === 'object' && s(x.title))
+    .slice(0, 50)
+    .map((x: any, i: number) => ({
+      id: s(x.id) || `V${i + 1}`,
+      title: s(x.title).slice(0, 500),
+      ...(s(x.location) ? { location: s(x.location).slice(0, 300) } : {}),
+      missing: s(x.missing).slice(0, 2000),
+      how: s(x.how).slice(0, 2000),
+    }));
 }
 
 export function parseWork(v: any): { summary: string; responses?: IssueResponse[] } | undefined {

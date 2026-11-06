@@ -56,6 +56,43 @@ export function useAssignPreview(draft: RoleDraft | null, providers: ProviderInf
   return state;
 }
 
+/**
+ * The workflow's security check (docs/next-task-security-audit-skill.md): its code reviewer also reviews with the
+ * bundled security-audit skill, statically. Says when it cannot run, so it is never on without effect.
+ */
+function SecurityCheck({ draft, disabled, locked, onChange }: { draft: RoleDraft; disabled?: boolean; locked?: boolean; onChange: (on: boolean) => void }) {
+  const t = useT();
+  const on = !!draft.securityReview;
+  const noReviewer = !draft.implement.enabled || !draft.implement.reviewer;
+  return (
+    <section className="sect">
+      <label className="check">
+        {/* Set before the workflow starts: a running one keeps what it started with (the hub does not take it mid-run). */}
+        <input type="checkbox" disabled={disabled || locked} checked={on} onChange={(e) => onChange(e.target.checked)} />
+        {t('安全檢查（這次的程式審查者另外做安全審查）', 'Security check (the code reviewer also reviews for security)')}
+      </label>
+      <div className="muted small">
+        {t(
+          '使用內建的 Cloudflare security-audit skill，只交給這次的程式審查者，依變更範圍讀取相關段落。只做靜態檢查：不執行程式；需要執行才能確認的項目會列為「待驗證」。只套用在這段對話，不會成為新對話的預設。',
+          'Uses the bundled Cloudflare security-audit skill, for this workflow\'s code reviewer only, reading the parts that fit the change. Static only: no code is run; what would need running to confirm is listed as "needs validation". For this conversation only, not a default for new ones.',
+        )}
+      </div>
+      {locked && (
+        <div className="note small">
+          {on
+            ? t('這次工作流開始時已開啟安全檢查；執行中不能切換。結束後的追問會套用這裡的設定。', 'This workflow started with the security check on; it cannot be switched while it runs. A follow-up message after it ends uses the setting here.')
+            : t('這次工作流開始時沒有開啟安全檢查；執行中不能切換，只能在開始前設定。結束後的追問會套用這裡的設定。', 'This workflow started without the security check; it can only be set before a workflow starts. A follow-up message after it ends uses the setting here.')}
+        </div>
+      )}
+      {on && noReviewer && !locked && (
+        <div className="err-text small">
+          {t('目前沒有程式審查者，安全檢查不會執行：請啟用「實作」並設定「審查程式碼」。', 'There is no code reviewer, so the security check will not run: turn on "Build" and set "Review the code".')}
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** A count the user may leave empty for "no limit" (stored as 0); any number from `min` up. */
 function OptionalLimit({ value, min, onChange, disabled }: { value: number; min: number; onChange: (v: number) => void; disabled?: boolean }) {
   const t = useT();
@@ -797,6 +834,7 @@ export function RoleSettings({
   onReuse,
   notice,
   lockFolder,
+  lockSecurity,
   onApplyNow,
   onDryRun,
 }: {
@@ -811,6 +849,8 @@ export function RoleSettings({
   notice?: string;
   /** Folder and isolation cannot change once a run started. */
   lockFolder?: boolean;
+  /** A workflow is running: its security check stays as it started (set it before a workflow starts). */
+  lockSecurity?: boolean;
   /** A running conversation: stop the agents whose role changed and start them again with the new settings. */
   onApplyNow?: () => void;
   /** Start a dry run with these settings. */
@@ -982,6 +1022,7 @@ export function RoleSettings({
           auto={auto}
           onChange={(implement) => set({ implement })}
         />
+        <SecurityCheck draft={draft} disabled={readOnly} locked={lockSecurity} onChange={(securityReview) => set({ securityReview: securityReview || undefined })} />
 
         <GoalSection disabled={readOnly} value={draft.verify ?? { enabled: false, by: 'planner' }} providers={providers} auto={auto} implementer={draft.implement.author.provider} onChange={(verify) => set({ verify })} />
         <LimitsSection disabled={readOnly} value={draft.limits ?? { enabled: false }} onChange={(limits) => set({ limits })} />

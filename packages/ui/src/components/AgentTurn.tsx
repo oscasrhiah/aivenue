@@ -196,6 +196,33 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             {i.detail && <div className="muted small">{i.detail}</div>}
           </div>
         ))}
+        {/* Not confirmed, no severity, never sends the work back; older reviews have none. */}
+        {(r.needsValidation?.length ?? 0) > 0 && (
+          <div className="needs-validation">
+            <div className="block-label">{t('待驗證（未確認，不分嚴重度，不會要求修改）', 'Needs validation (not confirmed, no severity, does not ask for changes)')}</div>
+            {r.needsValidation!.map((n) => (
+              <div key={n.id} className="issue nv">
+                <div>
+                  <span className="issue-id">{n.id}</span>
+                  {n.title}
+                  {n.location && <span className="muted"> · {n.location}</span>}
+                </div>
+                {n.missing && (
+                  <div className="muted small">
+                    {t('缺少的證據：', 'Missing evidence: ')}
+                    {n.missing}
+                  </div>
+                )}
+                {n.how && (
+                  <div className="muted small">
+                    {t('如何安全確認：', 'How to confirm safely: ')}
+                    {n.how}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {round.route && <div className="route small">➜ {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
         {round.handoff && <HandoffBlock h={round.handoff} />}
       </div>

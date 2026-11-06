@@ -99,3 +99,20 @@ test('已安裝且可執行時不重新安裝', async () => {
   await s.installGraphify();
   assert.equal(s.list().find(x => x.id === 'graphify').state, 'ready');
 });
+
+test('安全檢查：內建的 security-audit skill 複製到 skills 資料夾，回傳 CLI 讀得到的 SKILL.md 路徑；沒有附就是 undefined', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const skillsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-skills-'));
+  const make = (bundledDir) => new ExtensionService({ dataDir: skillsDir, bundledDir, capabilities: { skillsDir, get: () => ({ extensions: {} }) }, registry: {}, secrets: {}, onChange() {} });
+  const p = make(path.join(process.cwd(), 'packages', 'core', 'bundled')).securityAuditSkill();
+  assert.equal(p, path.join(skillsDir, '.bundled', 'security-audit', 'skills', 'security-audit', 'SKILL.md'));
+  assert.ok(fs.existsSync(p));
+  assert.ok(fs.existsSync(path.join(path.dirname(p), 'WEB-PROTOCOL-AND-AUTH.md')));
+  assert.equal(make(path.join(skillsDir, 'nothing-here')).securityAuditSkill(), p, 'an earlier copy still serves');
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-skills-'));
+  assert.equal(new ExtensionService({ dataDir: empty, bundledDir: path.join(empty, 'none'), capabilities: { skillsDir: empty, get: () => ({ extensions: {} }) }, registry: {}, secrets: {}, onChange() {} }).securityAuditSkill(), undefined);
+  fs.rmSync(skillsDir, { recursive: true, force: true });
+  fs.rmSync(empty, { recursive: true, force: true });
+});

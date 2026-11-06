@@ -322,6 +322,8 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
       if (r.review) {
         rows.push(`Review: ${r.review.verdict} — ${r.review.summary}`);
         for (const i of r.review.issues) rows.push(`  ${i.id} [${i.severity}] ${i.title}${i.location ? ` (${i.location})` : ''}${i.detail ? `: ${i.detail}` : ''}`);
+        // Not confirmed and without severity: kept apart so no one passes them on as facts.
+        for (const n of r.review.needsValidation ?? []) rows.push(`  ${n.id} [needs validation, not confirmed] ${n.title}${n.location ? ` (${n.location})` : ''} — missing: ${n.missing}${n.how ? ` — to confirm: ${n.how}` : ''}`);
       }
       if (r.route) rows.push(`Routed to ${r.route.to}: ${r.route.reason}`);
       if (rows.length) parts.push(`${key.toUpperCase()} STAGE, ROUND ${r.n}:\n${rows.join('\n')}`);

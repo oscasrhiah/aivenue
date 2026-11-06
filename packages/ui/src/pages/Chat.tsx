@@ -15,7 +15,7 @@ import { CompactFailedAsk, ContextAsk, ContextPie } from '../components/ContextP
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
-import { draftInit, type DraftInit } from '../draftInit';
+import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
@@ -708,8 +708,8 @@ export function Chat({ id }: { id?: string }) {
 
   const updateDraft = (d: RoleDraft) => {
     setDraft(d);
-    // Whole-computer access is for one conversation: the saved default for new ones stays at Full auto.
-    void saveSettings({ draft: d.permission === 'full' ? { ...d, permission: 'auto' } : d });
+    // What is for one conversation only (whole-computer access, the security check) is not kept for new ones.
+    void saveSettings({ draft: forNewConversations(d) });
   };
 
   const active = !!run && (run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human');
@@ -1066,6 +1066,7 @@ export function Chat({ id }: { id?: string }) {
           draft={shown}
           providers={providers}
           lockFolder={active}
+          lockSecurity={active}
           onApplyNow={active ? applyNow : undefined}
           onDryRun={!run ? dryRun : undefined}
           notice={

@@ -212,7 +212,7 @@ export class ExtensionService {
   // ---------- bundled skills ----------
 
   /** Copy an extension's skills next to the user's (again when the app ships a different copy). */
-  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify') {
+  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'security-audit') {
     const from = path.join(this.o.bundledDir, id);
     const to = path.join(this.skillsRoot, id);
     if (!fs.existsSync(from)) return;
@@ -227,6 +227,25 @@ export class ExtensionService {
     fs.mkdirSync(to, { recursive: true });
     fs.cpSync(from, to, { recursive: true });
     fs.writeFileSync(stampFile, stamp);
+  }
+
+  /**
+   * The bundled Cloudflare security-audit skill (docs/next-task-security-audit-skill.md): the path of its SKILL.md,
+   * copied next to the user's skills so every CLI may read it and its companion files. Not an extension to turn on: a
+   * workflow asks for it with its "security check" option. Undefined when the app ships without it.
+   */
+  securityAuditSkill(): string | undefined {
+    return this.onDemandSkill('security-audit');
+  }
+
+  /** A bundled skill a workflow loads only when it needs it: copied next to the user's skills, the path of its SKILL.md. */
+  private onDemandSkill(id: 'security-audit'): string | undefined {
+    try {
+      this.syncSkills(id);
+    } catch {
+      // the bundle is read in place below
+    }
+    return [path.join(this.skillsRoot, id, 'skills', id, 'SKILL.md'), path.join(this.o.bundledDir, id, 'skills', id, 'SKILL.md')].find((p) => fs.existsSync(p));
   }
 
   /** name → description of one extension's skills (from the copy, else the bundle). */

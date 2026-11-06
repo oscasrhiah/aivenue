@@ -803,6 +803,16 @@ p {
   border-color: var(--warn);
 }
 
+/* Needs validation: not a defect, so no severity color — a dashed line instead. */
+.needs-validation {
+  margin-top: 8px;
+}
+
+.issue.nv {
+  border-left-style: dashed;
+  border-color: var(--line-strong);
+}
+
 .issue-id {
   font-family: var(--mono);
   font-size: 12px;

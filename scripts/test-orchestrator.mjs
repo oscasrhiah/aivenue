@@ -63,6 +63,7 @@ function setup(o = {}) {
     gpuQuery: o.gpuQuery ?? (() => { throw new Error('no GPU'); }),
     gpuSmi: o.gpuSmi ?? (() => { throw new Error('no GPU'); }),
     platform: o.platform,
+    securityAudit: o.securityAudit,
   });
   return { orch, cwd, dir, caps };
 }
@@ -1475,5 +1476,129 @@ test('改動清單：編輯失敗的檔案記為「可能改動」，之後成�
   assert.match(reviewerPrompt, /Files it changed: [^\n]*src[\\/]b\.js/);
   assert.match(reviewerPrompt, /Files it possibly changed \(every edit of them failed[^\n]*\): src[\\/]a\.js/);
   assert.doesNotMatch(reviewerPrompt.match(/Files it changed: [^\n]*/)?.[0] ?? '', /a\.js/);
+});
+
+// ---------- 安全檢查：只交給該次的程式審查者（security-audit，靜態 guidance） ----------
+
+const SKILL = 'C:/skills/.bundled/security-audit/skills/security-audit/SKILL.md';
+
+/** Every prompt each role got in one run, with or without the security check. */
+async function securityPrompts(over, deps = { securityAudit: () => SKILL }) {
+  const { orch, cwd } = setup(deps);
+  const prompts = {};
+  const keep = (role, then) => async (o, secret, opts) => {
+    (prompts[role] ??= []).push(opts.prompt);
+    await o.callTool(secret, then.tool, then.args);
+  };
+  fakeAgents(orch, {
+    planner: [keep('planner', defaults.planner)],
+    plan_reviewer: [keep('plan_reviewer', defaults.plan_reviewer)],
+    executor: [keep('executor', defaults.executor)],
+    code_reviewer: [keep('code_reviewer', defaults.code_reviewer)],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, ...over })).id);
+  assert.equal(r.status, 'completed', r.error);
+  return { prompts, orch, cwd };
+}
+const times = (text, part) => text.split(part).length - 1;
+
+test('安全檢查開啟：只有程式審查者收到一次指示（guidance、只做靜態、待驗證），其他角色沒有', async () => {
+  const { prompts } = await securityPrompts({ securityReview: true });
+  assert.equal(prompts.code_reviewer.length, 1);
+  const review = prompts.code_reviewer[0];
+  assert.equal(times(review, 'SECURITY CHECK'), 1);
+  assert.ok(review.includes(`Read ${SKILL}`));
+  assert.match(review, /Aivenue chose the skill's guidance mode: do not ask which mode to use, do not run the full audit workflow/);
+  assert.match(review, /Static only: read the source\. Do not run the target's code/);
+  assert.ok(review.includes('put it in needs_validation (title, location, missing'));
+  for (const role of ['planner', 'plan_reviewer', 'executor']) for (const text of prompts[role]) assert.equal(times(text, 'SECURITY CHECK'), 0, role);
+});
+
+test('安全檢查關閉（預設）：沒有任何角色收到；開啟但這個版本沒附 skill 時也不送', async () => {
+  const off = await securityPrompts({});
+  for (const [role, list] of Object.entries(off.prompts)) for (const text of list) assert.equal(times(text, 'SECURITY CHECK'), 0, role);
+  const missing = await securityPrompts({ securityReview: true }, { securityAudit: () => undefined });
+  for (const [role, list] of Object.entries(missing.prompts)) for (const text of list) assert.equal(times(text, 'SECURITY CHECK'), 0, role);
+});
+
+test('安全檢查開啟但沒有程式審查者：不會執行，送出前的檢查會說明啟用條件', async () => {
+  const noReviewer = { securityReview: true, implement: { enabled: true, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } };
+  const { prompts, orch, cwd } = await securityPrompts(noReviewer);
+  assert.equal(prompts.code_reviewer, undefined);
+  for (const [role, list] of Object.entries(prompts)) for (const text of list) assert.equal(times(text, 'SECURITY CHECK'), 0, role);
+  const items = await orch.preflight(config(cwd, { verify: undefined, ...noReviewer }));
+  assert.ok(items.some((i) => i.level === 'warn' && /安全檢查已開啟，但這次沒有程式審查者|security check is on, but this workflow has no code reviewer/.test(i.message ?? i.text ?? '')), JSON.stringify(items));
+  // With a reviewer: no such warning.
+  const fine = await orch.preflight(config(cwd, { verify: undefined, securityReview: true }));
+  assert.ok(!fine.some((i) => /安全檢查已開啟|security check is on/.test(i.message ?? i.text ?? '')));
+});
+
+test('安全檢查只在開始前設定：執行中的設定更新即使帶了 securityReview 也不改變，審查者照開始時的設定', async () => {
+  for (const startOn of [false, true]) {
+    const { orch, cwd } = setup({ securityAudit: () => SKILL });
+    let reviewerPrompt = '';
+    let runId;
+    fakeAgents(orch, {
+      executor: [
+        async (o, secret) => {
+          // Mid-run, the settings window sends an update (as Chat's runPatch would, plus the field it never sends).
+          o.updateConfig(runId, { implement: { enabled: true, author: { provider: 'fake' }, reviewer: { provider: 'fake2' }, maxRounds: 5, humanGate: false }, securityReview: !startOn });
+          await o.callTool(secret, 'submit_work', { summary: 'done' });
+        },
+      ],
+      code_reviewer: [
+        async (o, secret, opts) => {
+          reviewerPrompt = opts.prompt;
+          await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+        },
+      ],
+    });
+    runId = orch.start(config(cwd, { verify: undefined, securityReview: startOn || undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+    const r = await settle(orch, runId);
+    assert.equal(r.status, 'completed', r.error);
+    assert.equal(!!r.config.securityReview, startOn, 'the run keeps what it started with');
+    assert.equal(times(reviewerPrompt, 'SECURITY CHECK'), startOn ? 1 : 0, `started ${startOn ? 'on' : 'off'}`);
+  }
+});
+
+// ---------- 審查的「待驗證」不觸發返工、不清除已確認問題 ----------
+
+const NV = [{ id: 'V1', title: 'admin header may be client-controlled', location: 'src/server.js:22', missing: 'the code trusts the header; whether a client can set it depends on the proxy', how: 'check the deployment config' }];
+
+test('待驗證：只有待驗證項目的通過審查直接完成，不會送回實作者；項目保存在審查結果', async () => {
+  const { orch, cwd } = setup();
+  const calls = fakeAgents(orch, { code_reviewer: [{ tool: 'submit_review', args: { verdict: 'approve', summary: 'ok', issues: [], needs_validation: NV } }] });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(calls.filter((x) => x === 'executor').length, 1);
+  const review = r.stages.implement.rounds.at(-1).review;
+  assert.deepEqual(review.issues, []);
+  assert.deepEqual(review.needsValidation, NV);
+});
+
+test('待驗證：要求修改時，實作者只被要求處理已確認問題；待驗證不會被當成要修的問題，也不會清掉已確認的問題', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  const revise = { tool: 'submit_review', args: { verdict: 'revise', summary: 'fix it', issues: [{ id: 'R1', severity: 'major', title: 'download route permits path traversal' }], needs_validation: NV } };
+  const calls = fakeAgents(orch, {
+    code_reviewer: [revise, { tool: 'submit_review', args: { verdict: 'approve', summary: 'ok', issues: [] } }],
+    executor: [
+      defaults.executor,
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'fixed', responses: [{ issue_id: 'R1', action: 'fixed', note: 'resolved inside FILES' }] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 3, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(calls.filter((x) => x === 'executor').length, 2, 'one rework, for R1 only');
+  const first = r.stages.implement.rounds[0].review;
+  assert.deepEqual(first.issues.map((i) => i.id), ['R1'], 'the confirmed issue stays');
+  assert.deepEqual(first.needsValidation.map((n) => n.id), ['V1']);
+  // The rework prompt names R1 to fix; V1 is never handed over as an issue to fix.
+  const role = prompts[0].split('SHARED CONTEXT')[0];
+  assert.match(role, /R1/);
+  assert.doesNotMatch(role, /admin header may be client-controlled/);
 });
 

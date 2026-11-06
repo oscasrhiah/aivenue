@@ -169,6 +169,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     hubUrl: () => baseUrl,
     push,
     github: () => github.promptInfo(githubMcpOn()),
+    securityAudit: () => extensions.securityAuditSkill(),
     servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
   });
   // Settings → General: how long kept CLIs stay idle after their workflow ended.
