@@ -140,7 +140,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   void pushUsage(true);
   registry.catalogLoader = () => loadCatalog(dataDir);
   const capabilities = new CapabilityStore(dataDir, secrets);
-  const capsState = () => ({ config: capabilities.get(), skills: capabilities.listSkills() });
+  const capsState = () => ({ config: capabilities.get(), skills: capabilities.listSkills(), projectSkills: capabilities.listProjectSkills() });
   const capsChanged = () => {
     const data = capsState();
     push({ topic: 'capabilities', data });
@@ -294,6 +294,19 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       capabilities.setSkill(p.name, { enabled: p.enabled, roles: p.roles });
       return capsChanged();
     },
+    // Turning a skill on approves the content the user looked at (its hash); findings need acceptFindings.
+    'skills.approve': (p: { name: string; hash: string; acceptFindings?: boolean }) => {
+      capabilities.approveSkill(p.name, p.hash, p.acceptFindings === true);
+      return capsChanged();
+    },
+    'skills.approveProject': (p: { dir: string; hash: string; acceptFindings?: boolean }) => {
+      capabilities.approveProjectSkill(p.dir, p.hash, p.acceptFindings === true);
+      return capsChanged();
+    },
+    'skills.disableProject': (p: { dir: string }) => {
+      capabilities.disableProjectSkill(p.dir);
+      return capsChanged();
+    },
     'skills.import': async () => {
       const folder = await opts.hooks.pickFolder?.();
       if (!folder) return null;
@@ -303,7 +316,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     },
     'skills.openFolder': (p: { name?: string }) => {
       if (p.name && !/^[\w.-]+$/.test(p.name)) throw new Error('invalid skill name');
-      return opts.hooks.openPath?.(p.name ? path.join(capabilities.skillsDir, p.name) : capabilities.skillsDir);
+      // A skill waiting for approval is in the review area, not the library.
+      return opts.hooks.openPath?.(p.name ? (capabilities.folderOf(p.name) ?? path.join(capabilities.skillsDir, p.name)) : capabilities.skillsDir);
     },
     'providers.list': () => registry.list(),
     'providers.templates': () => ({ templates: PROVIDER_TEMPLATES, builtins: BUILTIN_PROVIDERS }),

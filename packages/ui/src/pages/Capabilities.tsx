@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, SkillInfo } from '../../../core/src/types';
+import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
 import { hub, useCapabilities, useExtensions, useHostInfo, useProviders } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
@@ -525,19 +525,127 @@ function SkillEditor({ name, onClose }: { name?: string; onClose: () => void }) 
   );
 }
 
+/** Why a skill is or is not loaded, and what the local scan of its current files found. */
+function ReviewState({ r }: { r: SkillReview }) {
+  const t = useT();
+  const n = (r.scan?.findings.length ?? 0) + (r.scan?.more ?? 0);
+  const scan =
+    r.scan?.status === 'failed'
+      ? t(`無法掃描：${r.scan.error ?? ''}`, `Could not be scanned: ${r.scan.error ?? ''}`)
+      : r.scan?.status === 'findings'
+        ? t(`靜態掃描：${n} 處需要注意`, `Static scan: ${n} finding(s) to look at`)
+        : r.scan?.status === 'clean'
+          ? t('靜態掃描：沒有發現需要注意的內容（不代表一定安全）', 'Static scan: nothing to look at found (not a guarantee of safety)')
+          : t('還沒掃描', 'Not scanned yet');
+  const state =
+    r.state === 'approved'
+      ? r.by === 'editor'
+        ? t('用內建編輯器寫的', 'Written in the built-in editor')
+        : r.by === 'aivenue'
+          ? t('Aivenue 自己寫的', 'Written by Aivenue')
+          : t('已確認這一版', 'This version was approved')
+      : r.state === 'changed'
+        ? t('確認後檔案又變了：暫停載入，要重新確認這一版才會提供給 agent', 'The files changed after approval: not loaded until you approve this version')
+        : r.state === 'failed'
+          ? t('無法掃描，維持停用', 'Could not be scanned, so it stays off')
+          : t('待確認：還沒確認過這一版，暫停載入。打開開關，看過掃描結果後確認，才會提供給 agent', 'Waiting for approval: not loaded until you turn it on and approve this version after looking at the scan')
+  return (
+    <div className={cx('skill-review', r.state)}>
+      <span className={cx('ext-chip', r.state === 'approved' ? 'ok' : r.state === 'failed' ? 'bad' : 'warn')}>{state}</span>
+      <span className="muted tiny"> · {scan}</span>
+    </div>
+  );
+}
+
+/**
+ * Turning a third-party skill on: the user sees the version (hash, files) and every finding, and approves exactly
+ * that content; with findings, a second confirmation. A failed scan cannot be approved.
+ */
+function ApproveSkill({ title, r, onApprove, onClose }: { title: string; r: SkillReview; onApprove: (acceptFindings: boolean) => Promise<unknown>; onClose: () => void }) {
+  const t = useT();
+  const [seen, setSeen] = useState(false);
+  const [error, setError] = useState<string>();
+  const findings = r.scan?.findings ?? [];
+  const n = findings.length + (r.scan?.more ?? 0);
+  const failed = r.state === 'failed' || r.scan?.status === 'failed';
+  const approve = () =>
+    onApprove(n > 0)
+      .then(onClose)
+      .catch((e) => setError((e as Error).message));
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-head">
+          <h3>{t(`啟用前確認：${title}`, `Before turning it on: ${title}`)}</h3>
+          <button className="icon-btn" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <p className="small">
+          {t(
+            `Aivenue 只會載入你確認的這一版（版本 ${r.hash?.slice(0, 12) ?? '?'}，${r.scan?.files ?? '?'} 個檔案）。之後任何檔案有變動，都會暫停載入，等你重新確認。`,
+            `Aivenue loads only the version you approve here (version ${r.hash?.slice(0, 12) ?? '?'}, ${r.scan?.files ?? '?'} ${r.scan?.files === 1 ? 'file' : 'files'}). Any later change to its files stops it from loading until you approve again.`,
+          )}
+        </p>
+        {failed ? (
+          <div className="note err">{t(`無法掃描，不能啟用：${r.scan?.error ?? ''}`, `It could not be scanned and cannot be turned on: ${r.scan?.error ?? ''}`)}</div>
+        ) : n === 0 ? (
+          <div className="note">{t('本機靜態掃描沒有發現需要注意的內容。這只是規則比對，不代表一定安全。', 'The local static scan found nothing to look at. It only matches rules; it is not a guarantee of safety.')}</div>
+        ) : (
+          <>
+            <div className="note warn">
+              {t(`本機靜態掃描找到 ${n} 處需要注意。這些是線索，不是判定：討論安全問題的 skill 也會命中。`, `The local static scan found ${n} place(s) to look at. They are leads, not verdicts: a skill that discusses security matches some too.`)}
+            </div>
+            <div className="findings">
+              {findings.map((f, i) => (
+                <div key={i} className="finding">
+                  <code>
+                    {f.file}
+                    {f.line ? `:${f.line}` : ''}
+                  </code>{' '}
+                  <span className="tag">{f.category}</span> <span className="muted tiny">{f.rule}</span>
+                  <div className="mono small break">{f.excerpt}</div>
+                </div>
+              ))}
+              {r.scan?.more ? <div className="muted small">{t(`還有 ${r.scan.more} 處沒有列出`, `${r.scan.more} more not listed`)}</div> : null}
+            </div>
+            <label className="row gap small">
+              <input type="checkbox" checked={seen} onChange={(e) => setSeen(e.target.checked)} />
+              {t(`我看過以上 ${n} 處，仍要啟用這一版`, `I looked at these ${n} finding(s) and still want to turn this version on`)}
+            </label>
+          </>
+        )}
+        {error && <div className="note err">{error}</div>}
+        <div className="row gap end">
+          <button className="btn ghost" onClick={onClose}>
+            {t('取消', 'Cancel')}
+          </button>
+          <button className="btn primary" disabled={failed || (n > 0 && !seen)} onClick={approve}>
+            {t('啟用這一版', 'Turn this version on')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkillRow({ s }: { s: SkillInfo }) {
   const t = useT();
   const [editing, setEditing] = useState(false);
+  const [approving, setApproving] = useState(false);
   const roles = s.roles ?? [];
   const toggleRole = (r: InstructionRole) => {
     const next = roles.includes(r) ? roles.filter((x) => x !== r) : [...roles, r];
     void hub.call('skills.set', { name: s.name, roles: next });
   };
+  const loaded = s.enabled && s.review.state === 'approved';
+  // Turning on a version nobody approved goes through the approval.
+  const toggle = (on: boolean) => (!on || s.review.state === 'approved' ? hub.call('skills.set', { name: s.name, enabled: on }) : setApproving(true));
   return (
     <div className="crow">
       <div className="crow-head">
         <label className="switch">
-          <input type="checkbox" checked={s.enabled} onChange={(e) => hub.call('skills.set', { name: s.name, enabled: e.target.checked })} />
+          <input type="checkbox" checked={loaded} onChange={(e) => toggle(e.target.checked)} />
           <span />
         </label>
         <div className="grow min0">
@@ -545,6 +653,7 @@ function SkillRow({ s }: { s: SkillInfo }) {
             {s.name} {s.files > 1 && <span className="tag">{t(`${s.files} 個檔案`, `${s.files} files`)}</span>}
           </div>
           <div className="muted small">{s.description || t('（沒有 description）', '(no description)')}</div>
+          <ReviewState r={s.review} />
         </div>
         <div className="row gap">
           <button className="btn small ghost" onClick={() => setEditing(true)}>
@@ -572,6 +681,31 @@ function SkillRow({ s }: { s: SkillInfo }) {
         )}
       </div>
       {editing && <SkillEditor name={s.name} onClose={() => setEditing(false)} />}
+      {approving && <ApproveSkill title={s.name} r={s.review} onApprove={(acceptFindings) => hub.call('skills.approve', { name: s.name, hash: s.review.hash, acceptFindings })} onClose={() => setApproving(false)} />}
+    </div>
+  );
+}
+
+/** A skill in a working folder's .aivenue/skills: its files stay there; it loads only once this version is approved. */
+function ProjectSkillRow({ s }: { s: ProjectSkillInfo }) {
+  const t = useT();
+  const [approving, setApproving] = useState(false);
+  const loaded = s.review.state === 'approved';
+  return (
+    <div className="crow">
+      <div className="crow-head">
+        <label className="switch">
+          <input type="checkbox" checked={loaded} onChange={(e) => (e.target.checked ? setApproving(true) : hub.call('skills.disableProject', { dir: s.dir }))} />
+          <span />
+        </label>
+        <div className="grow min0">
+          <div className="crow-name">{s.name}</div>
+          <div className="muted small">{s.description || t('（沒有 description）', '(no description)')}</div>
+          <div className="muted tiny mono break">{s.dir}</div>
+          <ReviewState r={s.review} />
+        </div>
+      </div>
+      {approving && <ApproveSkill title={s.name} r={s.review} onApprove={(acceptFindings) => hub.call('skills.approveProject', { dir: s.dir, hash: s.review.hash, acceptFindings })} onClose={() => setApproving(false)} />}
     </div>
   );
 }
@@ -579,7 +713,7 @@ function SkillRow({ s }: { s: SkillInfo }) {
 function Skills() {
   const t = useT();
   const host = useHostInfo();
-  const { skills } = useCapabilities();
+  const { skills, projectSkills = [] } = useCapabilities();
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string>();
   return (
@@ -591,6 +725,12 @@ function Skills() {
             {t(
               '採用 Agent Skills 格式（資料夾 + SKILL.md）。每個 agent 都會收到 skill 清單（名稱與說明），需要時自己讀取 SKILL.md，因此任何能讀檔的 CLI 都能使用。',
               'Agent Skills format (a folder with SKILL.md). Every agent gets the list of skills (name and description) and reads SKILL.md when relevant, so any CLI that can read files can use them.',
+            )}
+          </p>
+          <p className="muted small">
+            {t(
+              '匯入或手動放進資料夾的 skill 會先暫停載入：Aivenue 在本機做靜態掃描（不連網、不呼叫模型），你看過結果、確認這一版後才會提供給 agent；確認後檔案有變動，會再暫停。用「新增」或「編輯」在這裡寫的 skill 不受影響。',
+              'Skills you import or put into the folder yourself are not loaded at first: Aivenue scans them locally (no network, no model), and offers one to agents only after you looked at the result and approved that version; a later change to its files stops it again. Skills written here with Add or Edit are not affected.',
             )}
           </p>
         </div>
@@ -615,6 +755,22 @@ function Skills() {
           <SkillRow key={s.name} s={s} />
         ))}
       </div>
+      {projectSkills.length > 0 && (
+        <>
+          <h4>{t('工作資料夾裡的專案 skills', 'Project skills in working folders')}</h4>
+          <p className="muted small">
+            {t(
+              'Aivenue 在工作資料夾的 .aivenue/skills 找到這些 skill。檔案留在原處；確認這一版之前不會提供給 agent。Aivenue 自己整理出的專案規則不受影響。',
+              'Aivenue found these in working folders (.aivenue/skills). Their files stay where they are; they are not offered to agents until you approve this version. Project rules Aivenue distilled itself are not affected.',
+            )}
+          </p>
+          <div className="clist">
+            {projectSkills.map((s) => (
+              <ProjectSkillRow key={s.dir} s={s} />
+            ))}
+          </div>
+        </>
+      )}
       {adding && <SkillEditor onClose={() => setAdding(false)} />}
     </section>
   );

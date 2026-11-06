@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus } from '../../core/src/types';
+import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus } from '../../core/src/types';
 import { setPickedColors } from './util';
 
 type Listener = (data: any) => void;
@@ -148,8 +148,8 @@ export function useUsage(): ProviderUsage[] {
   return useSynced<ProviderUsage[]>('usage.get', undefined, 'usage', [])[0];
 }
 
-export function useCapabilities(): { config: CapabilitiesConfig; skills: SkillInfo[] } {
-  return useSynced('capabilities.get', undefined, 'capabilities', { config: { mcpServers: [], instructions: {}, skills: {} }, skills: [] as SkillInfo[] })[0];
+export function useCapabilities(): { config: CapabilitiesConfig; skills: SkillInfo[]; projectSkills?: ProjectSkillInfo[] } {
+  return useSynced('capabilities.get', undefined, 'capabilities', { config: { mcpServers: [], instructions: {}, skills: {} }, skills: [] as SkillInfo[], projectSkills: [] as ProjectSkillInfo[] })[0];
 }
 
 export function useExtensions(): ExtensionStatus[] {

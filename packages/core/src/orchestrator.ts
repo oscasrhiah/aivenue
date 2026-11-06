@@ -65,7 +65,7 @@ import { backgroundLaunch, commandOf, findProcesses, isInside, logOf, processCwd
 import { checkRecords, collectActivity, fileReadOf, ownWorkBlock, POLLING, toolCallPage } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
-import { exportBundle, distilProjectSkill } from './bundle';
+import { exportBundle, distilProjectSkill, projectSkillsDir } from './bundle';
 import { skillsReminder } from './capabilities';
 import { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './promptStats';
 import { memoryContentDigest, MemoryStore, type MemoryCandidate, type MemoryPatch } from './memoryStore';
@@ -1675,7 +1675,13 @@ export class Orchestrator {
   distilSkill(id: string): { path: string; added: number } {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
-    return distilProjectSkill(run.worktree?.origCwd ?? run.config.cwd, run);
+    const cwd = run.worktree?.origCwd ?? run.config.cwd;
+    // Aivenue writes this one itself: trusted, unless the folder already held content nobody approved.
+    const dir = path.join(projectSkillsDir(cwd), 'project-rules');
+    const before = this.d.capabilities.projectSkillState?.(dir);
+    const out = distilProjectSkill(cwd, run);
+    this.d.capabilities.trustProjectSkill?.(dir, before);
+    return out;
   }
 
   // ---------- MCP bridge entry points ----------

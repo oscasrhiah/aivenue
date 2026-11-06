@@ -269,7 +269,9 @@ export interface CapabilitiesConfig {
   mcpServers: McpServerConfig[];
   instructions: Partial<Record<InstructionRole, string>>;
   /** Per-skill settings (skill content lives in <dataDir>/skills/<name>/SKILL.md). */
-  skills: Record<string, { enabled: boolean; roles?: InstructionRole[] }>;
+  skills: Record<string, { enabled: boolean; roles?: InstructionRole[]; origin?: 'imported' | 'editor'; approved?: SkillApproval }>;
+  /** Project skills (<cwd>/.aivenue/skills/<name>), by their folder: the approved version, and those seen pending. */
+  projectSkills?: Record<string, { dir: string; name: string; cwd: string; seenAt: number; approved?: SkillApproval }>;
   /** Built-in extensions (all off until the user turns them on). */
   extensions?: ExtensionsConfig;
 }
@@ -341,9 +343,52 @@ export interface SkillInfo {
   name: string;
   description: string;
   path: string;
+  /** The user's switch. Loaded only when also `review.state` is "approved". */
   enabled: boolean;
   roles?: InstructionRole[];
   files: number;
+  review: SkillReview;
+}
+
+/**
+ * Whether a skill's current content may be loaded (docs/next-task-skills-integration.md, skill-scanner): approved
+ * (this very content was approved, or written by Aivenue or its editor), pending (never approved), changed (approved
+ * once, the files changed since), failed (could not be scanned: stays off). `scan` is the local static scan of the
+ * current content; `hash` is the version the user would approve.
+ */
+export interface SkillReview {
+  state: 'approved' | 'pending' | 'changed' | 'failed';
+  hash?: string;
+  scan?: SkillScan;
+  approvedAt?: number;
+  /** Who made the approved version trusted: the user, the built-in editor, Aivenue (a distilled project skill). */
+  by?: 'user' | 'editor' | 'aivenue';
+}
+
+export type SkillFindingCategory = 'injection' | 'hidden' | 'frontmatter' | 'credentials' | 'network' | 'execution' | 'config' | 'autorun' | 'structure';
+
+/** One line of a skill that needs a look (a lead, not a verdict). */
+export interface SkillFinding {
+  file: string;
+  /** 1-based; 0 for the file as a whole. */
+  line: number;
+  category: SkillFindingCategory;
+  rule: string;
+  excerpt: string;
+}
+
+/** The local static scan of a skill folder (skillScan.ts). */
+export interface SkillScan {
+  status: 'clean' | 'findings' | 'failed';
+  rules: string;
+  at: number;
+  /** Over every path, its kind and its content (a link: its target): what an approval is for. */
+  hash?: string;
+  files?: number;
+  findings: SkillFinding[];
+  /** More findings than kept. */
+  more?: number;
+  error?: string;
 }
 
 /**
@@ -362,6 +407,26 @@ export interface EarlierPlan {
   handoff?: { by: string; text: string; ts: number };
   /** As of the previous message (outdated: files changed after it ran); all of them ran before this message. */
   checks: (ObservedCheck & { output?: string })[];
+}
+
+/** A skill in a project's .aivenue/skills folder that Aivenue found while preparing an agent. */
+export interface ProjectSkillInfo {
+  /** The skill's folder (absolute): its identity. */
+  dir: string;
+  name: string;
+  description: string;
+  path: string;
+  cwd: string;
+  review: SkillReview;
+}
+
+/** An approval of one version of a skill. */
+export interface SkillApproval {
+  hash: string;
+  at: number;
+  by: 'user' | 'editor' | 'aivenue';
+  /** Findings the user saw when approving. */
+  findings?: number;
 }
 
 export interface ProviderInfo {

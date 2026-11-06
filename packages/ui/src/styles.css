@@ -5501,3 +5501,19 @@ textarea.code {
 .check-seen code {
   overflow-wrap: anywhere;
 }
+
+/* skill review before loading */
+.skill-review {
+  margin-top: 4px;
+}
+.findings {
+  max-height: 46vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+.finding code {
+  overflow-wrap: anywhere;
+}
