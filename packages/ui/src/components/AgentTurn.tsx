@@ -9,6 +9,7 @@ import { Transcript, visible } from './Transcript';
 import { Markdown } from './Markdown';
 import { extensionSummary } from '../extensionUse';
 import { outcomeText } from './Progress';
+import { RememberButton } from './Memory';
 
 export const failureLabel = (t: ReturnType<typeof useT>, k: FailureKind) =>
   ({ rate_limit: t('限流', 'Rate limited'), quota: t('額度用完', 'Out of quota'), network: t('網路', 'Network'), auth: t('登入失效', 'Signed out'), model_service: t('模型服務故障', 'Model service'), logic: t('執行錯誤', 'Task error'), unknown: t('未知錯誤', 'Unknown') })[k];
@@ -280,6 +281,7 @@ function Notes({ run, agentId, against }: { run: WorkflowRun; agentId: string; a
             <span className="note-pin">{handoff ? '🤝' : '📌'}</span>
             {handoff ? <span className="pill">{t('交接', 'Hand-off')}</span> : NOTE_KIND(t, n.kind) && <span className={cx('pill', n.kind === 'fact' ? 'ok' : n.kind === 'decision' ? '' : 'warn')}>{NOTE_KIND(t, n.kind)}</span>}
             <span className="note-text">{shown ? text : same ? t('筆記（與這張卡片的結果相同）', 'Note (same as this card\'s result)') : text}</span>
+            {shown && !handoff && <RememberButton runId={run.id} text={text} noteId={n.id} ts={n.ts} />}
           </div>
         );
       })}

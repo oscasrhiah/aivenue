@@ -962,3 +962,376 @@ test('工作中途用量超過上限：agent 被停下並問你；選結束就�
   r = await settle(orch, id);
   assert.equal(r.status, 'cancelled');
 });
+
+// ---------- 專案記憶接入工作流（docs/memory-phase1.md §3、§7、§8） ----------
+
+/** Wait until the workflow is completely done, including what it writes to the memory at the end. */
+async function finished(orch, id) {
+  const r = await settle(orch, id);
+  await orch.executions.get(id);
+  return r;
+}
+
+/** Fake agents that also keep each role's prompts. */
+function recordingAgents(orch) {
+  const prompts = {};
+  const inner = fakeAgents(orch, {});
+  const fake = globalThis.__fakeAgent;
+  globalThis.__fakeAgent = async (o) => {
+    (prompts[role(o.prompt)] ??= []).push(o.prompt);
+    return fake(o);
+  };
+  return { prompts, calls: inner };
+}
+
+test('記憶：「記住：」與通過的驗收寫進專案記憶；下一個工作流依角色帶給 agent', async () => {
+  const { orch, cwd } = setup();
+  recordingAgents(orch);
+  const first = orch.start(config(cwd, { goal: 'make the tests pass\n記住：這個專案一律用 pnpm 安裝套件\n> 記住：引用的這行不算' })).id;
+  let r = await finished(orch, first);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(r.projectMemory.projectId);
+
+  const { prompts } = recordingAgents(orch);
+  const second = orch.start(config(cwd, { goal: 'add a feature with pnpm' })).id;
+  r = await finished(orch, second);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(r.projectMemory.picks.length >= 2);
+  const exec = prompts.executor.join('\n');
+  assert.match(exec, /PROJECT MEMORY/);
+  assert.match(exec, /一律用 pnpm/);
+  assert.doesNotMatch(exec, /引用的這行不算/);
+  // 驗收者拿到驗收方法（practice），而且在這個 checkout 已驗證
+  assert.match(prompts.verifier.join('\n'), /\(practice; verified here\) tests: all pass — measured by npm test/);
+  assert.ok(r.projectMemory.injectedTokens > 0);
+});
+
+test('記憶：只讀模式帶入但不寫入任何東西；完全不用時不帶入也不寫入', async () => {
+  const { orch, cwd, dir } = setup();
+  recordingAgents(orch);
+  const seed = orch.start(config(cwd, { ...noPlan, goal: 'seed\n記住：先跑 lint 再提交' })).id;
+  const seeded = await finished(orch, seed);
+  const memDir = path.join(dir, 'home', 'memory', seeded.projectMemory.projectId);
+  const snapshotOf = () => fs.readdirSync(memDir).filter((f) => f !== 'lock').map((f) => f + ':' + fs.readFileSync(path.join(memDir, f), 'utf8')).join('\n');
+
+  let rec = recordingAgents(orch);
+  const before = snapshotOf();
+  const ro = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'lint the code\n記住：只讀時不該存下這句', memory: { mode: 'readonly' } })).id);
+  assert.equal(ro.status, 'completed', ro.error);
+  assert.match(rec.prompts.executor.join('\n'), /先跑 lint/);
+  assert.equal(snapshotOf(), before);
+
+  rec = recordingAgents(orch);
+  const off = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'lint again\n記住：關閉時也不該存', memory: { mode: 'off' } })).id);
+  assert.equal(off.status, 'completed', off.error);
+  assert.doesNotMatch(rec.prompts.executor.join('\n'), /PROJECT MEMORY/);
+  assert.equal(snapshotOf(), before);
+});
+
+test('記憶：執行中改成只讀，取回這個工作流排隊中的候選；之後的對話照常帶入', async () => {
+  const { orch, cwd } = setup();
+  recordingAgents(orch);
+  let id;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'post_note', { text: 'the build needs node 22', kind: 'fact' });
+        await o.setMemoryMode(id, 'readonly');
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  id = orch.start(config(cwd, { ...noPlan, goal: 'build it\n記住：用 node 22' })).id;
+  const r = await finished(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(r.projectMemory.mode, 'readonly');
+  // 什麼都沒寫進記憶：下一個工作流沒有可帶入的記憶
+  const rec = recordingAgents(orch);
+  const next = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'build again' })).id);
+  assert.equal(next.projectMemory.picks.length, 0);
+  assert.doesNotMatch(rec.prompts.executor.join('\n'), /node 22/);
+});
+
+const memFiles = (dir, pid) => {
+  const d = path.join(dir, 'home', 'memory', pid);
+  return fs.existsSync(d) ? fs.readdirSync(d).map((f) => fs.readFileSync(path.join(d, f), 'utf8')).join('\n') : '';
+};
+
+test('記憶：同一專案兩個工作流並行，別人不會提前套用執行中工作流的候選；它改成只讀時取回得到', async () => {
+  const { orch, cwd, dir } = setup();
+  let posted = false;
+  let open;
+  const gate = new Promise((r) => (open = r));
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        if (opts.prompt.includes('job A')) {
+          await o.callTool(secret, 'post_note', { text: 'A found that the cache dir is .cache-a', kind: 'fact' });
+          posted = true;
+          await gate;
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const a = orch.start(config(cwd, { ...noPlan, goal: 'job A\n記住：A 的規則' })).id;
+  for (let i = 0; i < 400 && !posted; i++) await new Promise((res) => setTimeout(res, 25));
+  assert.ok(posted);
+  const b = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'job B\n記住：B 的規則' })).id);
+  assert.equal(b.status, 'completed', b.error);
+  const pid = b.projectMemory.projectId;
+  const store = orch.memStore(pid);
+  assert.deepEqual(store.list().map((m) => m.text), ['B 的規則']);
+  assert.deepEqual(store.queuedWorkflows(), [a]);
+
+  await orch.setMemoryMode(a, 'readonly');
+  assert.ok(orch.runs.get(a).log.some((l) => /取回 2 筆/.test(l.text)), orch.runs.get(a).log.map((l) => l.text).join('\n'));
+  open();
+  const ra = await finished(orch, a);
+  assert.equal(ra.status, 'completed', ra.error);
+  assert.doesNotMatch(memFiles(dir, pid), /A 的規則|cache-a/);
+});
+
+test('記憶：已結束（或崩潰）工作流留在佇列的候選，下一個工作流開始時套用', async () => {
+  const { orch, cwd } = setup();
+  fakeAgents(orch, {});
+  const first = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'first' })).id);
+  const store = orch.memStore(first.projectMemory.projectId);
+  await store.enqueue({ opId: 'ghost-1', kind: 'instruction', text: 'left by a crashed workflow', source: { workflowId: 'ghost-run', eventRef: 'u', ts: 1 }, lifecycle: 'active' });
+  const next = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'second' })).id);
+  assert.equal(next.status, 'completed', next.error);
+  assert.deepEqual(store.list().map((m) => m.text), ['left by a crashed workflow']);
+  assert.deepEqual(store.queuedWorkflows(), []);
+});
+
+test('記憶：新專案用只讀模式不會建立任何記憶檔案', async () => {
+  const { orch, cwd, dir } = setup();
+  fakeAgents(orch, {});
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'look\n記住：不該存', memory: { mode: 'readonly' } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(r.projectMemory.projectId, undefined);
+  assert.equal(fs.existsSync(path.join(dir, 'home', 'memory')), false);
+});
+
+test('記憶：agent 的事實筆記成為候選，附上它讀過、筆記提到的檔案（雜湊在讀取當下記錄）', async () => {
+  const { orch, cwd, dir } = setup();
+  fs.mkdirSync(path.join(cwd, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'src', 'app.ts'), 'export function main() {}\n');
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        opts.onEvent({ seq: 1, ts: Date.now(), kind: 'tool', tool: { id: 't1', name: 'Read', category: 'read', title: 'src/app.ts', status: 'ok' } }, false);
+        await o.callTool(secret, 'post_note', { text: 'app.ts exports main()', kind: 'fact' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'read the app' })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const m = orch.memStore(r.projectMemory.projectId).list().find((x) => x.text === 'app.ts exports main()');
+  assert.equal(m.lifecycle, 'candidate');
+  assert.equal(m.evidence[0].kind, 'file_read');
+  assert.equal(m.evidence[0].files[0].path, 'src/app.ts');
+  assert.match(m.evidence[0].files[0].hash, /^[0-9a-f]{64}$/);
+  void dir;
+});
+
+/** A executor for "job A" that queues a candidate after switching to full mode, then waits for the gate. */
+function switchingAgents(orch, from, state) {
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        if (opts.prompt.includes('job A')) {
+          await o.setMemoryMode(state.id, 'full');
+          await o.callTool(secret, 'post_note', { text: 'A noticed the port is 5173', kind: 'fact' });
+          state.posted = true;
+          await state.gate;
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+}
+
+for (const from of ['readonly', 'off']) {
+  test(`記憶：從「${from === 'off' ? '完全不用' : '只讀'}」切到完整，先取得租約再擷取；別的工作流不會提前套用`, async () => {
+    const { orch, cwd } = setup();
+    fakeAgents(orch, {});
+    // 有記憶的專案（只讀也找得到）
+    await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'seed\n記住：seed 規則' })).id);
+    const state = { posted: false };
+    state.gate = new Promise((r) => (state.open = r));
+    switchingAgents(orch, from, state);
+    state.id = orch.start(config(cwd, { ...noPlan, goal: 'job A', memory: { mode: from } })).id;
+    for (let i = 0; i < 400 && !state.posted; i++) await new Promise((res) => setTimeout(res, 25));
+    assert.ok(state.posted);
+    const a = orch.runs.get(state.id);
+    assert.equal(a.projectMemory.mode, 'full');
+    assert.ok(orch.memLeases.has(state.id));
+    const b = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'job B' })).id);
+    assert.equal(b.status, 'completed', b.error);
+    const store = orch.memStore(b.projectMemory.projectId);
+    assert.ok(!store.list().some((m) => m.text.includes('5173')));
+    assert.deepEqual(store.queuedWorkflows(), [state.id]);
+    state.open();
+    await finished(orch, state.id);
+    assert.ok(store.list().some((m) => m.text.includes('5173')));
+  });
+}
+
+test('記憶：新專案以只讀開始、中途切到完整：這時才建立專案並取得租約', async () => {
+  const { orch, cwd, dir } = setup();
+  const state = { posted: false };
+  state.gate = new Promise((r) => (state.open = r));
+  switchingAgents(orch, 'readonly', state);
+  state.id = orch.start(config(cwd, { ...noPlan, goal: 'job A', memory: { mode: 'readonly' } })).id;
+  for (let i = 0; i < 400 && !state.posted; i++) await new Promise((res) => setTimeout(res, 25));
+  assert.ok(fs.existsSync(path.join(dir, 'home', 'memory', 'projects.json')));
+  assert.ok(orch.memLeases.has(state.id));
+  state.open();
+  const r = await finished(orch, state.id);
+  assert.ok(orch.memStore(r.projectMemory.projectId).list().some((m) => m.text.includes('5173')));
+});
+
+test('記憶：目標列出依賴檔；驗收後改了那個檔，下一個工作流把驗收方法標成待重驗', async () => {
+  const { orch, cwd } = setup();
+  fs.writeFileSync(path.join(cwd, 'a.ts'), 'export const a = 1;\n');
+  const goalWithData = { ...goal, data: ['a.ts'] };
+  const planner = { tool: 'submit_plan', args: { summary: 'plan', markdown: 'plan', steps: [{ id: '1', title: 'do it' }], goal: goalWithData } };
+  const rec = { prompts: {} };
+  fakeAgents(orch, { planner: [planner] });
+  const fake = globalThis.__fakeAgent;
+  globalThis.__fakeAgent = async (o) => ((rec.prompts[role(o.prompt)] ??= []).push(o.prompt), fake(o));
+  const first = await finished(orch, orch.start(config(cwd)).id);
+  assert.equal(first.status, 'completed', first.error);
+  const v = first.stages.verify.rounds.at(-1).verification;
+  assert.deepEqual(v.fingerprint.map((f) => f.path), ['a.ts']);
+  const store = orch.memStore(first.projectMemory.projectId);
+  const practice = store.list().find((m) => m.kind === 'practice');
+  assert.equal(store.checkoutStates(first.projectMemory.checkoutId)[practice.id].state, 'verified');
+
+  fs.writeFileSync(path.join(cwd, 'a.ts'), 'export const a = 2;\n');
+  rec.prompts = {};
+  await finished(orch, orch.start(config(cwd, { goal: 'make the tests pass again' })).id);
+  assert.match(rec.prompts.verifier.join('\n'), /\(practice; lead to re-check[^)]*\) tests: all pass/);
+});
+
+test('記憶頁 API：「記住」立刻生效，但不會連帶套用執行中工作流的候選；清單、核准、編輯、刪除', async () => {
+  const { orch, cwd } = setup();
+  let posted = false;
+  let open;
+  const gate = new Promise((r) => (open = r));
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        if (opts.prompt.includes('job A')) {
+          await o.callTool(secret, 'post_note', { text: 'A thinks the API is v2', kind: 'fact' });
+          posted = true;
+          await gate;
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const a = orch.start(config(cwd, { ...noPlan, goal: 'job A\n記住：A 的規則' })).id;
+  for (let i = 0; i < 400 && !posted; i++) await new Promise((res) => setTimeout(res, 25));
+  await orch.memoryRemember(a, '提交前先跑 lint');
+  const pid = orch.runs.get(a).projectMemory.projectId;
+  let list = orch.memoryList(pid);
+  assert.deepEqual(list.map((m) => m.text), ['提交前先跑 lint']);
+  assert.equal(list[0].approvedBy, 'user');
+  assert.ok(list[0].states.length >= 1);
+  assert.deepEqual(orch.memStore(pid).queuedWorkflows(), [a]);
+
+  open();
+  await finished(orch, a);
+  list = orch.memoryList(pid);
+  const cand = list.find((m) => m.text === 'A thinks the API is v2');
+  assert.equal(cand.lifecycle, 'candidate');
+  const approved = await orch.memoryUpdate(pid, cand.id, { lifecycle: 'active', approvedBy: 'user' }, cand.version);
+  assert.equal(approved.lifecycle, 'active');
+  await assert.rejects(orch.memoryUpdate(pid, cand.id, { text: 'stale edit' }, cand.version), /changed since/);
+  const del = await orch.memoryDelete(pid, cand.id);
+  assert.deepEqual(del.workflows, [a]);
+  assert.ok(!orch.memoryList(pid).some((m) => m.id === cand.id));
+  const projects = orch.memoryProjects();
+  assert.equal(projects.length, 1);
+  assert.equal(projects[0].counts.active, 2);
+
+  const view = orch.memoryForRun(a);
+  assert.equal(view.mode, 'full');
+  assert.ok(view.queued >= 2);
+});
+
+test('記憶頁 API：清空欄位經 JSON 傳輸後確實清除；不能清空內容', async () => {
+  const { orch, cwd } = setup();
+  fakeAgents(orch, {});
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'seed' })).id);
+  await orch.memoryRemember(r.id, 'use pnpm');
+  const pid = r.projectMemory.projectId;
+  let m = orch.memoryList(pid)[0];
+  m = await orch.memoryUpdate(pid, m.id, { conditions: 'when installing', environment: 'Windows', check: { command: 'pnpm -v', expectExit: 0 } }, m.version);
+  assert.equal(m.environment, 'Windows');
+  // 經 WebSocket 的請求：JSON 會丟掉 undefined，但保留 null
+  const wire = JSON.parse(JSON.stringify({ patch: { text: 'use pnpm 9', conditions: null, environment: null, check: null } }));
+  m = await orch.memoryUpdate(pid, m.id, wire.patch, m.version);
+  assert.equal(m.text, 'use pnpm 9');
+  assert.equal('conditions' in m, false);
+  assert.equal('environment' in m, false);
+  assert.equal('check' in m, false);
+  assert.equal(orch.memoryList(pid)[0].environment, undefined);
+  await assert.rejects(orch.memoryUpdate(pid, m.id, JSON.parse('{"text":null}'), m.version), /cannot be cleared/);
+  await assert.rejects(orch.memoryUpdate(pid, m.id, { text: '  ' }, m.version), /cannot be empty/);
+});
+
+test('記憶頁 API：同一則訊息可以多次「記住」不同文字；同一次儲存重試不重複；刪掉後還能再記', async () => {
+  const { orch, cwd } = setup();
+  fakeAgents(orch, {});
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'seed' })).id);
+  const from = { ts: r.createdAt, noteId: undefined };
+  const req1 = { id: 'save-1', at: 1000 };
+  await orch.memoryRemember(r.id, '先跑 lint', { ...from, request: req1 });
+  await orch.memoryRemember(r.id, '先跑 lint', { ...from, request: req1 }); // 重試
+  await orch.memoryRemember(r.id, '先跑 lint 再跑測試', { ...from, request: { id: 'save-2', at: 2000 } });
+  const pid = r.projectMemory.projectId;
+  let list = orch.memoryList(pid);
+  assert.deepEqual(list.map((m) => m.text).sort(), ['先跑 lint', '先跑 lint 再跑測試']);
+  await orch.memoryDelete(pid, list.find((m) => m.text === '先跑 lint').id);
+  await orch.memoryRemember(r.id, '先跑 lint（改過）', { ...from, request: { id: 'save-3', at: 3000 } });
+  list = orch.memoryList(pid);
+  assert.deepEqual(list.map((m) => m.text).sort(), ['先跑 lint 再跑測試', '先跑 lint（改過）']);
+});
+
+test('記憶頁 API：刪除後再刻意記住「完全相同」的文字會成功；自動擷取仍被擋；回報實際結果', async () => {
+  const { orch, cwd } = setup();
+  fakeAgents(orch, {});
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'seed' })).id);
+  const pid = r.projectMemory.projectId;
+  const first = await orch.memoryRemember(r.id, 'run lint first', { request: { id: 'r1', at: 1 } });
+  assert.equal(first.status, 'added');
+  // 同一次儲存重試：仍回報已記住，不重複
+  assert.equal((await orch.memoryRemember(r.id, 'run lint first', { request: { id: 'r1', at: 1 } })).status, 'added');
+  assert.equal(orch.memoryList(pid).length, 1);
+  await orch.memoryDelete(pid, first.memoryId);
+
+  // 自動擷取（工作流訊息裡的「記住：」）被刪除標記擋下
+  await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'again\n記住：run lint first' })).id);
+  assert.equal(orch.memoryList(pid).length, 0);
+
+  // 使用者刻意重新記住相同文字：建立新記憶
+  const again = await orch.memoryRemember(r.id, 'run lint first', { request: { id: 'r2', at: 2 } });
+  assert.equal(again.status, 'added');
+  assert.deepEqual(orch.memoryList(pid).map((m) => m.text), ['run lint first']);
+
+  // 相同內容的記憶被鎖定：回報等待，不說已記住
+  await orch.memoryUpdate(pid, again.memoryId, { locked: true });
+  const held = await orch.memoryRemember(r.id, 'run lint first', { request: { id: 'r3', at: 3 } });
+  assert.equal(held.status, 'held');
+  assert.match(held.message, /鎖定/);
+  assert.ok(orch.runs.get(r.id).log.some((l) => /還沒記住/.test(l.text)));
+  // 相同內容（未鎖定）：併入既有記憶
+  await orch.memoryUpdate(pid, again.memoryId, { locked: false });
+  const merged = await orch.memoryRemember(r.id, 'run lint first', { request: { id: 'r4', at: 4 } });
+  assert.equal(merged.status, 'merged');
+});
+

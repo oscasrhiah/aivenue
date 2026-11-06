@@ -8,21 +8,28 @@ const MAX_FILES = 50000;
 export interface Snapshot {
   files: Map<string, { size: number; mtimeMs: number }>;
   truncated: boolean;
+  /** Folders or files that could not be read (not ones that vanished while scanning): the listing misses them. */
+  unreadable: number;
 }
 
+/** Gone between listing and reading it (a change, not a gap in what was seen). */
+const vanished = (e: unknown) => (e as NodeJS.ErrnoException).code === 'ENOENT';
+
 /** File listing of a folder (relative path → size/mtime), skipping dependency and VCS folders. */
-export function snapshot(root: string): Snapshot {
+export function snapshot(root: string, maxFiles = MAX_FILES): Snapshot {
   const files = new Map<string, { size: number; mtimeMs: number }>();
   let truncated = false;
+  let unreadable = 0;
   const walk = (dir: string) => {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (e) {
+      if (!vanished(e)) unreadable++;
       return;
     }
     for (const e of entries) {
-      if (files.size >= MAX_FILES) {
+      if (files.size >= maxFiles) {
         truncated = true;
         return;
       }
@@ -33,14 +40,14 @@ export function snapshot(root: string): Snapshot {
         try {
           const st = fs.statSync(abs);
           files.set(path.relative(root, abs), { size: st.size, mtimeMs: st.mtimeMs });
-        } catch {
-          // vanished while scanning
+        } catch (err) {
+          if (!vanished(err)) unreadable++;
         }
       }
     }
   };
   walk(root);
-  return { files, truncated };
+  return { files, truncated, unreadable };
 }
 
 /** What changed between two snapshots of the same folder. */

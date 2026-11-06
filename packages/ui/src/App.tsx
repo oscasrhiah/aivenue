@@ -7,7 +7,7 @@ import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { cx, relativeDay, wfStatus } from './util';
 
-type SettingsTab = 'general' | 'providers' | 'capabilities' | 'usage';
+type SettingsTab = 'general' | 'providers' | 'capabilities' | 'usage' | 'memory';
 type Route = { page: 'new' } | { page: 'run'; id: string } | { page: 'settings'; tab: SettingsTab };
 
 function parseHash(): Route {
@@ -15,7 +15,7 @@ function parseHash(): Route {
   if (h.startsWith('run/')) return { page: 'run', id: h.slice(4) };
   if (h.startsWith('settings')) {
     const tab = h.split('/')[1] as SettingsTab;
-    return { page: 'settings', tab: ['providers', 'capabilities', 'usage'].includes(tab) ? tab : 'general' };
+    return { page: 'settings', tab: ['providers', 'capabilities', 'usage', 'memory'].includes(tab) ? tab : 'general' };
   }
   if (h === 'providers') return { page: 'settings', tab: 'providers' };
   return { page: 'new' };

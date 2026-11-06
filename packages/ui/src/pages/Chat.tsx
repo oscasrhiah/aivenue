@@ -18,6 +18,7 @@ import { saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
+import { RememberButton } from '../components/Memory';
 
 type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
@@ -37,7 +38,7 @@ function timeline(run: WorkflowRun): Item[] {
 }
 
 /** A message sent while the agents were working: handed to them right away. */
-function MidRunMessage({ text, files, onImage, delivered, replies, planUpdated }: { text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number; replies?: Reply[]; planUpdated?: boolean }) {
+function MidRunMessage({ runId, ts, text, files, onImage, delivered, replies, planUpdated }: { runId: string; ts: number; text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number; replies?: Reply[]; planUpdated?: boolean }) {
   const t = useT();
   return (
     <div className="user-msg-wrap">
@@ -49,6 +50,7 @@ function MidRunMessage({ text, files, onImage, delivered, replies, planUpdated }
         </div>
       )}
       {text && <div className="user-msg">{text}</div>}
+      {text && <RememberButton runId={runId} text={text} ts={ts} className="user-remember" />}
       <Replies replies={replies} planUpdated={planUpdated} />
       <div className="muted tiny mid-run-tag">
         {delivered
@@ -82,7 +84,7 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
     <div className="earlier-msg">
       {items.map((it) =>
         it.type === 'user' && it.midRun ? (
-          <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={onImage} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />
+          <MidRunMessage key={it.key} runId={run.id} ts={it.ts} text={it.text} files={it.files} onImage={onImage} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />
         ) : it.type === 'user' ? (
           <div key={it.key} className="user-block">
             {own.length > 0 && (
@@ -538,6 +540,7 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
     return (
       <div className="user-msg-wrap">
         <div className="user-msg">{text}</div>
+        <RememberButton runId={run.id} text={text} ts={run.createdAt} className="user-remember" />
         {!run.replacedBy && (
           <button
             className="link tiny user-edit"
@@ -928,7 +931,7 @@ export function Chat({ id }: { id?: string }) {
                 <EarlierMessage key={r.id} run={r} before={earlier.slice(0, i)} providers={providers} onImage={setLightbox} />
               ))}
               {items.map((it) => {
-                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} text={it.text} files={it.files} onImage={setLightbox} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />;
+                if (it.type === 'user' && it.midRun) return <MidRunMessage key={it.key} runId={run.id} ts={it.ts} text={it.text} files={it.files} onImage={setLightbox} delivered={it.delivered} replies={it.replies} planUpdated={it.planUpdated} />;
                 if (it.type === 'user')
                   return (
                     <div key={it.key} className="user-block">

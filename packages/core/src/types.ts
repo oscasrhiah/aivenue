@@ -688,6 +688,8 @@ export interface WorkflowConfig {
   preApproved?: { kind: string; target: string; details: string }[];
   /** Goal verification after the code review (off unless enabled). */
   verify?: VerifyConfig;
+  /** The project's long-term memory: read and write (default), read only, or not at all. */
+  memory?: { mode: MemoryMode };
   /** Stops for time, cost, retries and lack of progress (off by default). */
   limits?: LimitsConfig;
   /** Only check environment, paths, providers and resources; no agent runs. */
@@ -751,6 +753,11 @@ export interface Verification {
   metrics: { id: string; value: string; met: boolean; evidence: string }[];
   issues: ReviewIssue[];
   evidence?: EvidenceStamp;
+  /**
+   * What the result rests on, hashed when the verification started (relative to the checkout): the goal's data
+   * files, or the whole checkout when the goal names none. A memory distilled from it keeps exactly these.
+   */
+  fingerprint?: { path: string; hash: string }[];
   /** The code changed after this was measured: it no longer counts until checked again. */
   stale?: boolean;
 }
@@ -1001,6 +1008,8 @@ export type WorkflowStatus = 'running' | 'paused' | 'waiting_human' | 'completed
 
 export interface WorkflowRun {
   id: string;
+  /** The project memory this workflow uses (docs/memory-phase1.md). */
+  projectMemory?: RunMemory;
   config: WorkflowConfig;
   status: WorkflowStatus;
   createdAt: number;
@@ -1241,4 +1250,139 @@ export interface HostInfo {
   canPickFiles: boolean;
   /** API keys are encrypted by the OS (false in standalone browser mode). */
   secureSecrets: boolean;
+}
+
+// ---------- project memory (docs/memory-phase1.md) ----------
+
+export type MemoryKind = 'instruction' | 'fact' | 'decision' | 'practice' | 'pitfall';
+export type MemoryLifecycle = 'candidate' | 'active' | 'superseded' | 'archived';
+
+export interface MemorySource {
+  workflowId: string;
+  noteId?: string;
+  eventRef?: string;
+  ts: number;
+  by?: string;
+  branch?: string;
+  /** The goal metric it came from, for a practice distilled from a passed goal verification. "M1" means something
+   * different in every workflow: the metric is identified by workflowId + goalVersion + metricId together. */
+  metricId?: string;
+  /** A digest of the goal the metric belonged to (its statement and metrics). */
+  goalVersion?: string;
+}
+
+export interface MemoryEvidence {
+  eventRef: string;
+  kind: 'user_message' | 'verification' | 'ruling' | 'command' | 'file_read';
+  checkoutId?: string;
+  environment?: string;
+  files?: { path: string; hash: string }[];
+  /** Masked summary; the full output stays in the workflow's own records (eventRef). */
+  summary: string;
+}
+
+/** One thing a project's earlier workflows left for later ones. Text fields are masked before they are stored. */
+export interface ProjectMemory {
+  id: string;
+  kind: MemoryKind;
+  text: string;
+  conditions?: string;
+  environment?: string;
+  /** A command whose success (exit code) verifies it in a checkout. */
+  check?: { command: string; expectExit: number };
+  sources: MemorySource[];
+  evidence: MemoryEvidence[];
+  lifecycle: MemoryLifecycle;
+  approvedBy?: 'auto' | 'user';
+  /** Held back: a known secret pattern was still found when it was about to be written. */
+  suspectSecret?: boolean;
+  supersededBy?: string;
+  locked?: boolean;
+  editedByUser?: boolean;
+  injectedCount: number;
+  lastInjectedAt?: number;
+  lastRetrievedAt?: number;
+  feedback: { useful: number; wrong: number };
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+}
+
+/** Where one memory stands in one checkout (docs/memory-phase1.md §2): verification belongs to a checkout, not to the memory. */
+export interface CheckoutVerification {
+  state: 'verified' | 'needs_recheck' | 'unverified';
+  /** The event that set it, what was expected and what was seen. */
+  evidenceRef: string;
+  expected: string;
+  actual: string;
+  /** The memory's files (relative to the checkout) as they were when it was checked. */
+  fingerprint: { path: string; hash: string }[];
+  lastVerifiedAt?: number;
+  /** When Aivenue observed the event that set it: an older event never replaces a newer state. */
+  at: number;
+  /** Digest of what was verified (kind, text, conditions, environment, check): when it changes, verify again. */
+  contentDigest: string;
+}
+
+export type MemoryMode = 'full' | 'readonly' | 'off';
+
+/** One memory picked for a workflow when it started: a reference, never its text (docs/memory-phase1.md §7). */
+export interface MemoryPick {
+  memoryId: string;
+  version: number;
+  /** What it said when picked: a different digest later means the user changed it. */
+  contentDigest: string;
+}
+
+/** What one agent conversation was given, to send a resumed one only what changed. */
+export interface MemoryGiven {
+  memoryId: string;
+  contentDigest: string;
+  state: CheckoutVerification['state'];
+}
+
+/** A workflow's use of the project memory. */
+export interface RunMemory {
+  mode: MemoryMode;
+  projectId?: string;
+  checkoutId?: string;
+  checkoutRoot?: string;
+  /** Fixed at the start: new memories are not added while it runs; removed or downgraded ones are. */
+  picks: MemoryPick[];
+  /** Agent id → what its conversation was given. */
+  given: Record<string, MemoryGiven[]>;
+  /** Sum of the memory text put into prompts (an estimate: not what the provider counted, see docs §7). */
+  injectedTokens: number;
+  /** The latest injection: what was left out and why. */
+  leftOut?: { memoryId: string; reason: string }[];
+  /** Candidates this workflow queued. */
+  queued: number;
+  /** Memory could not be used (shown to the user; the workflow goes on without it). */
+  error?: string;
+}
+
+/** A project as the memory page lists it. */
+export interface MemoryProjectInfo {
+  id: string;
+  label: string;
+  kind: 'git' | 'folder';
+  key: string;
+  counts: Record<MemoryLifecycle, number>;
+}
+
+/** A memory as the memory page shows it: with its state in each checkout of the project. */
+export interface MemoryView extends ProjectMemory {
+  states: { checkoutId: string; root: string; state: CheckoutVerification['state']; why?: 'changed' | 'failed' | 'edited' | 'incomplete'; lastVerifiedAt?: number }[];
+}
+
+/** What a workflow picked and gave its agents (the workflow's memory window). */
+export interface RunMemoryView {
+  mode: MemoryMode;
+  projectId?: string;
+  error?: string;
+  picks: { memoryId: string; kind?: MemoryKind; text?: string; state?: CheckoutVerification['state']; gone?: boolean; updated?: boolean }[];
+  given: { agentId: string; label: string; memoryIds: string[] }[];
+  leftOut: { memoryId: string; reason: string; text?: string }[];
+  injectedTokens: number;
+  queued: number;
 }

@@ -18,10 +18,15 @@ export function evidenceStamp(cwd: string, dataPaths: string[] = []): EvidenceSt
 }
 
 export function treeHash(cwd: string): string {
-  const snap = snapshot(cwd);
+  return treeScan(cwd).hash;
+}
+
+/** The tree hash, and whether every file was looked at (a very large tree is cut off: its hash then vouches for nothing). */
+export function treeScan(cwd: string, maxFiles?: number): { hash: string; complete: boolean } {
+  const snap = snapshot(cwd, maxFiles);
   const h = createHash('sha1');
   for (const [p, st] of [...snap.files].sort(([a], [b]) => a.localeCompare(b))) if (!NOT_CODE.test(p)) h.update(`${p}\0${st.size}\0${Math.round(st.mtimeMs)}\n`);
-  return h.digest('hex').slice(0, 16);
+  return { hash: h.digest('hex').slice(0, 16), complete: !snap.truncated && !snap.unreadable };
 }
 
 function gitHead(cwd: string): string | undefined {

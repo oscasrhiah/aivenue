@@ -32,6 +32,14 @@ import type {
   WorkflowConfig,
   WorkflowRun,
   WorkflowSummary,
+  MemoryEvidence,
+  MemoryLifecycle,
+  MemoryMode,
+  MemoryProjectInfo,
+  MemoryView,
+  RunMemoryView,
+  ProjectMemory,
+  SharedNote,
 } from './types';
 import { runAgent, type BridgeLaunch, type RunAgentResult } from './agentRunner';
 import { capture, findNode } from './proc';
@@ -48,6 +56,11 @@ import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
 import { skillsReminder } from './capabilities';
+import { memoryContentDigest, MemoryStore, type MemoryCandidate, type MemoryPatch } from './memoryStore';
+import { findProject, listProjects, relinkProject, resolveProject } from './memoryProject';
+import { fingerprint, recordEvent, stateDetail, WHOLE_CHECKOUT } from './memoryVerify';
+import { holdOsLock, isOsLockHeld, lockName } from './osLock';
+import { fromNote, fromRuling, fromUserMessage, fromVerification, goalVersionOf, injectionFor, pickMemories } from './memoryWorkflow';
 import { classifyTool } from './providers/parsers';
 import { L } from './i18n';
 import { LIMIT_PATTERN, quotaWindowKey, quotaWindowName, type UsageTracker } from './usage';
@@ -387,6 +400,7 @@ export class Orchestrator {
       steps: [],
       agents: {},
       log: [],
+      projectMemory: { mode: config.memory?.mode ?? 'full', picks: [], given: {}, injectedTokens: 0, queued: 0 },
     };
     if (prev) this.carryOver(prev, run);
     this.runs.set(id, run);
@@ -585,7 +599,9 @@ export class Orchestrator {
     }
     const listed = added.map((a) => `- ${a.name}: ${a.companion?.path ?? a.path}${a.companion ? ` (Aivenue's readable version of ${a.path})` : ''}`);
     const msg = [text.trim().slice(0, 8000), listed.length ? `The user attached these files; read them:\n${listed.join('\n')}` : ''].filter(Boolean).join('\n\n');
-    (run.userMessages ??= []).push({ ts: now(), text: text.trim().slice(0, 8000), attachments: added.length ? added : undefined });
+    const sentAt = now();
+    (run.userMessages ??= []).push({ ts: sentAt, text: text.trim().slice(0, 8000), attachments: added.length ? added : undefined });
+    this.memoryCapture(run, fromUserMessage(run.id, { ts: sentAt, text: text.trim() }));
     (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: 'user', by: 'USER (sent while you were working — follow it)', text: msg, ts: now() });
     const p = this.pauses.get(id);
     if (run.status === 'paused' && p) {
@@ -662,6 +678,325 @@ export class Orchestrator {
    */
   private keepsSessions(run: WorkflowRun): boolean {
     return run.config.context?.keepSessions === true;
+  }
+
+  // ---------- project memory (docs/memory-phase1.md) ----------
+
+  private memStores = new Map<string, MemoryStore>();
+  /** One memory write at a time per workflow, in the order things happened. */
+  private memChains = new Map<string, Promise<unknown>>();
+  private memSeen = new Set<string>();
+  /**
+   * The lease a workflow holds while it may still queue candidates: other workflows leave its candidates alone (it may
+   * yet take them back); a workflow whose lease nobody holds ended or crashed, and its candidates are applied.
+   */
+  private memLeases = new Map<string, { release: () => Promise<void> }>();
+  /** Each agent's latest reads and commands, with the files' hashes as they were when Aivenue saw them. */
+  private memEvidence = new Map<string, MemoryEvidence[]>();
+
+  private memStore(projectId: string): MemoryStore {
+    let s = this.memStores.get(projectId);
+    if (!s) this.memStores.set(projectId, (s = new MemoryStore(this.d.dataDir, projectId)));
+    return s;
+  }
+
+  private leaseName = (runId: string) => lockName(this.d.dataDir, `wf-${runId}`);
+
+  /** Run a memory write after the ones before it; a failure is logged once and never stops the workflow. */
+  private memoryQueue(run: WorkflowRun, fn: (store: MemoryStore) => Promise<unknown>) {
+    const mem = run.projectMemory;
+    if (!mem?.projectId || mem.mode !== 'full' || mem.error) return;
+    const store = this.memStore(mem.projectId);
+    const next = (this.memChains.get(run.id) ?? Promise.resolve())
+      .then(() => (run.projectMemory?.mode === 'full' ? fn(store) : undefined))
+      .catch((e) => this.log(run, L(`專案記憶寫入失敗：${(e as Error).message}`, `Writing the project memory failed: ${(e as Error).message}`), 'warn'));
+    this.memChains.set(run.id, next);
+  }
+
+  private memoryCapture(run: WorkflowRun, list: MemoryCandidate[]) {
+    if (!list.length) return;
+    this.memoryQueue(run, async (store) => {
+      for (const c of list) await store.enqueue(c);
+      if (run.projectMemory) run.projectMemory.queued += list.length;
+    });
+  }
+
+  /** An agent's fact or decision note becomes a candidate, with the reads and commands of its own it mentions as evidence. */
+  private memoryNote(run: WorkflowRun, info: AgentRunInfo, note: SharedNote) {
+    const cand = fromNote(run.id, { ...note, by: this.label(info) });
+    if (!cand) return;
+    const text = note.text.toLowerCase();
+    const cited = (this.memEvidence.get(info.id) ?? []).filter((e) =>
+      e.files?.length ? e.files.some((f) => text.includes(path.basename(f.path).toLowerCase())) : e.kind === 'command' && text.includes(e.summary.toLowerCase().slice(0, 40)),
+    );
+    if (cited.length) cand.evidence = cited.slice(-5);
+    this.memoryCapture(run, [cand]);
+  }
+
+  /**
+   * A finished read or command: kept as evidence (files hashed now, as Aivenue saw it), and checked against the
+   * memories' check commands. Its time and reference are the event's own, so a retry is the same event.
+   */
+  private memoryToolEvent(run: WorkflowRun, info: AgentRunInfo, e: AgentEvent) {
+    const t = e.tool!;
+    const ref = `${run.id}:${info.id}:${t.id}`;
+    if (this.memSeen.has(ref)) return;
+    this.memSeen.add(ref);
+    const mem = run.projectMemory;
+    const command = (t.title || t.input || '').trim();
+    if (!command || !mem?.checkoutId || !mem.checkoutRoot || mem.mode !== 'full') return;
+    const { checkoutId, checkoutRoot } = mem;
+    const read = t.category === 'read' ? command : fileReadOf(command);
+    const rel = read ? path.relative(checkoutRoot, path.resolve(run.config.cwd, read)).replace(/\\/g, '/') : undefined;
+    const files = rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? fingerprint(checkoutRoot, [rel]) : undefined;
+    const list = this.memEvidence.get(info.id) ?? [];
+    list.push({ eventRef: ref, kind: files ? 'file_read' : 'command', checkoutId, files, summary: command.slice(0, 200) });
+    this.memEvidence.set(info.id, list.slice(-30));
+    if (t.category === 'command') this.memoryQueue(run, (store) => recordEvent(store, checkoutId, checkoutRoot, { kind: 'command', ref, command, status: t.status === 'ok' ? 'ok' : 'error', at: e.ts }));
+  }
+
+  /**
+   * Find the project, apply what ended or crashed workflows left in the queue (never a running one's), and pick this
+   * workflow's memories. Read-only only looks the project up: it creates nothing.
+   */
+  private async memoryStart(run: WorkflowRun, fresh: boolean) {
+    const mem = (run.projectMemory ??= { mode: 'full', picks: [], given: {}, injectedTokens: 0, queued: 0 });
+    if (mem.mode === 'off') return;
+    try {
+      const store = await this.memoryOpen(run, mem.mode);
+      if (!store) return; // read only, and this folder has no memory yet
+      if (fresh && !mem.picks.length) mem.picks = pickMemories(store.list(), run.config.goal);
+      if (fresh) this.memoryCapture(run, fromUserMessage(run.id, { ts: run.createdAt, text: run.config.goal }));
+      if (mem.picks.length) this.log(run, L(`專案記憶：這次選了 ${mem.picks.length} 條過去留下的記憶，依角色帶給各 agent`, `Project memory: ${mem.picks.length} memories from earlier workflows picked, given to each agent by role`), 'info');
+    } catch (e) {
+      mem.error = (e as Error).message;
+      this.log(run, L(`專案記憶無法使用，這次不帶入也不寫入：${mem.error}`, `Project memory is unavailable; this workflow neither reads nor writes it: ${mem.error}`), 'warn', true);
+    }
+  }
+
+  /**
+   * Find the workflow's project. For "full" (writing): create it if needed, take the workflow's lease, and apply
+   * what ended or crashed workflows left queued (never a running one's). For "readonly": only look it up.
+   */
+  private async memoryOpen(run: WorkflowRun, mode: MemoryMode): Promise<MemoryStore | undefined> {
+    const mem = run.projectMemory!;
+    const id = mode === 'full' ? await resolveProject(this.d.dataDir, run.config.cwd) : findProject(this.d.dataDir, run.config.cwd);
+    if (!id) return undefined;
+    Object.assign(mem, { projectId: id.projectId, checkoutId: id.checkoutId, checkoutRoot: id.checkoutRoot, error: undefined });
+    const store = this.memStore(id.projectId);
+    if (mode !== 'full') return store;
+    // A checker may hold the name for a moment: try a few times.
+    for (let i = 0; i < 20 && !this.memLeases.has(run.id); i++) {
+      const lease = await holdOsLock(this.leaseName(run.id));
+      if (lease) this.memLeases.set(run.id, lease);
+      else await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!this.memLeases.has(run.id)) throw new Error("could not take this workflow's memory lease");
+    const ended = new Set<string>();
+    for (const wf of store.queuedWorkflows()) if (wf !== run.id && !(await isOsLockHeld(this.leaseName(wf)))) ended.add(wf);
+    if (ended.size) await store.processQueue({ workflows: (wf) => ended.has(wf) });
+    return store;
+  }
+
+  /** What a goal verification rests on, hashed now (when it starts): the goal's data paths, or the whole checkout. */
+  private verifyBasis(run: WorkflowRun): { path: string; hash: string }[] | undefined {
+    const root = run.projectMemory?.checkoutRoot;
+    if (!root) return undefined;
+    const rel = (run.plan?.goal?.data ?? [])
+      .map((p) => path.relative(root, path.resolve(run.config.cwd, p)).replace(/\\/g, '/'))
+      .filter((p) => p && !p.startsWith('..') && !path.isAbsolute(p));
+    return fingerprint(root, rel.length ? rel : [WHOLE_CHECKOUT]);
+  }
+
+  /** What this agent conversation gets from the memory (a resumed one: what changed; after its CLI compacted it: a short recap). */
+  private memoryFor(run: WorkflowRun, info: AgentRunInfo, resume?: string, compacted = false): string {
+    const mem = run.projectMemory;
+    if (!mem?.projectId || mem.mode === 'off' || mem.error) return '';
+    try {
+      const before = resume ? Object.values(run.agents).find((a) => a.id !== info.id && a.sessionId === resume && mem.given[a.id]) : undefined;
+      const previous = resume ? (mem.given[info.id] ?? (before ? mem.given[before.id] : undefined)) : undefined;
+      const inj = injectionFor(this.memStore(mem.projectId), mem, info.role, previous, { compacted });
+      mem.given[info.id] = inj.given;
+      mem.injectedTokens += inj.tokens;
+      mem.leftOut = inj.leftOut;
+      if (inj.injected.length) this.memoryQueue(run, (store) => store.countInjected(inj.injected));
+      return inj.text;
+    } catch (e) {
+      this.log(run, L(`專案記憶讀取失敗：${(e as Error).message}`, `Reading the project memory failed: ${(e as Error).message}`), 'warn');
+      return '';
+    }
+  }
+
+  /** Apply what this workflow queued (only its own), mark the practices its passed verification produced as verified here, and let go of its lease. */
+  private async memoryEnd(run: WorkflowRun) {
+    const mem = run.projectMemory;
+    try {
+      if (!mem?.projectId || mem.mode !== 'full' || mem.error) return;
+      await (this.memChains.get(run.id) ?? Promise.resolve());
+      this.memChains.delete(run.id);
+      const store = this.memStore(mem.projectId);
+      const r = await store.processQueue({ workflows: (wf) => wf === run.id });
+      const vr = [...(run.stages.verify?.rounds ?? [])].reverse().find((x) => x.verification);
+      const v = vr?.verification;
+      const goal = run.plan?.goal;
+      // Only with what it rested on, taken when it started: re-hashing now could vouch for another version.
+      if (vr && v?.fingerprint?.length && goal && mem.checkoutId && mem.checkoutRoot) {
+        const goalVersion = goalVersionOf(goal);
+        for (const m of v.metrics)
+          await recordEvent(store, mem.checkoutId, mem.checkoutRoot, { kind: 'verification', ref: `${run.id}:verify:${goalVersion}:${vr.n}:${m.id}`, workflowId: run.id, goalVersion, metricId: m.id, met: m.met && v.outcome === 'met', stale: !!v.stale, value: m.value, at: v.evidence?.at ?? run.endedAt ?? now(), files: v.fingerprint });
+      }
+      const all = store.list();
+      const added = r.added.map((id) => all.find((m) => m.id === id)).filter(Boolean) as ProjectMemory[];
+      const active = added.filter((m) => m.lifecycle === 'active').length;
+      if (added.length || r.merged.length) this.log(run, L(`專案記憶：新增 ${active} 條、候選 ${added.length - active} 條（待你在記憶頁核准）、補充 ${r.merged.length} 條既有記憶的來源`, `Project memory: ${active} added, ${added.length - active} candidates (for you to approve), sources added to ${r.merged.length}`), 'info', true);
+    } catch (e) {
+      this.log(run, L(`專案記憶整理失敗（候選仍保留，下次再處理）：${(e as Error).message}`, `Saving the project memory failed (the candidates stay queued for next time): ${(e as Error).message}`), 'warn', true);
+    } finally {
+      for (const a of Object.values(run.agents)) this.memEvidence.delete(a.id);
+      const lease = this.memLeases.get(run.id);
+      this.memLeases.delete(run.id);
+      await lease?.release().catch(() => undefined);
+    }
+  }
+
+  /** Switch a workflow's memory mode. Leaving "full" takes back what it queued; what agents were already given stays given. */
+  async setMemoryMode(id: string, mode: MemoryMode) {
+    const run = this.runs.get(id);
+    if (!run) throw new Error('workflow not found');
+    const mem = (run.projectMemory ??= { mode: 'full', picks: [], given: {}, injectedTokens: 0, queued: 0 });
+    const was = mem.mode;
+    if (mode === 'full' && was !== 'full') {
+      // Writing starts only once the project exists and this workflow holds its lease (others then leave its
+      // candidates alone); until then the mode stays as it was. A workflow that started without memory picks now.
+      const store = await this.memoryOpen(run, 'full');
+      if (store && !mem.picks.length && was === 'off') mem.picks = pickMemories(store.list(), run.config.goal);
+      mem.mode = 'full';
+      this.log(run, L('記憶模式改為「完整」：之後的對話會帶入記憶，並寫入新的候選', 'Memory mode set to full: later conversations get the memory and new candidates are written'), 'info', true);
+      this.touch(run);
+      return mem;
+    }
+    if (mode === 'readonly' && was === 'off' && !mem.projectId) {
+      const store = await this.memoryOpen(run, 'readonly');
+      if (store && !mem.picks.length) mem.picks = pickMemories(store.list(), run.config.goal);
+    }
+    mem.mode = mode;
+    if (was === 'full' && mode !== 'full' && mem.projectId) {
+      await (this.memChains.get(run.id) ?? Promise.resolve());
+      const dropped = await this.memStore(mem.projectId).dropQueued(run.id);
+      this.log(run, L(`記憶模式改為「${mode === 'off' ? '完全不用' : '只讀'}」：取回 ${dropped} 筆尚未寫入的候選。已經給 agent 的記憶無法收回，只影響之後的對話。`, `Memory mode set to ${mode === 'off' ? 'off' : 'read only'}: ${dropped} queued candidates taken back. What agents were already given stays given; this applies to later conversations.`), 'info', true);
+    }
+    this.touch(run);
+    return mem;
+  }
+
+  // ---------- the memory page (docs/memory-phase1.md §9) ----------
+
+  private memProject(projectId: string) {
+    const p = listProjects(this.d.dataDir).find((x) => x.id === projectId);
+    if (!p) throw new Error(L('找不到這個專案', 'Project not found'));
+    return p;
+  }
+
+  memoryProjects(): MemoryProjectInfo[] {
+    return listProjects(this.d.dataDir).map((p) => {
+      const counts: Record<MemoryLifecycle, number> = { candidate: 0, active: 0, superseded: 0, archived: 0 };
+      for (const m of this.memStore(p.id).list()) counts[m.lifecycle]++;
+      return { id: p.id, label: p.label, kind: p.kind, key: p.key, counts };
+    });
+  }
+
+  /** Every memory of a project, with its state in each checkout seen so far. */
+  memoryList(projectId: string): MemoryView[] {
+    const p = this.memProject(projectId);
+    const store = this.memStore(projectId);
+    const states = (p.checkouts ?? []).map((c) => ({ ...c, stored: store.checkoutStates(c.id) }));
+    return store.list().map((m) => ({
+      ...m,
+      states: states.map((c) => {
+        const d = stateDetail(m, c.id, c.root, c.stored[m.id]);
+        return { checkoutId: c.id, root: c.root, state: d.state, why: d.why, lastVerifiedAt: c.stored[m.id]?.lastVerifiedAt };
+      }),
+    }));
+  }
+
+  /** The user's change (approve, edit, lock, archive…): refused when it changed since the page read it. */
+  memoryUpdate(projectId: string, id: string, patch: MemoryPatch, version?: number) {
+    this.memProject(projectId);
+    return this.memStore(projectId).update(id, patch, { byUser: true, version });
+  }
+
+  /** Forget it for good. Its workflows' own records stay: they are named so the user can delete those too. */
+  async memoryDelete(projectId: string, id: string): Promise<{ workflows: string[] }> {
+    this.memProject(projectId);
+    const store = this.memStore(projectId);
+    const m = store.get(id);
+    if (!m) throw new Error(L('找不到這條記憶', 'Memory not found'));
+    const workflows = [...new Set(m.sources.map((s) => s.workflowId.replace(/^ui:/, '')))].filter((w) => this.runs.has(w));
+    await store.delete(id);
+    return { workflows };
+  }
+
+  memoryRelink(projectId: string, cwd: string) {
+    return relinkProject(this.d.dataDir, projectId, cwd);
+  }
+
+  /**
+   * The user's "remember this" on a message or a note: an instruction, in force at once. It is queued under a
+   * workflow id of its own (no lease), so applying it never applies a running workflow's candidates.
+   */
+  /**
+   * Each save is a request of its own: `request` (an id and time the page fixes when the user presses Save) names it,
+   * so a retry of that save is the same request and a later save of edited text is a new one. Where it was saved
+   * from (a message, a note) is kept as evidence, not as its source: deleting one remembered text must not stop
+   * the user from deliberately remembering something from the same message again.
+   */
+  async memoryRemember(workflowId: string, text: string, from: { noteId?: string; ts?: number; request?: { id: string; at: number } } = {}) {
+    const run = this.runs.get(workflowId);
+    if (!run) throw new Error('workflow not found');
+    const body = text.trim().slice(0, 1000);
+    if (!body) throw new Error(L('沒有內容可以記住', 'Nothing to remember'));
+    const id = await resolveProject(this.d.dataDir, run.config.cwd);
+    const store = this.memStore(id.projectId);
+    const request = from.request ?? { id: randomUUID(), at: now() };
+    const source = { workflowId: `ui:${workflowId}`, eventRef: `remember:${request.id}`, ts: request.at, by: 'user' };
+    const opId = `${source.workflowId}:remember:${request.id}`;
+    const where = from.noteId ? `note:${from.noteId}` : `message:${from.ts ?? run.createdAt}`;
+    await store.enqueue({ opId, kind: 'instruction', text: body, source, evidence: [{ eventRef: `${workflowId}:${where}`, kind: 'user_message', summary: `the user chose to remember this (from ${where})` }], lifecycle: 'active', approvedBy: 'user', explicit: true });
+    const r = await store.processQueue({ workflows: (wf) => wf === source.workflowId });
+    // A retry of a save that already went through finds nothing new to apply: it was added then.
+    const outcome = r.byOp[opId] ?? (store.list().some((m) => m.sources.some((s) => s.eventRef === source.eventRef)) ? { status: 'added' as const, memoryId: store.list().find((m) => m.sources.some((s) => s.eventRef === source.eventRef))!.id } : { status: 'rejected' as const });
+    if (outcome.status === 'conflict') throw new Error(L('這次儲存的請求和先前的不一致，請重新按一次「記住」', 'This save does not match the earlier one: press Remember again'));
+    const said = {
+      added: L('已記住：之後在這個專案的工作流會帶入這條指示', 'Remembered: later workflows in this project get this instruction'),
+      merged: L('已記住：和既有的一條記憶相同，已併入它', 'Remembered: it matches an existing memory and was added to it'),
+      held: L('還沒記住：相同內容的記憶被你鎖定了，解鎖後才會併入', 'Not yet: a memory with the same text is locked; it goes in once you unlock it'),
+      rejected: L('沒有記住：被既有的刪除紀錄擋下', 'Not remembered: a deletion record blocked it'),
+    }[outcome.status];
+    this.log(run, said, outcome.status === 'added' || outcome.status === 'merged' ? 'info' : 'warn', true);
+    return { ...outcome, message: said };
+  }
+
+  /** What a workflow picked and gave each agent. */
+  memoryForRun(workflowId: string): RunMemoryView {
+    const run = this.runs.get(workflowId);
+    if (!run) throw new Error('workflow not found');
+    const mem = run.projectMemory;
+    const base: RunMemoryView = { mode: mem?.mode ?? 'full', projectId: mem?.projectId, error: mem?.error, picks: [], given: [], leftOut: [], injectedTokens: mem?.injectedTokens ?? 0, queued: mem?.queued ?? 0 };
+    if (!mem?.projectId) return base;
+    const store = this.memStore(mem.projectId);
+    const states = mem.checkoutId ? store.checkoutStates(mem.checkoutId) : {};
+    const textOf = (id: string) => store.get(id)?.text;
+    base.picks = mem.picks.map((p) => {
+      const m = store.get(p.memoryId);
+      if (!m || m.lifecycle !== 'active') return { memoryId: p.memoryId, gone: true };
+      const state = mem.checkoutId && mem.checkoutRoot ? stateDetail(m, mem.checkoutId, mem.checkoutRoot, states[m.id]).state : undefined;
+      return { memoryId: m.id, kind: m.kind, text: m.text, state, updated: memoryContentDigest(m) !== p.contentDigest };
+    });
+    base.given = Object.entries(mem.given)
+      .filter(([, g]) => g.length)
+      .map(([agentId, g]) => ({ agentId, label: run.agents[agentId] ? this.label(run.agents[agentId]) : agentId, memoryIds: g.map((x) => x.memoryId) }));
+    base.leftOut = (mem.leftOut ?? []).map((x) => ({ ...x, text: textOf(x.memoryId) }));
+    return base;
   }
 
   /** Questions agents asked the user with ask_user, answered once their turn has stopped. */
@@ -1605,7 +1940,9 @@ export class Orchestrator {
         const text = String(args.text ?? '').trim();
         if (!text) throw new Error('text is required');
         const kind = ['fact', 'inference', 'decision'].includes(String(args.kind)) ? (String(args.kind) as 'fact') : 'inference';
-        (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, text, kind, ts: now() });
+        const note: SharedNote = { id: randomUUID().slice(0, 8), agentId: info.id, text, kind, ts: now() };
+        (run.notes ??= []).push(note);
+        this.memoryNote(run, info, note);
         this.refreshShared(run);
         this.touch(run);
         return 'Note shared with all later agents.';
@@ -1858,6 +2195,7 @@ export class Orchestrator {
         this.dryRun(run);
         return;
       }
+      await this.memoryStart(run, !from);
       this.startWatchdog(run);
       await this.cycle(run, from);
       run.status = 'completed';
@@ -1887,6 +2225,7 @@ export class Orchestrator {
         }
       }
     } finally {
+      await this.memoryEnd(run);
       this.endRunResources(run);
       // The idle countdown of the CLIs it kept starts now.
       this.pool.ownerEnded(run.id);
@@ -1993,6 +2332,7 @@ export class Orchestrator {
       const own = byPlanner && who.provider === run.config.plan.author.provider && run.config.plan.enabled ? run.stages.plan.authorSessionId : stage.authorSessionId;
       const resume = canResume ? own : undefined;
       const evidence = evidenceStamp(run.config.cwd, run.plan?.goal?.data);
+      const basis = this.verifyBasis(run);
       const r = await this.runRole(run, {
         role: 'verifier',
         roleCfg: who,
@@ -2012,6 +2352,7 @@ export class Orchestrator {
       verification = r.sub?.verification;
       if (verification) {
         verification.evidence = evidence;
+        if (basis) verification.fingerprint = basis;
         break;
       }
       tried.add(who.provider);
@@ -2035,6 +2376,7 @@ export class Orchestrator {
       }
     }
     round.verification = verification;
+    if (run.plan?.goal) this.memoryCapture(run, fromVerification(run.id, run.plan.goal, verification, verification.evidence?.at ?? now(), n, run.projectMemory?.checkoutId));
     // 0: never force a re-diagnosis (the user left the threshold empty).
     const route = routeVerification(verification, earlier, repeatLimitOf(vcfg));
     round.route = route;
@@ -2135,7 +2477,9 @@ export class Orchestrator {
       return [];
     }
     for (const x of rulings) {
-      (run.rulings ??= []).push({ issueId: x.issue_id, ruling: `${x.ruling}: ${x.reason}`.slice(0, 1000), by: r.info.id, ts: now() });
+      const ruling = { issueId: x.issue_id, ruling: `${x.ruling}: ${x.reason}`.slice(0, 1000), by: r.info.id, ts: now() };
+      (run.rulings ??= []).push(ruling);
+      this.memoryCapture(run, [fromRuling(run.id, ruling)]);
       (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: r.info.id, kind: 'decision', text: `Ruling on ${x.issue_id}: ${x.ruling === 'uphold' ? 'UPHELD (must be fixed)' : 'DISMISSED (the author is right)'} — ${x.reason}`.slice(0, 2000), ts: now() });
     }
     this.log(run, L(`裁定：${rulings.map((x) => `${x.issue_id} ${x.ruling === 'uphold' ? '維持' : '駁回'}`).join('、')}`, `Ruling: ${rulings.map((x) => `${x.issue_id} ${x.ruling === 'uphold' ? 'upheld' : 'dismissed'}`).join(', ')}`), 'info', true);
@@ -2661,10 +3005,11 @@ export class Orchestrator {
         userMessages: run.userMessages?.length ?? 0,
       };
       if (!plain) for (const m of run.userMessages ?? []) if (!(m.deliveredTo ??= []).includes(info.id)) m.deliveredTo.push(info.id);
+      const projectMemory = plain ? '' : this.memoryFor(run, info, resume, !!recapIds);
       const res = await runAgent({
         spec,
         // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + advisorText + files + skills + skillsAgain,
+        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + projectMemory + advisorText + files + skills + skillsAgain,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,
@@ -2771,6 +3116,7 @@ export class Orchestrator {
     }
     if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && e.tool.category === 'edit') this.lastEditAt.set(run.id, e.ts);
     if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'read')) this.watchCommand(run, info, e);
+    if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'read')) this.memoryToolEvent(run, info, e);
     const act = activityOf(e);
     if (act && !(isUpdate && e.tool?.status !== 'running')) info.activity = act;
     this.d.push({ topic: 'agentEvent', data: { workflowId: run.id, agentId: info.id, event: e } });

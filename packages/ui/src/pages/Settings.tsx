@@ -6,8 +6,9 @@ import { cx, fmtTokens, modelLabel, providerColor, providerName } from '../util'
 import { ProvidersPane } from './Providers';
 import { useDragOrder, type DragProps } from '../components/DragOrder';
 import { CapabilitiesPane } from './Capabilities';
+import { MemoryPane } from './Memory';
 
-type Tab = 'general' | 'providers' | 'capabilities' | 'usage';
+type Tab = 'general' | 'providers' | 'capabilities' | 'usage' | 'memory';
 
 function GeneralPane() {
   const t = useT();
@@ -419,6 +420,7 @@ export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: str
     { id: 'providers', label: t('供應商與帳號', 'Providers') },
     { id: 'capabilities', label: t('能力', 'Capabilities') },
     { id: 'usage', label: t('用量', 'Usage') },
+    { id: 'memory', label: t('記憶', 'Memory') },
   ];
   return (
     <div className="settings">
@@ -439,6 +441,7 @@ export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: str
         {tab === 'providers' && <ProvidersPane />}
         {tab === 'capabilities' && <CapabilitiesPane />}
         {tab === 'usage' && <UsagePane />}
+        {tab === 'memory' && <MemoryPane />}
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { AttachmentStore } from './attachments';
 import type { ExtensionId, PonytailLevel } from './types';
+import type { MemoryPatch } from './memoryStore';
 import type { AppSettings, Attachment, CapabilitiesConfig, HostInfo, InstructionRole, McpServerConfig, ProviderSpec, PushMessage, RpcRequest, RpcResponse, WorkflowConfig, WorkflowPreset } from './types';
 import { CapabilityStore } from './capabilities';
 import { GithubService } from './github';
@@ -393,6 +394,14 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.preflight': (p: { config: WorkflowConfig }) => orchestrator.preflight(p.config),
     'workflows.export': (p: { id: string; mask?: boolean }) => orchestrator.exportRun(p.id, p.mask !== false),
     'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
+    'workflows.setMemoryMode': (p: { id: string; mode: 'full' | 'readonly' | 'off' }) => orchestrator.setMemoryMode(p.id, p.mode),
+    'workflows.memory': (p: { id: string }) => orchestrator.memoryForRun(p.id),
+    'workflows.remember': (p: { id: string; text: string; noteId?: string; ts?: number; request?: { id: string; at: number } }) => orchestrator.memoryRemember(p.id, p.text, { noteId: p.noteId, ts: p.ts, request: p.request }),
+    'memory.projects': () => orchestrator.memoryProjects(),
+    'memory.list': (p: { projectId: string }) => orchestrator.memoryList(p.projectId),
+    'memory.update': (p: { projectId: string; id: string; patch: MemoryPatch; version?: number }) => orchestrator.memoryUpdate(p.projectId, p.id, p.patch, p.version),
+    'memory.delete': (p: { projectId: string; id: string }) => orchestrator.memoryDelete(p.projectId, p.id),
+    'memory.relink': (p: { projectId: string; cwd: string }) => orchestrator.memoryRelink(p.projectId, p.cwd),
     'resources.gpus': () => orchestrator.gpus(),
     'resources.gpuDetail': () => orchestrator.gpuDetail(),
     'processes.inspect': (p: { workflowId: string; pid: number }) => orchestrator.inspectProcess(p.workflowId, p.pid),

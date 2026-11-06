@@ -957,6 +957,29 @@ export function RoleSettings({
         <LimitsSection disabled={readOnly} value={draft.limits ?? { enabled: false }} onChange={(limits) => set({ limits })} />
 
         <section className="sect">
+          <div className="sect-title">{t('專案記憶', 'Project memory')}</div>
+          <div className="muted small">
+            {t(
+              '過去工作流在這個專案留下的記憶（設定 → 記憶）。開始前就決定：完整＝帶入並寫入新的候選；只讀＝只帶入、不寫入任何東西；完全不用＝不帶入也不寫入（專案 Skill 照常載入）。執行中也能在 ⋯ → 專案記憶 切換。',
+              "What earlier workflows left in this project's memory (Settings → Memory). Decide before it starts: Full = give it to agents and write new candidates; Read only = give it, write nothing; Off = neither (project Skills still load). It can also be switched while running, in ⋯ → Project memory.",
+            )}
+          </div>
+          <div className="seg" role="radiogroup">
+            {(
+              [
+                ['full', t('完整', 'Full')],
+                ['readonly', t('只讀', 'Read only')],
+                ['off', t('完全不用', 'Off')],
+              ] as const
+            ).map(([mode, label]) => (
+              <button key={mode} disabled={readOnly} className={cx((draft.memory?.mode ?? 'full') === mode && 'on')} onClick={() => set({ memory: { mode } })}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="sect">
           <div className="sect-head">
             <div>
               <div className="sect-title">Sub agents</div>
