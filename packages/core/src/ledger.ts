@@ -301,8 +301,38 @@ export function knowledgeBlock(run: WorkflowRun, act: ReturnType<typeof collectA
   return parts.join('\n\n');
 }
 
+/**
+ * Checks Aivenue itself saw run (tests, builds, type checks, linters…) and how each ended, newest last: what the
+ * records prove, as opposed to what an agent says it verified. Marked when files changed after it ran.
+ */
+export function verifiedChecks(act: ReturnType<typeof collectActivity>, limit = 5): string[] {
+  return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
+    .slice(-limit)
+    .map((e) => `- ${checkOutcome(e)}: \`${clip(e.what, 100)}\` (run by ${who(e.agent)})${e.outdated ? ' — files changed since: re-run it before relying on it' : e.maybeOutdated ? ' — a failed edit since may have changed files' : ''}`);
+}
+
+/**
+ * How a check ended, as far as the record shows. A check run alone: the command's end is its end. One run with other
+ * steps in the same command (`a; npm test; b`, `npm test | tail`): the command's end belongs to the whole line, so
+ * success says only that it ran — its own result is in the output, to be read.
+ */
+const isCompound = (what: string) => /[;&|\n]/.test(what.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
+
+function checkOutcome(e: LedgerEntry): string {
+  const compound = isCompound(e.what);
+  if (!compound) return !e.ok ? '✗ failed' : FAILED.test(e.result) ? '⚠ ran, its output reports a failure' : '✓ passed';
+  if (!e.ok) return '✗ the longer command it ran in failed (which step failed: check the output)';
+  return FAILED.test(e.result) ? '⚠ ran within a longer command whose output reports a failure' : '◦ ran within a longer command (the command ended fine; the check\'s own result: read the output)';
+}
+
+/**
+ * A command that runs a check (tests, a build, a type check, a linter) — the tool itself, not a file that merely has
+ * "test" in its name (`Get-Content test/a.test.js` edits or reads a file; it checks nothing).
+ */
+const CHECK = /(^|[;&|(]\s*)(npm(\.cmd)?\s+(run\s+)?(test|build|lint|typecheck)|pnpm\s+(run\s+)?(test|build|lint)|yarn\s+(test|build|lint)|node\s+--test|npx\s+(tsc|vitest|jest|eslint|mocha)|pytest|python3?\s+-m\s+(pytest|unittest|mypy)|tsc\b|cargo\s+(test|build|check|clippy)|go\s+(test|build|vet)|dotnet\s+(test|build)|mvn\s|gradle\w*\s|make\b|eslint\b|ruff\b|mypy\b|vitest\b|jest\b)/i;
+
 /** Where the workflow stands right now: goal and gap, open issues, routing, waits, locks, processes, blockers. */
-export function statusBlock(run: WorkflowRun): string {
+export function statusBlock(run: WorkflowRun, o: { openIssues?: boolean } = {}): string {
   const lines: string[] = [];
   const goal = run.plan?.goal;
   const checks = (run.stages.verify?.rounds ?? []).flatMap((r) => (r.verification ? [{ v: r.verification, route: r.route }] : []));
@@ -320,7 +350,8 @@ export function statusBlock(run: WorkflowRun): string {
   // Open issues of the latest review in each stage.
   for (const key of ['plan', 'implement'] as const) {
     const r = [...run.stages[key].rounds].reverse().find((x) => x.review);
-    if (r?.review?.verdict === 'revise' && r.review.issues.length) lines.push(`Open ${key} review issues (round ${r.n}${r.review.stale ? ', STALE' : ''}): ${r.review.issues.map((i) => `${i.id} [${i.severity}] ${clip(i.title, 80)}`).join('; ')}`);
+    // Left out when the hand-off lists them already (contextBlock).
+    if (o.openIssues !== false && r?.review?.verdict === 'revise' && r.review.issues.length) lines.push(`Open ${key} review issues (round ${r.n}${r.review.stale ? ', STALE' : ''}): ${r.review.issues.map((i) => `${i.id} [${i.severity}] ${clip(i.title, 80)}`).join('; ')}`);
     if (r?.route?.to === 'planner') lines.push(`Code review → planner: ${clip(r.route.reason, 200)}`);
   }
   if (last && last.v.issues.length && last.route?.to !== 'done') lines.push(`Verification issues: ${last.v.issues.map((i) => `${i.id} ${clip(i.title, 80)}`).join('; ')}`);

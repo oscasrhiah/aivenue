@@ -483,11 +483,12 @@ test('交接：下一個 agent 拿到前一個自己寫的交接，不是它的�
   run.config.contextSharing = 'full';
   a1.handover = { text: 'Fixed the mask in src/model.py; test_x still fails on padding, look at collate() next.', ts: 55 };
   const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
-  assert.match(text, /HAND-OFF FROM THE AGENT BEFORE YOU — aaaaaaaa-111 — implementer[\s\S]*look at collate\(\) next/);
+  assert.match(text, /HAND-OFF TO YOU[\s\S]*THE AGENT BEFORE YOU — aaaaaaaa-111 — implementer[^\n]*its own account, to check[\s\S]*look at collate\(\) next/);
   assert.match(text, /read_context \{agent_id: "aaaaaaaa-111"\}/);
   assert.doesNotMatch(text, /FULL TRANSCRIPT/);
-  // The directory shows who it is and the first line of what it handed over.
-  assert.match(text, /Agents so far[^\n]*:\n- aaaaaaaa-111 — implementer[\s\S]*hand-off: Fixed the mask/);
+  // The directory still names it, but points at the hand-off instead of repeating it.
+  assert.match(text, /Agents so far[^\n]*:\n- aaaaaaaa-111 — implementer[^\n]*\n  hand-off: in HAND-OFF TO YOU above/);
+  assert.equal(text.split('Fixed the mask in src/model.py').length - 1, 1, 'the hand-off text appears once');
 });
 
 test('交接：沒寫交接時 Aivenue 用它的結果與最後的指令湊一份，不另外呼叫模型', () => {
@@ -498,7 +499,7 @@ test('交接：沒寫交接時 Aivenue 用它的結果與最後的指令湊一�
   const h = W.handoverOf(run, a1, eventsOf(a1.id));
   assert.equal(h.auto, true);
   assert.match(h.text, /ended with an error: CLI exited 1[\s\S]*Files it changed: src\/model\.py[\s\S]*pytest -q → ok/);
-  assert.match(W.contextBlock(run, a2, eventsOf, { maxChars: 200000 }), /it wrote none; put together by Aivenue/);
+  assert.match(W.contextBlock(run, a2, eventsOf, { maxChars: 200000 }), /it wrote no hand-off; Aivenue put this together from what it did/);
 });
 
 test('共用筆記：交接筆記不重複出現；上一則訊息的筆記只帶決策與使用者指示', () => {
@@ -1256,5 +1257,133 @@ test('待驗證：read_context 的總覽把它和已確認問題分開，標成�
   const text = W.overview(run);
   assert.match(text, /R1 \[major\] traversal/);
   assert.match(text, /V1 \[needs validation, not confirmed\] header trusted — missing: proxy unknown — to confirm: check config/);
+});
+
+// ---------- 交接升級：一份交接，分開「Aivenue 看到的」「前一位的說法」「未確認的」 ----------
+
+function handoffRun() {
+  const tool = (ts, category, name, title, status = 'ok', output = 'ok') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name, category, title, output, status } });
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 50, stats: { filesChanged: ['src/server.js'] }, handover: { text: 'Added the download route. I also ran the linter and everything is green.', ts: 50 } };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 60, endedAt: 90, stats: {}, handover: { text: 'R1 must be fixed; V1 needs the deployment config.', ts: 90 } };
+  const a3 = { id: 'cccccccc-333', role: 'executor', provider: 'claude', status: 'running', depth: 0, stage: 'implement', round: 2, startedAt: 100, stats: {}, task: 'Fix the open issues of the code review' };
+  const review = {
+    verdict: 'revise',
+    summary: 'fix it',
+    issues: [{ id: 'R1', severity: 'major', title: 'download route permits path traversal', location: 'src/server.js:12' }],
+    needsValidation: [{ id: 'V1', title: 'admin check trusts a client header', location: 'src/server.js:22', missing: 'the code trusts the header; whether a client can set it depends on the proxy', how: 'check the deployment config' }],
+  };
+  const run = {
+    id: 'r',
+    config: { cwd: os.tmpdir(), goal: 'Add a download route' },
+    agents: { [a1.id]: a1, [a2.id]: a2, [a3.id]: a3 },
+    stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, authorAgentId: a1.id, reviewerAgentId: a2.id, submission: { summary: 'added it' }, review, route: { to: 'implementer', reason: '1 open issue from the code review' } }] }, verify: { rounds: [] } },
+    notes: [],
+    userMessages: [{ ts: 40, text: 'Keep the public API exactly as it is.' }],
+  };
+  const events = {
+    [a1.id]: [tool(10, 'command', 'shell', 'npm test', 'ok', '3 passing'), tool(20, 'edit', 'apply_patch', 'src/server.js')],
+    [a2.id]: [tool(70, 'command', 'shell', 'node --test test/server.test.js', 'error', '1 failing: traversal')],
+    [a3.id]: [],
+  };
+  return { run, a3, eventsOf: (id) => events[id] ?? [] };
+}
+
+test('交接升級：接手者拿到下一步、使用者原話、Aivenue 看到的驗證、未解問題、待驗證、前一位的說法、來源與核對要求', () => {
+  const { run, a3, eventsOf } = handoffRun();
+  const text = W.contextBlock(run, a3, eventsOf, { maxChars: 200000 });
+  const h = text.slice(text.indexOf('HAND-OFF TO YOU'), text.indexOf('BEFORE YOU ACT'));
+  assert.match(h, /^HAND-OFF TO YOU \(from Aivenue's records; the user's words and the current files win over it\):/);
+  // Next step.
+  assert.match(h, /NEXT STEP:\n- Your task now: Fix the open issues of the code review\n- Why it came back to you: 1 open issue from the code review/);
+  // The user's words, verbatim.
+  assert.match(h, /FROM THE USER \(their words; constraints to keep\):\n- "Keep the public API exactly as it is\."/);
+  // Only what Aivenue saw run: the passing test and the failing one, not the linter the agent says it ran.
+  const verified = h.slice(h.indexOf('VERIFIED BY AIVENUE'), h.indexOf('OPEN ISSUES'));
+  assert.match(verified, /✓ passed: `npm test` \(run by aaaaaaaa implementer\)/);
+  assert.match(verified, /✗ failed: `node --test test\/server\.test\.js` \(run by bbbbbbbb code reviewer\)/);
+  assert.doesNotMatch(verified, /lint/i);
+  assert.match(verified, /an agent's own claims are not here/);
+  // Open issues and what is not confirmed, apart.
+  const open = h.slice(h.indexOf('OPEN ISSUES'), h.indexOf('NEEDS VALIDATION'));
+  assert.match(open, /- R1 \[major\] download route permits path traversal \(src\/server\.js:12\) — implement review, round 1/);
+  assert.doesNotMatch(open, /V1|client header/);
+  assert.match(h, /NEEDS VALIDATION \(not confirmed, no severity; not facts, not defects\):\n- V1 admin check trusts a client header \(src\/server\.js:22\) — missing evidence: the code trusts the header; whether a client can set it depends on the proxy; to confirm: check the deployment config/);
+  // The previous agent's account, as its claims.
+  assert.match(h, /THE AGENT BEFORE YOU — bbbbbbbb-222 — code reviewer[^\n]*its own account, to check:\nR1 must be fixed; V1 needs the deployment config\./);
+  // Sources, with what matters there.
+  assert.match(h, /SOURCES:\n- Its conversation: read_context \{agent_id: "bbbbbbbb-222"\}/);
+  assert.match(h, /All reviews and verifications: read_context \{\}\./);
+  assert.match(text, /BEFORE YOU ACT: check the claims you rely on against the current files, read-only; report a mismatch/);
+});
+
+test('交接升級：同一份 prompt 不重複舊的交接區塊、狀態裡的未解問題與 agent 清單裡的交接全文', () => {
+  const { run, a3, eventsOf } = handoffRun();
+  const text = W.contextBlock(run, a3, eventsOf, { maxChars: 200000 });
+  assert.equal(text.split('HAND-OFF TO YOU (').length - 1, 1);
+  assert.doesNotMatch(text, /HAND-OFFS \(latest of each stage\)/);
+  assert.doesNotMatch(text, /HAND-OFF FROM THE AGENT BEFORE YOU/);
+  assert.doesNotMatch(text, /Open implement review issues/, 'the status does not list them again');
+  assert.equal(text.split('R1 must be fixed; V1 needs the deployment config.').length - 1, 1, 'its hand-off appears once');
+  // Without a hand-off (the first agent), the status still lists open issues as before.
+  const first = { ...run, agents: { [a3.id]: a3 } };
+  assert.match(W.contextBlock(first, a3, eventsOf, { maxChars: 200000 }), /Open implement review issues \(round 1\): R1 \[major\]/);
+});
+
+test('交接回歸：只記在計畫階段的決定與待辦，經過實作者後，審查者仍從新交接看到', () => {
+  const p1 = { id: 'pppppppp-111', role: 'planner', provider: 'claude', status: 'completed', depth: 0, stage: 'plan', round: 1, startedAt: 1, endedAt: 20, stats: {} };
+  const ex = { id: 'eeeeeeee-222', role: 'executor', provider: 'claude', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 30, endedAt: 50, stats: { filesChanged: ['src/a.js'] }, handover: { text: 'Implemented the change in src/a.js.', ts: 50 } };
+  const rv = { id: 'rrrrrrrr-333', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, stage: 'implement', round: 1, startedAt: 60, stats: {} };
+  const run = {
+    id: 'r',
+    config: { cwd: os.tmpdir(), goal: 'g' },
+    agents: { [p1.id]: p1, [ex.id]: ex, [rv.id]: rv },
+    stages: {
+      plan: { rounds: [{ n: 1, authorAgentId: p1.id, handoff: { ts: 20, stage: 'plan', round: 1, decisions: ['Store dates as UTC; never local time'], facts: ['submitted: plan for the export'], open: ['P1 [minor] decide the CSV delimiter later'], links: [] } }] },
+      implement: { rounds: [{ n: 1, authorAgentId: ex.id, submission: { summary: 'done' } }] },
+      verify: { rounds: [] },
+    },
+    notes: [],
+  };
+  const text = W.contextBlock(run, rv, () => [], { maxChars: 200000 });
+  const h = text.slice(text.indexOf('HAND-OFF TO YOU'), text.indexOf('BEFORE YOU ACT'));
+  // The executor's own hand-off does not repeat them; the reviewer still gets them.
+  assert.doesNotMatch(ex.handover.text, /UTC|delimiter/);
+  assert.match(h, /RECORDED AT EACH STAGE \(the latest round of each\):\nplan stage, round 1:\n  DECISION: Store dates as UTC; never local time\n  FACT: submitted: plan for the export\n  OPEN: P1 \[minor\] decide the CSV delimiter later/);
+  assert.doesNotMatch(text, /HAND-OFFS \(latest of each stage\)/, 'not repeated in the old block');
+});
+
+test('交接回歸：複合指令的整體成功不寫成某一項檢查已通過；單獨執行的檢查照實標示', () => {
+  const tool = (ts, title, status = 'ok', output = 'done') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name: 'shell', category: 'command', title, output, status } });
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 50, stats: {} };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, stage: 'implement', round: 1, startedAt: 60, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = {
+    [a1.id]: [
+      tool(10, 'npm test; git status --short'),
+      tool(11, 'npm run build | tail -5'),
+      tool(12, 'cd web && npm run lint', 'error', 'exit 1'),
+      tool(13, 'pytest -q'),
+      tool(14, "node --test 'a; b.test.js'"),
+    ],
+  };
+  const text = W.contextBlock(run, a2, (id) => events[id] ?? [], { maxChars: 200000 });
+  const v = text.slice(text.indexOf('VERIFIED BY AIVENUE'), text.indexOf('THE AGENT BEFORE YOU'));
+  assert.match(v, /◦ ran within a longer command \(the command ended fine; the check's own result: read the output\): `npm test; git status --short`/);
+  assert.match(v, /◦ ran within a longer command[^`]*`npm run build \| tail -5`/);
+  assert.match(v, /✗ the longer command it ran in failed \(which step failed: check the output\): `cd web && npm run lint`/);
+  assert.match(v, /✓ passed: `pytest -q`/);
+  // A separator inside quotes is not a second step.
+  assert.match(v, /✓ passed: `node --test 'a; b\.test\.js'`/);
+  assert.doesNotMatch(v, /✓ passed: `npm test; git status/);
+});
+
+test('交接回歸：程式審查要求修改（沒有記錄路由）時，返工的實作者仍知道為什麼回到它手上', () => {
+  const { run, a3, eventsOf } = handoffRun();
+  delete run.stages.implement.rounds[0].route;
+  const text = W.contextBlock(run, a3, eventsOf, { maxChars: 200000 });
+  assert.match(text, /NEXT STEP:\n- Your task now: Fix the open issues of the code review\n- Why it came back to you: the implement review of round 1 asked for changes \(R1\)/);
+  // A first-round agent gets no NEXT STEP (its task is the role prompt's).
+  const first = { ...a3, round: 1 };
+  assert.doesNotMatch(W.contextBlock({ ...run, agents: { ...run.agents, [a3.id]: first } }, first, eventsOf, { maxChars: 200000 }), /NEXT STEP:/);
 });
 

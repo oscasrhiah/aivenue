@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentRunInfo, ContextSharing, SharedNote, WorkflowRun } from './types';
-import { activityBlock, collectActivity, fit, handoffsBlock, knowledgeBlock, statusBlock } from './ledger';
+import { activityBlock, collectActivity, fit, handoffsBlock, knowledgeBlock, statusBlock, verifiedChecks } from './ledger';
 import { buildTopics, topicIndexBlock } from './topics';
 
 /**
@@ -12,6 +12,9 @@ export const DEFAULT_SHARING: ContextSharing = 'on_demand';
 export const TRANSCRIPT_PAGE = 40000;
 /** Notes that are an agent's hand-off (also organized by the librarian), shown as hand-offs rather than as notes. */
 export const HANDOFF_NOTE = /^HAND-OFF\b/;
+
+/** Whitespace folded to single spaces. */
+const flat = (t: string | undefined) => (t ?? '').replace(/\s+/g, ' ').trim();
 export const sharingOf = (run: WorkflowRun): ContextSharing => run.config.contextSharing ?? DEFAULT_SHARING;
 
 const ROLE: Record<AgentRunInfo['role'], string> = {
@@ -71,12 +74,97 @@ export function handoverOf(run: WorkflowRun, a: AgentRunInfo, events: AgentEvent
 }
 
 /**
+ * The one hand-off an agent gets from the agent before it (docs/next-task-skills-integration.md, first delivery),
+ * put together from the records with no model call. After Matt Pocock's handoff (point at what is recorded rather
+ * than copy it), context-compression (fixed sections so nothing drops silently; the user's words verbatim; the
+ * artifact trail from Aivenue's own records, not a summary) and ce-handoff (the receiver checks material claims
+ * against the current state; the user's words and current files win; whose account each part is).
+ * Kept apart on purpose: what Aivenue saw run, what the previous agent says, and what is not confirmed yet.
+ */
+/** The user's own words in the records: messages during the run, feedback on a round, decisions said to be theirs. */
+export function userWordLines(run: WorkflowRun): string[] {
+  return [
+    ...(run.userMessages ?? []).slice(-8).map((m) => `- "${cut(m.text.trim(), 1500)}"`),
+    ...(['plan', 'implement'] as const).flatMap((k) => (run.stages[k]?.rounds ?? []).filter((r) => r.userFeedback).slice(-2).map((r) => `- (on the ${k} round ${r.n}) "${cut(r.userFeedback!.trim(), 1500)}"`)),
+    ...(run.notes ?? []).filter((n) => n.kind === 'decision' && USER_SAID.test(n.text)).slice(-6).map((n) => `- (decision recorded as the user's) ${cut(flat(n.text), 400)}`),
+  ];
+}
+
+/** Open issues of the latest review in each stage, and what it left unconfirmed (no severity, kept apart). */
+export function openReviewLines(run: WorkflowRun): { open: string[]; nv: string[] } {
+  const reviews = (['plan', 'implement'] as const).map((k) => ({ k, r: [...(run.stages[k]?.rounds ?? [])].reverse().find((x) => x.review) })).filter((x) => x.r);
+  const open = reviews
+    .filter(({ r }) => r!.review!.verdict === 'revise' && r!.review!.issues.length)
+    .flatMap(({ k, r }) => r!.review!.issues.map((i) => `- ${i.id} [${i.severity}] ${cut(flat(i.title), 160)}${i.location ? ` (${i.location})` : ''} — ${k} review, round ${r!.n}${r!.review!.stale ? ', STALE: the code changed since' : ''}`));
+  const nv = reviews.flatMap(({ k, r }) =>
+    (r!.review!.needsValidation ?? []).map((n) => `- ${n.id} ${cut(flat(n.title), 160)}${n.location ? ` (${n.location})` : ''} — missing evidence: ${cut(flat(n.missing), 300)}${n.how ? `; to confirm: ${cut(flat(n.how), 200)}` : ''} (${k} review, round ${r!.n})`),
+  );
+  return { open, nv };
+}
+
+export function handoffToYou(run: WorkflowRun, self: AgentRunInfo, prev: AgentRunInfo, handover: { text: string; auto: boolean }, act: ReturnType<typeof collectActivity>, accountChars: number): { text: string; listsOpenIssues: boolean } {
+  const parts: string[] = [`HAND-OFF TO YOU (from Aivenue's records; the user's words and the current files win over it):`];
+  // Next step: what Aivenue asked of this agent, and why the work came here.
+  // A route counts only when it sends the work to this agent's role (a review or verification sending it back).
+  const toMe = self.role === 'executor' ? 'implementer' : self.role === 'planner' ? 'planner' : undefined;
+  const routed = toMe ? [...(run.stages.plan?.rounds ?? []), ...(run.stages.implement?.rounds ?? []), ...(run.stages.verify?.rounds ?? [])].filter((r) => r.route?.to === toMe).pop()?.route : undefined;
+  // A code or plan review asking for changes records no route: the round before this one in the agent's own stage says
+  // why the work came back.
+  const before = self.stage && self.round && self.round > 1 && (self.role === 'executor' || self.role === 'planner') ? run.stages[self.stage]?.rounds.find((r) => r.n === self.round! - 1) : undefined;
+  const sentBack = before?.review?.verdict === 'revise' ? `the ${self.stage} review of round ${before.n} asked for changes${before.review.issues.length ? ` (${before.review.issues.map((i) => i.id).join(', ')})` : ''}` : undefined;
+  const why = routed ? flat(routed.reason) : sentBack;
+  // Only when the work came back: a first turn's task is already the role prompt's.
+  if (why) parts.push(`NEXT STEP:\n${[self.task?.trim() ? `- Your task now: ${cut(flat(self.task), 300)}` : '', `- Why it came back to you: ${cut(why, 300)}`].filter(Boolean).join('\n')}`);
+  // The user's own words, verbatim: messages during the run, feedback on a round, decisions said to be the user's.
+  const userLines = userWordLines(run);
+  if (userLines.length) parts.push(`FROM THE USER (their words; constraints to keep):\n${userLines.join('\n')}`);
+  // What the records prove, not what anyone says they checked.
+  const checks = verifiedChecks(act);
+  parts.push(`VERIFIED BY AIVENUE (checks it saw run; an agent's own claims are not here):\n${checks.length ? checks.join('\n') : '- none recorded yet'}`);
+  // Open issues of the latest review in each stage, and what is not confirmed yet (no severity, kept apart).
+  const { open, nv } = openReviewLines(run);
+  if (open.length) parts.push(`OPEN ISSUES (confirmed by a reviewer):\n${open.join('\n')}`);
+  if (nv.length) parts.push(`NEEDS VALIDATION (not confirmed, no severity; not facts, not defects):\n${nv.join('\n')}`);
+  // What each stage recorded when its latest round ended (decisions, facts, open points): an earlier stage's decision
+  // reaches every later agent even when the agent right before did not repeat it. Open issues listed above are not
+  // repeated.
+  const listed = new Set([...open].map((l) => /^- (\S+)/.exec(l)?.[1]));
+  const recorded = Object.entries(run.stages).flatMap(([key, st]) => {
+    const h = [...(st?.rounds ?? [])].reverse().find((x) => x.handoff)?.handoff;
+    if (!h) return [];
+    const lines = [
+      ...h.decisions.map((d) => `  DECISION: ${cut(flat(d), 240)}`),
+      ...h.facts.map((d) => `  FACT: ${cut(flat(d), 240)}`),
+      ...h.open.filter((d) => !listed.has(/^(\S+)/.exec(d)?.[1])).map((d) => `  OPEN: ${cut(flat(d), 200)}`),
+    ];
+    return lines.length ? [`${key} stage, round ${h.round}:`, ...lines] : [];
+  });
+  if (recorded.length) parts.push(`RECORDED AT EACH STAGE (the latest round of each):\n${recorded.join('\n')}`);
+  // The previous agent's account: its claims, to check, not facts.
+  parts.push(
+    `THE AGENT BEFORE YOU — ${agentLabel(prev)} [${prev.status}]${handover.auto ? ' (it wrote no hand-off; Aivenue put this together from what it did)' : ' — its own account, to check'}:\n${handover.auto ? cut(handover.text, accountChars) : handover.text.trim()}`,
+  );
+  // Where to look, with what matters there.
+  const files = prev.stats?.filesChanged ?? [];
+  const maybe = prev.stats?.filesMaybeChanged ?? [];
+  const sources = [
+    `- Its conversation: read_context {agent_id: "${prev.id}"} (parts "messages", "tools").`,
+    files.length ? `- What it changed: ${files.slice(-12).join(', ')}${files.length > 12 ? ` (+${files.length - 12} more)` : ''} (see their current diff)` : '',
+    maybe.length ? `- Possibly changed (its edits failed; check them): ${maybe.slice(-12).join(', ')}` : '',
+    (['plan', 'implement'] as const).some((k) => run.stages[k]?.rounds.some((x) => x.review)) ? '- All reviews and verifications: read_context {}.' : '',
+  ].filter(Boolean);
+  parts.push(`SOURCES:\n${sources.join('\n')}`);
+  parts.push('BEFORE YOU ACT: check the claims you rely on against the current files, read-only; report a mismatch instead of building on it.');
+  return { text: parts.join('\n'), listsOpenIssues: open.length > 0 };
+}
+
+/**
  * One agent in the directory of the shared context: who, where, its state, what it handed over (the first line, or
  * all of it in "full" sharing).
  */
-function directoryLine(run: WorkflowRun, a: AgentRunInfo, resultChars: number, whole = false): string {
+function directoryLine(run: WorkflowRun, a: AgentRunInfo, resultChars: number, whole = false, noHandoff = false): string {
   const where = a.stage && a.role !== 'subagent' ? `, ${a.stage} stage` : a.parentId ? `, sub-agent of ${a.parentId.slice(0, 8)}` : '';
-  const h = a.handover?.text && !a.handover.auto ? `\n  hand-off: ${whole ? a.handover.text.trim().replace(/\n/g, '\n    ') : oneLine(a.handover.text, 300)}` : '';
+  const h = !noHandoff && a.handover?.text && !a.handover.auto ? `\n  hand-off: ${whole ? a.handover.text.trim().replace(/\n/g, '\n    ') : oneLine(a.handover.text, 300)}` : noHandoff ? '\n  hand-off: in HAND-OFF TO YOU above' : '';
   return `- ${agentLabel(a)}${where} [${a.status}]: ${cut(agentResult(run, a), resultChars) || '—'}${h}`;
 }
 
@@ -129,11 +217,16 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const max = o.maxChars ?? 40000;
   const fresh = (a: AgentRunInfo) => a.status === 'running' || (a.endedAt ?? 0) > since;
   const agents = others(run, self.id);
+  // Whoever worked right before this agent hands over to it (handoffToYou), not its raw conversation: that stays in the
+  // shared records (read_context {agent_id}). A sub-agent has its task from its parent instead.
+  const prev = self.parentId ? undefined : agents.filter((a) => a.depth === 0 && a.status !== 'running').pop();
+  const handover = prev && fresh(prev) ? handoverOf(run, prev, transcriptOf(prev.id)) : undefined;
   const foldedCount = agents.filter((a) => folded(run, a)).length;
   const list = [
     ...(foldedCount && !since ? [`- (${foldedCount} earlier agent(s): see the shared memory below)`] : []),
-    // "full": every agent's whole hand-off (organized by the agent itself), not only the one right before.
-    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => (mode === 'full' ? directoryLine(run, a, 2000, true) : directoryLine(run, a, 1200))),
+    // "full": every agent's whole hand-off (organized by the agent itself), not only the one right before. The one
+    // before this agent is in the hand-off already: its line keeps who and what, not its hand-off again.
+    ...agents.filter((a) => !folded(run, a) && fresh(a)).map((a) => (mode === 'full' ? directoryLine(run, a, 2000, true, !!handover && a === prev) : directoryLine(run, a, 1200, false, !!handover && a === prev))),
   ];
   const memory = run.memory && run.memory.updatedAt > since ? memoryBlock(run) : '';
   const upto = Math.max(run.memory?.upto ?? 0, run.knowledge?.upto ?? 0);
@@ -143,10 +236,13 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > since && inPrompt(n)).map((n) => noteLine(run, n));
   const carriedOut = !since ? (run.notes ?? []).filter((n) => n.carried && !inPrompt(n) && !HANDOFF_NOTE.test(n.text)).length : 0;
   const knowledgeDoc = run.knowledge && run.knowledge.updatedAt > since ? run.knowledge.doc : '';
-  // Always first: where things stand and what was handed over.
-  const status = statusBlock(run);
-  const handoffs = handoffsBlock(run, since);
   const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
+  // The one hand-off from the agent before; with it, the stages' hand-off notes and the open issues in the status are
+  // not repeated (it carries the open issues, what is not confirmed, and where to look).
+  const handoff = handover && prev ? handoffToYou(run, self, prev, handover, act, Math.max(6000, Math.floor((max - 4000) * 0.4))) : undefined;
+  // Always first: where things stand and what was handed over.
+  const status = statusBlock(run, { openIssues: !handoff?.listsOpenIssues });
+  const handoffs = handoff ? '' : handoffsBlock(run, since);
   const footer =
     "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for any agent's conversation (its messages, commands and their output; part \"messages\" or \"tools\", page 2 for older parts), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives. When you submit, list what you learned in `findings` and write your `handoff` for the agent who takes over: the state, what is open, what to do next and where to look.";
   const progress = progressBlock(run);
@@ -163,13 +259,7 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   // the others ran and read.
   let room = Math.max(4000, max - head.length - footer.length - 400);
   const take = (text: string) => ((room -= text.length + 1), text);
-  // Whoever worked right before this agent hands over what it wrote for the next one, not its raw conversation: that
-  // stays in the shared records (read_context {agent_id}). A sub-agent has its task from its parent instead.
-  const prev = self.parentId ? undefined : others(run, self.id).filter((a) => a.depth === 0 && a.status !== 'running').pop();
-  const handover = prev && fresh(prev) ? handoverOf(run, prev, transcriptOf(prev.id)) : undefined;
-  const handoverText = take(handover
-    ? `HAND-OFF FROM THE AGENT BEFORE YOU — ${agentLabel(prev!)} [${prev!.status}]${handover.auto ? ' (it wrote none; put together by Aivenue from what it did)' : ''}:\n${handover.auto ? cut(handover.text, Math.max(6000, Math.floor(room * 0.4))) : handover.text.trim()}\nIts whole conversation is in the shared records: read_context {agent_id: "${prev!.id}"} (part "messages" for what it said, "tools" for its commands and their output).`
-    : '');
+  const handoverText = take(handoff?.text ?? '');
   const recap = o.recap ? take(o.recap(Math.floor(room * 0.3))) : '';
   // The organized knowledge and the table of contents of every record, before the newest raw items.
   const organized = take(knowledgeDoc ? `SHARED KNOWLEDGE (organized by subject from the shared notes, with sources [n:id]; read_context {topic: "knowledge"} for all of it):\n${cut(knowledgeDoc, Math.floor(room * 0.25))}` : '');

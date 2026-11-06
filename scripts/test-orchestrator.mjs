@@ -1602,3 +1602,29 @@ test('待驗證：要求修改時，實作者只被要求處理已確認問題�
   assert.doesNotMatch(role, /admin header may be client-controlled/);
 });
 
+test('交接升級（替身流程）：返工的實作者收到一份交接，含審查者的未解問題與獨立的待驗證，以及審查者自己的交接', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  const revise = { tool: 'submit_review', args: { verdict: 'revise', summary: 'fix it', issues: [{ id: 'R1', severity: 'major', title: 'download route permits path traversal', location: 'src/server.js:12' }], needs_validation: NV, handoff: 'R1 must be fixed first; V1 depends on the deployment.' } };
+  fakeAgents(orch, {
+    code_reviewer: [revise, { tool: 'submit_review', args: { verdict: 'approve', summary: 'ok', issues: [] } }],
+    executor: [
+      defaults.executor,
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'fixed', responses: [{ issue_id: 'R1', action: 'fixed', note: 'resolved inside FILES' }] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 3, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const shared = prompts[0].slice(prompts[0].indexOf('HAND-OFF TO YOU'));
+  assert.ok(prompts[0].includes('HAND-OFF TO YOU ('), 'one hand-off');
+  const open = shared.slice(shared.indexOf('OPEN ISSUES'), shared.indexOf('NEEDS VALIDATION'));
+  assert.match(open, /R1 \[major\] download route permits path traversal \(src\/server\.js:12\)/);
+  assert.doesNotMatch(open, /admin header may be client-controlled/);
+  assert.match(shared, /NEEDS VALIDATION \(not confirmed[^\n]*\n- V1 admin header may be client-controlled \(src\/server\.js:22\) — missing evidence: the code trusts the header/);
+  assert.match(shared, /THE AGENT BEFORE YOU — [^\n]*code reviewer[^\n]*its own account[^\n]*:\nR1 must be fixed first; V1 depends on the deployment\./);
+  assert.match(shared, /BEFORE YOU ACT:/);
+});
+
