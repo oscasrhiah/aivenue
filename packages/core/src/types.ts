@@ -1046,6 +1046,22 @@ export interface NeedsValidation {
  * A point the author does not settle: a suggestion marked optional, people who disagree, a choice for the user. Every
  * side is kept with where it was said, and it stays open until the user (or whoever it is for) decides.
  */
+/**
+ * A check (tests, build, type check, linter) as Aivenue saw it run — observed, not reported. `outcome`: passed (it
+ * ended fine and printed no failure), failed (it ended with an error), output_failure (it ended fine but its output
+ * reports a failure), in_longer_command (it ran within a longer command that ended fine: its own result is in the
+ * output). `outdated`: files changed after it ran (re-verify); `maybeOutdated`: only a failed edit came after.
+ */
+export interface ObservedCheck {
+  command: string;
+  agentId: string;
+  by: string;
+  ts: number;
+  outcome: 'passed' | 'failed' | 'output_failure' | 'in_longer_command';
+  outdated?: boolean;
+  maybeOutdated?: boolean;
+}
+
 export interface OpenDecision {
   id: string;
   question: string;
@@ -1085,7 +1101,11 @@ export interface Round {
   authorAgentId?: string;
   reviewerAgentId?: string;
   /** What the author submitted (plan or work summary). */
-  submission?: { summary: string; plan?: PlanDoc; responses?: IssueResponse[]; openDecisions?: OpenDecision[] };
+  /**
+   * `checks`: what Aivenue itself saw run when the work was submitted (the latest run of each check, by any agent),
+   * kept apart from the summary, which is the author's own account. Empty: no check seen.
+   */
+  submission?: { summary: string; plan?: PlanDoc; responses?: IssueResponse[]; openDecisions?: OpenDecision[]; checks?: ObservedCheck[] };
   review?: Review;
   /** Goal verification of this round (verify stage). */
   verification?: Verification;

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { AgentEvent, AgentRunInfo, WorkflowRun } from './types';
+import type { AgentEvent, AgentRunInfo, ObservedCheck, WorkflowRun } from './types';
 
 /**
  * What every agent did, built from their recorded events (no model call), for the shared context:
@@ -85,6 +85,11 @@ export interface LedgerEntry {
   outdated?: boolean;
   /** Only a failed edit came after it: a file may or may not have changed. */
   maybeOutdated?: boolean;
+  /**
+   * The tool call it comes from, when that one call can be read again whole: its event number in the agent's records
+   * (unique there) and the length of its output.
+   */
+  source?: { seq: number; chars: number };
 }
 
 /**
@@ -141,7 +146,11 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
   let lastEdit = 0;
   for (const a of Object.values(run.agents)) {
     if (a.role === 'test' || a.role === 'compactor') continue;
-    for (const e of eventsOf(a.id)) {
+    const events = eventsOf(a.id);
+    // An event number that names one tool call only (a record read back from disk keeps the last version of each).
+    const seqs = new Map<number, number>();
+    for (const e of events) if (e.kind === 'tool') seqs.set(e.seq, (seqs.get(e.seq) ?? 0) + 1);
+    for (const e of events) {
       if (e.kind !== 'tool' || !e.tool || e.tool.status === 'running') continue;
       const t = e.tool;
       if (t.category === 'edit') {
@@ -173,7 +182,9 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
       }
       const graph = GRAPH.test(what);
       const important = !graph && (t.status !== 'ok' || IMPORTANT.test(what) || FAILED.test(t.output ?? ''));
-      entries.push({ ts: e.ts, agent: a, kind: graph ? 'graph' : 'command', what, ok: t.status === 'ok', result: graph ? clip(flat(t.output), 2000) : important ? keyOutput(t.output, 2000) : outcome(t.output, 400) });
+      const chars = plainOutput(t.output).length;
+      const source = chars && seqs.get(e.seq) === 1 ? { seq: e.seq, chars } : undefined;
+      entries.push({ ts: e.ts, agent: a, kind: graph ? 'graph' : 'command', what, ok: t.status === 'ok', result: graph ? clip(flat(t.output), 2000) : important ? keyOutput(t.output, 2000) : outcome(t.output, 400), ...(source ? { source } : {}) });
     }
   }
   const changes = [...changed.entries()];
@@ -219,9 +230,50 @@ export function fit(lines: string[], budget: number, head: string): string {
 
 const indent = (s: string) => s.replace(/\n/g, '\n    ');
 
-/** One command line: who ran it, how it ended and what it printed. */
-const commandLine = (e: LedgerEntry, showWho = true) =>
-  `- ${showWho ? `[${who(e.agent)}] ` : ''}${!e.ok ? '✗' : FAILED.test(e.result) ? '⚠' : '✓'} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : e.maybeOutdated ? ' (a failed edit since may have changed files; check before relying on it)' : ''}${e.result ? (e.result.includes('\n') ? `\n    ${indent(e.result)}` : ` → ${e.result}`) : ''}`;
+/**
+ * One command line: who ran it, how it ended and what it printed. With `mask`, the output of a successful run that
+ * files changed after is left out for a reference to that very tool call — only when that call can be read again
+ * whole. A failure, a warning and an output still current stay as they are.
+ */
+const commandLine = (e: LedgerEntry, showWho = true, mask = false) => {
+  const mark = !e.ok ? '✗' : FAILED.test(e.result) ? '⚠' : '✓';
+  const head = `- ${showWho ? `[${who(e.agent)}] ` : ''}${mark} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : e.maybeOutdated ? ' (a failed edit since may have changed files; check before relying on it)' : ''}`;
+  const shown = e.result ? (e.result.includes('\n') ? `\n    ${indent(e.result)}` : ` → ${e.result}`) : '';
+  if (mask && mark === '✓' && e.outdated && e.result && e.source) {
+    const ref = `\n    (its output, ${e.source.chars} chars, is left out because files changed since: read_context {agent_id: "${e.agent.id}", event: ${e.source.seq}} has that run's output whole)`;
+    // Only when it is shorter than the output itself.
+    if (ref.length < shown.length) return `${head}${ref}`;
+  }
+  return `${head}${shown}`;
+};
+
+// eslint-disable-next-line no-control-regex
+const plainOutput = (s: string | undefined) => (s ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').trim();
+
+/** Characters of output per page of `toolCallPage`. */
+export const TOOL_OUTPUT_PAGE = 8000;
+
+/**
+ * One tool call of an agent, by its event number, with its output whole in pages of `size` characters (page 1 is
+ * the start). The exact run a shortened entry points to, not every run of the same command.
+ */
+export function toolCallPage(events: AgentEvent[], label: string, seq: number, page = 1, size = TOOL_OUTPUT_PAGE): string {
+  const calls = events.filter((e) => e.kind === 'tool' && e.seq === seq && e.tool);
+  if (calls.length !== 1) return calls.length ? `Event ${seq} of ${label} is more than one record: read_context {agent_id, part: "tools"} lists its tool calls.` : `No tool call with event number ${seq} in the records of ${label}: read_context {agent_id, part: "tools"} lists its tool calls.`;
+  const e = calls[0];
+  const t = e.tool!;
+  const out = plainOutput(t.output);
+  const pages = Math.max(1, Math.ceil(out.length / size));
+  const p = Math.min(Math.max(1, Math.floor(page) || 1), pages);
+  const from = (p - 1) * size;
+  const part = out.slice(from, from + size);
+  const input = t.input && flat(t.input) !== flat(t.title) ? `\nInput: ${clip(t.input, 2000)}` : '';
+  return [
+    `TOOL CALL (event ${seq}) OF ${label}, ${new Date(e.ts).toISOString().slice(0, 19).replace('T', ' ')} UTC: ${t.name} [${t.status}] \`${t.title}\`${input}`,
+    out ? `OUTPUT, characters ${from + 1}–${from + part.length} of ${out.length} (page ${p} of ${pages}${p < pages ? `; next: read_context {agent_id, event: ${seq}, page: ${p + 1}}` : ', the end'}):` : 'OUTPUT: (none)',
+    part,
+  ].join('\n');
+}
 
 /** One file read: who read it and the start of what they saw. */
 const readLine = (r: ReadEntry, excerpt: number, showWho = true) =>
@@ -231,11 +283,12 @@ const readLine = (r: ReadEntry, excerpt: number, showWho = true) =>
 const excerptSize = (budget: number, files: number) => Math.max(300, Math.min(6000, Math.floor(budget / Math.max(1, Math.min(files, 40)))));
 
 /** Commands and their results, files read (with what they showed) and changed: newest first within `budget`. */
-export function activityBlock(act: ReturnType<typeof collectActivity>, budget: number): string {
+export function activityBlock(act: ReturnType<typeof collectActivity>, budget: number, o: { mask?: boolean } = {}): string {
   const cmds = latestPerCommand(act.entries.filter((e) => e.kind === 'command'));
+  const mask = o.mask ?? true;
   const parts = [
     fit(
-      cmds.map((e) => commandLine(e)),
+      cmds.map((e) => commandLine(e, true, mask)),
       Math.floor(budget * 0.5),
       'COMMANDS ALREADY RUN BY OTHER AGENTS (who, command, how it ended: ✓ ok, ⚠ ran but its output reports a failure, ✗ failed, then what it printed). Use these results instead of running the same command again; re-run only when files changed since or you need the full output (read_context {agent_id}):',
     ),
@@ -309,6 +362,17 @@ export function verifiedChecks(act: ReturnType<typeof collectActivity>, limit = 
   return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
     .slice(-limit)
     .map((e) => `- ${checkOutcome(e)}: \`${clip(e.what, 100)}\` (run by ${who(e.agent)})${e.outdated ? ' — files changed since: re-run it before relying on it' : e.maybeOutdated ? ' — a failed edit since may have changed files' : ''}`);
+}
+
+/** The latest run of each check (the same as verifiedChecks), as data: for the record of a submission and the UI. */
+export function checkRecords(act: ReturnType<typeof collectActivity>, limit = 10): ObservedCheck[] {
+  return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
+    .slice(-limit)
+    .map((e) => {
+      const compound = isCompound(e.what);
+      const outcome: ObservedCheck['outcome'] = !e.ok ? 'failed' : FAILED.test(e.result) ? 'output_failure' : compound ? 'in_longer_command' : 'passed';
+      return { command: clip(e.what, 200), agentId: e.agent.id, by: who(e.agent), ts: e.ts, outcome, ...(e.outdated ? { outdated: true } : e.maybeOutdated ? { maybeOutdated: true } : {}) };
+    });
 }
 
 /**

@@ -18,7 +18,7 @@ const bundled = await build({
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
-      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
+      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords } from './packages/core/src/ledger';
       export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
@@ -1973,5 +1973,103 @@ test('要求修改後同一位審查者又核准：標成已被取代，保留�
   assert.match(superseded, /\n  SUPERSEDED: lead's latest review is APPROVED \(2026-11-02T15:40Z, on commit cafecafecafe\) https:\/\/github\.com\/octo\/app\/pull\/1#pullrequestreview-9: "lgtm"\. This request is no longer the reviewer's current position; it is kept as history\./);
   // Still the reviewer's position: no such mark.
   assert.doesNotMatch(await run(still), /SUPERSEDED/);
+});
+
+function maskRun() {
+  const tool = (seq, ts, category, title, output, status = 'ok') => ({ seq, ts, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
+  const a1 = { id: 'aaaaaaaa-111', role: 'planner', provider: 'codex', status: 'completed', depth: 0, stage: 'plan', round: 1, startedAt: 1, endedAt: 9, stats: {} };
+  const a2 = { id: 'bbbbbbbb-222', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 10, endedAt: 90, stats: {} };
+  const a3 = { id: 'cccccccc-333', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, stage: 'implement', round: 1, startedAt: 100, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2, [a3.id]: a3 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = {
+    [a1.id]: [tool(3, 3, 'command', 'npm run lint', `lint FIRST RUN by the planner\n${'checked src/a.js\n'.repeat(30)}0 problems`)],
+    [a2.id]: [
+      tool(4, 12, 'command', 'npm run lint', `lint SECOND RUN by the implementer\n${'checked src/b.js\n'.repeat(30)}0 problems`),
+      tool(5, 13, 'command', 'npm test', 'Error: expected 2 got 3\n1 failed'),
+      tool(6, 14, 'command', 'node --test', 'test x\n✖ 1 failing', 'error'),
+      tool(7, 15, 'command', 'git diff --stat', 'src/a.js | 2 +-'),
+      tool(7, 15, 'command', 'git diff --stat', 'src/a.js | 2 +-'),
+      tool(10, 16, 'command', 'rg --files', 'src/a.js'),
+      tool(8, 20, 'edit', 'src/a.js', ''),
+      tool(9, 30, 'command', 'npm run build', 'built in 1.2s'),
+    ],
+  };
+  return { run, a2, a3, events, eventsOf: (id) => events[id] ?? [] };
+}
+
+test('過期且成功的指令輸出換成指向那一次工具呼叫的參照；失敗、警告、最新輸出與查不回原紀錄的照舊', () => {
+  const { run, a2, a3, eventsOf } = maskRun();
+  const act = W.collectActivity(run, eventsOf, { selfId: a3.id });
+  const block = W.activityBlock(act, 20000);
+  const before = W.activityBlock(act, 20000, { mask: false });
+  const entry = (b, cmd) => b.split('\n- ').find((x) => x.includes(`\`${cmd}\``));
+  // The same command ran twice: only the latest run is listed, and its reference names that run (event 4), not the planner's.
+  const lint = entry(block, 'npm run lint');
+  assert.match(lint, /^(- )?\[bbbbbbbb implementer\] ✓ `npm run lint` \(files changed since; re-run if it matters\)\n {4}\(its output, 555 chars, is left out because files changed since: read_context \{agent_id: "bbbbbbbb-222", event: 4\} has that run's output whole\)$/);
+  assert.doesNotMatch(block, /SECOND RUN|FIRST RUN/);
+  assert.match(W.toolCallPage(eventsOf(a2.id), 'implementer', 4), /lint SECOND RUN by the implementer/);
+  assert.doesNotMatch(W.toolCallPage(eventsOf(a2.id), 'implementer', 4), /FIRST RUN/);
+  // Failure, warning and a current output: as before.
+  for (const cmd of ['npm test', 'node --test', 'npm run build']) assert.equal(entry(block, cmd), entry(before, cmd), cmd);
+  assert.match(entry(block, 'npm test'), /⚠[\s\S]*expected 2 got 3/);
+  assert.match(entry(block, 'node --test'), /✗[\s\S]*1 failing/);
+  assert.match(entry(block, 'npm run build'), /built in 1\.2s/);
+  // A short output stays: a reference would be longer than what it replaces.
+  assert.equal(entry(block, 'rg --files'), entry(before, 'rg --files'));
+  assert.match(entry(block, 'rg --files'), /→ src\/a\.js/);
+  // Two records under one event number: no exact call to point to, so the output stays.
+  assert.equal(entry(block, 'git diff --stat'), entry(before, 'git diff --stat'));
+  assert.match(entry(block, 'git diff --stat'), /src\/a\.js \| 2 \+-/);
+  // Everything else in the block is unchanged.
+  const rest = (b) => b.split('\n- ').filter((x) => !x.includes('`npm run lint`')).join('\n- ');
+  assert.equal(rest(block), rest(before));
+  assert.match(W.toolCallPage(eventsOf(a2.id), 'implementer', 7), /more than one record/);
+  assert.match(W.toolCallPage(eventsOf(a2.id), 'implementer', 99), /No tool call with event number 99/);
+});
+
+test('工具呼叫的輸出超過 8,000 字元：分頁依序讀完，內容與原輸出相同', () => {
+  const lines = Array.from({ length: 900 }, (_, i) => `line ${String(i).padStart(4, '0')} ${'x'.repeat(14)}`);
+  const output = lines.join('\n');
+  assert.ok(output.length > 2 * W.TOOL_OUTPUT_PAGE);
+  const events = [{ seq: 1, ts: 1, kind: 'tool', tool: { id: 't', name: 'shell', category: 'command', title: 'npm test', output: 'short', status: 'ok' } }, { seq: 2, ts: 2, kind: 'tool', tool: { id: 'u', name: 'shell', category: 'command', title: 'npm test', output, status: 'ok' } }];
+  const pages = [];
+  let p = 1;
+  for (;;) {
+    const r = W.toolCallPage(events, 'implementer', 2, p);
+    const [h1, h2, ...body] = r.split('\n');
+    assert.match(h1, /^TOOL CALL \(event 2\) OF implementer, .* UTC: shell \[ok\] `npm test`$/);
+    pages.push(body.join('\n'));
+    if (/the end\):$/.test(h2)) break;
+    assert.match(h2, new RegExp(`next: read_context \{agent_id, event: 2, page: ${p + 1}\}`));
+    p++;
+  }
+  assert.equal(p, Math.ceil(output.length / W.TOOL_OUTPUT_PAGE));
+  assert.equal(pages.join(''), output);
+  // Past the last page: the last page again, not an empty one.
+  assert.equal(W.toolCallPage(events, 'implementer', 2, 99), W.toolCallPage(events, 'implementer', 2, p));
+});
+
+test('Aivenue 看到的檢查（資料）：通過、失敗、輸出報錯、在較長指令中、改檔後需重驗、可能已變；不是檢查的指令不算', () => {
+  const tool = (seq, ts, category, title, output, status = 'ok') => ({ seq, ts, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = [
+    tool(1, 10, 'command', 'npm test', '3 passing'),
+    tool(2, 11, 'command', 'npm run build', 'error TS2322', 'error'),
+    tool(3, 12, 'command', 'npm run lint', '2 problems\nError: no-unused-vars'),
+    tool(4, 13, 'command', 'npm.cmd test; git status --short', 'pass 6\nfail 0'),
+    tool(5, 14, 'command', 'git diff --stat', 'src/a.js | 2 +-'),
+    tool(6, 20, 'edit', 'src/a.js', ''),
+    tool(7, 30, 'command', 'pytest -q', '5 passed'),
+    tool(8, 40, 'edit', 'src/b.py', '', 'error'),
+  ];
+  const got = W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome, c.outdated ?? false, c.maybeOutdated ?? false]);
+  assert.deepEqual(got, [
+    ['npm test', 'passed', true, false],
+    ['npm run build', 'failed', true, false],
+    ['npm run lint', 'output_failure', true, false],
+    ['npm.cmd test; git status --short', 'in_longer_command', true, false],
+    ['pytest -q', 'passed', false, true],
+  ]);
 });
 

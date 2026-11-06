@@ -5488,3 +5488,16 @@ textarea.code {
   flex-shrink: 0;
   align-self: center;
 }
+
+/* the checks Aivenue saw run, on an implementation result */
+.ext-chip.bad {
+  color: var(--err);
+}
+.checks-seen {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.check-seen code {
+  overflow-wrap: anywhere;
+}

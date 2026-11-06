@@ -56,7 +56,7 @@ import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { inspectProcess, parseSize } from './procstat';
 import { backgroundLaunch, commandOf, findProcesses, isInside, logOf, processCwd, type Launch } from './procdetect';
-import { fileReadOf, ownWorkBlock, POLLING } from './ledger';
+import { checkRecords, collectActivity, fileReadOf, ownWorkBlock, POLLING, toolCallPage } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
@@ -258,6 +258,8 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 
 /** Most sub-agents one conversation may start in total. */
 const MAX_SUBAGENTS = 40;
+/** Characters of a sub-agent's result per wait_subagent page (the first page is what a call without a page returns). */
+const SUBAGENT_RESULT_PAGE = 20000;
 
 /**
  * Shared context capacity when the user picks none (tokens), and the share of an agent's usable window it may fill in a
@@ -2006,7 +2008,13 @@ export class Orchestrator {
         if (id === 'notes') return allNotes(run);
         const target = run.agents[id] ?? Object.values(run.agents).find((a) => a.id.startsWith(id));
         if (!target) throw new Error(`Unknown agent_id ${id}. Call read_context {} to list agents.`);
-        const part = args.part === 'messages' || args.part === 'tools' ? args.part : 'all';
+        // One tool call exactly (the run a shortened entry points to), its output in pages.
+        if (args.event !== undefined && args.event !== null && args.event !== '') {
+          const seq = Number(args.event);
+          if (!Number.isInteger(seq)) throw new Error('event must be the event number of a tool call (an integer)');
+          return toolCallPage(this.events(run.id, target.id), agentLabel(target), seq, Number(args.page) || 1);
+        }
+        const part =args.part === 'messages' || args.part === 'tools' ? args.part : 'all';
         const page = Number(args.page) > 1 ? Math.floor(Number(args.page)) : 1;
         const handover = target.handover?.text && !target.handover.auto && page === 1 && part !== 'tools' ? `ITS HAND-OFF:\n${target.handover.text}\n\n` : '';
         return `${part === 'all' ? 'CONVERSATION' : part === 'messages' ? 'MESSAGES' : 'TOOL CALLS'} OF ${agentLabel(target)} [${target.status}]\n\n${handover}${formatTranscript(this.events(run.id, target.id), { budget: TRANSCRIPT_PAGE, prompts: args.include_prompts === true, part, page })}`;
@@ -2715,7 +2723,9 @@ export class Orchestrator {
         run.plan = plan;
         run.steps = plan.steps.map((st) => ({ ...st, status: 'pending' }));
       } else if (authorResult.work) {
-        round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses, openDecisions: authorResult.work.openDecisions };
+        // With what Aivenue itself saw run by then: the summary is the author's own account, the checks are not.
+        const checks = checkRecords(collectActivity(run, (id) => this.events(run.id, id)));
+        round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses, openDecisions: authorResult.work.openDecisions, checks };
         // Reviews and verifications of the code before this change no longer count.
         if (this.hasEvidence(run)) {
           const stale = markStale(run, evidenceStamp(run.config.cwd, run.plan?.goal?.data));
@@ -3423,13 +3433,48 @@ export class Orchestrator {
       subagent_id: id,
       provider: child.provider,
       status: child.status,
-      ...(finished ? { result: (child.finalText ?? '').slice(0, 20000), error: child.error } : { activity: child.activity, hint: 'Still running; call wait_subagent again.' }),
+      ...(finished ? { ...this.subagentResult(run, child, Number(args.page) || 1), error: child.error } : { activity: child.activity, hint: 'Still running; call wait_subagent again.' }),
       ...(child.status === 'failed' ? { failure: child.failure?.kind, next: 'Decide: retry it (spawn_subagent again), adjust the task, or replace it with another provider (list_providers).' } : {}),
       files_changed: child.stats.filesChanged,
       // Every edit of these failed: they may or may not have changed.
       ...(child.stats.filesMaybeChanged?.length ? { files_possibly_changed: child.stats.filesMaybeChanged } : {}),
       ...(finished ? this.factRoundNote(run, child) : {}),
     });
+  }
+
+  /**
+   * A finished sub-agent's result as its parent gets it: the sub-agent's own account (a page of it when long, with the
+   * call for the next page), kept apart from the checks Aivenue saw this sub-agent run — so "it ended" is never read
+   * as "its checks passed" (docs/next-task-skills-integration.md, multi-agent-patterns).
+   */
+  private subagentResult(run: WorkflowRun, child: AgentRunInfo, page: number) {
+    const text = child.finalText ?? '';
+    const pages = Math.max(1, Math.ceil(text.length / SUBAGENT_RESULT_PAGE));
+    const p = Math.min(Math.max(1, Math.floor(page)), pages);
+    const from = (p - 1) * SUBAGENT_RESULT_PAGE;
+    const part = text.slice(from, from + SUBAGENT_RESULT_PAGE);
+    // Its own tool records only; a file changed after a check (by anyone) still marks it to be re-verified.
+    const seen = checkRecords(collectActivity(run, (aid) => this.events(run.id, aid), { onlyIds: new Set([child.id]) }));
+    const checks = seen.map((c) => ({ command: c.command, outcome: c.outcome, ...(c.outdated ? { outdated: true } : c.maybeOutdated ? { maybe_outdated: true } : {}) }));
+    const bad = seen.filter((c) => c.outcome === 'failed' || c.outcome === 'output_failure').length;
+    const unread = seen.filter((c) => c.outcome === 'in_longer_command').length;
+    const stale = seen.filter((c) => c.outdated || c.maybeOutdated).length;
+    const note = !checks.length
+      ? 'Aivenue saw this sub-agent run no check (tests, build, type check, linter): "completed" only means it ended; nothing it says passed was seen to pass.'
+      : [
+          bad ? `${bad} of ${checks.length} check(s) Aivenue saw did not pass` : unread === checks.length ? 'every check seen ran within a longer command: its own result is in that output' : 'the checks Aivenue saw ended without a failure',
+          unread && unread < checks.length ? `${unread} ran within a longer command (read the output)` : '',
+          stale ? `${stale} ran before a later file change (re-verify)` : '',
+        ]
+          .filter(Boolean)
+          .join('; ') + '.';
+    return {
+      result: part,
+      result_is: "the sub-agent's own account (what it says it did); checks_seen is what Aivenue saw it run",
+      ...(pages > 1 ? { result_truncated: { page: p, pages, shown: `${from + 1}-${from + part.length}`, total: text.length, ...(p < pages ? { next: `wait_subagent {subagent_id: "${child.id}", page: ${p + 1}}` } : {}) } } : {}),
+      checks_seen: checks,
+      checks_note: note,
+    };
   }
 
   // ---------- context: size, compaction ----------

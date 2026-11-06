@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
+import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ObservedCheck, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
 import { agentStatus, cx, elapsed, firstLine, saidOwner, modelLabel, providerColor, providerName, roleLabel, roleTone, similar, STEP_ICON, subTitle } from '../util';
@@ -314,6 +314,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             <Markdown className="prose" text={round.submission.summary} />
           </div>
         )}
+        {done && isAuthor && <ObservedChecks checks={round?.submission?.checks} />}
         <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
       </>
     );
@@ -421,6 +422,49 @@ function Files({ files, maybe = [] }: { files: string[]; maybe?: string[] }) {
           {f} · {t('可能改動', 'possibly changed')}
         </span>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The checks Aivenue itself saw run when the work was submitted — apart from the summary, which is the author's own
+ * account: passed, failed, its output reports a failure, ran within a longer command, and re-verify after a change.
+ * Shown only for submissions recorded with it (older ones have no `checks`).
+ */
+function ObservedChecks({ checks }: { checks?: ObservedCheck[] }) {
+  const t = useT();
+  if (!checks) return null;
+  const label = t('Aivenue 看到的檢查（提交時；不是 agent 的自述）', 'Checks Aivenue saw run (at submission; not the agent\'s own account)');
+  if (!checks.length)
+    return (
+      <div className="block">
+        <div className="block-label">{label}</div>
+        <span className="ext-chip warn">{t('沒有看到任何檢查執行：摘要裡說的通過或完成，是 agent 自己的說法', 'No check seen: any "passed" or "done" in the summary is the agent\'s own account')}</span>
+      </div>
+    );
+  const outcome = (c: ObservedCheck) =>
+    c.outcome === 'passed'
+      ? { cls: 'ok', text: t('✓ 通過', '✓ passed') }
+      : c.outcome === 'failed'
+        ? { cls: 'bad', text: t('✗ 失敗', '✗ failed') }
+        : c.outcome === 'output_failure'
+          ? { cls: 'bad', text: t('⚠ 執行完成，但輸出回報失敗', '⚠ ran, its output reports a failure') }
+          : { cls: 'muted', text: t('◦ 在較長的指令中執行，結果要看輸出', '◦ ran within a longer command; its result is in the output') };
+  return (
+    <div className="block">
+      <div className="block-label">{label}</div>
+      <div className="checks-seen">
+        {checks.map((c) => {
+          const o = outcome(c);
+          const stale = c.outdated ? t('之後有改檔，需重驗', 'files changed since: re-verify') : c.maybeOutdated ? t('之後有編輯失敗，檔案可能已變，請確認', 'a failed edit since may have changed files') : '';
+          return (
+            <div key={`${c.agentId}|${c.command}`} className="check-seen">
+              <span className={cx('ext-chip', stale ? 'warn' : o.cls)}>{o.text}</span> <code>{c.command}</code> <span className="muted">{t(`（${c.by} 執行）`, `(run by ${c.by})`)}</span>
+              {stale && <span className="ext-chip warn"> · {stale}</span>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

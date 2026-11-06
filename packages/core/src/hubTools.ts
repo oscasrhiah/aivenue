@@ -402,10 +402,11 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   },
   wait_subagent: {
     name: 'wait_subagent',
-    description: 'Wait (up to ~50s) for a sub-agent and return its status and result. Call again while status is "running".',
+    description:
+      'Wait (up to ~50s) for a sub-agent and return its status and result. Call again while status is "running". The result is the sub-agent\'s own account; checks_seen lists the checks Aivenue saw it run and how they ended. A result longer than one page is marked result_truncated, with the call for the next page.',
     inputSchema: {
       type: 'object',
-      properties: { subagent_id: { type: 'string' }, timeout_sec: { type: 'number' } },
+      properties: { subagent_id: { type: 'string' }, timeout_sec: { type: 'number' }, page: { type: 'number', description: 'Page of a long result: 1 (default) is the start, 2 the next 20000 characters, and so on.' } },
       required: ['subagent_id'],
     },
   },
@@ -444,7 +445,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   read_context: {
     name: 'read_context',
     description:
-      'Read what other agents in this workflow did. With topic: everything on one subject at once — a file (who read and changed it, what it showed, notes and issues naming it), a command (every run and its output), an issue (its whole history), or "facts", "decisions", "inferences", "checkpoints", "knowledge" (the organized shared knowledge), "index" (every topic). Without arguments: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s conversation (its messages, tool calls, commands and their output), newest part first; part "messages" or "tools" for only one kind, page 2, 3… for older parts.',
+      'Read what other agents in this workflow did. With topic: everything on one subject at once — a file (who read and changed it, what it showed, notes and issues naming it), a command (every run and its output), an issue (its whole history), or "facts", "decisions", "inferences", "checkpoints", "knowledge" (the organized shared knowledge), "index" (every topic). Without arguments: an overview with the full plan, every review with all issues, each agent\'s summary and the shared notes. With agent_id: that agent\'s conversation (its messages, tool calls, commands and their output), newest part first; part "messages" or "tools" for only one kind, page 2, 3… for older parts. With agent_id and event: that one tool call exactly (the run a shortened entry points to) with its whole output, page 2, 3… for the rest of a long one.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -452,7 +453,8 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
         part: { type: 'string', enum: ['all', 'messages', 'tools'], description: 'With agent_id: only its messages (what it said and concluded) or only its tool calls with their output. Default all.' },
-        page: { type: 'number', description: 'With agent_id or topic "log": 1 (default) is the newest part, 2 the part before it, and so on.' },
+        event: { type: 'number', description: 'With agent_id: the event number of one of its tool calls (as a shortened entry in the shared context gives it).' },
+        page: { type: 'number', description: 'With agent_id or topic "log": 1 (default) is the newest part, 2 the part before it, and so on. With agent_id and event: 1 is the start of the output, 2 the next 8000 characters, and so on.' },
       },
     },
   },

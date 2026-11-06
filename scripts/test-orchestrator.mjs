@@ -1874,3 +1874,149 @@ test('需要重交的只有缺少必要內容或無法解析的提交：工具�
   assert.match(errors[0] ?? '', /Invalid plan: provide summary, markdown and steps/);
 });
 
+test('審查者看到過期的成功輸出被換成參照，用 read_context {agent_id, event, page} 讀回同一次執行的完整輸出', async () => {
+  const { orch, cwd } = setup();
+  const long = Array.from({ length: 1200 }, (_, i) => `ok ${i} - case ${'y'.repeat(12)}`).join('\n');
+  let reviewerPrompt;
+  const pages = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        const ev = (seq, title, output, category = 'command') => a.onEvent({ seq, ts: Date.now(), kind: 'tool', tool: { id: `t${seq}`, name: 'bash', category, title, output, status: 'ok' }, ...(category === 'edit' ? { files: [title] } : {}) }, false);
+        ev(201, 'npm test', 'EARLIER RUN: 3 passing');
+        await new Promise((r) => setTimeout(r, 5));
+        ev(202, 'npm test', long);
+        await new Promise((r) => setTimeout(r, 5));
+        ev(203, 'src/app.js', '', 'edit');
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+    code_reviewer: [
+      async (o, secret, a) => {
+        reviewerPrompt = a.prompt;
+        const m = a.prompt.match(/read_context \{agent_id: "([^"]+)", event: (\d+)\}/);
+        for (let p = 1; m; p++) {
+          const r = await o.callTool(secret, 'read_context', { agent_id: m[1], event: Number(m[2]), page: p });
+          pages.push(r.split('\n').slice(2).join('\n'));
+          if (/the end\)/.test(r.split('\n')[1])) break;
+        }
+        await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(reviewerPrompt, /✓ `npm test` \(files changed since; re-run if it matters\)\n {4}\(its output, \d+ chars, is left out because files changed since: read_context \{agent_id: "[^"]+", event: 202\}/);
+  assert.doesNotMatch(reviewerPrompt, /ok 1199 - case/);
+  assert.equal(pages.length, Math.ceil(long.length / 8000));
+  assert.equal(pages.join(''), long, 'the very run the entry names, whole');
+});
+
+test('實作結果附上 Aivenue 看到的檢查：通過、失敗、沒執行、改檔後需重驗分得開；agent 自述「全部通過」不算', async () => {
+  const cases = {
+    // Ran the tests, then changed a file: passed, but to be re-verified.
+    stale: [['npm test', 'ok', '3 passing'], ['src/app.js', 'edit']],
+    // The tests failed; its summary still says they pass.
+    failed: [['npm test', 'error', '1 failing']],
+    // Ran no check at all.
+    none: [['git status', 'ok', 'clean']],
+    // Ran it last: passed and current.
+    fresh: [['src/app.js', 'edit'], ['npm test', 'ok', '3 passing']],
+  };
+  const got = {};
+  for (const [name, steps] of Object.entries(cases)) {
+    const { orch, cwd } = setup();
+    let n = 300;
+    fakeAgents(orch, {
+      executor: [
+        async (o, secret, a) => {
+          for (const [title, status, output] of steps) {
+            const edit = status === 'edit';
+            a.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { id: `t${n}`, name: edit ? 'apply_patch' : 'bash', category: edit ? 'edit' : 'command', title, output: output ?? '', status: edit ? 'ok' : status }, ...(edit ? { files: [title] } : {}) }, false);
+            await new Promise((r) => setTimeout(r, 3));
+          }
+          await o.callTool(secret, 'submit_work', { summary: 'All tests pass.' });
+        },
+      ],
+    });
+    const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+    assert.equal(r.status, 'completed', r.error);
+    got[name] = r.stages.implement.rounds[0].submission;
+  }
+  const one = (s) => s.checks.map((c) => [c.command, c.outcome, !!c.outdated]);
+  assert.deepEqual(one(got.stale), [['npm test', 'passed', true]]);
+  assert.deepEqual(one(got.failed), [['npm test', 'failed', false]]);
+  assert.deepEqual(got.none.checks, [], 'none seen (git status is no check): an empty list, not missing');
+  assert.deepEqual(one(got.fresh), [['npm test', 'passed', false]]);
+  // The agent's own words stay its summary, apart from what Aivenue saw.
+  for (const s of Object.values(got)) assert.equal(s.summary, 'All tests pass.');
+  assert.match(got.stale.checks[0].by, /implementer/);
+});
+
+test('子 agent 結果交接：自稱全過但 npm test 失敗，父 agent 從 checks_seen 看得到；沒跑檢查會明說；result 照舊是自述', async () => {
+  const { orch, cwd } = setup();
+  const got = {};
+  let n = 500;
+  const ev = (a, title, status, output) => a.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { id: `t${n}`, name: 'bash', category: 'command', title, output, status } }, false);
+  fakeAgents(orch, {
+    subagent: [
+      // It runs the tests, they fail, and it reports success anyway.
+      async (o, secret, a) => (ev(a, 'npm test', 'error', '1 failing: expected 2 got 3'), { lastSeq: n + 1, exitCode: 0, resumed: false, finalText: 'All tests pass. Done.' }),
+      // It runs no check at all.
+      async (o, secret, a) => (ev(a, 'git status --short', 'ok', ' M src/a.js'), { lastSeq: n + 1, exitCode: 0, resumed: false, finalText: 'Fixed it.' }),
+    ],
+    executor: [
+      async (o, secret) => {
+        for (const k of ['failed', 'none']) {
+          const s = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: k }));
+          got[k] = JSON.parse(await o.callTool(secret, 'wait_subagent', { subagent_id: s.subagent_id, timeout_sec: 5 }));
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  // Ended, said it passed — and the failure Aivenue saw is right next to it.
+  assert.deepEqual([got.failed.status, got.failed.result], ['completed', 'All tests pass. Done.']);
+  assert.match(got.failed.result_is, /own account/);
+  assert.deepEqual(got.failed.checks_seen, [{ command: 'npm test', outcome: 'failed' }]);
+  assert.match(got.failed.checks_note, /1 of 1 check\(s\) Aivenue saw did not pass/);
+  // No check run: said outright; git status is no check.
+  assert.deepEqual(got.none.checks_seen, []);
+  assert.match(got.none.checks_note, /no check .*"completed" only means it ended/);
+  assert.equal(got.none.result_truncated, undefined);
+});
+
+test('子 agent 長結果：不帶頁碼的呼叫照舊回第一頁並標出截斷與下一頁；逐頁接回與原文完全一致', async () => {
+  const { orch, cwd } = setup();
+  const text = Array.from({ length: 3000 }, (_, i) => `line ${i} ${'z'.repeat(10)}`).join('\n') + '\nEND-OF-RESULT';
+  const pages = [];
+  let first;
+  fakeAgents(orch, {
+    subagent: [async () => ({ lastSeq: 1, exitCode: 0, resumed: false, finalText: text })],
+    executor: [
+      async (o, secret) => {
+        const s = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: 'summarize' }));
+        first = JSON.parse(await o.callTool(secret, 'wait_subagent', { subagent_id: s.subagent_id, timeout_sec: 5 }));
+        pages.push(first.result);
+        // Follow the "next" call it gives, page by page.
+        for (let cur = first; cur.result_truncated?.next; ) {
+          const page = Number(/page: (\d+)/.exec(cur.result_truncated.next)[1]);
+          cur = JSON.parse(await o.callTool(secret, 'wait_subagent', { subagent_id: s.subagent_id, page }));
+          pages.push(cur.result);
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(text.length > 40000);
+  assert.equal(first.result.length, 20000, 'a call without a page still returns the first 20000 characters');
+  assert.deepEqual([first.result_truncated.page, first.result_truncated.pages, first.result_truncated.total], [1, Math.ceil(text.length / 20000), text.length]);
+  assert.match(first.result_truncated.next, /^wait_subagent \{subagent_id: "[^"]+", page: 2\}$/);
+  assert.equal(pages.length, Math.ceil(text.length / 20000));
+  assert.equal(pages.join(''), text);
+});
+
