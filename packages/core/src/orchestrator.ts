@@ -2245,7 +2245,8 @@ export class Orchestrator {
       this.aborts.delete(run.id);
       this.touch(run);
       this.d.store.saveNow(run);
-      setTimeout(() => this.d.store.release(run.id), 60000);
+      // Not a reason to keep the process alive (a hub that is stopping has nothing left to release).
+      setTimeout(() => this.d.store.release(run.id), 60000).unref?.();
     }
   }
 

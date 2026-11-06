@@ -25,6 +25,7 @@ const bundled = await build({
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
       export { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './packages/core/src/promptStats';
       export { createParser } from './packages/core/src/providers/parsers';
+      export { cliEnv } from './packages/core/src/proc';
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit } from './packages/ui/src/draftInit';
       export * as P from './packages/core/src/prompts';`,
@@ -729,6 +730,21 @@ test('A2：成本分解依角色與階段、壓縮與整理筆記另列；三種
   live.status = 'running';
   W.trackWaiting(live, 700);
   assert.equal(live.timing.waitingMs, 500);
+});
+
+test('啟動 agent CLI 時，PWD 與 INIT_CWD 指向它的工作資料夾，不沿用 Aivenue 啟動時的位置', () => {
+  const before = { PWD: process.env.PWD, OLDPWD: process.env.OLDPWD };
+  process.env.PWD = '/somewhere/else';
+  process.env.OLDPWD = '/older';
+  try {
+    const env = W.cliEnv('C:/work/repo', { EXTRA: '1' });
+    assert.equal(env.PWD, 'C:/work/repo');
+    assert.equal(env.INIT_CWD, 'C:/work/repo');
+    assert.equal(env.EXTRA, '1');
+    assert.equal('OLDPWD' in env, false);
+  } finally {
+    for (const [k, v] of Object.entries(before)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+  }
 });
 
 // ---------- B：可選的標準模式（不呼叫模型） ----------

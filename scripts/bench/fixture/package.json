@@ -1,0 +1,10 @@
+{
+  "name": "textkit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Small text utilities (the fixed project for Aivenue's efficiency benchmark).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "_note": "Review-ability test (docs/workflow-efficiency-plan.md A3): the reviewer gets the fixture plus these files as the uncommitted change for the csv-report task, and must find the known defects. A defect counts as found when one issue mentions its file and one of its keywords (case-insensitive); the raw review is kept in the report for a person to check.",
+  "task": "csv-report",
+  "defects": [
+    {
+      "id": "D1",
+      "file": "src/csv.js",
+      "what": "Double quotes inside a quoted field are not doubled.",
+      "keywords": ["double quote", "doubled", "\"\"", "escape the quote", "escaping quote", "quotes inside", "inner quote", "embedded quote", "escape quotes", "escaped quote", "rfc 4180", "rfc4180"]
+    },
+    {
+      "id": "D2",
+      "file": "src/csv.js",
+      "what": "A field containing a newline is not quoted.",
+      "keywords": ["newline", "new line", "line break", "\\n", "linebreak", "carriage return", "multiline", "multi-line", "multiple lines"]
+    },
+    {
+      "id": "D3",
+      "file": "src/report.js",
+      "what": "summaryCsv([]) throws: columns come from items[0]; the column order also follows the first item instead of name, qty, price, subtotal.",
+      "keywords": ["empty", "items[0]", "no items", "zero items", "[]", "undefined", "throws", "typeerror", "first item", "column order", "object.keys"]
+    }
+  ]
+}

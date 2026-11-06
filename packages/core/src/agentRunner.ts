@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import type { AgentEvent, ArgGroup, ModeKey, PermissionLevel, ProviderSpec } from './types';
-import { capture, childEnv, killTree, resolveCommand, spawnResolved, specCommand, takesEffort } from './proc';
+import { capture, cliEnv, killTree, resolveCommand, spawnResolved, specCommand, takesEffort } from './proc';
 import { createParser, type EventDraft } from './providers/parsers';
 import { L } from './i18n';
 import type { ResolvedMcpServer } from './capabilities';
@@ -413,7 +413,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
       ({
         fingerprint,
         sessionId: '',
-        child: spawnResolved(resolved, args, { cwd: o.cwd, env: childEnv(extraEnv), stdio: ['pipe', 'pipe', 'pipe'] }),
+        child: spawnResolved(resolved, args, { cwd: o.cwd, env: cliEnv(o.cwd, extraEnv), stdio: ['pipe', 'pipe', 'pipe'] }),
         secret: keep.secret,
         owner: keep.owner,
         busy: true,
@@ -478,7 +478,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     return { lastSeq: seq, exitCode: outcome.exited ? outcome.code : null, sessionId, resumed: canResume, finalText: parser.finalText(), error, keptAlive: alive };
   }
 
-  const child = spawnResolved(resolved, args, { cwd: o.cwd, env: childEnv(extraEnv), stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawnResolved(resolved, args, { cwd: o.cwd, env: cliEnv(o.cwd, extraEnv), stdio: ['pipe', 'pipe', 'pipe'] });
   const onAbort = () => killTree(child);
   o.signal.addEventListener('abort', onAbort);
 

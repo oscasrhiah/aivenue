@@ -96,6 +96,16 @@ export function childEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   return { ...env, ...extra };
 }
 
+/**
+ * The environment of an agent CLI working in `cwd`: PWD and INIT_CWD say the same folder as the working directory
+ * (inherited ones point wherever Aivenue was started from; OpenCode sessions were seen placed there), OLDPWD dropped.
+ */
+export function cliEnv(cwd: string, extra?: Record<string, string>): NodeJS.ProcessEnv {
+  const env = childEnv(extra);
+  delete env.OLDPWD;
+  return { ...env, PWD: cwd, INIT_CWD: cwd };
+}
+
 function findOnPath(name: string): string | undefined {
   if (path.isAbsolute(name)) return fs.existsSync(name) ? name : undefined;
   const dirs = childPath().split(path.delimiter);

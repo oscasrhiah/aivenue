@@ -1,0 +1,23 @@
+{
+  "_note": "Fixed tasks of the efficiency benchmark (docs/workflow-efficiency-plan.md A3). The goal is what the agents get; the acceptance file is never copied into the checkout.",
+  "tasks": [
+    {
+      "id": "slug-maxlength",
+      "kind": "small-change",
+      "goal": "In src/slug.js, add an optional second argument to slugify: slugify(text, { maxLength }). When maxLength is a positive number, the slug must be at most maxLength characters. Cut at a word boundary (between words, i.e. at a '-') when possible, and never end with '-'. If the first word alone is longer than maxLength, cut that word at maxLength. Without the option, or with maxLength 0, behave exactly as now. Add tests for it.",
+      "acceptance": "slug-maxlength.accept.mjs"
+    },
+    {
+      "id": "duration-units",
+      "kind": "debugging",
+      "goal": "Bug report: parseDuration('1h30m') in src/duration.js returns 90 instead of 5400, and parseDuration('3m') returns 3 instead of 180. Find the cause and fix parseDuration so every unit (h, m, s) is respected in any combination, e.g. '2m5s' is 125 and '1h5s' is 3605. Keep NaN for text that is not a duration. Add tests that would have caught the bug.",
+      "acceptance": "duration-units.accept.mjs"
+    },
+    {
+      "id": "csv-report",
+      "kind": "cross-file-feature",
+      "goal": "Add CSV export. 1) Create src/csv.js exporting toCsv(rows, columns): rows is an array of objects, columns an array of keys; the first line is the header (the column names), then one line per row, lines joined with '\\n'. A field that contains a comma, a double quote or a newline must be wrapped in double quotes, with double quotes inside it doubled. null and undefined become empty fields; numbers are written as they are. 2) In src/report.js, add summaryCsv(items) that uses toCsv to return a CSV with columns name, qty, price, subtotal (qty * price) for every item, followed by a final row whose name is TOTAL, qty and price empty, and subtotal the total of all items. It must also work for an empty list. Add tests.",
+      "acceptance": "csv-report.accept.mjs"
+    }
+  ]
+}
