@@ -1,4 +1,5 @@
 // Shared types between the hub (core) and the UI. Keep this file free of Node imports.
+import type { MaterialItem, MemoryEntry } from './memoryEntries';
 
 /**
  * A group of CLI arguments. Tokens like `{sessionId}` are substituted at run time;
@@ -345,6 +346,24 @@ export interface SkillInfo {
   files: number;
 }
 
+/**
+ * Where the message a follow-up continues had got to (docs/next-task-skills-integration.md, planning-with-files): its
+ * latest approved plan, its steps with their status and notes, its last hand-off and the checks Aivenue saw run — the
+ * previous message's state, not the follow-up's own plan or progress.
+ */
+export interface EarlierPlan {
+  /** The workflow it comes from, and how it ended. */
+  runId: string;
+  status: string;
+  /** When it was carried over. */
+  at: number;
+  plan?: { summary: string; markdown: string; round?: number; approved: boolean };
+  steps: { id: string; title: string; status: string; note?: string }[];
+  handoff?: { by: string; text: string; ts: number };
+  /** As of the previous message (outdated: files changed after it ran); all of them ran before this message. */
+  checks: (ObservedCheck & { output?: string })[];
+}
+
 export interface ProviderInfo {
   spec: ProviderSpec;
   builtin: boolean;
@@ -628,6 +647,10 @@ export interface ContextConfig {
   shareOfWindow?: number;
   /** Organize the shared notes into a knowledge document every this many new notes (default 30; 0 = never). */
   organizeEvery?: number;
+  /** The shared memory's entries are shown within this many tokens, most important first (default 4000). */
+  memoryTokens?: number;
+  /** Characters of the user's earlier messages put in each prompt, whole messages, newest kept first (default 12000). */
+  userWordsChars?: number;
   /**
    * Go on in the same CLI conversation round after round (default false). Off, every turn starts a new conversation
    * with the goal, plan, progress, hand-offs and the newest 100 entries of the conversation log; a long loop then does
@@ -648,6 +671,18 @@ export interface SharedKnowledge {
   notes: number;
 }
 
+/** One piece of the user's own words, with where and when it was said. */
+export interface UserWords {
+  /** "g:<run id>": the request that started a message; "u:<time>": a message sent while one ran. */
+  id: string;
+  runId: string;
+  ts: number;
+  text: string;
+  kind: 'request' | 'message';
+  /** Why the text may not be only the user's own words (written by Aivenue for them, or saved before they were kept apart). */
+  note?: string;
+}
+
 export interface SharedMemory {
   summary: string;
   /** Notes and agent results up to this time are represented by the summary. */
@@ -660,6 +695,19 @@ export interface SharedMemory {
   after?: number;
   /** Items the validation found missing and appended verbatim. */
   kept?: string[];
+  /** The memory as numbered entries, updated by each compaction (memoryEntries.ts); `summary` is their rendering. */
+  entries?: MemoryEntry[];
+  /** How many compactions updated the entries, and the next entry number. */
+  cycle?: number;
+  nextId?: number;
+  /**
+   * Material up to `upto` not processed yet, each saved whole (source, the message it came from, text, strength): it
+   * goes into the next batch as it was, in this message or a later one, until a compaction processes it. A bare ref is
+   * what older versions saved.
+   */
+  pending?: (MaterialItem | string)[];
+  /** The latest file change known in the conversation (for checks carried in `pending` to be re-verified). */
+  lastEdit?: number;
 }
 
 export interface AdvisorConfig {
@@ -747,6 +795,13 @@ export interface WorkflowConfig {
   replaces?: string;
   /** A follow-up message: the workflow it continues (its notes, shared memory and agent conversations carry over). */
   continueFrom?: string;
+  /**
+   * The user's own words of this message. `goal` may add Aivenue's background to them (for a follow-up: the earlier
+   * task and its outcome); this is what the user wrote, kept apart so it is never mixed with an agent's outcome.
+   */
+  userText?: string;
+  /** When `userText` was written by Aivenue for the user (e.g. the user allowed an action they had denied). */
+  userTextNote?: string;
   /** The conversation this message belongs to (the id of its first workflow); one entry in the sidebar. */
   threadId?: string;
   /** External actions the user approved in advance ("allow and continue" after a denial); each is used once. */
@@ -1241,6 +1296,20 @@ export interface WorkflowRun {
   worktree?: { path: string; branch: string; baseCommit: string; repo: string; origCwd: string; cwd: string; state: 'active' | 'applied' | 'discarded' | 'kept'; note?: string };
   /** `chat` entries are shown as divider lines in the conversation. */
   log: { ts: number; text: string; level: 'info' | 'warn' | 'error'; chat?: boolean }[];
+  /**
+   * The user's own words in the earlier messages of this conversation (requests and messages sent during them),
+   * oldest first, verbatim: carried from message to message by Aivenue, never summarized.
+   */
+  earlierUserWords?: UserWords[];
+  /**
+   * The latest file change Aivenue saw in the earlier messages of this conversation, carried from message to message
+   * whether or not they compacted (a check left pending is then marked to be re-verified after any later change).
+   */
+  earlierEdit?: number;
+  /** The state of the message this one continues (its plan, steps, hand-off, checks), carried over at the start. */
+  earlierPlan?: EarlierPlan;
+  /** Per CLI conversation (session id): the ids of the user's earlier words it was given and still holds. */
+  wordsSeen?: Record<string, string[]>;
   /** Messages the user sent while the workflow was running (handed to the working agents and every later one). */
   userMessages?: {
     ts: number;

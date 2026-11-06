@@ -48,6 +48,12 @@ import { capture, findNode } from './proc';
 import { ciDiagnosisBlock, diagnoseCi, wantsCiDiagnosis, type GhRun } from './ciDiagnose';
 import { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './prReviews';
 import { replayGh } from './ghReplay';
+import { writeHandoffSummary } from './handoffSummary';
+import { notFoundBlock, notFoundInSource } from './sourceCheck';
+import { applyMemoryOps, parseMemoryOps, renderMemory } from './memoryEntries';
+import { memoryBatch } from './memoryBatch';
+import { earlierUserWordsBlock, userWordsTopic } from './userWords';
+import { applyCarried, carriedState, earlierPlanBlock, earlierPlanTopic } from './continuation';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
@@ -271,6 +277,10 @@ const SHARE_OF_WINDOW = 0.5;
 const ORGANIZE_EVERY = 30;
 /** Below this (tokens of material) a summary is not worth it. */
 const MIN_COMPACT_TOKENS = 1000;
+/** Characters of the user's earlier messages in each prompt (whole messages, newest kept first). */
+const USER_WORDS_CHARS = 12000;
+/** The shared memory's entries are shown within this many tokens (most important first). */
+const MEMORY_TOKENS = 4000;
 
 /** Automatic compactor: the first signed-in of these (mid-priced models, not the tiniest free ones). */
 // OmniRoute (when on and connected) first: compaction needs no tools, so a free model does, and the result is checked anyway.
@@ -1260,6 +1270,8 @@ export class Orchestrator {
       cwd: run.worktree?.origCwd ?? run.config.cwd,
       title: L(`改成允許並繼續：${label}`, `Allowed and continued: ${label}`).slice(0, 60),
       goal: `${goal}\n\n(Context: this continues an earlier task in the same folder: "${run.config.goal.slice(0, 800)}". Its outcome: ${(prev ?? run.status).slice(0, 1500)})`,
+      userText: goal,
+      userTextNote: 'written by Aivenue when the user allowed an action they had denied',
       replaces: undefined,
       continueFrom: run.id,
     });
@@ -1275,20 +1287,10 @@ export class Orchestrator {
    * conversation when the same CLI fills it in the same folder (not across an isolated worktree).
    */
   private carryOver(prev: WorkflowRun, run: WorkflowRun) {
-    const label = (agentId: string) => {
-      const a = prev.agents[agentId];
-      return a ? `${roleLabel(a.role)} ${a.provider}` : undefined;
-    };
-    // Every note goes along (searchable, and organized in the knowledge document that goes along too), but only
-    // decisions and the user's instructions are put in prompts again: the rest was about the earlier message.
-    run.notes = (prev.notes ?? []).map((n) => ({ ...n, by: n.by ?? label(n.agentId), carried: true }));
-    if (prev.knowledge) run.knowledge = { ...prev.knowledge };
-    if (prev.sideEffects?.length) run.sideEffects = [...prev.sideEffects];
-    const waits = (prev.waits ?? []).filter((w) => w.state === 'waiting' && w.timeoutAt > now());
-    if (waits.length) run.waits = waits.map((w) => ({ ...w }));
-    if (prev.memory) run.memory = { ...prev.memory };
-    if (prev.contextMuted) run.contextMuted = [...prev.contextMuted];
-    if (prev.contextAsked) run.contextAsked = { ...prev.contextAsked };
+    // What the follow-up inherits (continuation.ts): the time and the file changes seen in prev's records come from here.
+    const act = collectActivity(prev, (id) => this.events(prev.id, id));
+    applyCarried(run, carriedState(prev, { now: now(), lastEditSeen: act.lastEdit, checksSeen: checkRecords(act, 10, { output: true }), agentLabel: (a) => `${roleLabel(a.role)} ${a.provider}` }));
+    // Whether its CLI conversations go on: same folder, no isolated worktree, same provider per role.
     const sameFolder = !prev.worktree && run.config.isolation !== 'worktree' && path.resolve(prev.config.cwd) === path.resolve(run.config.cwd);
     if (!sameFolder) return;
     const carried: string[] = [];
@@ -1307,6 +1309,8 @@ export class Orchestrator {
       if (seen) this.sharedSeen.set(`${run.id}|${sid}`, seen);
     }
     if (carried.length) run.carriedSessions = carried;
+    // And what they hold of the user's earlier words (given again if not all of them, or after a compaction).
+    for (const sid of carried) if (prev.wordsSeen?.[sid]) (run.wordsSeen ??= {})[sid] = [...prev.wordsSeen[sid]];
   }
 
   /** Running workflows, so an edit can wait until the old one really stopped. */
@@ -1998,6 +2002,8 @@ export class Orchestrator {
       case 'read_context': {
         const topic = String(args.topic ?? '').trim();
         if (topic) {
+          if (/^user$/i.test(topic)) return userWordsTopic(run, typeof args.from === 'string' ? args.from : undefined);
+          if (/^previous$/i.test(topic)) return earlierPlanTopic(run);
           if (/^log$/i.test(topic)) return logPage(conversationLog(run, (aid) => this.events(run.id, aid)), Number(args.page) || 1);
           if (/^knowledge$/i.test(topic)) return run.knowledge ? `SHARED KNOWLEDGE (organized from ${run.knowledge.notes} notes; newer notes are in the shared context):\n${run.knowledge.doc}` : 'No organized knowledge yet: read the shared notes in the shared context, or read_context {topic: "facts"}.';
           const topics = buildTopics(run, (aid) => this.events(run.id, aid));
@@ -3110,8 +3116,19 @@ export class Orchestrator {
       const ciText = worker ? await this.ciDiagnosisFor(run) : '';
       // Same for a request to address a PR's review comments: the unresolved threads, read once, read only.
       const reviewText = worker ? await this.prReviewsFor(run) : '';
+      // Where the message this one continues had got to (continuation.ts): a bounded summary when it did not finish,
+      // only where to read it when it did; once per conversation, to the agents that plan and do the work.
+      const previousText = worker ? earlierPlanBlock(run) : '';
+      // The user's own words from the earlier messages of this conversation, verbatim (userWords.ts): every role, once per
+      // conversation, so an early constraint does not hang on a summary.
+      // A resumed conversation gets them again when it has not seen them all, or when it was compacted since (its CLI's
+      // own compaction, or Aivenue's, forgets what it held): the words never hang on a CLI's memory of them.
+      const earlier = plain ? undefined : earlierUserWordsBlock(run, this.userWordsBudget(run));
+      const earlierIds = earlier ? [...earlier.shown, ...earlier.omitted.map((w) => w.id)] : [];
+      const seenWords = resume ? (run.wordsSeen?.[resume] ?? []) : [];
+      const earlierWords = earlier?.text && (!resume || earlierIds.some((id) => !seenWords.includes(id))) ? earlier.text : '';
       // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + ciText + reviewText + P.doneEffectsBlock(run.sideEffects);
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + (earlierWords ? `\n\n${earlierWords}` : '') + previousText + ciText + reviewText + P.doneEffectsBlock(run.sideEffects);
       // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
       const turn = promptTurn(
         [
@@ -3173,6 +3190,9 @@ export class Orchestrator {
       keptAlive = !!res.keptAlive;
       if (res.sessionId) info.sessionId = res.sessionId;
       if (res.sessionId && !plain && !res.error) this.sharedSeen.set(`${run.id}|${res.sessionId}`, sharedAt);
+      // What this conversation now holds of the user's earlier words.
+      const wordsSid = res.sessionId ?? resume;
+      if (earlierWords && wordsSid && !res.error) (run.wordsSeen ??= {})[wordsSid] = earlierIds;
       await this.readAgentContext(info, spec, res.sessionId, run.config.cwd);
       const served = await this.d.servedBy?.(spec.accountOf ?? spec.id, this.requestedModel.get(info.id) ?? info.model, turnStart, now()).catch(() => undefined);
       if (served) info.servedBy = [...new Set([...(info.servedBy ?? []), ...served])];
@@ -3542,8 +3562,20 @@ export class Orchestrator {
   }
 
   /** Facts kept verbatim outside the shared memory (structured data): orientation for the compactor. */
+  /** How many characters of the user's earlier messages go into each prompt. */
+  private userWordsBudget(run: WorkflowRun): number {
+    return run.config.context?.userWordsChars ?? USER_WORDS_CHARS;
+  }
+
+  /**
+   * What every prompt carries word for word, for the compactor not to repeat: only what the prompts really contain —
+   * the whole goal, and those of the user's earlier messages that fit (the others are not claimed as kept).
+   */
   private keptVerbatim(run: WorkflowRun): string {
-    const parts = [`Goal: ${run.config.goal.slice(0, 2000)}`];
+    const earlier = earlierUserWordsBlock(run, this.userWordsBudget(run));
+    const parts = [`Goal (in every prompt, whole): ${run.config.goal}`];
+    if (earlier.shown.length) parts.push(`The user's earlier messages in every prompt, whole: ${earlier.shown.join(', ')}`);
+    if (earlier.omitted.length) parts.push(`NOT in the prompts (too long to fit): the user's earlier messages ${earlier.omitted.map((w) => w.id).join(', ')} — keep their constraints as entries`);
     if (run.plan) parts.push(`Plan: ${run.plan.summary}\n${run.plan.steps.map((s) => `${s.id}. ${s.title}`).join('\n')}`);
     for (const key of ['plan', 'implement'] as StageKey[]) {
       const last = [...run.stages[key].rounds].reverse().find((r) => r.review);
@@ -3650,22 +3682,25 @@ export class Orchestrator {
     return p;
   }
 
+  /**
+   * Shared memory as numbered entries (memoryEntries.ts): the compactor proposes operations on them from a batch of
+   * new notes and agent results; Aivenue checks and applies what holds. The batch is what came after the last one plus
+   * what it left pending; what this one does not process stays pending. Nothing changes — memory or progress — when
+   * the reply cannot be used. A valid result is kept even when longer than before: correctness is not judged by size.
+   */
   private async doCompactShared(run: WorkflowRun, reason: 'auto' | 'manual') {
     const upto = now();
-    const prev = run.memory?.upto ?? 0;
-    const notes = (run.notes ?? []).filter((n) => n.ts > prev && n.ts <= upto);
-    const agents = Object.values(run.agents).filter((a) => a.role !== 'test' && a.role !== 'compactor' && a.endedAt && a.endedAt > prev && a.endedAt <= upto);
-    const material = [
-      run.memory?.summary ? `PREVIOUS SHARED MEMORY:\n${run.memory.summary}` : '',
-      notes.length ? `SHARED NOTES:\n${notes.map((n) => `- [${run.agents[n.agentId] ? `${roleLabel(run.agents[n.agentId].role)} ${run.agents[n.agentId].provider}` : 'agent'}] ${n.text}`).join('\n')}` : '',
-      agents.length ? `AGENT RESULTS:\n${agents.map((a) => `- ${agentLabel(a)}: ${(agentResult(run, a) || a.finalText || '').trim().slice(0, 1500) || '—'}`).join('\n')}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-    if (!notes.length && !agents.length) {
+    const m = run.memory;
+    const prev = m?.upto ?? 0;
+    // The batch, with each item's evidence judged by where it really comes from (memoryBatch.ts).
+    const { batch, entries, legacy, fresh, lastEdit } = memoryBatch(run, (id) => this.events(run.id, id), upto);
+    if (!batch.some((b) => b.ref !== 'legacy')) {
       if (reason === 'manual') throw new Error(L('上次壓縮後還沒有新的內容可以壓縮', 'Nothing new to compact since the last compaction'));
       return;
     }
+    // Pending items alone do not start an automatic run (that would retry the same batch on every refresh).
+    if (reason === 'auto' && !fresh) return;
+    const material = batch.map((b) => `[${b.ref}] (${b.missing ? 'CANNOT BE READ: do not cite it' : b.strength === 'user' ? "the user's own words" : b.strength === 'strong' ? 'observed by Aivenue' : "an agent's account, not verified"}) ${b.text}`).join('\n');
     // A summary of very little is not shorter than the original.
     const size = estimateTokens(material);
     if (size < MIN_COMPACT_TOKENS) {
@@ -3681,35 +3716,54 @@ export class Orchestrator {
     this.log(run, L(`${reason === 'auto' ? '共用上下文快滿了，' : ''}正在由 ${label} 壓縮共用上下文…`, `${reason === 'auto' ? 'The shared context is nearly full; ' : ''}${label} is compacting it…`), 'info', true);
     this.touch(run);
     const kept = this.keptVerbatim(run);
-    const target = Math.max(300, Math.min(8000, Math.round(estimateTokens(material) * 0.25)));
-    const required = this.mustKeep(run, material);
-    const task = L('壓縮共用上下文', 'Compact the shared context');
-    let summary = await this.runCompactor(run, who, P.compactSharedPrompt(material, kept, target), task);
-    let missing = required.filter((r) => !summary.includes(r));
-    // One more try with the list of what it dropped; whatever is still missing is kept word for word.
-    if (missing.length) {
-      summary = await this.runCompactor(run, who, P.compactSharedPrompt(material, kept, target, missing), task);
-      missing = required.filter((r) => !summary.includes(r));
+    const budget = run.config.context?.memoryTokens ?? MEMORY_TOKENS;
+    const task = L('更新共用記憶', 'Update the shared memory');
+    const listing = entries
+      .filter((e) => e.status === 'active')
+      .map((e) => `- ${e.id} v${e.version} [${e.section}] ${e.text} (sources: ${e.sources.join(', ')})${e.conflicts?.length ? ` [${e.conflicts.length} conflict(s) recorded]` : ''}`)
+      .join('\n');
+    let reply = await this.runCompactor(run, who, P.compactEntriesPrompt(listing, material, kept, budget), task);
+    let ops = parseMemoryOps(reply);
+    if (!ops) {
+      reply = await this.runCompactor(run, who, P.compactEntriesPrompt(listing, material, kept, budget, 'it was not a JSON object with "ops"'), task);
+      ops = parseMemoryOps(reply);
     }
-    if (missing.length) summary += `\n\n## Kept verbatim\n${missing.map((m) => `- ${m}`).join('\n')}`;
-    const previous = run.memory;
-    run.memory = { summary, upto, updatedAt: now(), by: label, before, kept: missing.length ? missing : undefined };
-    this.refreshShared(run);
-    // Not smaller: keep what was there.
-    if ((run.sharedTokens ?? 0) >= before) {
-      run.memory = previous;
-      this.refreshShared(run);
+    // Unusable twice: nothing is applied, and the batch stays where it was for the next compaction.
+    if (!ops) {
+      // An automatic run waits until there is clearly more before trying again.
       this.noGainAt.set(run.id, before);
-      this.log(run, L(`壓縮後沒有變小（${label}），保留原本的共用上下文`, `The summary was not smaller (${label}); the shared context stays as it was`), 'info', true);
+      this.log(run, L(`${label} 的回覆無法解析成條目操作：共用記憶與處理進度維持原狀，這批內容留到下一次`, `${label}'s reply could not be read as entry operations: the shared memory and its progress stay as they were; this batch waits for the next compaction`), 'warn', true);
       return;
     }
+    const cycle = (m?.cycle ?? 0) + 1;
+    const nextId = m?.nextId ?? (legacy ? 1 : entries.length + 1);
+    const applied = applyMemoryOps(entries, ops, batch, { cycle, nextId });
+    // Explicit references in the new texts that the batch and the earlier entries do not hold.
+    const newTexts = applied.accepted.map((x) => applied.entries.find((e) => e.id === x.id)?.text ?? '').join('\n');
+    const notFound = notFoundInSource(newTexts, [material, kept, entries.map((e) => e.text).join('\n')]);
+    const known = new Set(Object.values(run.stages).flatMap((s) => s.rounds.flatMap((r) => r.review?.issues.map((i) => i.id) ?? [])));
+    const open = new Set((['plan', 'implement'] as const).flatMap((k) => [...(run.stages[k]?.rounds ?? [])].reverse().find((r) => r.review)?.review).filter((r) => r?.verdict === 'revise').flatMap((r) => r!.issues.map((i) => i.id)));
+    const shown = renderMemory(applied.entries, budget, { tokens: estimateTokens, lastEdit, knownIssueIds: known, openIssueIds: open });
+    const iso = (t: number) => `${new Date(t).toISOString().slice(0, 16)}Z`;
+    const summary = [shown.text, notFound.length ? notFoundBlock(notFound, `this batch (notes and agent results ${prev ? `after ${iso(prev)}` : 'from the start'} up to ${iso(upto)}, and pending ones), the earlier entries and what is kept verbatim`) : ''].filter(Boolean).join('\n\n');
+    run.memory = { summary, upto, updatedAt: now(), by: label, before, entries: applied.entries, cycle, nextId: applied.nextId, pending: applied.pending.filter((r) => r !== 'legacy').map((r) => batch.find((b) => b.ref === r)!).filter(Boolean), lastEdit };
+    this.refreshShared(run);
     run.memory.after = run.sharedTokens;
+    // Kept even when not smaller (a valid update may add); an automatic run then waits for clearly more.
+    if ((run.sharedTokens ?? 0) >= before) this.noGainAt.set(run.id, run.sharedTokens ?? before);
+    const count = (op: string) => applied.accepted.filter((x) => x.op.op === op).length;
     this.log(
       run,
-      L(`已壓縮共用上下文：約 ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}（${label}）${missing.length ? `，另外逐字保留 ${missing.length} 項摘要漏掉的內容` : ''}。原文仍可用 read_context 讀取。`, `Shared context compacted: about ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)} (${label})${missing.length ? `; ${missing.length} item(s) the summary dropped were kept word for word` : ''}. The originals stay readable with read_context.`),
+      L(
+        `已更新共用記憶（第 ${cycle} 次，${label}）：新增 ${count('add')}、更新 ${count('update')}、取代 ${count('supersede')}、撤銷 ${count('retract')}、合併 ${count('merge')}；衝突 ${applied.conflicted.length + count('conflict')}、拒絕 ${applied.rejected.length}；${applied.pending.length} 項留到下一次。約 ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}，原文仍可用 read_context 讀取。`,
+        `Shared memory updated (cycle ${cycle}, ${label}): ${count('add')} added, ${count('update')} updated, ${count('supersede')} replaced, ${count('retract')} retracted, ${count('merge')} merged; ${applied.conflicted.length + count('conflict')} conflict(s), ${applied.rejected.length} rejected; ${applied.pending.length} item(s) wait for the next one. About ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}; the originals stay readable with read_context.`,
+      ),
       'info',
       true,
     );
+    if (applied.rejected.length) this.log(run, L(`共用記憶拒絕的操作：${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''}（${x.why}）`).join('；')}`, `Shared memory operations rejected: ${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''} (${x.why})`).join('; ')}`), 'warn', true);
+    const stated = notFound.filter((x) => x.as === 'stated');
+    if (stated.length) this.log(run, L(`共用記憶的新內容提到來源中找不到的 ${stated.map((x) => x.ref).join(', ')}（已標示）`, `The shared memory's new entries name ${stated.map((x) => x.ref).join(', ')}, not found in their source (marked)`), 'warn', true);
   }
 
   /** An agent's conversation passed the ask threshold (80% by default, again at 90%): let the user decide. */
@@ -3818,6 +3872,7 @@ export class Orchestrator {
       const c = codexContext(spec, sid);
       after = c?.used || undefined;
       info.context = { ...info.context, window: c?.window ?? info.context?.window, used: after, compactedAt: now() };
+      delete run.wordsSeen?.[sid];
     } else if (native === 'slash') {
       // The CLI's own /compact, sent into its conversation.
       const helper = this.newAgent(run, { role: 'compactor', provider: info.provider, model: this.requestedModel.get(info.id) ?? info.model, depth: 0, task: L(`壓縮 ${this.label(info)} 的對話`, `Compact ${this.label(info)}'s conversation`) });
@@ -3830,12 +3885,32 @@ export class Orchestrator {
       if (res.error) throw new Error(res.error);
       info.context = { ...info.context, used: undefined, compactedAt: now() };
       this.recapDue.add(sid);
+      delete run.wordsSeen?.[sid];
     } else {
       // Not compactable from outside: a hand-off summary, and the next turn starts a fresh conversation from it.
       if (!who) throw new Error(L('沒有已登入的 CLI 可以整理交接摘要', 'No signed-in CLI can write the hand-off summary'));
       const turns = Object.values(run.agents).filter((a) => a.sessionId === sid).sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
       const transcript = turns.map((a) => formatTranscript(this.events(run.id, a.id), { budget: 120000 })).join('\n\n---\n\n');
-      const summary = await this.runCompactor(run, who, P.handoffSummaryPrompt(agentLabel(info), transcript, 3000), L(`整理 ${this.label(info)} 的交接摘要`, `Hand-off summary of ${this.label(info)}`));
+      // The model writes what only the conversation shows; Aivenue attaches its records and checks the references.
+      const task = L(`整理 ${this.label(info)} 的交接摘要`, `Hand-off summary of ${this.label(info)}`);
+      const iso = (t?: number) => (t ? `${new Date(t).toISOString().slice(0, 16)}Z` : '?');
+      const written = await writeHandoffSummary({
+        run,
+        info,
+        ids: new Set(turns.map((a) => a.id)),
+        eventsOf: (id) => this.events(run.id, id),
+        transcript,
+        label: agentLabel(info),
+        compact: (prompt) => this.runCompactor(run, who, prompt, task),
+        required: this.mustKeep(run, transcript),
+        range: `the transcript of ${turns.length} turn(s) of ${agentLabel(info)} (${iso(turns[0]?.startedAt)} to ${iso(turns.at(-1)?.endedAt ?? now())}), Aivenue's records attached above, the goal and the plan`,
+      });
+      // Not made within its ceiling: the conversation stays as it was (its session is kept), and the user is told.
+      if (!written.ok) throw new Error(L(`交接摘要放不下必要內容，對話維持原狀：${written.reason}`, `The hand-off could not hold what must be kept, so the conversation stays as it was: ${written.reason}`));
+      const summary = written.text;
+      const stated = written.notFound.filter((x) => x.as === 'stated');
+      if (stated.length)
+        this.log(run, L(`${this.label(info)} 的交接摘要提到來源中找不到的 ${stated.map((x) => x.ref).join(', ')}（已在摘要後標示）`, `${this.label(info)}'s hand-off summary names ${stated.map((x) => x.ref).join(', ')}, not found in its source (marked after the summary)`), 'warn', true);
       // The slot this conversation fills (its stage's author or reviewer) starts fresh next turn, from the summary.
       const stage = info.stage ? run.stages[info.stage] : undefined;
       const reviewer = info.role === 'plan_reviewer' || info.role === 'code_reviewer';
@@ -4013,6 +4088,8 @@ export class Orchestrator {
     const ids = info.sessionId ? this.conversationIds(run, info.sessionId) : new Set<string>();
     ids.add(info.id);
     if (info.sessionId) this.recapDue.add(info.sessionId);
+    // A compacted conversation may have lost the user's earlier words: they are given again next turn.
+    if (info.sessionId) delete run.wordsSeen?.[info.sessionId];
     const recap = ownWorkBlock(run, (id) => this.events(run.id, id), ids, this.findingsOf(run, ids), 40000);
     if (recap) this.notify(info.id, recap);
     this.notify(info.id, P.checkpointRequest());

@@ -365,14 +365,21 @@ export function verifiedChecks(act: ReturnType<typeof collectActivity>, limit = 
 }
 
 /** The latest run of each check (the same as verifiedChecks), as data: for the record of a submission and the UI. */
-export function checkRecords(act: ReturnType<typeof collectActivity>, limit = 10): ObservedCheck[] {
+export function checkRecords(act: ReturnType<typeof collectActivity>, limit = 10, o: { output?: boolean } = {}): (ObservedCheck & { output?: string })[] {
   return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
     .slice(-limit)
     .map((e) => {
       const compound = isCompound(e.what);
       const outcome: ObservedCheck['outcome'] = !e.ok ? 'failed' : FAILED.test(e.result) ? 'output_failure' : compound ? 'in_longer_command' : 'passed';
-      return { command: clip(e.what, 200), agentId: e.agent.id, by: who(e.agent), ts: e.ts, outcome, ...(e.outdated ? { outdated: true } : e.maybeOutdated ? { maybeOutdated: true } : {}) };
+      return { command: clip(e.what, 200), agentId: e.agent.id, by: who(e.agent), ts: e.ts, outcome, ...(e.outdated ? { outdated: true } : e.maybeOutdated ? { maybeOutdated: true } : {}), ...(o.output && e.result ? { output: e.result } : {}) };
     });
+}
+
+/** Every check Aivenue saw run (not only the latest per command), with when and by whom: observed, not reported. */
+export function observedChecks(act: ReturnType<typeof collectActivity>): { ts: number; agentId: string; line: string }[] {
+  return act.entries
+    .filter((e) => e.kind === 'command' && CHECK.test(e.what))
+    .map((e) => ({ ts: e.ts, agentId: e.agent.id, line: `${checkOutcome(e)}: \`${clip(e.what, 100)}\` (run by ${who(e.agent)})${e.outdated ? ' — files changed since' : ''}` }));
 }
 
 /**

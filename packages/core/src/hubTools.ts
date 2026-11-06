@@ -449,12 +449,13 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     inputSchema: {
       type: 'object',
       properties: {
-        topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index", or "log" for the full conversation log of every agent and the user (with page: 1 = the newest 100 entries, 2 the 100 before…).' },
+        topic: { type: 'string', description: 'A topic key or part of one: "file:src/model.py", "model.py", "command:pytest", "issue:R2", "facts", "decisions", "checkpoints", "knowledge", "index", "user" for every message of the user in this conversation (verbatim, oldest first), "previous" for where the message this one continues had got to (its plan, steps, last hand-off and the checks Aivenue saw run, with their output), or "log" for the full conversation log of every agent and the user (with page: 1 = the newest 100 entries, 2 the 100 before…).' },
         agent_id: { type: 'string', description: 'An agent id from the overview. Omit for the overview. "notes" lists every original shared note, also those condensed into the shared memory.' },
         include_prompts: { type: 'boolean', description: 'Also include the instructions Aivenue gave that agent (default false).' },
         part: { type: 'string', enum: ['all', 'messages', 'tools'], description: 'With agent_id: only its messages (what it said and concluded) or only its tool calls with their output. Default all.' },
         event: { type: 'number', description: 'With agent_id: the event number of one of its tool calls (as a shortened entry in the shared context gives it).' },
         page: { type: 'number', description: 'With agent_id or topic "log": 1 (default) is the newest part, 2 the part before it, and so on. With agent_id and event: 1 is the start of the output, 2 the next 8000 characters, and so on.' },
+        from: { type: 'string', description: 'With topic "user": start at this message id (e.g. "g:20261105185237-f057d8").' },
       },
     },
   },

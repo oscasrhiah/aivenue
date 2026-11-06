@@ -16,6 +16,7 @@ import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
+import { followUpGoal } from '../followUp';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
@@ -755,20 +756,20 @@ export function Chat({ id }: { id?: string }) {
     setError(undefined);
     let config: WorkflowConfig;
     if (run) {
-      const prev = Object.values(run.agents)
-        .filter((a) => (a.role === 'executor' || a.role === 'planner') && a.finalText)
-        .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]?.finalText;
       const base = runDraft ?? run.config;
       config = {
         ...base,
         // An isolated run worked in a temporary copy; follow-ups start from the user's project (unless a new folder was picked).
         cwd: runDraft && runDraft.cwd !== run.config.cwd ? runDraft.cwd : (run.worktree?.origCwd ?? run.config.cwd),
         title: goal.split('\n')[0].slice(0, 60),
-        goal: `${goal}\n\n(Context: this continues an earlier task in the same folder: "${run.config.goal.slice(0, 800)}". Its outcome: ${(prev ?? run.status).slice(0, 1500)})`,
+        goal: followUpGoal(goal, run),
+        // What the user wrote, kept apart from the context added above: Aivenue carries it verbatim to later messages.
+        userText: goal,
+        userTextNote: undefined,
         continueFrom: run.id,
       };
     } else {
-      config = { ...draft, title: goal.split('\n')[0].slice(0, 60), goal };
+      config = { ...draft, title: goal.split('\n')[0].slice(0, 60), goal, userText: goal, userTextNote: undefined };
     }
     // Follow-ups keep the earlier files available to agents (copied into the new run), marked so this message does not show them.
     config.attachments = [...(run?.config.attachments ?? []).map((a) => ({ ...a, earlier: true })), ...attachments.map((a) => ({ ...a, earlier: false }))];

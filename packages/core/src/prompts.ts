@@ -477,40 +477,54 @@ export function resumeAfterPause(): string {
 const COMPACT_SECTIONS = ['## Decisions', '## Known problems and open questions', '## Where things are (files, commands, settings)', '## Done so far', '## Still to do'].join('\n');
 
 /**
- * Condense the shared notes and agent results of a workflow. The facts kept verbatim elsewhere (goal, plan, open review
- * issues, user instructions) are given for orientation only, so the summary does not spend room on them.
+ * Update the shared memory's entries from a new batch of notes and agent results (memoryEntries.ts): operations, not a
+ * rewritten summary. Each operation names its sources from the batch; Aivenue checks them and applies what holds.
  */
-export function compactSharedPrompt(material: string, keptVerbatim: string, targetTokens: number, missing?: string[]): string {
+export function compactEntriesPrompt(entries: string, batch: string, keptVerbatim: string, budgetTokens: number, retry?: string): string {
   return [
-    'You condense the shared context of an Aivenue multi-agent workflow so later agents can keep working with a short version of it.',
-    'Do not use any tools, do not read files, do not run commands: work only from the text below, and reply with the summary only.',
-    '',
+    'You keep the shared memory of an Aivenue multi-agent workflow up to date. It is a list of numbered entries; you update it from a new batch of notes and agent results.',
+    'Do not use any tools, do not read files, do not run commands: work only from the text below. Reply with one JSON object and nothing else:',
+    '{"ops": [...], "covered": ["<every batch ref you went through, also those with nothing worth keeping>"]}',
+    'Operations (every one names its sources: refs from THIS BATCH, e.g. "n:1a2b3c4d", "a:<agent id>"):',
+    '- {"op":"add","section":"constraint|open|decision|todo|where|done","text":"…","sources":["…"]}',
+    '- {"op":"update","id":"M3","version":2,"text":"…","sources":["…"],"reason":"…"} — the entry changed (copy its current version)',
+    '- {"op":"supersede","id":"M3","version":2,"text":"the new entry","sources":["…"],"reason":"…"} — a decision changed, a problem was solved',
+    '- {"op":"retract","id":"M3","version":2,"sources":["…"],"reason":"…"} — it turned out wrong',
+    '- {"op":"conflict","id":"M3","sources":["…"],"reason":"…","text":"what the batch says instead"} — the batch contradicts it, but not clearly enough to replace it',
+    '- {"op":"merge","ids":["M5","M6"],"text":"…","sources":["…"]} — to keep the memory short',
     'RULES:',
-    '- Keep every decision and its reason, every unresolved problem or error (with its exact message), every file path, command, setting name and identifier that later work may need, and every instruction the user gave.',
-    '- Drop chatter, repetition, step-by-step narration and anything already settled that no later step depends on.',
-    '- Write facts, not a story. Be specific: names, paths and numbers exactly as written in the material.',
-    `- Aim for at most about ${targetTokens} tokens. Use these sections (leave one out if it has nothing):`,
-    COMPACT_SECTIONS,
+    "- Keep every decision with its reason, every open problem or error (exact message), paths, commands, settings and identifiers later work needs, and every instruction of the user's.",
+    "- What an agent wrote (any note, any result — whatever it called it) is not enough to update, replace or retract an entry: use conflict. Only the user's own words or what Aivenue observed are. The user's constraints change only on the user's own words.",
+    '- Leave out chatter and narration. Write facts, with names, paths and numbers exactly as in the batch.',
+    '- A batch item marked CANNOT BE READ has no content: never cite it as a source. Aivenue keeps it pending.',
+    `- The memory is shown within about ${budgetTokens} tokens, most important first; merge entries that say the same thing.`,
     LANG,
-    missing?.length ? `\nYOUR PREVIOUS SUMMARY LEFT THESE OUT. Include each of them this time:\n${missing.map((m) => `- ${m}`).join('\n')}` : '',
+    retry ? `\nYOUR PREVIOUS REPLY COULD NOT BE USED: ${retry}. Reply with the JSON object only.` : '',
     '',
-    'ALREADY KEPT VERBATIM (for orientation; do not repeat it):',
+    'ALREADY KEPT VERBATIM ELSEWHERE (for orientation; do not add it):',
     keptVerbatim || '(nothing)',
     '',
-    'MATERIAL TO CONDENSE:',
-    material,
+    'CURRENT ENTRIES (id, version, section, text, sources):',
+    entries || '(none yet)',
+    '',
+    'NEW BATCH (ref, where it comes from, text):',
+    batch,
   ].join('\n');
 }
 
 /** Hand-off summary of one agent's conversation, for a CLI whose conversation cannot be compacted from outside. */
-export function handoffSummaryPrompt(label: string, transcript: string, targetTokens: number): string {
+export function handoffSummaryPrompt(label: string, transcript: string, targetTokens: number, records?: string, missing?: string[]): string {
   return [
     `You condense the conversation of ${label} in an Aivenue multi-agent workflow. It will continue in a fresh conversation that starts from your summary instead of the full history.`,
     'Do not use any tools, do not read files, do not run commands: work only from the transcript below, and reply with the summary only.',
-    'Keep what the agent needs to carry on: its task, what it already did (files changed, commands run and their outcome), decisions and reasons, errors still open (exact messages), and what is left to do. Keep paths, names and numbers exactly.',
+    records
+      ? "Aivenue attaches its own records after your summary (below, for orientation): the task and the user's words, open issues and decisions, the checks and commands run and the files changed and read. Do not repeat them. Write what only the conversation shows: decisions and their reasons, what the agent found out, errors still open (exact messages), the state it left things in, and what is left to do. Keep paths, names and numbers exactly; say when something is a guess."
+      : 'Keep what the agent needs to carry on: its task, what it already did (files changed, commands run and their outcome), decisions and reasons, errors still open (exact messages), and what is left to do. Keep paths, names and numbers exactly.',
     `Aim for at most about ${targetTokens} tokens, in these sections:`,
     COMPACT_SECTIONS,
     LANG,
+    missing?.length ? `\nYOUR PREVIOUS SUMMARY LEFT THESE OUT. Include each of them this time:\n${missing.map((m) => `- ${m}`).join('\n')}` : '',
+    ...(records ? ['', 'ATTACHED BY AIVENUE AFTER YOUR SUMMARY (do not repeat):', records] : []),
     '',
     'TRANSCRIPT:',
     transcript,

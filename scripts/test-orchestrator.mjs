@@ -38,7 +38,9 @@ function setup(o = {}) {
   const ids = o.ids ?? ['fake', 'fake2'];
   // `caps`: usage caps per provider ({ fake: { '10080:': 80 } }); `windows`: its quota windows, read each time.
   const caps = o.caps ?? {};
-  const withQuota = (id) => (o.windows ? { ...spec(id), quota: { reader: 'test' } } : spec(id));
+  // `resumable`: the stand-in CLI can go on in a session (so turns resume it).
+  const base = (id) => (o.resumable ? { ...spec(id), run: { args: [], resume: [['--resume', '{sessionId}']] } } : spec(id));
+  const withQuota = (id) => (o.windows ? { ...base(id), quota: { reader: 'test' } } : base(id));
   const registry = {
     get: (id) => (ids.includes(id) ? withQuota(id) : undefined),
     quotaCaps: (id) => caps[id] ?? {},
@@ -1874,6 +1876,437 @@ test('需要重交的只有缺少必要內容或無法解析的提交：工具�
   assert.match(errors[0] ?? '', /Invalid plan: provide summary, markdown and steps/);
 });
 
+test('交接摘要（替身流程）：無法從外部壓縮的對話，交接由模型摘要＋Aivenue 紀錄＋來源中未找到組成，接手的回合從它開始', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'submit_work', { summary: 'added the route' });
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'done', sessionId: 'sess-h' };
+      },
+      // The compactor's prompt: its reply is the model's part of the summary.
+      async (o, secret, a) => {
+        prompts.push(a.prompt);
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: '## Decisions\n- The route stays under /files.\n## Done so far\n- Wrote src/phantom.js.\n## Still to do\n- Add test/route.test.js.' };
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { goal: 'Add a download route; keep the public API as it is.', verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const ex = Object.values(r.agents).find((a) => a.role === 'executor');
+  orch.compactAgentNow(r.id, ex.id);
+  for (let i = 0; i < 100 && !r.stages.implement.authorHandoff; i++) await new Promise((res) => setTimeout(res, 20));
+  const h = r.stages.implement.authorHandoff ?? '';
+  assert.match(prompts[0], /^You condense the conversation of /);
+  assert.match(prompts[0], /ATTACHED BY AIVENUE AFTER YOUR SUMMARY \(do not repeat\):\nFROM AIVENUE'S RECORDS/);
+  assert.match(h, /^## Decisions\n- The route stays under \/files\./);
+  assert.match(h, /\n\nFROM AIVENUE'S RECORDS \(attached by Aivenue, not written by the summarizer; source: the tool records of agent\(s\) /);
+  assert.match(h, /NOT FOUND IN THE SOURCE \(checked by Aivenue against the transcript of 1 turn\(s\) of [^\n]*\n- `src\/phantom\.js` — written as done or existing[^\n]*\n- `test\/route\.test\.js` — named as a next step/);
+  assert.ok(r.log.some((l) => /src\/phantom\.js/.test(l.text ?? '')), 'the stated one is warned in the run log');
+  assert.ok(r.notes.some((n) => n.kind === 'inference' && n.text.includes('FROM AIVENUE\'S RECORDS')));
+});
+
+test('共用記憶的條目更新（替身流程）：多次壓縮、矛盾更新、壓縮期間新增的紀錄、解析失敗後重試', async () => {
+  const { orch, cwd } = setup();
+  const pad = (s) => `${s} ${'(details) '.repeat(450)}`;
+  const replies = [];
+  // The compactor's prompt starts "You keep the shared memory": answer from the queue, finding refs by their marker words.
+  const refOf = (prompt, word) => new RegExp(`\\[(n:[0-9a-f]+)\\][^\\n]*${word}`).exec(prompt)?.[1];
+  let during;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        if (/^You keep the shared memory/.test(a.prompt)) {
+          const next = replies.shift();
+          if (during) during(), (during = undefined);
+          return { lastSeq: 1, exitCode: 0, resumed: false, finalText: typeof next === 'function' ? next(a.prompt) : next };
+        }
+        await o.callTool(secret, 'post_note', { text: pad('TTLFACT the cache TTL is 5 minutes'), kind: 'fact' });
+        await o.callTool(secret, 'post_note', { text: pad('GUESSNOTE maybe the cache is not needed at all'), kind: 'inference' });
+        await o.callTool(secret, 'post_note', { text: pad('USERRULE the user said keep the public API as it is'), kind: 'decision' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const idle = async () => {
+    await new Promise((res) => setTimeout(res, 10));
+    while (orch.compactingShared.has(r.id)) await new Promise((res) => setTimeout(res, 10));
+  };
+  const late = (marker) => r.notes.push({ id: Math.random().toString(16).slice(2, 10), agentId: Object.keys(r.agents)[0], text: pad(marker), kind: 'fact', ts: Date.now() });
+
+  // Cycle 1: two entries; the guess is not covered (pending); a note posted while the compactor works waits.
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'decision', text: 'Cache TTL is 5 minutes.', sources: [refOf(p, 'TTLFACT')] }, { op: 'add', section: 'constraint', text: 'Keep the public API as it is.', sources: [refOf(p, 'USERRULE')] }], covered: [refOf(p, 'TTLFACT'), refOf(p, 'USERRULE')] }));
+  during = () => late('LATENOTE the build uses Node 22');
+  orch.compactSharedNow(r.id);
+  await idle();
+  assert.equal(r.memory.cycle, 1);
+  assert.deepEqual(r.memory.entries.filter((e) => e.status === 'active').map((e) => [e.id, e.section]), [['M1', 'decision'], ['M2', 'constraint']]);
+  const guess = r.notes.find((n) => n.text.startsWith('GUESSNOTE'));
+  const lateNote = r.notes.find((n) => n.text.startsWith('LATENOTE'));
+  assert.ok(r.memory.pending.some((p) => p.ref === `n:${guess.id}` && p.text.includes("GUESSNOTE")), 'not covered: pending');
+  assert.ok(lateNote.ts > r.memory.upto, 'posted during the compaction: after this batch');
+  assert.match(r.memory.summary, /^## The user's constraints\n- M2 Keep the public API as it is\./);
+
+  // Cycle 2: the guess tries to replace the decision (a conflict, not a replacement); an out-of-batch source is rejected.
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'supersede', id: 'M1', version: 1, text: 'No cache.', sources: [refOf(p, 'GUESSNOTE')], reason: 'maybe not needed' }, { op: 'retract', id: 'M2', version: 1, sources: ['n:nothere'], reason: 'x' }, { op: 'add', section: 'where', text: 'Node 22 for the build.', sources: [refOf(p, 'LATENOTE')] }], covered: [refOf(p, 'GUESSNOTE'), refOf(p, 'LATENOTE')] }));
+  orch.compactSharedNow(r.id);
+  await idle();
+  const by = Object.fromEntries(r.memory.entries.map((e) => [e.id, e]));
+  assert.equal(r.memory.cycle, 2);
+  assert.equal(by.M1.status, 'active');
+  assert.equal(by.M1.conflicts.length, 1);
+  assert.equal(by.M2.status, 'active');
+  assert.equal(by.M3.text, 'Node 22 for the build.');
+  assert.ok(r.log.some((l) => /n:nothere/.test(l.text ?? '')), 'the rejected operation is said');
+  assert.match(r.memory.summary, /M1 Cache TTL is 5 minutes\. \[CONFLICT \(cycle 2/);
+
+  // Cycle 3 fails twice (no JSON): nothing changes, progress included; the new note waits.
+  late('RETRYNOTE the tests need TZ=UTC');
+  await new Promise((res) => setTimeout(res, 5));
+  const before = JSON.stringify(r.memory);
+  replies.push('## Decisions\n- free text', 'still not json');
+  orch.compactSharedNow(r.id);
+  await idle();
+  assert.equal(JSON.stringify(r.memory), before);
+  assert.ok(r.log.some((l) => /could not be read as entry operations|無法解析成條目操作/.test(l.text ?? '')), r.log.slice(-4).map((l) => l.text).join(' / '));
+
+  // The next try takes the waiting note.
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'where', text: 'Tests need TZ=UTC.', sources: [refOf(p, 'RETRYNOTE')] }], covered: [refOf(p, 'RETRYNOTE'), ...[...p.matchAll(/\[([ag]:[^\]]+)\]/g)].map((m) => m[1])] }));
+  orch.compactSharedNow(r.id);
+  await idle();
+  assert.equal(r.memory.cycle, 3);
+  assert.ok(r.memory.entries.some((e) => e.text === 'Tests need TZ=UTC.' && e.cycle === 3));
+  assert.deepEqual(r.memory.pending, []);
+});
+
+test('使用者原文跨對話（替身流程）：三段續接、兩次壓縮；早期限制、長訊息尾端的限制、新增要求與後來的撤銷都以原文與時間順序送達', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  const compactorPrompts = [];
+  const replies = [];
+  const filler = (n) => ' (background detail)'.repeat(n);
+  const first = `EARLYRULE never edit db/schema.sql.${filler(240)} TAILRULE keep the CLI flag --legacy working.`;
+  const second = `ADDREQ also support --json output.${filler(240)} ADDTAIL print errors to stderr.`;
+  const third = 'REVOKE you may now edit db/schema.sql.';
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        if (/^You keep the shared memory/.test(a.prompt)) {
+          compactorPrompts.push(a.prompt);
+          return { lastSeq: 1, exitCode: 0, resumed: false, finalText: replies.shift()(a.prompt) };
+        }
+        prompts.push(a.prompt);
+        if (prompts.length === 3) replies.push(await o.callTool(secret, 'read_context', { topic: 'user' }));
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const cfg = (goal, userText, extra = {}) => config(cwd, { goal, userText, verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } }, ...extra });
+  const idle = async (id) => {
+    await new Promise((res) => setTimeout(res, 10));
+    while (orch.compactingShared.has(id)) await new Promise((res) => setTimeout(res, 10));
+  };
+  const refs = (p) => [...p.matchAll(/\[([gaunk]:[^\]]+)\]/g)].map((m) => m[1]);
+  // Like the app: a follow-up's goal adds the earlier task (cut) and its outcome; userText is what the user wrote.
+  const followUp = (text, prev) => `${text}\n\n(Context: this continues an earlier task in the same folder: "${prev.config.goal.slice(0, 800)}". Its outcome: done)`;
+
+  const r1 = await settle(orch, orch.start(cfg(first, first)).id);
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'constraint', text: 'Do not edit db/schema.sql; keep --legacy.', sources: [`g:${r1.id}`] }], covered: refs(p) }));
+  orch.compactSharedNow(r1.id);
+  await idle(r1.id);
+  assert.equal(r1.memory.cycle, 1);
+  // The compactor got the user's whole request as a source, tail included, and was told it is kept in every prompt.
+  assert.match(compactorPrompts[0], new RegExp(`\\[g:${r1.id}\\] \\(the user's own words\\) the user's request for this run: "EARLYRULE[^"]*TAILRULE keep the CLI flag --legacy working\\."`));
+  assert.match(compactorPrompts[0], /Goal \(in every prompt, whole\): EARLYRULE[\s\S]*TAILRULE/);
+
+  const r2 = await settle(orch, orch.start(cfg(followUp(second, r1), second, { continueFrom: r1.id })).id);
+  // The second message's agent gets the first message whole (its tail too), from Aivenue's record, not the cut goal.
+  assert.match(prompts[1], new RegExp(`THE USER'S EARLIER MESSAGES IN THIS CONVERSATION[^\\n]*\\n- \\[g:${r1.id}\\] [^\\n]* request: "EARLYRULE[^"]*TAILRULE keep the CLI flag --legacy working\\."`));
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'todo', text: 'Support --json; errors to stderr.', sources: [`g:${r2.id}`] }], covered: refs(p) }));
+  orch.compactSharedNow(r2.id);
+  await idle(r2.id);
+  assert.equal(r2.memory.cycle, 2);
+  // Its source is the user's words alone, not the context Aivenue added to the goal.
+  assert.match(compactorPrompts[1], new RegExp(`\\[g:${r2.id}\\] \\(the user's own words\\) the user's request for this run: "ADDREQ[^"]*ADDTAIL print errors to stderr\\."`));
+  assert.doesNotMatch(compactorPrompts[1].split('NEW BATCH')[1], /\(Context: this continues/);
+
+  const r3 = await settle(orch, orch.start(cfg(followUp(third, r2), third, { continueFrom: r2.id })).id);
+  const p3 = prompts[2];
+  const block = p3.slice(p3.indexOf("THE USER'S EARLIER MESSAGES"));
+  // Both earlier messages, whole, oldest first; the revocation is the current request (GOAL), and the later one holds.
+  assert.ok(block.indexOf(`[g:${r1.id}]`) < block.indexOf(`[g:${r2.id}]`), 'oldest first');
+  assert.match(block, /TAILRULE keep the CLI flag --legacy working\./);
+  assert.match(block, /ADDTAIL print errors to stderr\./);
+  assert.match(block, /when they disagree, the later one holds/);
+  assert.match(p3, /GOAL:\nREVOKE you may now edit db\/schema\.sql\./);
+  // The shorter entries the compactor wrote are there too, for reading — next to, not instead of, the originals.
+  assert.match(p3, /M1 Do not edit db\/schema\.sql; keep --legacy\./);
+  // read_context {topic: "user"}: every message of the user in this conversation, whole.
+  const all = String(replies.shift());
+  assert.ok(all.indexOf('EARLYRULE') < all.indexOf('ADDREQ') && all.indexOf('ADDREQ') < all.indexOf('REVOKE'));
+  assert.match(all, /TAILRULE keep the CLI flag --legacy working\./);
+});
+
+test('使用者原文超出預算：明確標示續接資訊不完整、列出省略的訊息與讀取方式；壓縮者不會被告知未放入的內容已逐字保留', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  const compactorPrompts = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        if (/^You keep the shared memory/.test(a.prompt)) {
+          compactorPrompts.push(a.prompt);
+          return { lastSeq: 1, exitCode: 0, resumed: false, finalText: JSON.stringify({ ops: [], covered: [] }) };
+        }
+        prompts.push(a.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const big = `LONGRULE keep the old endpoint alive.${' (more)'.repeat(800)} LONGTAIL and never log tokens.`;
+  const cfg = (goal, extra = {}) => config(cwd, { goal, userText: goal, verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' }, userWordsChars: 2000 }, ...extra });
+  const r1 = await settle(orch, orch.start(cfg(big)).id);
+  const r2 = await settle(orch, orch.start(cfg(`SECOND short follow-up.${' (pad)'.repeat(900)}`, { continueFrom: r1.id })).id);
+  assert.match(prompts[1], new RegExp(`INCOMPLETE: 1 earlier message\\(s\\) of the user are not shown here for space: \\[g:${r1.id}\\] [^ ]+ \\(${big.length} characters\\)\\. Their constraints may still hold: read them with read_context \\{topic: "user"\\}`));
+  assert.doesNotMatch(prompts[1], /LONGTAIL/);
+  orch.compactSharedNow(r2.id);
+  await new Promise((res) => setTimeout(res, 10));
+  while (orch.compactingShared.has(r2.id)) await new Promise((res) => setTimeout(res, 10));
+  // Kept verbatim is claimed only for what the prompts hold; the left-out message is named as not in them.
+  assert.match(compactorPrompts[0], new RegExp(`NOT in the prompts \\(too long to fit\\): the user's earlier messages g:${r1.id}`));
+  assert.doesNotMatch(compactorPrompts[0], new RegExp(`earlier messages in every prompt, whole: [^\\n]*g:${r1.id}`));
+});
+
+test('使用者原文送到 CLI 的最終 prompt：新 session、跨工作流續接的 session 都收到；同一 session 已收過就不重複；CLI 壓縮後再給一次', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const turns = [];
+  let r2;
+  const exec = (summary) => async (o, secret, opts) => {
+    turns.push({ prompt: opts.prompt, resume: opts.resumeSessionId });
+    await o.callTool(secret, 'submit_work', { summary });
+    return { lastSeq: 1, exitCode: 0, resumed: !!opts.resumeSessionId, finalText: 'done', sessionId: 'sess-w' };
+  };
+  const revise = (id) => ({ verdict: 'revise', summary: 'again', issues: [{ id, severity: 'minor', title: `fix ${id}` }] });
+  const execs = [exec('run 1'), exec('run 2, round 1'), exec('run 2, round 2'), exec('run 2, round 3')];
+  const reviews = [
+    async (o, secret) => o.callTool(secret, 'submit_review', defaults.code_reviewer.args),
+    async (o, secret) => o.callTool(secret, 'submit_review', revise('R1')),
+    // The executor's CLI compacted its conversation by itself before its next turn.
+    async (o, secret) => {
+      const info = Object.values(r2.agents).find((a) => a.role === 'executor' && a.sessionId === 'sess-w');
+      orch.onSelfCompaction(r2, info, 50000);
+      await o.callTool(secret, 'submit_review', revise('R2'));
+    },
+    async (o, secret) => o.callTool(secret, 'submit_review', defaults.code_reviewer.args),
+  ];
+  // A resumed prompt has no role heading to tell roles by: ask the orchestrator which agent is working.
+  globalThis.__fakeAgent = async (opts) => {
+    const secret = opts.bridge?.env?.AIVENUE_SESSION;
+    const working = [...orch.runs.values()].flatMap((r) => Object.values(r.agents)).filter((a) => a.status === 'running').pop();
+    const done = { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'done' };
+    if (working?.role === 'code_reviewer') return (await reviews.shift()(orch, secret), done);
+    return execs.shift()(orch, secret, opts);
+  };
+  const cfg = (goal, extra = {}) => config(cwd, { goal, userText: goal, verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, implement: { enabled: true, author: { provider: 'fake' }, reviewer: { provider: 'fake' }, maxRounds: 3, humanGate: false }, context: { organizeEvery: 0, keepSessions: true }, ...extra });
+  const r1 = await settle(orch, orch.start(cfg('FIRSTRULE keep the --legacy flag.')).id);
+  r2 = orch.start(cfg('Then add --json.', { continueFrom: r1.id }));
+  await settle(orch, r2.id);
+  assert.equal(r2.status, 'completed', r2.error);
+  const block = /THE USER'S EARLIER MESSAGES IN THIS CONVERSATION[^\n]*\n- \[g:[^\]]+\][^\n]*"FIRSTRULE keep the --legacy flag\."/;
+  // Run 1: a new session, no earlier messages yet.
+  assert.equal(turns[0].resume, undefined);
+  assert.doesNotMatch(turns[0].prompt, /THE USER'S EARLIER MESSAGES/);
+  // Run 2, round 1: the session carried over from run 1 is resumed — it never got the block: given.
+  assert.equal(turns[1].resume, 'sess-w');
+  assert.match(turns[1].prompt, block);
+  // Round 2: same session, already holds it: not repeated.
+  assert.equal(turns[2].resume, 'sess-w');
+  assert.doesNotMatch(turns[2].prompt, /THE USER'S EARLIER MESSAGES/);
+  // Round 3: its CLI compacted the conversation in between: given again.
+  assert.equal(turns[3].resume, 'sess-w');
+  assert.match(turns[3].prompt, block);
+});
+
+test('待處理項目的生命週期（替身流程）：第二段被拒 → 重啟 → 第三段續接仍失敗（解析失敗、再被拒）→ 第四段成功處理；來源、內容、強度一路相同', async () => {
+  const first = setup();
+  const pad = (s) => `${s} ${'(detail) '.repeat(160)}`;
+  const replies = [];
+  const compactorPrompts = [];
+  const script = (orch) => {
+    fakeAgents(orch, {
+      executor: [
+        async (o, secret, a) => {
+          if (/^You keep the shared memory/.test(a.prompt)) {
+            compactorPrompts.push(a.prompt);
+            return { lastSeq: 1, exitCode: 0, resumed: false, finalText: replies.shift()(a.prompt) };
+          }
+          const run = [...orch.runs.values()].find((r) => Object.values(r.agents).some((x) => x.status === 'running' && x.role === 'executor'));
+          if (run && !run.config.continueFrom) {
+            // The second message: the user sends a message while it works, and the executor leaves a note.
+            (run.userMessages ??= []).push({ ts: Date.now(), text: pad('USERMSG keep logs in UTC') });
+            await o.callTool(secret, 'post_note', { text: pad('NOTEFACT the cache lives in .cache/'), kind: 'fact' });
+          }
+          await o.callTool(secret, 'submit_work', { summary: 'done' });
+        },
+      ],
+    });
+  };
+  const refs = (p) => [...p.matchAll(/^\[([gaunk]:[^\]]+)\] \(([^)]*)\) (.*)$/gm)].map((m) => ({ ref: m[1], label: m[2], text: m[3] }));
+  const reject = (p) => JSON.stringify({ ops: [{ op: 'update', id: 'M9', version: 1, text: 'x', sources: refs(p).map((x) => x.ref) }], covered: refs(p).map((x) => x.ref) });
+  const idle = async (orch, id) => {
+    await new Promise((res) => setTimeout(res, 10));
+    while (orch.compactingShared.has(id)) await new Promise((res) => setTimeout(res, 10));
+  };
+  const cfg = (cwd, goal, extra = {}) => config(cwd, { goal: pad(goal), userText: pad(goal), verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } }, ...extra });
+
+  // Second message: its compaction's only operation is rejected — everything it cited stays pending, saved whole.
+  script(first.orch);
+  const r2 = await settle(first.orch, first.orch.start(cfg(first.cwd, 'REQ2 add --json')).id);
+  replies.push(reject);
+  first.orch.compactSharedNow(r2.id);
+  await idle(first.orch, r2.id);
+  assert.ok(r2.memory, r2.log.slice(-3).map((l) => l.text).join(' / '));
+  const saved = r2.memory.pending;
+  const kinds = saved.map((p) => p.ref[0]).sort().join('');
+  assert.match(kinds, /a.*g.*n.*u/, `request, user message, note and agent result pending: ${kinds}`);
+  assert.ok(saved.every((p) => p.runId === r2.id && p.text && p.strength));
+  const before = Object.fromEntries(refs(compactorPrompts[0]).map((x) => [x.ref, x]));
+
+  // Aivenue restarts: the pending items come back from disk (the run file is written shortly after a change).
+  await new Promise((res) => setTimeout(res, 600));
+  const second = setup({ dir: first.dir });
+  assert.deepEqual(second.orch.runs.get(r2.id).memory.pending, saved);
+  script(second.orch);
+
+  // Third message: two unusable replies (nothing changes), then a rejection — still pending, carried to the fourth.
+  const r3 = await settle(second.orch, second.orch.start(cfg(first.cwd, 'REQ3 add --yaml', { continueFrom: r2.id })).id);
+  replies.push(() => 'not json', () => 'still not json');
+  second.orch.compactSharedNow(r3.id);
+  await idle(second.orch, r3.id);
+  assert.equal(r3.memory.cycle, 1);
+  replies.push(reject);
+  second.orch.compactSharedNow(r3.id);
+  await idle(second.orch, r3.id);
+  for (const p of saved) assert.ok(r3.memory.pending.some((q) => q.ref === p.ref), `${p.ref} still pending`);
+
+  // Fourth message: processed at last — the same sources with the same text and strength as when first seen.
+  const r4 = await settle(second.orch, second.orch.start(cfg(first.cwd, 'REQ4 add docs', { continueFrom: r3.id })).id);
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'constraint', text: 'Keep logs in UTC.', sources: [saved.find((x) => x.ref.startsWith('u:')).ref] }], covered: refs(p).map((x) => x.ref) }));
+  second.orch.compactSharedNow(r4.id);
+  await idle(second.orch, r4.id);
+  const last = Object.fromEntries(refs(compactorPrompts.at(-1)).map((x) => [x.ref, x]));
+  for (const p of saved) assert.deepEqual(last[p.ref], before[p.ref], p.ref);
+  assert.equal(r4.memory.entries.find((e) => e.text === 'Keep logs in UTC.').section, 'constraint');
+  assert.deepEqual(r4.memory.pending, []);
+});
+
+test('待處理的檢查（替身流程）：A 段留下檢查 → B 段改檔但沒壓縮 → 重啟 → C 段壓縮時仍標成需重驗', async () => {
+  const first = setup();
+  const pad = (s) => `${s} ${'(detail) '.repeat(600)}`;
+  const prompts = [];
+  const replies = [];
+  let n = 0;
+  const ev = (o, tool, files) => o.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { status: 'ok', output: '', ...tool, id: `t${n}` }, ...(files ? { files } : {}) }, false);
+  const script = (orch, work) =>
+    fakeAgents(orch, {
+      executor: [
+        async (o, secret, a) => {
+          if (/^You keep the shared memory/.test(a.prompt)) {
+            prompts.push(a.prompt);
+            return { lastSeq: 1, exitCode: 0, resumed: false, finalText: replies.shift()(a.prompt) };
+          }
+          await work(a);
+          await o.callTool(secret, 'submit_work', { summary: 'done' });
+        },
+      ],
+    });
+  const refs = (p) => [...p.matchAll(/^\[([gaunk]:[^\]]+)\] \(([^)]*)\) (.*)$/gm)].map((m) => ({ ref: m[1], text: m[3] }));
+  const idle = async (orch, id) => {
+    await new Promise((res) => setTimeout(res, 10));
+    while (orch.compactingShared.has(id)) await new Promise((res) => setTimeout(res, 10));
+  };
+  const cfg = (goal, extra = {}) => config(first.cwd, { goal: pad(goal), userText: pad(goal), verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } }, ...extra });
+
+  // A: runs the tests; its compaction goes through everything but the check, which stays pending. Nothing edited yet.
+  script(first.orch, async (a) => ev(a, { name: 'bash', category: 'command', title: 'npm test', output: '3 passing' }));
+  const rA = await settle(first.orch, first.orch.start(cfg('REQA add --json')).id);
+  replies.push((p) => JSON.stringify({ ops: [], covered: refs(p).map((x) => x.ref).filter((r) => !r.startsWith('k:')) }));
+  first.orch.compactSharedNow(rA.id);
+  await idle(first.orch, rA.id);
+  const check = rA.memory.pending.find((p) => p.ref.startsWith('k:'));
+  assert.ok(check, 'the check is pending');
+  assert.doesNotMatch(check.text, /re-verify/);
+  assert.ok(!rA.memory.lastEdit);
+
+  // B: edits a file and is never compacted.
+  script(first.orch, async (a) => ev(a, { name: 'apply_patch', category: 'edit', title: 'src/cli.js' }, ['src/cli.js']));
+  const rB = await settle(first.orch, first.orch.start(cfg('REQB add --yaml', { continueFrom: rA.id })).id);
+  assert.equal(rB.memory.cycle, rA.memory.cycle, 'B did not compact');
+  assert.ok(!rB.memory.lastEdit, "B's memory (copied from A) knows nothing of B's edit");
+
+  // Aivenue restarts; C continues B and compacts.
+  await new Promise((res) => setTimeout(res, 600));
+  const second = setup({ dir: first.dir });
+  script(second.orch, async () => {});
+  const rC = await settle(second.orch, second.orch.start(cfg('REQC add docs', { continueFrom: rB.id })).id);
+  assert.ok(rC.earlierEdit > check.ts, "B's edit carried");
+  replies.push((p) => JSON.stringify({ ops: [], covered: refs(p).map((x) => x.ref).filter((r) => !r.startsWith('k:')) }));
+  second.orch.compactSharedNow(rC.id);
+  await idle(second.orch, rC.id);
+  const shown = refs(prompts.at(-1)).find((x) => x.ref === check.ref);
+  assert.ok(shown, 'the check is in the batch');
+  assert.match(shown.text, / — files changed since \(re-verify before relying on it\)$/);
+  assert.equal(rC.memory.lastEdit, rC.earlierEdit, 'and the memory keeps the edit time from now on');
+});
+
+test('來源不可取得的待處理項目（替身流程）：模型拿它當「Tests passed」的證據被拒，回報 covered 也留在 pending，下一段仍標示', async () => {
+  const { orch, cwd } = setup();
+  const pad = (s) => `${s} ${'(detail) '.repeat(600)}`;
+  const prompts = [];
+  const replies = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        if (/^You keep the shared memory/.test(a.prompt)) {
+          prompts.push(a.prompt);
+          return { lastSeq: 1, exitCode: 0, resumed: false, finalText: replies.shift()(a.prompt) };
+        }
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const refs = (p) => [...p.matchAll(/^\[([gaunk]:[^\]]+)\] \(([^)]*)\) (.*)$/gm)].map((m) => ({ ref: m[1], label: m[2], text: m[3] }));
+  const idle = async (id) => {
+    await new Promise((res) => setTimeout(res, 10));
+    while (orch.compactingShared.has(id)) await new Promise((res) => setTimeout(res, 10));
+  };
+  const cfg = (goal, extra = {}) => config(cwd, { goal: pad(goal), userText: pad(goal), verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, context: { organizeEvery: 0, compactor: { provider: 'fake' } }, ...extra });
+  const r1 = await settle(orch, orch.start(cfg('REQ1 add --json')).id);
+  // Left pending by an older version as a bare ref, and not in these records.
+  r1.memory = { summary: '', upto: 0, updatedAt: 0, entries: [], cycle: 1, nextId: 1, pending: ['k:gone0000@5'] };
+  replies.push((p) => JSON.stringify({ ops: [{ op: 'add', section: 'done', text: 'Tests passed', sources: ['k:gone0000@5'] }], covered: refs(p).map((x) => x.ref) }));
+  orch.compactSharedNow(r1.id);
+  await idle(r1.id);
+  const shown = refs(prompts.at(-1)).find((x) => x.ref === 'k:gone0000@5');
+  assert.match(shown.label, /CANNOT BE READ/);
+  assert.ok(!r1.memory.entries.some((e) => /Tests passed/.test(e.text)), 'not taken as evidence');
+  assert.equal(r1.memory.cycle, 2, 'the rest was processed');
+  const kept = r1.memory.pending.find((p) => p.ref === 'k:gone0000@5');
+  assert.equal(kept.missing, true);
+  assert.equal(r1.memory.pending.length, 1, 'only it stays');
+
+  // The next message: still pending, still marked, however often the model says it covered it.
+  const r2 = await settle(orch, orch.start(cfg('REQ2 add --yaml', { continueFrom: r1.id })).id);
+  replies.push((p) => JSON.stringify({ ops: [], covered: refs(p).map((x) => x.ref) }));
+  orch.compactSharedNow(r2.id);
+  await idle(r2.id);
+  assert.match(refs(prompts.at(-1)).find((x) => x.ref === 'k:gone0000@5').label, /CANNOT BE READ/);
+  assert.deepEqual(r2.memory.pending, [kept]);
+});
+
 test('審查者看到過期的成功輸出被換成參照，用 read_context {agent_id, event, page} 讀回同一次執行的完整輸出', async () => {
   const { orch, cwd } = setup();
   const long = Array.from({ length: 1200 }, (_, i) => `ok ${i} - case ${'y'.repeat(12)}`).join('\n');
@@ -2020,3 +2453,123 @@ test('子 agent 長結果：不帶頁碼的呼叫照舊回第一頁並標出截�
   assert.equal(pages.join(''), text);
 });
 
+// ---------- where the previous message had got to (planning-with-files) ----------
+
+const planOf = (v, steps) => ({ summary: `plan ${v}`, markdown: `## Plan ${v}\nPLANMARK-${v}`, steps: steps.map((t, i) => ({ id: String(i + 1), title: t })), goal });
+const followCfg = (cwd, extra = {}) => config(cwd, { verify: undefined, plan: { enabled: true, author: { provider: 'fake' }, reviewer: { provider: 'fake2' }, maxRounds: 3, humanGate: false }, ...extra });
+
+test('停止後送出「繼續」：接手的規劃者與實作者看得到上一段的 v2、各步驟狀態與失敗的 npm test；read_context previous 查回全文；新工作流有自己的計畫', async () => {
+  const { orch, cwd } = setup();
+  let n = 700;
+  let halt;
+  const halted = new Promise((r) => (halt = r));
+  const seen = {};
+  let previous;
+  fakeAgents(orch, {
+    planner: [
+      { tool: 'submit_plan', args: planOf('v1', ['OLD-v1 step']) },
+      { tool: 'submit_plan', args: planOf('v2', ['parse dates', 'fix the failing date test', 'update the docs']) },
+      async (o, secret, a) => {
+        seen.planner = a.prompt;
+        previous = await o.callTool(secret, 'read_context', { topic: 'previous' });
+        await o.callTool(secret, 'submit_plan', planOf('v3', ['finish the date test', 'update the docs']));
+      },
+    ],
+    plan_reviewer: [{ tool: 'submit_review', args: { verdict: 'revise', summary: 'split it', issues: [{ id: 'R1', severity: 'major', title: 'too coarse' }] } }, defaults.plan_reviewer],
+    executor: [
+      async (o, secret, a) => {
+        await o.callTool(secret, 'report_progress', { step_id: '1', status: 'done', note: 'parser handles 2d' });
+        await o.callTool(secret, 'report_progress', { step_id: '2', status: 'in_progress', note: 'test still red: expected 172800 got 0' });
+        a.onEvent({ seq: ++n, ts: Date.now(), kind: 'tool', tool: { id: `t${n}`, name: 'bash', category: 'command', title: 'npm test', output: '✖ parses 2d\n  expected 172800, got 0\n1 failing', status: 'error' } }, false);
+        halt();
+        await new Promise((r) => setTimeout(r, 3000));
+      },
+      async (o, secret, a) => {
+        seen.executor = a.prompt;
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const a = orch.start(followCfg(cwd)).id;
+  await halted;
+  orch.cancel(a);
+  await settle(orch, a);
+  const b = orch.start(followCfg(cwd, { goal: 'Continue where it stopped.', userText: 'Continue where it stopped.', continueFrom: a })).id;
+  const rb = await settle(orch, b);
+  assert.equal(rb.status, 'completed', rb.error);
+  for (const role of ['planner', 'executor']) {
+    const p = seen[role];
+    assert.match(p, new RegExp(`THE PREVIOUS MESSAGE \\(${a}\\) STOPPED BEFORE IT FINISHED \\(status: cancelled\\)`), role);
+    assert.match(p, /Its plan \(approved, plan round 2\): plan v2/, role);
+    assert.match(p, /Steps not finished:\n- 2\. fix the failing date test \[in_progress\] — test still red: expected 172800 got 0\n- 3\. update the docs \[pending\]/, role);
+    assert.match(p, /Checks that did not pass:\n- ✗ failed: `npm test`/, role);
+    assert.match(p, /Steps finished:\n- 1\. parse dates \[done\] — parser handles 2d/, role);
+    assert.doesNotMatch(p, /OLD-v1/, role);
+  }
+  // The whole of it on request: the approved plan text and the failing check's output.
+  assert.match(previous, /PLAN \(approved, plan round 2\):\n## Plan v2\nPLANMARK-v2/);
+  assert.match(previous, /✗ failed: `npm test`[^\n]*\n {4}✖ parses 2d\n {4} {2}expected 172800, got 0/);
+  // The follow-up keeps its own plan and progress; the earlier state is labelled with where it came from.
+  assert.equal(rb.plan.summary, 'plan v3');
+  assert.deepEqual(rb.steps.map((s) => s.title), ['finish the date test', 'update the docs']);
+  assert.equal(rb.earlierPlan.runId, a);
+});
+
+test('上一段已完成：接手者只拿到查詢入口，不放步驟摘要', async () => {
+  const { orch, cwd } = setup();
+  const seen = [];
+  fakeAgents(orch, {
+    planner: [{ tool: 'submit_plan', args: planOf('v1', ['do it']) }, async (o, secret, a) => {
+        seen.push(a.prompt);
+        await o.callTool(secret, 'submit_plan', planOf('v2', ['more']));
+      }],
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'report_progress', { step_id: '1', status: 'done' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const a = orch.start(followCfg(cwd)).id;
+  assert.equal((await settle(orch, a)).status, 'completed');
+  const b = orch.start(followCfg(cwd, { goal: 'Also add docs.', userText: 'Also add docs.', continueFrom: a })).id;
+  assert.equal((await settle(orch, b)).status, 'completed');
+  assert.match(seen[0], new RegExp(`THE PREVIOUS MESSAGE \\(${a}\\) FINISHED: read_context \\{topic: "previous"\\}`));
+  assert.doesNotMatch(seen[0], /STOPPED BEFORE IT FINISHED|Steps not finished|Steps finished/);
+});
+
+test('同一工作流重啟後接手：照舊看到核准的計畫與步驟進度，不出現「上一段」區塊', async () => {
+  const first = setup();
+  let cutOff;
+  const hung = new Promise((r) => (cutOff = r));
+  fakeAgents(first.orch, {
+    planner: [{ tool: 'submit_plan', args: planOf('v2', ['parse dates', 'fix the failing date test']) }],
+    plan_reviewer: [defaults.plan_reviewer],
+    executor: [
+      async (o, secret) => {
+        await o.callTool(secret, 'report_progress', { step_id: '1', status: 'done', note: 'parser handles 2d' });
+        cutOff();
+        await new Promise(() => {});
+      },
+    ],
+  });
+  const id = first.orch.start(followCfg(first.cwd)).id;
+  await hung;
+  first.orch.d.store.saveNow(first.orch.runs.get(id));
+  const second = setup({ dir: first.dir });
+  let prompt;
+  fakeAgents(second.orch, {
+    executor: [
+      async (o, secret, a) => {
+        prompt = a.prompt;
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  second.orch.autoResume();
+  assert.equal((await settle(second.orch, id)).status, 'completed');
+  assert.match(prompt, /AIVENUE WAS RESTARTED/);
+  assert.match(prompt, /APPROVED PLAN:\n## Plan v2/);
+  assert.match(prompt, /- 1\. parse dates \[done\] — parser handles 2d\n- 2\. fix the failing date test \[pending\]/);
+  assert.doesNotMatch(prompt, /THE PREVIOUS MESSAGE/);
+});

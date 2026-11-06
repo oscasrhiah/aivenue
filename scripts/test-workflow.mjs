@@ -29,10 +29,20 @@ const bundled = await build({
       export { runAgent } from './packages/core/src/agentRunner';
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
+      export { followUpGoal } from './packages/ui/src/followUp';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './packages/core/src/prReviews';
       export { replayGh } from './packages/core/src/ghReplay';
       export { noteReplay, replayLines } from './packages/core/src/ghReplayInfo';
+      export { handoffRecords } from './packages/core/src/context';
+      export { writeHandoffSummary } from './packages/core/src/handoffSummary';
+      export { notFoundInSource, notFoundBlock } from './packages/core/src/sourceCheck';
+      export { estimateTokens } from './packages/core/src/agentContext';
+      export { applyMemoryOps, parseMemoryOps, renderMemory, memoryHistory } from './packages/core/src/memoryEntries';
+      export { memoryBatch } from './packages/core/src/memoryBatch';
+      export { carriedState, applyCarried, earlierPlanBlock, earlierPlanTopic } from './packages/core/src/continuation';
+      export { readPending, isPending } from './packages/core/src/memoryEntries';
+      export { ownUserWords, conversationUserWords, carryUserWords, earlierUserWordsBlock, userWordsTopic } from './packages/core/src/userWords';
       export * as P from './packages/core/src/prompts';`,
     resolveDir: process.cwd(),
   },
@@ -1975,6 +1985,505 @@ test('要求修改後同一位審查者又核准：標成已被取代，保留�
   assert.doesNotMatch(await run(still), /SUPERSEDED/);
 });
 
+// ---------- 交接摘要（context-compression 第一版）：Aivenue 紀錄、來源中未找到、大小受控 ----------
+
+test('交接摘要的 Aivenue 紀錄：依優先順序保留使用者原話與未解事項；檔案與指令附狀態與來源；改檔前的檢查標成需重驗', () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  const text = W.handoffRecords(run, a1, new Set([a1.id]), eventsOf, 4800, Date.parse('2026-11-05T12:00:00Z'));
+  assert.match(text, /^FROM AIVENUE'S RECORDS \(attached by Aivenue, not written by the summarizer; source: the tool records of agent\(s\) aaaaaaaa and the workflow's review records, up to 2026-11-05T12:00Z; full outputs: read_context \{agent_id\}\):/);
+  assert.match(text, /Task and the user's words \(constraints to keep\):\n- "Keep the public API exactly as it is\."/);
+  assert.match(text, /Open issues, open decisions, points not confirmed:\n- R1 \[major\] download route permits path traversal \(src\/server\.js:12\)[^\n]*\n- \[not confirmed\] V1 admin check trusts a client header/);
+  // npm test ran before the edit of src/server.js: to be re-verified.
+  assert.match(text, /Checks it ran \(re-verify any marked so before relying on it\):\n- ✓ passed: `npm test` \(run by [^)]*\) — files changed since: re-run it before relying on it/);
+  assert.match(text, /Files it changed:\n- src\/server\.js \(by aaaaaaaa\)/);
+  assert.ok(text.length <= 4800);
+});
+
+test('交接摘要的 Aivenue 紀錄：預算很緊時先保住使用者原話與未解事項，其餘依序省略並說明去哪裡查', () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  // Many reads and commands that would not all fit.
+  const many = Array.from({ length: 60 }, (_, i) => ({ seq: 100 + i, ts: 100 + i, kind: 'tool', tool: { id: `r${i}`, name: 'shell', category: 'command', title: `cat src/file${i}.js`, output: 'x'.repeat(50), status: 'ok' } }));
+  const events = (id) => (id === a1.id ? [...eventsOf(id), ...many] : eventsOf(id));
+  const text = W.handoffRecords(run, a1, new Set([a1.id]), events, 900);
+  assert.ok(text.length <= 900, `${text.length}`);
+  assert.match(text, /Keep the public API exactly as it is/);
+  // The confirmed issue outranks the unconfirmed point; what did not fit is counted, with where to read it.
+  assert.match(text, /- R1 \[major\][^\n]*\n- \(1 more item\(s\) left out; read_context finds them\)/);
+  assert.match(text, /Files it read \(names only\):\n- \(57 older item\(s\) left out; search_records or read_context finds them\)/);
+});
+
+test('來源中未找到：只查明確的路徑、issue id 與紀錄 id；區分寫成已發生與列為下一步新增，附上核對範圍', () => {
+  const summary = [
+    '## Done so far',
+    '- Edited src\\server.js and src/ghost.js; fixed R1 and R7; see agent bbbbbbbb-222.',
+    '- parseDuration now rejects empty strings.',
+    '## Still to do',
+    '- Cover it in test/download.test.js.',
+    '- We should add docs/api.md and close D2.',
+  ].join('\n');
+  const source = 'npm test ran; edit src/server.js; review R1 open; parseDuration; agent bbbbbbbb-222';
+  const nf = W.notFoundInSource(summary, [source]);
+  assert.deepEqual(nf.map((x) => [x.ref, x.kind, x.as]), [
+    ['src/ghost.js', 'path', 'stated'],
+    ['R7', 'issue', 'stated'],
+    ['test/download.test.js', 'path', 'proposed'],
+    ['docs/api.md', 'path', 'proposed'],
+    ['D2', 'issue', 'proposed'],
+  ]);
+  const block = W.notFoundBlock(nf, 'the transcript of 2 turn(s)');
+  assert.match(block, /^NOT FOUND IN THE SOURCE \(checked by Aivenue against the transcript of 2 turn\(s\); only explicit paths, issue ids and record ids are checked\)\. Not necessarily wrong:/);
+  assert.match(block, /- `src\/ghost\.js` — written as done or existing: check it before relying on it/);
+  assert.match(block, /- `docs\/api\.md` — named as a next step or something new \(a new name can be expected\)/);
+  assert.doesNotMatch(block, /parseDuration/);
+  assert.equal(W.notFoundBlock([], 'x'), '');
+});
+
+test('交接摘要（替身壓縮者）：模型只寫對話才有的內容，附上 Aivenue 紀錄；漏掉的必要項目重試一次後逐字補回；超出預算會截斷，整體大小受控', async () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  const prompts = [];
+  const replies = ['## Decisions\n- Kept the route under /files.\n## Done so far\n- Wrote src/ghost.js.', '## Decisions\n- Kept the route under /files; the error was "EACCES: permission denied, open /srv/x".\n## Still to do\n- Add test/route.test.js.'];
+  const out = await W.writeHandoffSummary({
+    run,
+    info: a1,
+    ids: new Set([a1.id]),
+    eventsOf,
+    transcript: 'The route goes under /files. Error: "EACCES: permission denied, open /srv/x". Edited src/server.js.',
+    label: 'implementer (claude)',
+    compact: async (p) => (prompts.push(p), replies.shift()),
+    required: ['EACCES: permission denied, open /srv/x', 'src/server.js'],
+    range: 'the transcript of 1 turn(s)',
+  });
+  // The records carry src/server.js already: only the error message was required of the model, which it gave on retry.
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /ATTACHED BY AIVENUE AFTER YOUR SUMMARY \(do not repeat\):\nFROM AIVENUE'S RECORDS/);
+  assert.match(prompts[1], /YOUR PREVIOUS SUMMARY LEFT THESE OUT[^\n]*\n- EACCES: permission denied, open \/srv\/x/);
+  assert.doesNotMatch(prompts[1], /LEFT THESE OUT[^\n]*\n(- [^\n]*\n)*- src\/server\.js/);
+  assert.deepEqual(out.missing, []);
+  assert.ok(out.text.startsWith('## Decisions'));
+  assert.match(out.text, /\n\nFROM AIVENUE'S RECORDS/);
+  assert.deepEqual(out.notFound.map((x) => [x.ref, x.as]), [['test/route.test.js', 'proposed']]);
+  assert.match(out.text, /NOT FOUND IN THE SOURCE \(checked by Aivenue against the transcript of 1 turn\(s\)/);
+
+  // A runaway summary is cut: the hand-off stays within its budget.
+  const huge = await W.writeHandoffSummary({ run, info: a1, ids: new Set([a1.id]), eventsOf, transcript: 't', label: 'x', compact: async () => `## Done so far\n${'- did a thing\n'.repeat(5000)}`, required: [], range: 'r' });
+  assert.match(huge.summary, /\(the summary ran over its budget and was cut here\)$/);
+  assert.ok(W.estimateTokens(huge.text) <= 3000 * 1.5 + 1300, `${W.estimateTokens(huge.text)}`);
+});
+
+test('交接摘要回歸：必要資訊原本在長摘要尾端，被截斷後仍逐字補回，並回報為遺漏；整份交接不超過上限', async () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  const long = `## Done so far\n${'- routine step done\n'.repeat(4000)}- The fix lives in lib/needed/deep.js.`;
+  const out = await W.writeHandoffSummary({ run, info: a1, ids: new Set([a1.id]), eventsOf, transcript: 'Edited lib/needed/deep.js to fix it.', label: 'x', compact: async () => long, required: ['lib/needed/deep.js'], range: 'r' });
+  // It was in the summary before the cut (no retry), and is gone after it: put back, and said.
+  assert.match(out.summary, /\(the summary ran over its budget and was cut here\)\n\n## Kept verbatim\n- lib\/needed\/deep\.js$/);
+  assert.deepEqual(out.missing, ['lib/needed/deep.js']);
+  assert.equal(out.tokens, W.estimateTokens(out.text));
+  assert.ok(out.tokens <= out.budget, `${out.tokens} > ${out.budget}`);
+});
+
+test('交接摘要回歸：整份交接的預算在小預算、大量紀錄與大量來源中未找到時仍成立', async () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  run.userMessages = Array.from({ length: 8 }, (_, i) => ({ ts: 40 + i, text: `限制 ${i}：${'不要改動公開介面，保持相容。'.repeat(20)}` }));
+  const ghosts = Array.from({ length: 40 }, (_, i) => `- Wrote src/ghost${i}.js.`).join('\n');
+  for (const total of [1000, 3000]) {
+    const out = await W.writeHandoffSummary({ run, info: a1, ids: new Set([a1.id]), eventsOf, transcript: 't', label: 'x', compact: async () => `## Done so far\n${ghosts}\n${'- more\n'.repeat(3000)}`, required: [], range: 'r', totalTokens: total });
+    assert.ok(out.tokens <= out.budget, `total ${total}: ${out.tokens} > ${out.budget}`);
+    assert.match(out.text, /NOT FOUND IN THE SOURCE/);
+    assert.match(out.text, /- \(\d+ more not shown\)/);
+  }
+});
+
+test('交接紀錄回歸：每項待決事項整項保留雙方理由、來源與作者提議；放不下時改成明確的省略提示與查詢入口', () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  run.stages.implement.rounds[0].submission = { summary: 'added it', openDecisions: [{ ...CACHE_DECISION, proposal: 'keep it for now' }] };
+  const full = W.handoffRecords(run, a1, new Set([a1.id]), eventsOf, 4800);
+  assert.match(
+    full,
+    /- \[open decision\] D1 \[open, for the user\] Keep the 5-minute cache on the settings endpoint\?\n    reviewer-a: Optional: drop the cache, the endpoint is cheap and stale settings confuse users\. \(https:\/\/git\.example\/pr\/3#c1\)\n    reviewer-b: Keep it: the endpoint fans out to three services under load\. \(https:\/\/git\.example\/pr\/3#c2\)\n    the author's proposal, not a decision: keep it for now\n    sources: https:\/\/git\.example\/pr\/3#c1; https:\/\/git\.example\/pr\/3#c2; src\/settings\.js:40/,
+  );
+  // Too little room for the whole decision: its question stays, with where to read the rest; never a half.
+  const tight = W.handoffRecords(run, a1, new Set([a1.id]), eventsOf, 1000);
+  assert.ok(tight.length <= 1000, `${tight.length}`);
+  assert.match(tight, /- \[open decision\] D1 \[open, for the user\] Keep the 5-minute cache on the settings endpoint\? — its sides and sources are left out here for space: read_context \{\} lists them in full/);
+  assert.doesNotMatch(tight, /reviewer-a: Optional/);
+});
+
+test('交接摘要回歸：必要項目本身就超過上限時，明確回報未成功、不呼叫模型、不回傳超額交接', async () => {
+  const { run, eventsOf } = handoffRun();
+  const a1 = Object.values(run.agents).find((a) => a.id.startsWith('aaaaaaaa'));
+  const required = Array.from({ length: 60 }, (_, i) => `packages/some/deeply/nested/module/folder/number${i}/implementation_file_${i}.ts`);
+  let calls = 0;
+  const out = await W.writeHandoffSummary({ run, info: a1, ids: new Set([a1.id]), eventsOf, transcript: required.join('\n'), label: 'x', compact: async () => (calls++, 'summary'), required, range: 'r', totalTokens: 1000 });
+  assert.equal(out.ok, false);
+  assert.equal(calls, 0, 'no model call for a hand-off that cannot fit');
+  assert.equal(out.text, undefined);
+  assert.equal(out.budget, 1500);
+  assert.ok(out.tokens > out.budget);
+  assert.match(out.reason, /the items that must be kept \(60\) do not fit in the hand-off's ceiling of about 1500 tokens/);
+  // With room for them, the same items make a hand-off within its ceiling.
+  const ok = await W.writeHandoffSummary({ run, info: a1, ids: new Set([a1.id]), eventsOf, transcript: required.join('\n'), label: 'x', compact: async () => 'short', required, range: 'r', totalTokens: 3000 });
+  assert.equal(ok.ok, true);
+  assert.ok(ok.tokens <= ok.budget, `${ok.tokens} > ${ok.budget}`);
+  assert.equal(ok.missing.length, 60);
+});
+
+// ---------- 共用記憶的條目更新（context-compression 第 3 項）：純邏輯，替身資料 ----------
+
+const item = (ref, strength = 'strong', ts = 100, text = ref) => ({ ref, strength, ts, text });
+const entry = (id, section, text, o = {}) => ({ id, section, text, sources: ['n:old'], version: 1, cycle: 1, at: 50, status: 'active', ...o });
+
+test('條目操作：有來源的新增、更新、取代、撤銷生效；版本遞增；被取代與撤銷的保留在歷史，附理由與來源', () => {
+  const entries = [entry('M1', 'decision', 'Use SQLite for the cache.'), entry('M2', 'done', 'Parser handles empty input.'), entry('M3', 'where', 'Config in config/app.json.')];
+  const batch = [item('n:a1'), item('n:a2'), item('a:agent-1', 'strong')];
+  const r = W.applyMemoryOps(
+    entries,
+    {
+      ops: [
+        { op: 'add', section: 'todo', text: 'Add a migration test.', sources: ['n:a1'] },
+        { op: 'update', id: 'M3', version: 1, text: 'Config in config/app.json and config/local.json.', sources: ['n:a2'] },
+        { op: 'supersede', id: 'M1', version: 1, text: 'Use Postgres for the cache.', sources: ['n:a2'], reason: 'the user moved to Postgres' },
+        { op: 'retract', id: 'M2', version: 1, sources: ['a:agent-1'], reason: 'the test showed empty input still fails' },
+      ],
+      covered: ['n:a1', 'n:a2', 'a:agent-1'],
+    },
+    batch,
+    { cycle: 2, nextId: 4 },
+  );
+  assert.deepEqual(r.rejected, []);
+  const by = Object.fromEntries(r.entries.map((e) => [e.id, e]));
+  assert.deepEqual([by.M4.text, by.M4.section, by.M4.cycle], ['Add a migration test.', 'todo', 2]);
+  assert.deepEqual([by.M3.version, by.M3.updatedCycle, by.M3.sources], [2, 2, ['n:old', 'n:a2']]);
+  assert.deepEqual([by.M1.status, by.M1.by, by.M5.text], ['superseded', 'M5', 'Use Postgres for the cache.']);
+  assert.deepEqual([by.M2.status, by.M2.reason, by.M2.reasonSources], ['retracted', 'the test showed empty input still fails', ['a:agent-1']]);
+  assert.deepEqual(r.pending, []);
+  const history = W.memoryHistory(r.entries);
+  assert.match(history, /- M1 \[superseded by M5: the user moved to Postgres \(n:a2\)\] Use SQLite for the cache\./);
+  assert.match(history, /- M2 \[retracted: the test showed empty input still fails \(a:agent-1\)\]/);
+});
+
+test('條目操作：結構檢查——來源不在本批、條目不存在或已失效、版本不對，一律拒絕，原條目不變', () => {
+  const entries = [entry('M1', 'decision', 'Use SQLite.'), entry('M2', 'done', 'old', { status: 'superseded', by: 'M3' })];
+  const r = W.applyMemoryOps(
+    entries,
+    {
+      ops: [
+        { op: 'update', id: 'M1', version: 1, text: 'x', sources: ['n:elsewhere'] },
+        { op: 'update', id: 'M1', version: 3, text: 'x', sources: ['n:a1'] },
+        { op: 'retract', id: 'M2', version: 1, sources: ['n:a1'], reason: 'r' },
+        { op: 'retract', id: 'M9', version: 1, sources: ['n:a1'], reason: 'r' },
+        { op: 'add', section: 'done', text: 'no source' },
+      ],
+      covered: ['n:a1'],
+    },
+    [item('n:a1')],
+    { cycle: 2, nextId: 4 },
+  );
+  assert.deepEqual(r.rejected.map((x) => x.why), ['source(s) not in this batch: n:elsewhere', 'M1 is at version 1, not 3', 'M2 is superseded', 'no entry M9', 'no source']);
+  assert.equal(r.entries.find((e) => e.id === 'M1').text, 'Use SQLite.');
+  assert.equal(r.accepted.length, 0);
+});
+
+test('條目操作：只有弱證據的矛盾不撤銷舊條目，改標成衝突；使用者限制只因使用者的話而改，也不能被合併', () => {
+  const entries = [entry('M1', 'decision', 'Keep the ABCIInfo call.'), entry('M2', 'constraint', 'Keep the public API as it is.'), entry('M3', 'done', 'a'), entry('M4', 'done', 'b')];
+  const batch = [item('n:guess', 'weak', 120, 'INFERENCE: maybe SyncInfo is enough'), item('a:exec', 'weak'), item('n:fact', 'strong'), item('n:user', 'user')];
+  const r = W.applyMemoryOps(
+    entries,
+    {
+      ops: [
+        { op: 'supersede', id: 'M1', version: 1, text: 'Use SyncInfo instead.', sources: ['n:guess'], reason: 'one call is enough' },
+        { op: 'retract', id: 'M2', version: 1, sources: ['n:fact'], reason: 'the API may change' },
+        { op: 'merge', ids: ['M2', 'M3'], text: 'x', sources: ['n:fact'] },
+        { op: 'update', id: 'M2', version: 1, text: 'Keep the public API; the CLI flags may change.', sources: ['n:user'], reason: 'the user allowed CLI changes' },
+      ],
+      covered: ['n:guess', 'a:exec', 'n:fact', 'n:user'],
+    },
+    batch,
+    { cycle: 3, nextId: 5 },
+  );
+  const by = Object.fromEntries(r.entries.map((e) => [e.id, e]));
+  assert.equal(by.M1.status, 'active');
+  assert.deepEqual(by.M1.conflicts, [{ reason: 'one call is enough', sources: ['n:guess'], cycle: 3, proposed: 'Use SyncInfo instead.' }]);
+  assert.equal(by.M2.status, 'active', 'a fact note does not retract a constraint of the user');
+  assert.equal(by.M2.text, 'Keep the public API; the CLI flags may change.', "the user's word does");
+  assert.deepEqual(r.conflicted.map((x) => [x.id, x.why]), [['M1', "only weak evidence (an inference or an agent's account)"], ['M2', "a constraint of the user's changes only on the user's word"]]);
+  assert.deepEqual(r.rejected.map((x) => x.why), ["the user's constraints are not merged"]);
+  const text = W.renderMemory(r.entries, 2000, { tokens: W.estimateTokens }).text;
+  assert.match(text, /- M1 Keep the ABCIInfo call\. \[CONFLICT \(cycle 3, n:guess\): one call is enough — proposed: Use SyncInfo instead\.\]/);
+});
+
+test('條目操作：沒處理的、只被拒絕操作引用的，以及模型運算期間新增的紀錄，都留待下一批', () => {
+  const batch = [item('n:a'), item('n:b'), item('n:c'), item('n:d')];
+  const r = W.applyMemoryOps(
+    [],
+    { ops: [{ op: 'add', section: 'done', text: 'A done.', sources: ['n:a'] }, { op: 'add', section: 'nowhere', text: 'B', sources: ['n:b'] }], covered: ['n:a', 'n:b', 'n:c', 'n:late'] },
+    batch,
+    { cycle: 1, nextId: 1 },
+  );
+  // n:a used by an applied op; n:c covered (nothing worth keeping); n:b only by a rejected op; n:d not covered; n:late not in the batch.
+  assert.deepEqual(r.processed, ['n:a', 'n:c']);
+  assert.deepEqual(r.pending, ['n:b', 'n:d']);
+});
+
+test('條目呈現：超出預算時依重要性選取（使用者限制、未解事項優先，新鮮度只在同段落內排序），放不下的列出 id', () => {
+  const entries = [
+    entry('M1', 'constraint', 'Keep the public API as it is.', { cycle: 1 }),
+    entry('M2', 'open', 'R1 traversal in src/server.js still open.', { cycle: 1 }),
+    ...Array.from({ length: 30 }, (_, i) => entry(`M${10 + i}`, 'done', `Routine step ${i} finished with a fairly long description of what happened.`, { cycle: 5 })),
+  ];
+  const r = W.renderMemory(entries, 300, { tokens: W.estimateTokens });
+  assert.ok(r.shown.includes('M1') && r.shown.includes('M2'), 'the oldest entries stay because they matter most');
+  assert.ok(r.omitted.length > 0);
+  assert.ok(W.estimateTokens(r.text) <= 300, `${W.estimateTokens(r.text)}`);
+  assert.match(r.text, /^## The user's constraints\n- M1 /);
+  assert.match(r.text, /entries left out for space: M\d+/);
+});
+
+test('條目呈現：檔案改動後的「通過」標成需重驗；引用的審查問題已不再開啟時請確認', () => {
+  const entries = [entry('M1', 'done', 'npm test passes.', { at: 100 }), entry('M2', 'open', 'R1 is still open.'), entry('M3', 'done', 'Wrote the docs.', { at: 100 })];
+  const text = W.renderMemory(entries, 2000, { tokens: W.estimateTokens, lastEdit: 200, knownIssueIds: new Set(['R1']), openIssueIds: new Set() }).text;
+  assert.match(text, /- M1 npm test passes\. \[STALE: files changed since; re-verify\]/);
+  assert.match(text, /- M2 R1 is still open\. \[R1 no longer open: confirm this entry\]/);
+  assert.doesNotMatch(text, /M3 Wrote the docs\. \[/);
+});
+
+test('條目操作的解析：JSON 區塊或裸 JSON；沒有 ops 時視為無法解析', () => {
+  assert.deepEqual(W.parseMemoryOps('ok\n```json\n{"ops":[{"op":"add","section":"done","text":"x","sources":["n:a"]}],"covered":["n:a"]}\n```'), { ops: [{ op: 'add', section: 'done', text: 'x', sources: ['n:a'] }], covered: ['n:a'] });
+  assert.deepEqual(W.parseMemoryOps('{"ops":[],"covered":[]}'), { ops: [], covered: [] });
+  assert.equal(W.parseMemoryOps('## Decisions\n- free text summary'), undefined);
+  assert.equal(W.parseMemoryOps('{"summary":"x"}'), undefined);
+});
+
+test('多次壓縮：取代鏈只留最新的有效條目，歷史可查；合法變長的結果照樣接受', () => {
+  let entries = [];
+  let nextId = 1;
+  const run = (cycle, ops, batch) => {
+    const r = W.applyMemoryOps(entries, { ops, covered: batch.map((b) => b.ref) }, batch, { cycle, nextId });
+    entries = r.entries;
+    nextId = r.nextId;
+    return r;
+  };
+  run(1, [{ op: 'add', section: 'decision', text: 'Cache TTL is 5 minutes.', sources: ['n:1'] }], [item('n:1')]);
+  run(2, [{ op: 'supersede', id: 'M1', version: 1, text: 'Cache TTL is 1 minute.', sources: ['n:2'], reason: 'stale settings' }], [item('n:2')]);
+  const r3 = run(3, [{ op: 'supersede', id: 'M2', version: 1, text: 'No cache on the settings endpoint; every read goes to the database, accepted by the user for correctness over speed.', sources: ['n:3'], reason: 'the user chose correctness' }], [item('n:3', 'user')]);
+  const active = entries.filter((e) => e.status === 'active');
+  assert.deepEqual(active.map((e) => e.id), ['M3']);
+  assert.match(W.memoryHistory(entries), /M1 \[superseded by M2[\s\S]*M2 \[superseded by M3/);
+  // Longer than what it replaced, and fine: correctness is not judged by size.
+  assert.ok(active[0].text.length > 'Cache TTL is 1 minute.'.length);
+  assert.deepEqual(r3.rejected, []);
+});
+
+test('共用記憶：未處理的待辦項目仍以原文顯示；總覽列出全部條目與歷史', () => {
+  const { run, a3, eventsOf } = handoffRun();
+  run.steps = [];
+  run.notes = [{ id: 'aaaa0001', agentId: Object.keys(run.agents)[0], text: 'PENDINGNOTE still to fold', kind: 'fact', ts: 5 }, { id: 'aaaa0002', agentId: Object.keys(run.agents)[0], text: 'FOLDEDNOTE folded already', kind: 'fact', ts: 6 }];
+  run.memory = {
+    summary: '## Decisions\n- M2 Use Postgres.',
+    upto: 10,
+    updatedAt: 10,
+    cycle: 2,
+    pending: ['n:aaaa0001'],
+    entries: [
+      { id: 'M1', section: 'decision', text: 'Use SQLite.', sources: ['n:x'], version: 1, cycle: 1, at: 1, status: 'superseded', by: 'M2', reason: 'the user moved to Postgres', reasonSources: ['n:y'] },
+      { id: 'M2', section: 'decision', text: 'Use Postgres.', sources: ['n:y'], version: 1, cycle: 2, at: 2, status: 'active' },
+    ],
+  };
+  const text = W.contextBlock(run, a3, eventsOf, { maxChars: 200000 });
+  assert.match(text, /PENDINGNOTE still to fold/);
+  assert.doesNotMatch(text, /FOLDEDNOTE/);
+  const o = W.overview(run);
+  assert.match(o, /SHARED MEMORY \(all entries, cycle 2\):\n## Decisions\n- M2 Use Postgres\./);
+  assert.match(o, /SHARED MEMORY HISTORY \(no longer in the prompt\):\n- M1 \[superseded by M2: the user moved to Postgres \(n:y\)\] Use SQLite\./);
+});
+
+test('共用記憶回歸：弱證據不能透過 update 改寫結論；改記為衝突，原條目不變', () => {
+  const entries = [entry('M1', 'decision', 'Keep API v1.')];
+  const r = W.applyMemoryOps(entries, { ops: [{ op: 'update', id: 'M1', version: 1, text: 'Remove API v1.', sources: ['n:guess'], reason: 'nobody uses it' }], covered: ['n:guess'] }, [item('n:guess', 'weak')], { cycle: 2, nextId: 2 });
+  const m1 = r.entries.find((e) => e.id === 'M1');
+  assert.deepEqual([m1.text, m1.version, m1.status], ['Keep API v1.', 1, 'active']);
+  assert.deepEqual(m1.conflicts, [{ reason: 'nobody uses it', sources: ['n:guess'], cycle: 2, proposed: 'Remove API v1.' }]);
+  assert.deepEqual(r.conflicted.map((x) => [x.op.op, x.id]), [['update', 'M1']]);
+  assert.deepEqual(r.accepted, []);
+});
+
+test('共用記憶回歸：agent 自稱 fact 或轉述「使用者說」都只是弱證據；真正的使用者訊息與 Aivenue 看到的檢查才有效力', () => {
+  const { run, eventsOf } = handoffRun();
+  const ag = Object.keys(run.agents)[0];
+  run.memory = { summary: '', upto: 0, updatedAt: 0, entries: [entry('M1', 'constraint', 'Keep API v1.'), entry('M2', 'done', 'Docs are written.')], cycle: 1, nextId: 3 };
+  run.notes = [
+    { id: 'f0000001', agentId: ag, text: 'API v1 is dead code.', kind: 'fact', ts: 1 },
+    { id: 'd0000002', agentId: ag, text: 'The user said we can remove API v1.', kind: 'decision', ts: 2 },
+  ];
+  run.userMessages = [{ ts: 3, text: 'Yes, remove API v1 now.' }];
+  run.createdAt = 1;
+  const { batch } = W.memoryBatch(run, eventsOf, 1000);
+  const strength = Object.fromEntries(batch.map((b) => [b.ref, b.strength]));
+  // The request that started the run is the user's own words too.
+  assert.equal(strength['g:r'], 'user');
+  assert.match(batch.find((b) => b.ref === 'g:r').text, /^the user's request for this run: "Add a download route"/);
+  assert.equal(strength['n:f0000001'], 'weak');
+  assert.equal(strength['n:d0000002'], 'weak');
+  assert.equal(strength['u:3'], 'user');
+  assert.ok(Object.entries(strength).some(([ref, s]) => ref.startsWith('k:') && s === 'strong'), 'the npm test Aivenue saw run');
+  assert.match(batch.find((b) => b.ref === 'n:d0000002').text, /\(it called it decision\)/);
+  // The agent's account of the user's words does not change a constraint; the user's own message does.
+  const viaAgent = W.applyMemoryOps(run.memory.entries, { ops: [{ op: 'retract', id: 'M1', version: 1, sources: ['n:d0000002'], reason: 'the user allowed it' }], covered: [] }, batch, { cycle: 2, nextId: 3 });
+  assert.equal(viaAgent.entries.find((e) => e.id === 'M1').status, 'active');
+  assert.equal(viaAgent.conflicted.length, 1);
+  const viaUser = W.applyMemoryOps(run.memory.entries, { ops: [{ op: 'retract', id: 'M1', version: 1, sources: ['u:3'], reason: 'the user allowed it' }], covered: [] }, batch, { cycle: 2, nextId: 3 });
+  assert.equal(viaUser.entries.find((e) => e.id === 'M1').status, 'retracted');
+  // A note called a fact does not retract an ordinary entry either.
+  const viaFact = W.applyMemoryOps(run.memory.entries, { ops: [{ op: 'retract', id: 'M2', version: 1, sources: ['n:f0000001'], reason: 'r' }], covered: [] }, batch, { cycle: 2, nextId: 3 });
+  assert.equal(viaFact.entries.find((e) => e.id === 'M2').status, 'active');
+});
+
+test('共用記憶回歸：超過 6,000 字元的舊摘要遷移後完整保存；顯示依預算，放不下時列出查詢入口，總覽讀得到結尾', () => {
+  const { run, eventsOf } = handoffRun();
+  run.steps = [];
+  const long = `## Decisions\n${'- an older decision with its reason\n'.repeat(260)}- TAILMARK the last decision that must not be lost`;
+  assert.ok(long.length > 9000);
+  run.memory = { summary: long, upto: 5, updatedAt: 5 };
+  run.notes = [{ id: 'n0000001', agentId: Object.keys(run.agents)[0], text: 'new note', ts: 10 }];
+  const b = W.memoryBatch(run, eventsOf, 1000);
+  assert.equal(b.legacy, true);
+  assert.equal(b.entries[0].id, 'M0');
+  assert.equal(b.entries[0].text, long, 'kept whole');
+  const applied = W.applyMemoryOps(b.entries, { ops: [{ op: 'add', section: 'todo', text: 'Follow the new note.', sources: ['n:n0000001'] }], covered: ['n:n0000001'] }, b.batch, { cycle: 1, nextId: 1 });
+  const shown = W.renderMemory(applied.entries, 1000, { tokens: W.estimateTokens });
+  assert.ok(shown.omitted.includes('M0'));
+  assert.match(shown.text, /left out for space: M0 — read_context \{\} has the full shared memory/);
+  run.memory = { ...run.memory, entries: applied.entries, cycle: 1, summary: shown.text };
+  assert.match(W.overview(run), /TAILMARK the last decision that must not be lost/);
+});
+
+test('使用者原文：舊資料（續接但沒有分開保存原文）標明可能含 Aivenue 加的背景；由 Aivenue 代寫的也標出', () => {
+  const base = { id: 'r2', createdAt: 2, config: { goal: 'Do X.\n\n(Context: this continues …)', continueFrom: 'r1' }, userMessages: [{ ts: 3, text: 'and Y' }] };
+  const legacy = W.ownUserWords(base);
+  assert.deepEqual(legacy.map((w) => [w.id, w.kind, !!w.note]), [['g:r2', 'request', true], ['u:3', 'message', false]]);
+  assert.match(legacy[0].note, /may include context Aivenue added/);
+  const kept = W.ownUserWords({ ...base, config: { ...base.config, userText: 'Do X.' } });
+  assert.deepEqual([kept[0].text, kept[0].note], ['Do X.', undefined]);
+  const byAivenue = W.ownUserWords({ ...base, config: { ...base.config, userText: 'I now allow …', userTextNote: 'written by Aivenue when the user allowed an action they had denied' } });
+  assert.equal(byAivenue[0].note, 'written by Aivenue when the user allowed an action they had denied');
+  // Carried in order, and read back whole from any id on.
+  const r1 = { id: 'r1', createdAt: 1, config: { goal: 'First, keep A.' } };
+  const r2 = { ...base, config: { ...base.config, userText: 'Do X.' } };
+  W.carryUserWords(r1, r2);
+  assert.deepEqual(W.conversationUserWords(r2).map((w) => w.id), ['g:r1', 'g:r2', 'u:3']);
+  assert.match(W.userWordsTopic(r2, 'g:r2'), /^THE USER'S OWN WORDS[^\n]*\n- \[g:r2\][^\n]*"Do X\."\n- \[u:3\]/);
+});
+
+test('使用者原文區塊回歸：大量舊訊息時整個區塊（標頭、省略清單、讀取說明）都在預算內；原文仍完整保存', () => {
+  const words = Array.from({ length: 60 }, (_, i) => ({ id: `g:run-${String(i).padStart(2, '0')}`, runId: `run-${i}`, ts: 1000 + i * 60000, text: `Message ${i}: keep rule ${i}. ${'(detail) '.repeat(20)}`, kind: 'request' }));
+  const run = { id: 'now', createdAt: 9e12, config: { goal: 'current' }, earlierUserWords: words };
+  for (const budget of [1200, 3000, 300, 80]) {
+    const b = W.earlierUserWordsBlock(run, budget);
+    assert.ok(b.text.length <= budget, `budget ${budget}: ${b.text.length}`);
+    assert.match(b.text, /INCOMPLETE: \d+ earlier message/);
+    assert.equal(b.shown.length + b.omitted.length, 60);
+  }
+  const b = W.earlierUserWordsBlock(run, 1200);
+  assert.match(b.text, /, and \d+ more\. Their constraints may still hold: read them with read_context \{topic: "user"\}/);
+  assert.ok(b.shown.length >= 1, 'the newest still shown whole');
+  // Everything is still kept and readable in full.
+  const all = W.userWordsTopic(run);
+  for (const w of words) assert.ok(all.includes(w.text.trim()), w.id);
+  // When everything fits, no incomplete line.
+  assert.doesNotMatch(W.earlierUserWordsBlock({ ...run, earlierUserWords: words.slice(0, 2) }, 3000).text, /INCOMPLETE/);
+});
+
+test('待處理項目跨工作流：存下的副本照原來源、內容、強度與來源工作流放回批次；檢查之後若有改檔，標成需重驗；同一來源不重複', () => {
+  const { run, eventsOf } = handoffRun();
+  run.createdAt = 500;
+  const oldCheck = { ref: 'k:aaaaaaaa@10', runId: 'earlier-run', strength: 'strong', ts: 10, text: 'Aivenue saw this check run: ✓ passed: `npm test` (run by aaaaaaaa implementer)' };
+  const oldNote = { ref: 'n:0ld00001', runId: 'earlier-run', strength: 'weak', ts: 12, text: 'note by executor fake (it called it fact): the cache lives in .cache/' };
+  const oldRequest = { ref: 'g:earlier-run', runId: 'earlier-run', strength: 'user', ts: 1, text: 'the user\'s request for this run: "Keep logs in UTC."' };
+  const oldMessage = { ref: 'u:5', runId: 'earlier-run', strength: 'user', ts: 5, text: 'the user\'s message: "and never print tokens"' };
+  const oldResult = { ref: 'a:old-agent', runId: 'earlier-run', strength: 'weak', ts: 14, text: 'implementer (fake): done' };
+  run.memory = { summary: '', upto: 100, updatedAt: 100, entries: [], cycle: 1, nextId: 1, pending: [oldRequest, oldMessage, oldCheck, oldNote, oldResult], lastEdit: 50 };
+  // The same note is also in this message's records (carried over) — once, from the saved copy.
+  run.notes = [{ id: '0ld00001', agentId: 'gone', text: 'the cache lives in .cache/ (carried)', kind: 'fact', ts: 101 }];
+  const b = W.memoryBatch(run, eventsOf, 1000);
+  const by = Object.fromEntries(b.batch.map((x) => [x.ref, x]));
+  for (const p of [oldRequest, oldMessage, oldNote, oldResult]) assert.deepEqual(by[p.ref], p, p.ref);
+  assert.equal(b.batch.filter((x) => x.ref === 'n:0ld00001').length, 1);
+  // A check from before the last known file change: to be re-verified (strength and source kept).
+  assert.deepEqual([by['k:aaaaaaaa@10'].strength, by['k:aaaaaaaa@10'].runId], ['strong', 'earlier-run']);
+  assert.match(by['k:aaaaaaaa@10'].text, / — files changed since \(re-verify before relying on it\)$/);
+  assert.ok(b.lastEdit >= 50);
+});
+
+test('待處理項目：舊版只存 ref 的，找得到就照本段紀錄重建；找不到就明確標示，不靜默移除', () => {
+  const { run, eventsOf } = handoffRun();
+  run.createdAt = 500;
+  run.notes = [{ id: 'here0001', agentId: Object.keys(run.agents)[0], text: 'still here', kind: 'fact', ts: 20 }];
+  run.memory = { summary: '', upto: 100, updatedAt: 100, entries: [], cycle: 1, nextId: 1, pending: ['n:here0001', 'a:from-another-message'] };
+  const b = W.memoryBatch(run, eventsOf, 1000);
+  const by = Object.fromEntries(b.batch.map((x) => [x.ref, x]));
+  assert.match(by['n:here0001'].text, /still here/);
+  assert.equal(by['a:from-another-message'].missing, true);
+  assert.match(by['a:from-another-message'].text, /content was not saved and is not in this message's records \(a:from-another-message\)/);
+});
+
+test('待處理的檢查：中間一段改了檔但沒壓縮（記憶裡沒有那次改檔），續接帶來的改檔時間仍讓它標成需重驗', () => {
+  const { run } = handoffRun();
+  run.createdAt = 500;
+  const check = { ref: 'k:aaaaaaaa@10', runId: 'message-a', strength: 'strong', ts: 10, text: 'Aivenue saw this check run: ✓ passed: `npm test` (run by aaaaaaaa implementer)' };
+  // The memory as message A left it (no edit known yet); this message changed nothing itself.
+  run.memory = { summary: '', upto: 100, updatedAt: 100, entries: [], cycle: 1, nextId: 1, pending: [check] };
+  const none = () => [];
+  assert.equal(W.memoryBatch(run, none, 1000).batch.find((x) => x.ref === check.ref).text, check.text, 'nothing changed: not marked');
+  // Message B, in between, edited a file at 60 and never compacted: carried as earlierEdit.
+  run.earlierEdit = 60;
+  const b = W.memoryBatch(run, none, 1000);
+  const item = b.batch.find((x) => x.ref === check.ref);
+  assert.match(item.text, / — files changed since \(re-verify before relying on it\)$/);
+  assert.deepEqual([item.strength, item.runId, item.ts], ['strong', 'message-a', 10]);
+  assert.equal(b.lastEdit, 60, 'kept with the memory from now on');
+});
+
+test('來源不可取得的項目：不能當成任何操作的證據，模型回報 covered 也不移出 pending；之後在紀錄中找到就照原內容重建', () => {
+  const gone = { ref: 'k:gone0000@5', runId: '?', strength: 'weak', ts: 0, text: 'an item left pending … (k:gone0000@5): it cannot be read', missing: true };
+  const note = { ref: 'n:1', runId: 'r', strength: 'weak', ts: 20, text: 'note: the cache lives in .cache/' };
+  const entries = [{ id: 'M1', section: 'todo', text: 'run the tests', sources: ['n:0'], version: 1, cycle: 1, at: 1, status: 'active' }, { id: 'M2', section: 'todo', text: 'and lint', sources: ['n:0'], version: 1, cycle: 1, at: 1, status: 'active' }];
+  const r = W.applyMemoryOps(
+    entries,
+    {
+      ops: [
+        { op: 'add', section: 'done', text: 'Tests passed', sources: ['k:gone0000@5'] },
+        { op: 'add', section: 'done', text: 'Tests passed and the cache is in .cache/', sources: ['n:1', 'k:gone0000@5'] },
+        { op: 'conflict', id: 'M1', sources: ['k:gone0000@5'], reason: 'already ran' },
+        { op: 'merge', ids: ['M1', 'M2'], text: 'run tests and lint', sources: ['k:gone0000@5'] },
+        { op: 'add', section: 'where', text: 'The cache is in .cache/.', sources: ['n:1'] },
+      ],
+      covered: ['k:gone0000@5', 'n:1'],
+    },
+    [gone, note],
+    { cycle: 2, nextId: 3 },
+  );
+  assert.equal(r.rejected.length, 4);
+  for (const x of r.rejected) assert.match(x.why, /content cannot be read: k:gone0000@5/);
+  assert.deepEqual(r.entries.filter((e) => e.status === 'active').map((e) => e.text), ['run the tests', 'and lint', 'The cache is in .cache/.']);
+  assert.equal(r.entries[0].conflicts, undefined);
+  assert.deepEqual([r.processed, r.pending], [['n:1'], ['k:gone0000@5']]);
+  // Covered alone (no operation) does not remove it either.
+  assert.deepEqual(W.applyMemoryOps([], { ops: [], covered: ['k:gone0000@5'] }, [gone], { cycle: 3, nextId: 1 }).pending, ['k:gone0000@5']);
+  // Carried as unreadable, and stays so — unless this message's records have it after all.
+  const { run, eventsOf } = handoffRun();
+  run.memory = { summary: '', upto: 1000, updatedAt: 1000, entries: [], cycle: 2, nextId: 1, pending: [gone, { ...gone, ref: 'n:back0001' }], lastEdit: 999 };
+  run.notes = [{ id: 'back0001', agentId: Object.keys(run.agents)[0], text: 'found again', kind: 'fact', ts: 20 }];
+  const by = Object.fromEntries(W.memoryBatch(run, eventsOf, 2000).batch.map((x) => [x.ref, x]));
+  assert.deepEqual(by['k:gone0000@5'], gone, 'unchanged, no re-verify mark on what has no content');
+  assert.equal(by['n:back0001'].missing, undefined);
+  assert.match(by['n:back0001'].text, /found again/);
+});
+
 function maskRun() {
   const tool = (seq, ts, category, title, output, status = 'ok') => ({ seq, ts, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
   const a1 = { id: 'aaaaaaaa-111', role: 'planner', provider: 'codex', status: 'completed', depth: 0, stage: 'plan', round: 1, startedAt: 1, endedAt: 9, stats: {} };
@@ -2073,3 +2582,118 @@ test('Aivenue 看到的檢查（資料）：通過、失敗、輸出報錯、在
   ]);
 });
 
+// ---------- what a follow-up inherits (continuation.ts): plain objects, no workflow run ----------
+
+const prevRun = (over = {}) => ({
+  id: 'run-b',
+  createdAt: 2000,
+  config: { goal: 'Context: …\n\nAdd days.', userText: 'Add days.', continueFrom: 'run-a', cwd: os.tmpdir() },
+  agents: { 'ex-1': { id: 'ex-1', role: 'executor', provider: 'codex' } },
+  stages: {},
+  notes: [],
+  ...over,
+});
+const carry = (prev, lastEditSeen = 0) => W.carriedState(prev, { now: 10_000, lastEditSeen, agentLabel: (a) => `${a.role} ${a.provider}` });
+
+test('續接（純物件）：中間一段改過檔卻沒壓縮，它觀察到的改檔時間仍帶到下一段；與記憶和更早帶來的時間取最新', () => {
+  // A left memory without any edit time; B (this prev) edited at 60 and never compacted.
+  const prev = prevRun({ memory: { summary: '', upto: 10, updatedAt: 10, entries: [], cycle: 1, nextId: 1, pending: [] } });
+  assert.equal(carry(prev, 60).earlierEdit, 60);
+  // Nothing edited anywhere: no edit time at all.
+  assert.equal(carry(prev, 0).earlierEdit, undefined);
+  // The latest of what came from earlier, what the memory kept, and what prev's records show.
+  assert.equal(carry({ ...prev, earlierEdit: 30, memory: { ...prev.memory, lastEdit: 45 } }, 20).earlierEdit, 45);
+  assert.equal(carry({ ...prev, earlierEdit: 90, memory: { ...prev.memory, lastEdit: 45 } }, 20).earlierEdit, 90);
+  // Applied where memoryBatch reads it.
+  const run = { projectMemory: { mode: 'full', picks: [] } };
+  W.applyCarried(run, carry(prev, 60));
+  assert.equal(run.earlierEdit, 60);
+});
+
+test('續接（純物件）：待處理副本原樣帶過去（來源、工作流、內容、強度、缺失標示），舊版 ref 也保留；新舊格式用同一個 helper 辨識', () => {
+  const copy = { ref: 'k:aaaaaaaa@10', runId: 'run-a', strength: 'strong', ts: 10, text: 'Aivenue saw this check run: ✓ passed: `npm test`' };
+  const gone = { ref: 'n:gone0001', runId: '?', strength: 'weak', ts: 0, text: 'cannot be read', missing: true };
+  const pending = [copy, gone, 'a:legacy-ref'];
+  const prev = prevRun({ memory: { summary: '', upto: 10, updatedAt: 10, entries: [{ id: 'M1', section: 'todo', text: 't', sources: ['x'], version: 1, cycle: 1, at: 1, status: 'active' }], cycle: 1, nextId: 2, pending, lastEdit: 5 } });
+  const c = carry(prev);
+  assert.notEqual(c.memory, prev.memory, 'a copy of the memory, not the same object');
+  assert.deepEqual(c.memory, prev.memory);
+  assert.deepEqual(c.memory.pending, [copy, gone, 'a:legacy-ref']);
+  assert.deepEqual(pending.map((p) => W.readPending(p)), [{ ref: copy.ref, copy }, { ref: gone.ref, copy: gone }, { ref: 'a:legacy-ref' }]);
+  for (const ref of [copy.ref, gone.ref, 'a:legacy-ref']) assert.equal(W.isPending(c.memory.pending, ref), true, ref);
+  assert.equal(W.isPending(c.memory.pending, 'a:other'), false);
+  assert.equal(W.isPending(undefined, 'a:other'), false);
+});
+
+test('續接（純物件）：使用者原文逐字帶過去、來源標示不變；筆記標成帶過來並記下作者；過期的等待不帶', () => {
+  const earlier = { id: 'g:run-a', runId: 'run-a', ts: 1000, text: 'Never edit test/basic.test.js.', kind: 'request' };
+  const legacy = { id: 'g:run-0', runId: 'run-0', ts: 500, text: 'Old goal with context.', kind: 'request', note: "saved before the user's words were kept apart: may include context Aivenue added" };
+  const prev = prevRun({
+    earlierUserWords: [legacy, earlier],
+    userMessages: [{ ts: 2500, text: '  and keep logs in UTC  ' }],
+    notes: [{ id: 'n1', agentId: 'ex-1', text: 'cache in .cache/', kind: 'fact', ts: 2100 }, { id: 'n2', agentId: 'gone', by: 'planner claude', text: 'decided X', kind: 'decision', ts: 2200 }],
+    waits: [{ id: 'w1', state: 'waiting', timeoutAt: 20_000 }, { id: 'w2', state: 'waiting', timeoutAt: 5_000 }, { id: 'w3', state: 'done', timeoutAt: 20_000 }],
+  });
+  const c = carry(prev);
+  assert.deepEqual(c.earlierUserWords.map((w) => [w.id, w.text, w.note]), [
+    ['g:run-0', 'Old goal with context.', legacy.note],
+    ['g:run-a', 'Never edit test/basic.test.js.', undefined],
+    ['g:run-b', 'Add days.', undefined],
+    ['u:2500', 'and keep logs in UTC', undefined],
+  ]);
+  assert.notEqual(c.earlierUserWords[1], earlier, 'copies, not the same objects');
+  assert.deepEqual(c.notes.map((n) => [n.id, n.by, n.carried]), [['n1', 'executor codex', true], ['n2', 'planner claude', true]]);
+  assert.deepEqual(c.waits.map((w) => w.id), ['w1']);
+  // Project memory picks go along only when the new run has project memory on.
+  const withPicks = carry({ ...prev, projectMemory: { mode: 'full', picks: [{ memoryId: 'm1' }] } });
+  const on = { projectMemory: { mode: 'full', picks: [] } };
+  const off = { projectMemory: { mode: 'off', picks: [] } };
+  W.applyCarried(on, withPicks);
+  W.applyCarried(off, withPicks);
+  assert.deepEqual([on.projectMemory.picks, off.projectMemory.picks], [[{ memoryId: 'm1' }], []]);
+});
+
+test('上一段的計畫狀態（純物件）：預算小時先留未完成步驟與失敗檢查，略去的部分會說明；連續兩次「繼續」時狀態一路帶下去', () => {
+  const prev = prevRun({
+    status: 'cancelled',
+    stages: { plan: { status: 'approved', rounds: [{ n: 1, submission: { plan: { summary: 'plan v1', markdown: 'v1', steps: [] } }, review: { verdict: 'revise' } }, { n: 2, submission: { plan: { summary: 'plan v2', markdown: 'PLANMARK-v2', steps: [] } }, review: { verdict: 'approve' } }] } },
+    steps: [
+      { id: '1', title: 'parse dates', status: 'done', note: 'parser handles 2d' },
+      { id: '2', title: 'fix the failing date test', status: 'in_progress', note: 'still red' },
+      { id: '3', title: 'update the docs', status: 'pending' },
+    ],
+    agents: { 'ex-1': { id: 'ex-1', role: 'executor', provider: 'codex', handover: { text: 'Step 2 is half done. '.repeat(40), ts: 50 } } },
+  });
+  const checks = [
+    { command: 'npm run lint', agentId: 'ex-1', by: 'ex-1 implementer', ts: 30, outcome: 'passed', outdated: true },
+    { command: 'npm test', agentId: 'ex-1', by: 'ex-1 implementer', ts: 40, outcome: 'failed', output: '1 failing' },
+  ];
+  const c = W.carriedState(prev, { now: 10_000, lastEditSeen: 0, checksSeen: checks, agentLabel: (a) => `${a.role} ${a.provider}` });
+  assert.deepEqual([c.earlierPlan.runId, c.earlierPlan.status, c.earlierPlan.plan.summary, c.earlierPlan.plan.round, c.earlierPlan.plan.approved], ['run-b', 'cancelled', 'plan v2', 2, true]);
+  assert.equal(c.earlierPlan.handoff.by, 'executor codex');
+  const run = { earlierPlan: c.earlierPlan };
+  const full = W.earlierPlanBlock(run, 6000);
+  assert.ok(full.indexOf('Steps not finished') < full.indexOf('Checks that did not pass'));
+  assert.ok(full.indexOf('Checks that did not pass') < full.indexOf('Steps finished'));
+  assert.match(full, /✓ passed: `npm run lint` \(by ex-1 implementer\) — files changed after it, in that message/);
+  // A small budget: what is unfinished and what failed stay; the rest is named as left out.
+  const small = W.earlierPlanBlock(run, 600);
+  assert.ok(small.length <= 600 + 250, `${small.length}`);
+  assert.match(small, /Steps not finished:\n- 2\. fix the failing date test \[in_progress\] — still red/);
+  assert.match(small, /Checks that did not pass:\n- ✗ failed: `npm test`/);
+  assert.doesNotMatch(small, /Steps finished:/);
+  assert.match(small, /\(left out for space: Steps finished; Other checks it ran; Its last hand-off [^\n]*read_context \{topic: "previous"\}/);
+  // The full text has the check's output.
+  assert.match(W.earlierPlanTopic(run), /✗ failed: `npm test`[^\n]*\n {4}1 failing/);
+  // "Go on" again before the next message made any plan or step: the same state is passed on.
+  const middle = prevRun({ id: 'run-c', status: 'cancelled', earlierPlan: c.earlierPlan, agents: {} });
+  assert.equal(W.carriedState(middle, { now: 11_000, lastEditSeen: 0, checksSeen: [], agentLabel: () => '' }).earlierPlan, c.earlierPlan);
+});
+
+test('續接訊息的目標：前一段沒完成時寫明狀態，不把最後一則回報當成結果；完成時照舊', () => {
+  const agents = { p: { role: 'planner', finalText: 'plan submitted', endedAt: 1 }, e: { role: 'executor', finalText: 'done', endedAt: 2 } };
+  const cfg = { goal: 'Add days.' };
+  assert.equal(W.followUpGoal('繼續', { status: 'completed', config: cfg, agents }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: done)');
+  assert.equal(W.followUpGoal('繼續', { status: 'cancelled', config: cfg, agents }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: it did not finish (status: cancelled); the last report before that: done)');
+  assert.equal(W.followUpGoal('繼續', { status: 'failed', config: cfg, agents: {} }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: it did not finish (status: failed))');
+});

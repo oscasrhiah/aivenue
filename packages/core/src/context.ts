@@ -1,6 +1,7 @@
 import type { AgentEvent, AgentRunInfo, ContextSharing, OpenDecision, SharedNote, WorkflowRun } from './types';
 import { activityBlock, collectActivity, fit, handoffsBlock, knowledgeBlock, statusBlock, verifiedChecks } from './ledger';
 import { buildTopics, topicIndexBlock } from './topics';
+import { isPending, memoryHistory, renderMemory } from './memoryEntries';
 
 /**
  * Shared context between agents: an overview of the workflow, full transcripts on request,
@@ -38,7 +39,7 @@ const cut = (s: string | undefined, n: number) => {
 const oneLine = (s: string | undefined, n: number) => cut((s ?? '').replace(/\s+/g, ' '), n);
 
 /** A note that passes on what the user asked or said. */
-const USER_SAID = /\b(the )?user (said|says|asked|asks|wants|prefers|requested|instructed|told|requires|chose)\b|\buser'?s? (instruction|request|preference|requirement)|使用者|用戶/i;
+export const USER_SAID = /\b(the )?user (said|says|asked|asks|wants|prefers|requested|instructed|told|requires|chose)\b|\buser'?s? (instruction|request|preference|requirement)|使用者|用戶/i;
 
 /** A role in English, for text that goes to the models. */
 export const roleName = (role: AgentRunInfo['role']) => ROLE[role];
@@ -98,6 +99,41 @@ export function openDecisionLines(run: WorkflowRun): string[] {
     .flatMap(decisionLines);
 }
 
+/** One item kept whole, or, when it does not fit, a short form that says what was left out and where to read it. */
+type Unit = string | { full: string; short: string };
+
+/** As many items as fit in `budget`, from the first (lists in order of importance); an item is never split. */
+function fitTop(items: Unit[], budget: number, head: string): string {
+  const out: string[] = [];
+  let used = head.length + 80;
+  let i = 0;
+  for (; i < items.length; i++) {
+    const it = items[i];
+    const full = typeof it === 'string' ? it : it.full;
+    const short = typeof it === 'string' ? undefined : it.short;
+    const pick = used + full.length + 1 <= budget ? full : short && used + short.length + 1 <= budget ? short : undefined;
+    if (!pick) break;
+    out.push(pick);
+    used += pick.length + 1;
+  }
+  const dropped = items.length - i;
+  return [head, ...out, ...(dropped ? [`- (${dropped} more item(s) left out; read_context finds them)`] : [])].join('\n');
+}
+
+/**
+ * Each open decision as one unit: its question with every side and its sources, or — when that does not fit — its
+ * question with where to read the rest.
+ */
+export function openDecisionUnits(run: WorkflowRun): { full: string; short: string }[] {
+  return (['plan', 'implement'] as const)
+    .flatMap((k) => [...(run.stages[k]?.rounds ?? [])].reverse().find((r) => r.submission?.openDecisions?.length)?.submission?.openDecisions ?? [])
+    .map((d) => {
+      const lines = decisionLines(d);
+      const first = lines[0].replace(/^- /, '- [open decision] ');
+      return { full: [first, ...lines.slice(1)].join('\n'), short: `${first} — its sides and sources are left out here for space: read_context {} lists them in full` };
+    });
+}
+
 /** The user's own words in the records: messages during the run, feedback on a round, decisions said to be theirs. */
 export function userWordLines(run: WorkflowRun): string[] {
   return [
@@ -117,6 +153,57 @@ export function openReviewLines(run: WorkflowRun): { open: string[]; nv: string[
     (r!.review!.needsValidation ?? []).map((n) => `- ${n.id} ${cut(flat(n.title), 160)}${n.location ? ` (${n.location})` : ''} — missing evidence: ${cut(flat(n.missing), 300)}${n.how ? `; to confirm: ${cut(flat(n.how), 200)}` : ''} (${k} review, round ${r!.n})`),
   );
   return { open, nv };
+}
+
+/**
+ * Aivenue's own records for the hand-off summary of a conversation that cannot be compacted from outside
+ * (docs/next-task-skills-integration.md; after context-compression: the artifact trail is not left to the summarizer).
+ * Most important first, all within `budget` characters: the task and the user's words; open issues, what is not
+ * confirmed and open decisions; the checks this conversation ran (how they ended — a check run before a later file
+ * change is marked to be re-verified); its other commands (how they ended, no output); the files it changed or
+ * possibly changed; the files it read (names only). Each part names its source; what does not fit is counted, with
+ * where to read it.
+ */
+export function handoffRecords(run: WorkflowRun, info: AgentRunInfo, ids: Set<string>, eventsOf: (agentId: string) => AgentEvent[], budget: number, at = Date.now()): string {
+  const act = collectActivity(run, eventsOf, { onlyIds: ids });
+  const head = `FROM AIVENUE'S RECORDS (attached by Aivenue, not written by the summarizer; source: the tool records of agent(s) ${[...ids].map((id) => id.slice(0, 8)).join(', ')} and the workflow's review records, up to ${new Date(at).toISOString().slice(0, 16)}Z; full outputs: read_context {agent_id}):`;
+  const { open, nv } = openReviewLines(run);
+  const shown = (e: { ok: boolean; result: string; outdated?: boolean; maybeOutdated?: boolean; what: string }) =>
+    `- ${!e.ok ? '✗' : /\b(fail(ed|ing|ure)?|error)\b/i.test(e.result) ? '⚠' : '✓'} \`${cut(flat(e.what), 160)}\`${e.outdated ? ' — files changed since' : e.maybeOutdated ? ' — a failed edit since may have changed files' : ''}`;
+  const checks = verifiedChecks(act, 10);
+  const checkSet = new Set(checks.map((l) => /`([^`]*)`/.exec(l)?.[1]));
+  const latest = new Map<string, (typeof act.entries)[number]>();
+  for (const e of act.entries.filter((x) => x.kind === 'command')) latest.set(e.what, e);
+  const commands = [...latest.values()].filter((e) => !checkSet.has(cut(e.what, 100))).map(shown);
+  const changed = act.changed.filter(([, c]) => ids.has(c.by.id));
+  // The first two parts keep their items in order of importance (from the top: the task and the earliest words, which
+  // set the constraints; confirmed issues before decisions before what is not confirmed); the rest keep the newest.
+  const sections: { title: string; lines: Unit[]; cap: number; top?: boolean }[] = [
+    { title: 'Task and the user\'s words (constraints to keep):', lines: [...(info.task ? [`- Task of this conversation: ${cut(flat(info.task), 400)}`] : []), ...userWordLines(run)], cap: 0.45, top: true },
+    {
+      title: 'Open issues, open decisions, points not confirmed:',
+      lines: [...open, ...openDecisionUnits(run), ...nv.map((l) => l.replace(/^- /, '- [not confirmed] '))],
+      cap: 0.45,
+      top: true,
+    },
+    { title: 'Checks it ran (re-verify any marked so before relying on it):', lines: checks, cap: 1 },
+    { title: 'Files it changed:', lines: changed.filter(([, c]) => c.sure).map(([f, c]) => `- ${f} (by ${c.by.id.slice(0, 8)})`), cap: 1 },
+    { title: 'Files it possibly changed (every edit of them failed; check them):', lines: changed.filter(([, c]) => !c.sure).map(([f, c]) => `- ${f} (by ${c.by.id.slice(0, 8)})`), cap: 1 },
+    { title: 'Other commands it ran (how they ended; outputs in read_context):', lines: commands, cap: 1 },
+    { title: 'Files it read (names only):', lines: act.read.map((r) => `- ${r.file}${r.outdated ? ' — CHANGED since' : r.maybeOutdated ? ' — possibly changed since' : ''}`), cap: 1 },
+  ];
+  let left = budget - head.length - 1;
+  const parts = [head];
+  for (const s of sections) {
+    if (!s.lines.length || left <= s.title.length + 40) continue;
+    const room = Math.min(left, Math.floor(budget * s.cap));
+    // fit() does not count its "left out" line: leave room for it.
+    const text = s.top ? fitTop(s.lines, room, s.title) : fit(s.lines as string[], room - 90, s.title);
+    if (text.length > room) continue;
+    parts.push(text);
+    left -= text.length + 1;
+  }
+  return parts.length > 1 ? parts.join('\n') : '';
 }
 
 export function handoffToYou(run: WorkflowRun, self: AgentRunInfo, prev: AgentRunInfo, handover: { text: string; auto: boolean }, act: ReturnType<typeof collectActivity>, accountChars: number): { text: string; listsOpenIssues: boolean } {
@@ -205,7 +292,7 @@ function noteLine(run: WorkflowRun, n: SharedNote): string {
 /** Notes not yet folded into the shared memory (or all of them with `all`), newer than `since`. */
 function notesBlock(run: WorkflowRun, o: { all?: boolean; since?: number } = {}): string {
   const upto = o.all ? 0 : run.memory?.upto ?? 0;
-  const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > (o.since ?? 0));
+  const notes = (run.notes ?? []).filter((n) => (n.ts > upto || unfolded(run, `n:${n.id}`)) && n.ts > (o.since ?? 0));
   if (!notes.length) return '(no notes yet)';
   return notes.map((n) => noteLine(run, n)).join('\n');
 }
@@ -217,7 +304,10 @@ function memoryBlock(run: WorkflowRun): string {
 }
 
 /** Whether an agent's result is already folded into the shared memory. */
-const folded = (run: WorkflowRun, a: AgentRunInfo) => !!run.memory && !!a.endedAt && a.endedAt <= run.memory.upto;
+const folded = (run: WorkflowRun, a: AgentRunInfo) => !!run.memory && !!a.endedAt && a.endedAt <= run.memory.upto && !unfolded(run, `a:${a.id}`);
+
+/** Material up to the memory's time that its last compaction left pending: still shown as it is. */
+const unfolded = (run: WorkflowRun, ref: string) => isPending(run.memory?.pending, ref);
 
 /** Every original note, also the ones folded into the shared memory (read_context {agent_id: "notes"}). */
 export function allNotes(run: WorkflowRun): string {
@@ -253,7 +343,7 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   // Hand-offs come as hand-offs (the agent directory, the one before this agent in full); notes from an earlier
   // message only when they are decisions or the user's instructions, the rest is in the organized knowledge and searchable.
   const inPrompt = (n: SharedNote) => !HANDOFF_NOTE.test(n.text) && (!n.carried || n.kind === 'decision' || USER_SAID.test(n.text));
-  const notes = (run.notes ?? []).filter((n) => n.ts > upto && n.ts > since && inPrompt(n)).map((n) => noteLine(run, n));
+  const notes = (run.notes ?? []).filter((n) => (n.ts > upto || unfolded(run, `n:${n.id}`)) && n.ts > since && inPrompt(n)).map((n) => noteLine(run, n));
   const carriedOut = !since ? (run.notes ?? []).filter((n) => n.carried && !inPrompt(n) && !HANDOFF_NOTE.test(n.text)).length : 0;
   const knowledgeDoc = run.knowledge && run.knowledge.updatedAt > since ? run.knowledge.doc : '';
   const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
@@ -419,6 +509,12 @@ export function logPage(entries: string[], page: number): string {
 /** Overview for `read_context` without an agent id. `eventsOf` adds the commands every agent ran and the project knowledge. */
 export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => AgentEvent[]): string {
   const parts = [`GOAL:\n${run.config.goal}`];
+  // The shared memory in full: every active entry, and what was replaced, retracted or merged, with why.
+  if (run.memory?.entries?.length) {
+    const all = renderMemory(run.memory.entries, 1_000_000, { tokens: (t) => Math.ceil(t.length / 4) }).text;
+    const history = memoryHistory(run.memory.entries);
+    parts.push(`SHARED MEMORY (all entries, cycle ${run.memory.cycle ?? 0}):\n${all}${history ? `\n\n${history}` : ''}`);
+  }
   const status = statusBlock(run);
   if (status) parts.push(status);
   if (run.plan) parts.push(`CURRENT PLAN:\n${run.plan.markdown?.trim() || run.plan.summary}\n\nSteps:\n${run.plan.steps.map((s) => `${s.id}. ${s.title}${s.detail ? ` — ${s.detail}` : ''}`).join('\n')}`);
