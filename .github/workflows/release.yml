@@ -104,6 +104,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # release/ is not in the repository (it is ignored); vsce writes into it but does not create it.
+      - run: mkdir -p release
       - name: Package VS Code extension (release/aivenue-vscode.vsix)
         run: npm run package:vscode
       - uses: actions/upload-artifact@v4
