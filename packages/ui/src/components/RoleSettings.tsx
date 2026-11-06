@@ -6,6 +6,7 @@ import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } fro
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
 import { fmtContext } from '../../../core/src/modelContext';
+import { applyStandard, flowModeOf, keepFlowMark, STANDARD_ROUNDS } from '../../../core/src/flowMode';
 import { useT } from '../i18n';
 import { cx, providerColor, providerName } from '../util';
 
@@ -24,6 +25,13 @@ export function defaultDraft(providers: ProviderInfo[], cwd = ''): RoleDraft {
     subagents: { enabled: true, allowed: ids, maxDepth: 1, maxConcurrent: 2 },
     assignment: { mode: 'auto', auto: DEFAULT_AUTO },
   };
+}
+
+/** A reviewer from another provider than the implementer when there is one (for a layout that had no reviewer). */
+function otherReviewer(d: RoleDraft, providers: ProviderInfo[]): RoleConfig | undefined {
+  const ready = providers.filter((p) => p.installed && p.auth.state === 'logged_in').map((p) => p.spec.id);
+  const id = ready.find((x) => x !== d.implement.author.provider);
+  return id ? { provider: id } : undefined;
 }
 
 export const DEFAULT_AUTO: AutoAssignPrefs = { priority: 'balanced', crossReview: true, failover: true };
@@ -85,7 +93,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   const plan = view(draft.plan, preview?.plan);
   const implement = view(draft.implement, preview?.implement);
   const subs = preview?.subagents ?? draft.subagents.allowed;
-  const priority = { quality: t('品質優先', 'Quality'), balanced: t('平衡', 'Balanced'), economy: t('省額度', 'Economy') }[draft.assignment?.auto.priority ?? 'balanced'];
+  const priority = { quality: t('品質優先', 'Quality'), balanced: t('平衡', 'Balanced'), economy: t('省額度', 'Economy') }[draft.assignment?.auto?.priority ?? 'balanced'];
   const permission = draft.permission ?? 'auto';
   const stage = (label: string, s: StageConfig) => `${label}：${s.enabled ? [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ') : t('略過', 'skip')}`;
   // Everything lives in the settings window; the button carries just a hint and the full summary as a tooltip.
@@ -102,6 +110,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
     (!plan.enabled && implement.enabled ? ` · ${t('直接實作', 'no plan')}` : '');
   const pair = (s: StageConfig) => [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ');
   const long = [
+    flowModeOf(draft) === 'standard' ? t('標準模式', 'Standard') : '',
     auto ? `✦ ${t('自動指派', 'Auto')} · ${priority}` : '',
     plan.enabled ? `${t('計畫', 'Plan')} ${pair(plan)}` : t('不規劃', 'No plan'),
     implement.enabled ? `${t('實作', 'Build')} ${pair(implement)}` : '',
@@ -818,7 +827,9 @@ export function RoleSettings({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  const set = (patch: Partial<RoleDraft>) => onChange({ ...draft, ...patch });
+  // A change away from the standard layout drops the mode mark, so the settings then show as custom.
+  const set = (patch: Partial<RoleDraft>) => onChange(keepFlowMark({ ...draft, ...patch }));
+  const mode = flowModeOf(draft);
   const sub = draft.subagents;
   const auto = isAuto(draft) && !readOnly;
   const prefs = draft.assignment?.auto ?? DEFAULT_AUTO;
@@ -885,11 +896,30 @@ export function RoleSettings({
           </section>
         )}
 
+        {!readOnly && (
+          <section className="sect">
+            <div className="sect-title">{t('流程模式', 'Flow mode')}</div>
+            <div className="seg">
+              <button className={cx(mode === 'standard' && 'on')} onClick={() => mode !== 'standard' && onChange(applyStandard(draft, otherReviewer(draft, providers)))}>
+                {t('標準', 'Standard')}
+              </button>
+              <button className={cx(mode === 'custom' && 'on')} disabled={mode === 'custom'} onClick={() => set({ flow: undefined })}>
+                {t('自訂', 'Custom')}
+              </button>
+            </div>
+            <div className="muted small">
+              {mode === 'standard'
+                ? t(`不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式審查者，最多 ${STANDARD_ROUNDS} 輪；不做目標驗收、不開 sub agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`, `No planning stage: the implementer writes a short plan itself first. One code reviewer, at most ${STANDARD_ROUNDS} rounds; no goal verification, no sub-agents. Changing who writes or reviews keeps it Standard; changing a stage switch, the review rounds or other flow settings makes it "Custom".`)
+                : t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與 sub agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')}
+            </div>
+          </section>
+        )}
+
         {!readOnly && presets.length > 0 && (
           <div className="presets">
             {presets.map((p) => (
               <span key={p.id} className="preset">
-                <button className="chip-btn" onClick={() => onChange({ ...p.config, cwd: draft.cwd })}>
+                <button className="chip-btn" onClick={() => onChange(keepFlowMark({ ...p.config, cwd: draft.cwd }))}>
                   {p.name}
                 </button>
                 <button className="icon-btn tiny" title={t('刪除', 'Delete')} onClick={() => hub.call<WorkflowPreset[]>('presets.delete', { id: p.id }).then(setPresets)}>

@@ -15,6 +15,7 @@ import { CompactFailedAsk, ContextAsk, ContextPie } from '../components/ContextP
 import { ProgressPanel } from '../components/Progress';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
+import { draftInit, type DraftInit } from '../draftInit';
 import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
@@ -671,11 +672,26 @@ export function Chat({ id }: { id?: string }) {
   const scroller = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
 
+  // The saved draft, or the default only when the saved settings were read and hold none (draftInit.ts). Until then
+  // the page shows "loading" (or the read error with a retry), so nothing can save over the saved draft.
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const latest = useRef({ providers, host });
+  latest.current = { providers, host };
+  const init = useRef<DraftInit<RoleDraft> | undefined>(undefined);
+  init.current ??= draftInit<RoleDraft>({
+    read: () => hub.call('settings.get'),
+    makeDefault: () => defaultDraft(latest.current.providers, latest.current.host?.defaultCwd ?? ''),
+    set: (d) => {
+      const cwd = latest.current.host?.defaultCwd;
+      setDraft((cur) => cur ?? (!d.cwd && cwd ? { ...d, cwd } : d));
+    },
+    fail: setDraftError,
+  });
   useEffect(() => {
-    if (draft || !host || !providers.length) return;
-    const d = settings.draft ?? defaultDraft(providers, host.defaultCwd ?? '');
-    setDraft(!d.cwd && host.defaultCwd ? { ...d, cwd: host.defaultCwd } : d);
-  }, [settings.draft, host, providers.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (host && providers.length) void init.current!.start();
+  }, [!!host, providers.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => init.current!.saved(settings.draft), [settings.draft]);
+  useEffect(() => hub.on('reconnect', () => void init.current!.retry()), []);
 
   useEffect(() => {
     if (run?.status !== 'running' && run?.status !== 'waiting_human') return;
@@ -783,7 +799,17 @@ export function Chat({ id }: { id?: string }) {
     }
   };
 
-  if (!shown) return <div className="center-fill muted">{t('載入中…', 'Loading…')}</div>;
+  if (!shown)
+    return draftError ? (
+      <div className="center-fill">
+        <div className="err-text small">{t(`讀不到已存的工作流設定（${draftError}）。為了不覆蓋它，先不建立新的設定；連線恢復後會自動重試。`, `Could not read the saved workflow settings (${draftError}). So as not to overwrite them, no new settings are made yet; this retries when the connection is back.`)}</div>
+        <button className="btn" onClick={() => void init.current!.retry()}>
+          {t('重試', 'Retry')}
+        </button>
+      </div>
+    ) : (
+      <div className="center-fill muted">{t('載入中…', 'Loading…')}</div>
+    );
   // Providers that will see the attachments: auto picks (before the run) or the configured roles.
   const roleProviders = ((): RoleTarget[] => {
     const a = !run && isAuto(shown) ? preview.result : undefined;

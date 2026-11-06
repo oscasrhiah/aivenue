@@ -1,4 +1,5 @@
 import type { GoalSpec, IssueResponse, PlanDoc, Review, RouteDecision, SubagentConfig, Verification, WorkflowConfig, WorkflowRun } from './types';
+import { flowModeOf } from './flowMode';
 
 const LANG = 'Write all human-readable text (plans, summaries, issue descriptions) in the same language as the GOAL.';
 const SHOT = 'If the work has a visible UI (web page, HTML file, app screen), check it with the Aivenue tool `capture_screenshot` {target: URL or HTML file path, width? (390 = phone), full_page?}; the user sees the screenshot in the conversation.';
@@ -160,6 +161,8 @@ export function implementPrompt(cfg: WorkflowConfig, plan: PlanDoc | undefined, 
     '',
     plan ? 'TASK: Implement the APPROVED PLAN below in the working directory.' : 'TASK: Implement the GOAL in the working directory.',
     plan ? 'Before starting each plan step call `report_progress` {step_id, status: "in_progress"}, and after finishing it {step_id, status: "done", note}. Use "blocked" or "skipped" with a note when needed.' : 'Report notable milestones with `report_progress`.',
+    // Only in the standard mode, so the prompt of every other layout stays exactly as it was.
+    ...(!plan && flowModeOf(cfg) === 'standard' ? ['There is no planning stage in this workflow. Before you change any file, write a short plan of your own (a few lines: what you will change and how you will check it), then follow it.'] : []),
     'Verify your work (build / tests) where possible.',
     SHOT,
     userFeedback ? `\nThe user added this guidance:\n${userFeedback}` : '',

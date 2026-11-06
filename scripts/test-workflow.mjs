@@ -25,6 +25,8 @@ const bundled = await build({
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
       export { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './packages/core/src/promptStats';
       export { createParser } from './packages/core/src/providers/parsers';
+      export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
+      export { draftInit } from './packages/ui/src/draftInit';
       export * as P from './packages/core/src/prompts';`,
     resolveDir: process.cwd(),
   },
@@ -727,5 +729,187 @@ test('A2：成本分解依角色與階段、壓縮與整理筆記另列；三種
   live.status = 'running';
   W.trackWaiting(live, 700);
   assert.equal(live.timing.waitingMs, 500);
+});
+
+// ---------- B：可選的標準模式（不呼叫模型） ----------
+
+/** 目前新對話的預設角色配置（RoleSettings.tsx defaultDraft 的形狀），加上會被模式改掉的殘值。 */
+const heavyDraft = () => ({
+  cwd: 'C:/work/repo',
+  plan: { enabled: true, author: { provider: 'claude' }, reviewer: { provider: 'codex' }, maxRounds: 3, humanGate: true },
+  implement: { enabled: true, author: { provider: 'claude' }, reviewer: { provider: 'codex' }, maxRounds: 3, humanGate: true },
+  subagents: { enabled: true, allowed: ['claude', 'codex'], maxDepth: 1, maxConcurrent: 2 },
+  verify: { enabled: true, by: 'independent', verifier: { provider: 'gemini' }, repeatLimit: 3 },
+  assignment: { mode: 'manual', auto: { priority: 'balanced', crossReview: true, failover: true } },
+});
+
+test('標準模式：完整設定每個角色欄位，不沿用上次的殘值', () => {
+  const d = heavyDraft();
+  const s = W.applyStandard(d);
+  assert.equal(s.flow, 'standard');
+  assert.equal(s.plan.enabled, false);
+  assert.equal(s.plan.humanGate, false);
+  // 計畫階段只是關掉，角色留著，之後重新開啟會回來。
+  assert.deepEqual(s.plan.author, { provider: 'claude' });
+  assert.deepEqual(s.plan.reviewer, { provider: 'codex' });
+  assert.equal(s.implement.enabled, true);
+  assert.deepEqual(s.implement.reviewer, { provider: 'codex' }, '保留程式審查');
+  assert.equal(s.implement.maxRounds, W.STANDARD_ROUNDS);
+  assert.equal(W.STANDARD_ROUNDS, 2);
+  assert.equal(s.implement.humanGate, false);
+  assert.equal(s.verify.enabled, false);
+  assert.equal(s.subagents.enabled, false);
+  // 和角色配置無關的設定不動；原本的物件也不被改到。
+  assert.equal(s.cwd, d.cwd);
+  assert.deepEqual(s.assignment, d.assignment);
+  assert.deepEqual(d, heavyDraft());
+  assert.equal(W.flowModeOf(s), 'standard');
+});
+
+test('標準模式：原本沒有審查者時，補上另一家（或計畫審查者、或實作者自己），程式審查一定保留', () => {
+  const none = { ...heavyDraft(), implement: { ...heavyDraft().implement, reviewer: null } };
+  assert.deepEqual(W.applyStandard(none, { provider: 'gemini' }).implement.reviewer, { provider: 'gemini' });
+  assert.deepEqual(W.applyStandard(none).implement.reviewer, { provider: 'codex' });
+  const alone = { ...none, plan: { ...none.plan, reviewer: null } };
+  assert.deepEqual(W.applyStandard(alone).implement.reviewer, { provider: 'claude' });
+  // 沒有驗收設定時不憑空加一個。
+  const { verify: _v, ...noVerify } = heavyDraft();
+  assert.equal(W.applyStandard(noVerify).verify, undefined);
+});
+
+test('標準模式：改掉任何角色配置就變成「自訂」；既有設定沒有模式標記，維持自訂且不被改動', () => {
+  const s = W.applyStandard(heavyDraft());
+  for (const changed of [
+    { ...s, plan: { ...s.plan, enabled: true } },
+    { ...s, implement: { ...s.implement, reviewer: null } },
+    { ...s, implement: { ...s.implement, maxRounds: 3 } },
+    { ...s, implement: { ...s.implement, humanGate: true } },
+    { ...s, verify: { ...s.verify, enabled: true } },
+    { ...s, subagents: { ...s.subagents, enabled: true } },
+  ]) {
+    assert.equal(W.flowModeOf(changed), 'custom');
+    const kept = W.keepFlowMark(changed);
+    assert.equal('flow' in kept, false, '殘留的模式標記要拿掉');
+    assert.equal(W.flowModeOf(kept), 'custom');
+  }
+  // 換人不換配置：仍是標準。
+  const other = W.keepFlowMark({ ...s, implement: { ...s.implement, author: { provider: 'codex' }, reviewer: { provider: 'claude' } } });
+  assert.equal(W.flowModeOf(other), 'standard');
+  // 已存的設定（沒有標記），即使配置剛好一樣，也不會被當成標準模式。
+  const { flow: _f, ...saved } = s;
+  assert.equal(W.flowModeOf(saved), 'custom');
+  assert.equal(W.keepFlowMark(saved), saved);
+  assert.equal(W.flowModeOf(heavyDraft()), 'custom');
+});
+
+test('標準模式的實作 prompt 要求先寫幾行計畫；其他配置的 prompt 一字不差', () => {
+  const base = { ...heavyDraft(), title: 't', goal: 'add a flag' };
+  const line = 'There is no planning stage in this workflow. Before you change any file, write a short plan of your own';
+  const std = W.applyStandard(base);
+  assert.ok(W.P.implementPrompt(std, undefined, '').includes(line));
+  // 同樣的配置但沒有模式標記（使用者自己關掉計畫）：不加這句，和加入模式前完全相同。
+  const { flow: _f, ...custom } = std;
+  const plain = W.P.implementPrompt(custom, undefined, '');
+  assert.ok(!plain.includes(line));
+  const lines = W.P.implementPrompt(std, undefined, '').split('\n');
+  assert.equal(lines.filter((l) => !l.startsWith('There is no planning stage')).join('\n'), plain);
+  // 有核准計畫時不加。
+  const plan = { summary: 's', markdown: 'm', steps: [{ id: '1', title: 'x', status: 'pending' }] };
+  assert.ok(!W.P.implementPrompt(std, plan, '').includes(line));
+});
+
+// ---------- 新對話設定的載入順序（packages/ui/src/draftInit.ts） ----------
+
+/** 依序回應的設定讀取：每次呼叫取下一個結果（Error 代表讀取失敗）。 */
+function drafts(results) {
+  const log = { set: [], errors: [], reads: 0 };
+  const init = W.draftInit({
+    read: async () => {
+      const r = results[log.reads++];
+      if (r instanceof Error) throw r;
+      return r;
+    },
+    makeDefault: () => ({ name: 'default' }),
+    set: (d, from) => log.set.push([d.name, from]),
+    fail: (why) => why !== null && log.errors.push(why),
+  });
+  return { init, log };
+}
+
+test('設定載入：供應商先回來 → 讀取失敗 → 重連後讀到已存的標準模式，不會被預設值取代', async () => {
+  const saved = { name: 'saved-standard', flow: 'standard' };
+  const { init, log } = drafts([new Error('connection closed'), { draft: saved }]);
+  await init.start(); // 供應商與 host 已知，先讀設定：失敗
+  assert.deepEqual(log.set, [], '讀取失敗不等於沒有存檔，不建立預設值');
+  assert.deepEqual(log.errors, ['connection closed']);
+  assert.equal(init.done, false);
+  await init.retry(); // 重新連線
+  assert.deepEqual(log.set, [['saved-standard', 'saved']]);
+  assert.equal(init.done, true);
+  // 之後再收到任何東西都不會換掉已採用的設定。
+  init.saved({ name: 'other' });
+  await init.retry();
+  assert.deepEqual(log.set, [['saved-standard', 'saved']]);
+  assert.equal(log.reads, 2);
+});
+
+test('設定載入：只有成功讀到且確認沒有 draft 時才用預設值；回傳不是設定物件也算失敗', async () => {
+  const none = drafts([{ locale: 'zh-TW' }]);
+  await none.init.start();
+  assert.deepEqual(none.log.set, [['default', 'default']]);
+  const odd = drafts([undefined, null, { draft: { name: 'kept' } }]);
+  await odd.init.start();
+  await odd.init.retry();
+  assert.deepEqual(odd.log.set, []);
+  assert.equal(odd.log.errors.length, 2);
+  await odd.init.retry();
+  assert.deepEqual(odd.log.set, [['kept', 'saved']]);
+});
+
+test('設定載入：讀取失敗期間另外收到已存的設定就採用；供應商還沒回來前不讀', async () => {
+  const { init, log } = drafts([new Error('timeout')]);
+  await init.retry(); // 還沒 start：不讀
+  assert.equal(log.reads, 0);
+  await init.start();
+  assert.deepEqual(log.errors, ['timeout']);
+  init.saved(undefined); // 推送來的設定沒有 draft：不能因此建立預設值
+  assert.deepEqual(log.set, []);
+  init.saved({ name: 'pushed' });
+  assert.deepEqual(log.set, [['pushed', 'saved']]);
+});
+
+test('設定載入：較舊的讀取晚回來且沒有 draft，不會搶先建立預設值；採用較新讀取的已存設定', async () => {
+  const pending = [];
+  const log = { set: [], errors: [] };
+  const init = W.draftInit({
+    read: () => new Promise((resolve) => pending.push(resolve)),
+    makeDefault: () => ({ name: 'default' }),
+    set: (d, from) => log.set.push([d.name, from]),
+    fail: (why) => why !== null && log.errors.push(why),
+  });
+  const first = init.start(); // 第一次讀取還沒回覆
+  const second = init.retry(); // 重試（例如重新連線）
+  assert.equal(pending.length, 2);
+  pending[0]({ locale: 'zh-TW' }); // 舊請求先回：沒有 draft
+  await first;
+  assert.deepEqual(log.set, [], '過期的讀取結果不採用');
+  pending[1]({ draft: { name: 'saved-standard', flow: 'standard' } }); // 新請求回：已存的標準模式
+  await second;
+  assert.deepEqual(log.set, [['saved-standard', 'saved']]);
+  assert.deepEqual(log.errors, []);
+});
+
+test('設定載入：較舊的讀取晚回來帶著 draft 也不採用，以最新一次為準', async () => {
+  const pending = [];
+  const log = [];
+  const init = W.draftInit({ read: () => new Promise((resolve) => pending.push(resolve)), makeDefault: () => ({ name: 'default' }), set: (d, from) => log.push([d.name, from]), fail: () => undefined });
+  const a = init.start();
+  const b = init.retry();
+  pending[0]({ draft: { name: 'older' } });
+  await a;
+  assert.deepEqual(log, []);
+  pending[1]({ draft: { name: 'newer' } });
+  await b;
+  assert.deepEqual(log, [['newer', 'saved']]);
 });
 

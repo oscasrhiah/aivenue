@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 // 工作流狀態機的回歸測試：真正的 Orchestrator，只把 CLI 換成依角色回應的替身 agent，
 // 用來模擬各種結果、斷線、崩潰、錯誤核准與結果遺失。
 const bundled = await build({
-  stdin: { contents: `export { Orchestrator } from './packages/core/src/orchestrator'; export { RunStore } from './packages/core/src/store';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { Orchestrator } from './packages/core/src/orchestrator'; export { RunStore } from './packages/core/src/store'; export { applyStandard } from './packages/core/src/flowMode';`, resolveDir: process.cwd() },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -27,7 +27,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { Orchestrator, RunStore } = mod.exports;
+const { Orchestrator, RunStore, applyStandard } = mod.exports;
 
 const spec = (id) => ({ id, name: id, command: id, run: { args: [] }, output: 'text' });
 function setup(o = {}) {
@@ -1363,5 +1363,40 @@ test('A1／A2：每輪記下的 prompt 組成，加總正好是送出的 prompt�
   assert.ok(cost.rows.some((x) => x.key === 'executor@implement'));
   assert.ok(cost.blocks.some((b) => b.key.startsWith('shared.')));
   assert.ok(cost.wallMs > 0);
+});
+
+// ---------- B：標準模式的流程（替身 agent） ----------
+
+test('標準模式：不開計畫階段，實作後進入程式審查，通過就完成；實作 prompt 要求先寫幾行計畫', async () => {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  const calls = fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const c = applyStandard(config(cwd, { subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } }));
+  const r = await settle(orch, orch.start(c).id);
+  assert.equal(r.status, 'completed', r.error);
+  const roles = calls.filter((x) => x !== 'librarian');
+  assert.deepEqual(roles, ['executor', 'code_reviewer']);
+  assert.ok(!calls.some((x) => ['planner', 'plan_reviewer', 'verifier', 'subagent'].includes(x)));
+  assert.equal(r.config.flow, 'standard');
+  assert.ok(prompts[0].includes('There is no planning stage in this workflow'));
+});
+
+test('標準模式：程式審查最多 2 輪，第 2 輪仍要求修改就停下來問使用者', async () => {
+  const { orch, cwd } = setup();
+  const revise = { tool: 'submit_review', args: { verdict: 'revise', summary: 'no', issues: [{ id: 'R1', severity: 'major', title: 'missing check' }] } };
+  const fixed = { tool: 'submit_work', args: { summary: 'fixed', responses: [{ issue_id: 'R1', action: 'fixed', note: 'added' }] } };
+  const calls = fakeAgents(orch, { code_reviewer: [revise], executor: [defaults.executor, fixed] });
+  const r = await settle(orch, orch.start(applyStandard(config(cwd))).id);
+  assert.equal(r.status, 'waiting_human', r.error);
+  assert.equal(calls.filter((x) => x === 'code_reviewer').length, 2);
+  assert.equal(calls.filter((x) => x === 'executor').length, 2);
+  assert.ok(!calls.includes('planner'));
 });
 

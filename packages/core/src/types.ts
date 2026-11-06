@@ -759,6 +759,8 @@ export interface WorkflowConfig {
   limits?: LimitsConfig;
   /** Only check environment, paths, providers and resources; no agent runs. */
   dryRun?: boolean;
+  /** The flow mode the role layout was set from (flowMode.ts); absent = custom settings. */
+  flow?: 'standard';
 }
 
 /**

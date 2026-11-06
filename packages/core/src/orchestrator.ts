@@ -360,7 +360,7 @@ export class Orchestrator {
 
   /** Next provider to try for a role after `tried` failed (auto mode with failover). */
   private failoverTarget(run: WorkflowRun, kind: 'plan' | 'review' | 'code', tried: Set<string>): string | undefined {
-    if (run.config.assignment?.mode !== 'auto' || !run.config.assignment.auto.failover || !run.assignment) return undefined;
+    if (run.config.assignment?.mode !== 'auto' || !run.config.assignment.auto?.failover || !run.assignment) return undefined;
     const ready = new Set(this.d.registry.list().filter((p) => p.installed && p.auth.state === 'logged_in').map((p) => p.spec.id));
     return run.assignment.ranking[kind].find((id) => !tried.has(id) && ready.has(id));
   }
