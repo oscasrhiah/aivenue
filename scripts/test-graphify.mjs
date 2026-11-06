@@ -116,3 +116,27 @@ test('安全檢查：內建的 security-audit skill 複製到 skills 資料夾�
   fs.rmSync(skillsDir, { recursive: true, force: true });
   fs.rmSync(empty, { recursive: true, force: true });
 });
+
+test('CI 診斷：內建的 gh-fix-ci skill 也複製到 skills 資料夾，回傳讀得到的 SKILL.md 路徑', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const skillsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-skills-'));
+  const s = new ExtensionService({ dataDir: skillsDir, bundledDir: path.join(process.cwd(), 'packages', 'core', 'bundled'), capabilities: { skillsDir, get: () => ({ extensions: {} }) }, registry: {}, secrets: {}, onChange() {} });
+  const p = s.ghFixCiSkill();
+  assert.equal(p, path.join(skillsDir, '.bundled', 'gh-fix-ci', 'skills', 'gh-fix-ci', 'SKILL.md'));
+  assert.ok(fs.existsSync(p));
+  fs.rmSync(skillsDir, { recursive: true, force: true });
+});
+
+test('審查意見：內建的 gh-address-comments skill 也複製到 skills 資料夾，回傳讀得到的 SKILL.md 路徑', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const skillsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-skills-'));
+  const s = new ExtensionService({ dataDir: skillsDir, bundledDir: path.join(process.cwd(), 'packages', 'core', 'bundled'), capabilities: { skillsDir, get: () => ({ extensions: {} }) }, registry: {}, secrets: {}, onChange() {} });
+  const p = s.ghAddressCommentsSkill();
+  assert.equal(p, path.join(skillsDir, '.bundled', 'gh-address-comments', 'skills', 'gh-address-comments', 'SKILL.md'));
+  assert.ok(fs.existsSync(p));
+  fs.rmSync(skillsDir, { recursive: true, force: true });
+});

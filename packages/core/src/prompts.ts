@@ -82,7 +82,15 @@ function issuesBlock(review: Review): string {
 
 function responsesBlock(responses: IssueResponse[] | undefined): string {
   if (!responses?.length) return '(the author did not respond to individual issues)';
-  return responses.map((r) => `- ${r.issue_id}: ${r.action === 'fixed' ? 'FIXED' : 'REBUTTED'}${r.note ? ` — ${r.note}` : ''}`).join('\n');
+  const state = (r: IssueResponse) =>
+    r.unmatched
+      ? `NOT A REVIEW ISSUE OF THIS ROUND (sent as ${r.action === 'unclassified' ? (r.given ? `"${r.given}"` : 'no action') : `"${r.action}"`}; counted as neither fixed nor rebutted)`
+      : r.action === 'fixed'
+        ? 'FIXED'
+        : r.action === 'rebutted'
+          ? 'REBUTTED'
+          : `UNCLASSIFIED (${r.given ? `"${r.given}"` : 'no action'}; neither fixed nor rebutted)`;
+  return responses.map((r) => `- ${r.issue_id}: ${state(r)}${r.conflict ? ` [the same source is open decision ${r.conflict}]` : ''}${r.note ? ` — ${r.note}` : ''}`).join('\n');
 }
 
 export function subagentBlock(sub: SubagentConfig, depth: number, available: { id: string; name: string; model?: string; effort?: string; model_fixed?: boolean }[]): string {

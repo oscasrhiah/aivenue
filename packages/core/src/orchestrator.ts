@@ -12,6 +12,7 @@ import type {
   ProviderSpec,
   AgentRunInfo,
   IssueResponse,
+  OpenDecision,
   ModelInfo,
   PlanDoc,
   PreflightItem,
@@ -44,9 +45,12 @@ import type {
 } from './types';
 import { runAgent, type BridgeLaunch, type RunAgentResult } from './agentRunner';
 import { capture, findNode } from './proc';
+import { ciDiagnosisBlock, diagnoseCi, wantsCiDiagnosis, type GhRun } from './ciDiagnose';
+import { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './prReviews';
+import { replayGh } from './ghReplay';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
-import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, type ToolDef } from './hubTools';
+import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
@@ -100,6 +104,12 @@ export interface OrchestratorDeps {
   platform?: NodeJS.Platform;
   /** Path of the bundled security-audit SKILL.md, for a workflow's security check (undefined: not shipped). */
   securityAudit?: () => string | undefined;
+  /** Path of the bundled gh-fix-ci SKILL.md, for a workflow asking about failing GitHub PR checks. */
+  ghFixCi?: () => string | undefined;
+  /** Path of the bundled gh-address-comments SKILL.md, for a workflow asking to address a PR's review comments. */
+  ghAddressComments?: () => string | undefined;
+  /** How Aivenue runs gh for a CI diagnosis (default: the gh on PATH with the user's sign-in); tests give a stand-in. */
+  gh?: (cwd: string) => GhRun;
   gpuQuery?: () => string;
   /** nvidia-smi with any arguments (tests). */
   gpuSmi?: (args: string[]) => string;
@@ -117,9 +127,9 @@ class Incomplete extends Error {}
 type Expect = 'submit_plan' | 'submit_review' | 'submit_work' | 'submit_verification' | 'submit_ruling';
 
 interface Submission {
-  plan?: { plan: PlanDoc; responses?: IssueResponse[] };
+  plan?: { plan: PlanDoc; responses?: IssueResponse[]; openDecisions?: OpenDecision[] };
   review?: Review;
-  work?: { summary: string; responses?: IssueResponse[] };
+  work?: { summary: string; responses?: IssueResponse[]; openDecisions?: OpenDecision[] };
   verification?: Verification;
   rulings?: { issue_id: string; ruling: 'uphold' | 'dismiss'; reason: string }[];
 }
@@ -1210,7 +1220,7 @@ export class Orchestrator {
       this.log(run, L('計畫者沒有交出更新後的計畫，實作者照原計畫並依你的訊息繼續', 'The planner gave no updated plan; the implementer follows your message on the current plan'), 'warn', true);
       return false;
     }
-    round.submission = { summary: plan.summary, plan, responses: r.sub?.plan?.responses };
+    round.submission = { summary: plan.summary, plan, responses: r.sub?.plan?.responses, openDecisions: r.sub?.plan?.openDecisions };
     // Steps already done stay done.
     const before = run.steps;
     run.plan = plan;
@@ -1760,6 +1770,55 @@ export class Orchestrator {
     return text;
   }
 
+  /** The Aivenue review issues each author round was asked to address ("<run>|<stage>|<round>"). */
+  private askedIssues = new Map<string, string[]>();
+
+  /**
+   * Checks an author's responses against the round: an id that is not one of the Aivenue issues it was asked about
+   * (a GitHub thread id, a made-up one) is kept as sent but marked unmatched — counted as neither fixed nor rebutted —
+   * and a response whose source is also an open decision is marked as conflicting with it. Unclassified actions,
+   * unmatched ids and conflicts are said in the run log; the returned text tells the author.
+   */
+  private checkResponses(run: WorkflowRun, info: AgentRunInfo, responses: IssueResponse[] | undefined, decisions: OpenDecision[] | undefined): string {
+    if (!responses?.length) return '';
+    const asked = this.askedIssues.get(`${run.id}|${info.stage}|${info.round}`) ?? [];
+    // A PR thread's comment links stand for the thread: a decision citing them is about the same source.
+    const links = new Map((run.prReviews?.threads ?? []).map((t) => [t.id, t.comments.map((c) => c.url).filter((u): u is string => !!u)]));
+    const texts = (decisions ?? []).map((d) => ({ id: d.id, text: [d.question, ...d.sources, ...d.positions.flatMap((p) => [p.view, p.source ?? ''])].join('\n') }));
+    for (const r of responses) {
+      if (!asked.includes(r.issue_id)) r.unmatched = true;
+      const refs = [r.issue_id, ...(links.get(r.issue_id) ?? [])].filter(Boolean);
+      const hit = texts.find((d) => refs.some((x) => d.text.includes(x)));
+      if (hit) r.conflict = hit.id;
+    }
+    const unclassified = responses.filter((r) => r.action === 'unclassified');
+    const unmatched = responses.filter((r) => r.unmatched);
+    const conflicts = responses.filter((r) => r.conflict);
+    const who = this.label(info);
+    if (unclassified.length) {
+      const list = unclassified.map((r) => `${r.issue_id || '?'}${r.given ? ` ("${r.given}")` : ''}`).join(', ');
+      this.log(run, L(`${who} 對 ${list} 的回應不是「已修正」或「反駁」，記為未分類`, `${who} answered ${list} with neither fixed nor rebutted: kept as unclassified`), 'warn', true);
+    }
+    if (unmatched.length) {
+      const list = unmatched.map((r) => r.issue_id || '?').join(', ');
+      this.log(run, L(`${who} 回應的 ${list} 不是這一輪的審查問題：照原樣保存，不算已修正或反駁`, `${who} responded to ${list}, which ${unmatched.length === 1 ? 'is' : 'are'} not review issues of this round: kept as sent, counted as neither fixed nor rebutted`), 'warn', true);
+    }
+    if (conflicts.length) {
+      const list = conflicts.map((r) => `${r.issue_id} ↔ ${r.conflict}`).join(', ');
+      this.log(run, L(`${who} 的回應與待決事項指向同一來源：${list}`, `${who}'s responses and open decisions point at the same source: ${list}`), 'warn', true);
+    }
+    const notes = [
+      unclassifiedNotice(responses).trim(),
+      unmatched.length
+        ? `Note: ${unmatched.map((r) => r.issue_id || '(no issue_id)').join(', ')} ${unmatched.length === 1 ? 'is' : 'are'} not ${asked.length ? `among the review issues of this round (${asked.join(', ')})` : `${unmatched.length === 1 ? 'a review issue' : 'review issues'} (this round had none to respond to)`}: excluded from this round's issue responses — kept as you sent ${unmatched.length === 1 ? 'it' : 'them'}, counted as neither fixed nor rebutted.`
+        : '',
+      conflicts.length ? `Note: ${conflicts.map((r) => `the response to ${r.issue_id} (${r.action}) and open decision ${r.conflict}`).join('; ')} point at the same source.` : '',
+    ].filter(Boolean);
+    // Received as it is: the notes say what was recorded; correcting them is optional (a submission that cannot be
+    // read, misses what is required or would misroute the work is refused by the tool instead).
+    return notes.length ? ` ${notes.join(' ')} ${OPTIONAL_CORRECTION}` : '';
+  }
+
   private async runTool(run: WorkflowRun, info: AgentRunInfo, name: string, args: Record<string, unknown>): Promise<string> {
     const sub = this.submissions.get(info.id) ?? {};
     this.submissions.set(info.id, sub);
@@ -1776,7 +1835,7 @@ export class Orchestrator {
         if (!p) throw new Error('Invalid plan: provide summary, markdown and steps[]');
         if (run.config.verify?.enabled && !p.plan.goal?.metrics.length) throw new Error('Goal verification is on: include goal {statement, metrics: [{id, name, target, how}]} with measurable acceptance metrics.');
         sub.plan = p;
-        return 'Plan received by Aivenue. You can finish your turn now.';
+        return `Plan received by Aivenue.${this.checkResponses(run, info, p.responses, p.openDecisions)} You can finish your turn now.`;
       }
       case 'submit_review': {
         const r = parseReview(args);
@@ -1788,7 +1847,7 @@ export class Orchestrator {
         const w = parseWork(args);
         if (!w) throw new Error('Invalid submission: provide summary');
         sub.work = w;
-        return 'Work received by Aivenue. You can finish your turn now.';
+        return `Work received by Aivenue.${this.checkResponses(run, info, w.responses, w.openDecisions)} You can finish your turn now.`;
       }
       case 'submit_verification': {
         const v = parseVerification(args);
@@ -2601,6 +2660,10 @@ export class Orchestrator {
       const authorTried = new Set<string>();
       for (;;) {
         const { resume, prompt } = buildPrompt();
+        // What this round's author may respond to: the issues of the review that sent the work back, and those of a goal
+        // verification when the stage restarted from one.
+        const lastVerify = run.stages.verify?.rounds.at(-1)?.verification;
+        this.askedIssues.set(`${run.id}|${key}|${n}`, [...(pendingReview?.issues ?? []).map((i) => i.id), ...(entry && n === firstN ? (lastVerify?.issues ?? []).map((i) => i.id) : [])]);
         const a = await this.runRole(run, {
           role: isPlan ? 'planner' : 'executor',
           roleCfg: cfg.author,
@@ -2647,12 +2710,12 @@ export class Orchestrator {
       }
 
       if (isPlan && authorResult.plan) {
-        const { plan, responses } = authorResult.plan;
-        round.submission = { summary: plan.summary, plan, responses };
+        const { plan, responses, openDecisions } = authorResult.plan;
+        round.submission = { summary: plan.summary, plan, responses, openDecisions };
         run.plan = plan;
         run.steps = plan.steps.map((st) => ({ ...st, status: 'pending' }));
       } else if (authorResult.work) {
-        round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses };
+        round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses, openDecisions: authorResult.work.openDecisions };
         // Reviews and verifications of the code before this change no longer count.
         if (this.hasEvidence(run)) {
           const stale = markStale(run, evidenceStamp(run.config.cwd, run.plan?.goal?.data));
@@ -2896,6 +2959,7 @@ export class Orchestrator {
     if (expect === 'submit_plan') {
       if (!sub.plan) {
         sub.plan = parsePlan(json);
+        if (run?.agents[agentId]) this.checkResponses(run, run.agents[agentId], sub.plan?.responses, sub.plan?.openDecisions);
         if (!sub.plan && !res.error) {
           const plan = planFromText(res.finalText);
           if (plan) sub.plan = { plan };
@@ -2907,7 +2971,10 @@ export class Orchestrator {
       sub.review ??= parseReview(json);
       return sub.review ? sub : undefined;
     }
-    sub.work ??= parseWork(json) ?? (res.error || !res.finalText.trim() ? undefined : { summary: res.finalText.trim() });
+    if (!sub.work) {
+      sub.work = parseWork(json) ?? (res.error || !res.finalText.trim() ? undefined : { summary: res.finalText.trim() });
+      if (run?.agents[agentId]) this.checkResponses(run, run.agents[agentId], sub.work?.responses, sub.work?.openDecisions);
+    }
     return sub.work ? sub : undefined;
   }
 
@@ -3027,8 +3094,14 @@ export class Orchestrator {
       const projectMemory = plain ? '' : this.memoryFor(run, info, resume, !!recapIds);
       // The workflow's security check: only its code reviewer, once per conversation (docs/next-task-security-audit-skill.md).
       const securitySkill = !plain && !resume && info.role === 'code_reviewer' && run.config.securityReview ? this.d.securityAudit?.() : undefined;
+      // A request about failing GitHub PR checks: the agents doing the work get Aivenue's CI diagnosis (gathered once,
+      // read only, with the user's gh sign-in) and the gh-fix-ci method, once per conversation. No other workflow loads it.
+      const worker = !plain && !resume && (info.role === 'planner' || info.role === 'executor');
+      const ciText = worker ? await this.ciDiagnosisFor(run) : '';
+      // Same for a request to address a PR's review comments: the unresolved threads, read once, read only.
+      const reviewText = worker ? await this.prReviewsFor(run) : '';
       // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + P.doneEffectsBlock(run.sideEffects);
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + ciText + reviewText + P.doneEffectsBlock(run.sideEffects);
       // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
       const turn = promptTurn(
         [
@@ -3055,7 +3128,7 @@ export class Orchestrator {
         mcpServers: plain ? [] : mcpServers,
         systemPrompt,
         // Readable for CLIs that confine file access: the skills announced, and the security-audit skill (kept there too).
-        skillsDir: (skills || securitySkill) && !plain ? caps.skillsDir : undefined,
+        skillsDir: (skills || securitySkill || ciText || reviewText) && !plain ? caps.skillsDir : undefined,
         permission: run.config.permission,
         attachDir: attached.length ? this.d.attachments.runDir(run.id) : undefined,
         // Media the model takes natively ride along as files (images; video and audio too when it reads them).
@@ -3755,6 +3828,77 @@ export class Orchestrator {
   /** Per run: who first ran each command or read each file, and when anything was last edited (for "already done"). */
   private doneBy = new Map<string, { agentId: string; ts: number }>();
   private lastEditAt = new Map<string, number>();
+
+  /** The unresolved review comments per workflow, read once (when the first agent doing the work starts). */
+  private reviewRuns = new Map<string, Promise<string>>();
+
+  /**
+   * The PR review comments block for a workflow whose request asks to address them (prReviews.ts): empty for every other
+   * workflow. Read once with gh (read only) and kept on the run for its records.
+   */
+  private prReviewsFor(run: WorkflowRun): Promise<string> {
+    const want = wantsReviewComments(run.config.goal ?? '');
+    if (!want) return Promise.resolve('');
+    let p = this.reviewRuns.get(run.id);
+    if (!p) {
+      const cwd = run.config.cwd;
+      const gh: GhRun = this.ghFor(cwd);
+      const exists = (rel: string) => fs.existsSync(path.join(cwd, rel));
+      p = (run.prReviews ? Promise.resolve(run.prReviews) : this.checkoutHead(cwd).then((checkoutHead) => fetchPrReviews({ gh, pr: want.pr, exists, checkoutHead })))
+        .then((d) => {
+          run.prReviews = d;
+          this.d.store.save(run);
+          return prReviewsBlock(d, this.d.ghAddressComments?.());
+        })
+        .catch((e) => prReviewsBlock({ at: Date.now(), state: 'error', message: String((e as Error)?.message ?? e).slice(0, 300), threads: [], resolved: 0, changesRequested: [] }, this.d.ghAddressComments?.()));
+      this.reviewRuns.set(run.id, p);
+    }
+    return p;
+  }
+
+  /** The commit the working folder is at, to tell the agent when it is not the PR's head (undefined outside git). */
+  private checkoutHead(cwd: string): Promise<string | undefined> {
+    return capture('git', ['rev-parse', 'HEAD'], { cwd, timeoutMs: 10000 })
+      .then((r) => (r.code === 0 && /^[0-9a-f]{7,64}$/.test(r.stdout.trim()) ? r.stdout.trim() : undefined))
+      .catch(() => undefined);
+  }
+
+  /**
+   * The gh Aivenue reads CI and review data with: the injected one, else a historical snapshot when AIVENUE_GH_REPLAY
+   * names one (ghReplay.ts: the data then says it is a replay, with its own times), else the real gh.
+   */
+  private ghFor(cwd: string): GhRun {
+    const injected = this.d.gh?.(cwd);
+    if (injected) return injected;
+    const snapshot = process.env.AIVENUE_GH_REPLAY;
+    if (snapshot) return replayGh(snapshot);
+    return (args) => capture('gh', args, { cwd, timeoutMs: 60000 });
+  }
+
+  /** One CI diagnosis per workflow, shared by its agents (gathered when the first of them starts). */
+  private ciRuns = new Map<string, Promise<string>>();
+
+  /**
+   * The CI diagnosis block for a workflow whose request asks about failing GitHub PR checks (ciDiagnose.ts): empty for
+   * every other workflow. Gathered once with gh (read only) and kept on the run for its records.
+   */
+  private ciDiagnosisFor(run: WorkflowRun): Promise<string> {
+    const want = wantsCiDiagnosis(run.config.goal ?? '');
+    if (!want) return Promise.resolve('');
+    let p = this.ciRuns.get(run.id);
+    if (!p) {
+      const gh: GhRun = this.ghFor(run.config.cwd);
+      p = (run.ci ? Promise.resolve(run.ci) : this.checkoutHead(run.config.cwd).then((checkoutHead) => diagnoseCi({ gh, pr: want.pr, checkoutHead })))
+        .then((d) => {
+          run.ci = d;
+          this.d.store.save(run);
+          return ciDiagnosisBlock(d, this.d.ghFixCi?.());
+        })
+        .catch((e) => ciDiagnosisBlock({ at: Date.now(), state: 'error', message: String((e as Error)?.message ?? e).slice(0, 300), checks: [] }, this.d.ghFixCi?.()));
+      this.ciRuns.set(run.id, p);
+    }
+    return p;
+  }
   private dupHinted = new Map<string, number>();
 
   private notify(agentId: string, text: string) {

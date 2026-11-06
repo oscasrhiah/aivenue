@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AgentRunInfo, FailureKind, Handoff, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
+import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
 import { agentStatus, cx, elapsed, firstLine, saidOwner, modelLabel, providerColor, providerName, roleLabel, roleTone, similar, STEP_ICON, subTitle } from '../util';
@@ -76,13 +76,69 @@ function Responses({ round }: { round: Round }) {
   const t = useT();
   const rs = round.submission?.responses;
   if (!rs?.length) return null;
+  // An id that is not a review issue of the round (e.g. a GitHub thread) counts as nothing, whatever action it was sent with.
+  const kind = (r: IssueResponse) => (r.unmatched ? 'unmatched' : r.action);
+  const label = (a: string) => (a === 'fixed' ? t('已修正', 'Fixed') : a === 'rebutted' ? t('反駁', 'Rebutted') : a === 'unmatched' ? t('非本輪問題', 'Not an issue here') : t('未分類', 'Unclassified'));
+  const counts = (['fixed', 'rebutted', 'unclassified', 'unmatched'] as const).map((a) => [a, rs.filter((r) => kind(r) === a).length] as const).filter(([, n]) => n);
   return (
     <div className="block">
-      <div className="block-label">{t('對審查意見的回應', 'Responses to review')}</div>
-      {rs.map((r) => (
-        <div key={r.issue_id} className="resp">
-          <span className={cx('pill', r.action === 'fixed' ? 'ok' : 'warn')}>{r.action === 'fixed' ? t('已修正', 'Fixed') : t('反駁', 'Rebutted')}</span>
-          <b>{r.issue_id}</b> <span className="muted">{r.note}</span>
+      <div className="block-label">
+        {t('對審查意見的回應', 'Responses to review')}
+        {t('（', ' (')}
+        {counts.map(([a, n]) => `${label(a)} ${n}`).join(t('・', ', '))}
+        {t('）', ')')}
+      </div>
+      {rs.map((r, i) => (
+        <div key={`${r.issue_id}-${i}`} className="resp">
+          <span className={cx('pill', kind(r) === 'fixed' ? 'ok' : 'warn')}>{label(kind(r))}</span>
+          <b>{r.issue_id}</b>{' '}
+          {r.unmatched ? (
+            <span className="muted">
+              {t(`（不是這一輪的審查問題；作者送出「${r.action === 'unclassified' ? r.given || '無' : label(r.action)}」，不計入）`, `(not a review issue of this round; sent as "${r.action === 'unclassified' ? r.given || 'none' : label(r.action)}", not counted)`)}{' '}
+            </span>
+          ) : (
+            r.action === 'unclassified' && <span className="muted">{r.given ? t(`（作者寫的是「${r.given}」，不是已修正或反駁）`, `(the author wrote "${r.given}": neither fixed nor rebutted)`) : t('（作者沒有寫處理方式）', '(the author gave no action)')} </span>
+          )}
+          {r.conflict && <span className="pill warn">{t(`與待決事項 ${r.conflict} 矛盾`, `Conflicts with ${r.conflict}`)}</span>}
+          <span className="muted">{r.note}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Points the author left for the user: every side with its source, open until the user decides. */
+function OpenDecisions({ round }: { round: Round }) {
+  const t = useT();
+  const ds = round.submission?.openDecisions;
+  if (!ds?.length) return null;
+  const open = ds.filter((d) => d.status !== 'decided').length;
+  return (
+    <div className="block">
+      <div className="block-label">
+        {t('待你決定', 'For you to decide')}
+        {t('（', ' (')}
+        {[open && `${t('待決定', 'Open')} ${open}`, ds.length - open && `${t('已決定', 'Decided')} ${ds.length - open}`].filter(Boolean).join(t('・', ', '))}
+        {t('）', ')')}
+      </div>
+      {ds.map((d, i) => (
+        <div key={`${d.id}-${i}`} className="resp resp-decision">
+          <span className={cx('pill', d.status === 'decided' ? 'ok' : 'warn')}>{d.status === 'decided' ? t('已決定', 'Decided') : t('待決定', 'Open')}</span>
+          <b>{d.id}</b> {d.question}
+          {d.status === 'decided' && (
+            <div className="muted">
+              {t(`由 ${d.decidedBy} 決定：`, `Decided by ${d.decidedBy}: `)}
+              {d.decision} ({d.decisionSource})
+            </div>
+          )}
+          {d.proposal && <div className="muted">{t(`作者的提議（不是決定）：${d.proposal}`, `The author's proposal (not a decision): ${d.proposal}`)}</div>}
+          {d.positions.map((p, i) => (
+            <div key={i} className="muted">
+              <b>{p.by}</b>: {p.view}
+              {p.source ? ` (${p.source})` : ''}
+            </div>
+          ))}
+          {d.sources.length > 0 && <div className="muted">{t('來源', 'Sources')}: {d.sources.join('; ')}</div>}
         </div>
       ))}
     </div>
@@ -103,6 +159,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
     return (
       <>
         <Responses round={round} />
+        <OpenDecisions round={round} />
         <div className="block">
           <div className="block-label">{t('計畫', 'Plan')}</div>
           <Markdown className="prose" text={plan.summary} />
@@ -236,6 +293,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
     return (
       <>
         {round && <Responses round={round} />}
+        {round && <OpenDecisions round={round} />}
         {latestExecutor?.id === agent.id && run.steps.length > 0 && (
           <div className="block">
             <div className="block-label">{t('計畫進度', 'Plan progress')}</div>

@@ -840,6 +840,15 @@ p {
   gap: 8px;
   align-items: baseline;
 }
+/* An open decision: its heading on one line, each side and the sources on their own lines below. */
+.resp.resp-decision {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+.resp.resp-decision > .muted {
+  flex-basis: 100%;
+  padding-left: 12px;
+}
 
 .pill {
   font-size: 11px;

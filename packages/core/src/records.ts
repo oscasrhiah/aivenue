@@ -110,6 +110,7 @@ export function buildHandoff(run: WorkflowRun, stage: PhaseKey, r: Round): Hando
       links.push({ issueId: i.id, agentId: r.reviewerAgentId, label: i.id });
     }
   }
+  for (const d of r.submission?.openDecisions ?? []) (d.status === 'decided' ? decisions : open).push(`${d.id} [${d.status === 'decided' ? `decided by ${d.decidedBy}` : 'open decision, for the user'}] ${d.question.slice(0, 300)}`);
   if (r.route) decisions.push(`routed to ${r.route.to}: ${r.route.reason}`);
   const since = Math.min(...[r.authorAgentId, r.reviewerAgentId].map((id) => (id ? (run.agents[id]?.startedAt ?? Infinity) : Infinity)));
   for (const n of run.notes ?? []) if (n.kind === 'decision' && n.ts >= since) decisions.push(n.text.slice(0, 300));

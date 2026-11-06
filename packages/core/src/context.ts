@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentRunInfo, ContextSharing, SharedNote, WorkflowRun } from './types';
+import type { AgentEvent, AgentRunInfo, ContextSharing, OpenDecision, SharedNote, WorkflowRun } from './types';
 import { activityBlock, collectActivity, fit, handoffsBlock, knowledgeBlock, statusBlock, verifiedChecks } from './ledger';
 import { buildTopics, topicIndexBlock } from './topics';
 
@@ -81,6 +81,23 @@ export function handoverOf(run: WorkflowRun, a: AgentRunInfo, events: AgentEvent
  * against the current state; the user's words and current files win; whose account each part is).
  * Kept apart on purpose: what Aivenue saw run, what the previous agent says, and what is not confirmed yet.
  */
+/** One open decision as lines: the question, each side with its source, and what it rests on. */
+function decisionLines(d: OpenDecision): string[] {
+  return [
+    `- ${d.id} [${d.status === 'decided' ? `decided by ${cut(flat(d.decidedBy), 80)} (${cut(d.decisionSource, 300)}): ${cut(flat(d.decision), 300)}` : 'open, for the user'}] ${cut(flat(d.question), 300)}`,
+    ...d.positions.map((p) => `    ${cut(flat(p.by), 80)}: ${cut(flat(p.view), 600)}${p.source ? ` (${cut(p.source, 300)})` : ''}`),
+    ...(d.proposal ? [`    the author's proposal, not a decision: ${cut(flat(d.proposal), 600)}`] : []),
+    ...(d.sources.length ? [`    sources: ${d.sources.map((x) => cut(x, 300)).join('; ')}`] : []),
+  ];
+}
+
+/** The open decisions of the latest submission of each stage that recorded any. */
+export function openDecisionLines(run: WorkflowRun): string[] {
+  return (['plan', 'implement'] as const)
+    .flatMap((k) => [...(run.stages[k]?.rounds ?? [])].reverse().find((r) => r.submission?.openDecisions?.length)?.submission?.openDecisions ?? [])
+    .flatMap(decisionLines);
+}
+
 /** The user's own words in the records: messages during the run, feedback on a round, decisions said to be theirs. */
 export function userWordLines(run: WorkflowRun): string[] {
   return [
@@ -125,10 +142,13 @@ export function handoffToYou(run: WorkflowRun, self: AgentRunInfo, prev: AgentRu
   const { open, nv } = openReviewLines(run);
   if (open.length) parts.push(`OPEN ISSUES (confirmed by a reviewer):\n${open.join('\n')}`);
   if (nv.length) parts.push(`NEEDS VALIDATION (not confirmed, no severity; not facts, not defects):\n${nv.join('\n')}`);
+  // Points an author left for the user: every side and its sources, still open unless the user decided.
+  const decisions = openDecisionLines(run);
+  if (decisions.length) parts.push(`OPEN DECISIONS (left for the user to decide; keep every side and its source, do not settle them yourself):\n${decisions.join('\n')}`);
   // What each stage recorded when its latest round ended (decisions, facts, open points): an earlier stage's decision
   // reaches every later agent even when the agent right before did not repeat it. Open issues listed above are not
   // repeated.
-  const listed = new Set([...open].map((l) => /^- (\S+)/.exec(l)?.[1]));
+  const listed = new Set([...open, ...decisions].map((l) => /^- (\S+)/.exec(l)?.[1]));
   const recorded = Object.entries(run.stages).flatMap(([key, st]) => {
     const h = [...(st?.rounds ?? [])].reverse().find((x) => x.handoff)?.handoff;
     if (!h) return [];
@@ -408,7 +428,11 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
       const rows: string[] = [];
       if (r.userFeedback) rows.push(`User feedback: ${r.userFeedback}`);
       if (r.submission) rows.push(`Author submitted: ${r.submission.plan ? `plan "${r.submission.plan.summary}"` : r.submission.summary}`);
-      for (const resp of r.submission?.responses ?? []) rows.push(`  response to ${resp.issue_id}: ${resp.action}${resp.note ? ` — ${resp.note}` : ''}`);
+      for (const resp of r.submission?.responses ?? [])
+        rows.push(
+          `  response to ${resp.issue_id}: ${resp.unmatched ? `not a review issue of this round (sent as ${resp.action === 'unclassified' ? resp.given || 'no action' : resp.action}; counted as nothing)` : resp.action}${resp.conflict ? ` [same source as open decision ${resp.conflict}]` : ''}${resp.note ? ` — ${resp.note}` : ''}`,
+        );
+      for (const d of r.submission?.openDecisions ?? []) rows.push(...decisionLines(d).map((l) => `  ${l}`));
       if (r.review) {
         rows.push(`Review: ${r.review.verdict} — ${r.review.summary}`);
         for (const i of r.review.issues) rows.push(`  ${i.id} [${i.severity}] ${i.title}${i.location ? ` (${i.location})` : ''}${i.detail ? `: ${i.detail}` : ''}`);

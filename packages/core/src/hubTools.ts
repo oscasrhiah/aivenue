@@ -1,4 +1,4 @@
-import type { AgentRole, GoalSpec, IssueResponse, NeedsValidation, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
+import type { AgentRole, GoalSpec, IssueResponse, NeedsValidation, OpenDecision, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
 
 export interface ToolDef {
   name: string;
@@ -63,6 +63,31 @@ const responsesSchema = {
   },
 };
 
+/** Points left for the user to decide, each with every side and its sources. */
+const openDecisionsSchema = {
+  type: 'array',
+  description:
+    'Optional. Points that are not yours to settle: a suggestion its author marked optional, people who disagree (reviewers, the user, the code owners), a choice the user has not made. One entry each, with every side as it was said and where — keep them open unless the user decided; your own view goes in positions as yours.',
+  items: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: '"D1", "D2", ...' },
+      question: { type: 'string', description: 'What is to be decided.' },
+      positions: {
+        type: 'array',
+        description: 'Each side: who holds it, what and why, and where it was said.',
+        items: { type: 'object', properties: { by: { type: 'string' }, view: { type: 'string' }, source: { type: 'string', description: 'A link, thread id or file:line.' } }, required: ['by', 'view'] },
+      },
+      sources: { type: 'array', items: { type: 'string' }, description: 'Links, thread ids, log lines or file:line it rests on.' },
+      status: { type: 'string', enum: ['open', 'decided'], description: '"decided" only when the user (or whoever it is for) decided: give decision, decided_by and decision_source, else it stays open. Your own conclusion is a position, not a decision.' },
+      decision: { type: 'string', description: 'What was decided.' },
+      decided_by: { type: 'string', description: 'Who decided (the user, a named maintainer) — not you or another agent.' },
+      decision_source: { type: 'string', description: 'Where they said it: their message, a comment link.' },
+    },
+    required: ['question', 'positions'],
+  },
+};
+
 /** What an agent learned, kept as shared facts for every later agent. */
 const findingsSchema = {
   type: 'array',
@@ -98,6 +123,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         },
         goal: goalSchema,
         responses: responsesSchema,
+        open_decisions: openDecisionsSchema,
         findings: findingsSchema,
         handoff: handoffSchema,
       },
@@ -341,7 +367,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     description: 'Tell Aivenue you finished implementing: summary of changes and verification, plus responses to review issues if any.',
     inputSchema: {
       type: 'object',
-      properties: { summary: { type: 'string' }, responses: responsesSchema, findings: findingsSchema, handoff: handoffSchema },
+      properties: { summary: { type: 'string' }, responses: responsesSchema, open_decisions: openDecisionsSchema, findings: findingsSchema, handoff: handoffSchema },
       required: ['summary'],
     },
   },
@@ -496,20 +522,77 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
 
 const s = (v: unknown) => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v));
 
-function parseResponses(v: unknown): IssueResponse[] | undefined {
+/** Responses to review issues: only an explicit "fixed" or "rebutted" counts; anything else is kept as unclassified. */
+export function parseResponses(v: unknown): IssueResponse[] | undefined {
   if (!Array.isArray(v)) return undefined;
   return v
     .filter((r) => r && typeof r === 'object')
-    .map((r: any) => ({ issue_id: s(r.issue_id ?? r.id), action: r.action === 'rebutted' ? 'rebutted' : 'fixed', note: r.note ? s(r.note) : undefined }));
+    .map((r: any) => {
+      const given = s(r.action).trim();
+      const a = given.toLowerCase();
+      const action = a === 'fixed' || a === 'rebutted' ? a : 'unclassified';
+      return { issue_id: s(r.issue_id ?? r.id), action, ...(action === 'unclassified' ? { given: given.slice(0, 60) } : {}), note: r.note ? s(r.note) : undefined };
+    });
 }
 
-export function parsePlan(v: any): { plan: PlanDoc; responses?: IssueResponse[] } | undefined {
+/**
+ * What the author is told when a response was kept as unclassified (empty when none was): a statement of what was
+ * recorded, not a demand — the submission is accepted as it is.
+ */
+export function unclassifiedNotice(responses: IssueResponse[] | undefined): string {
+  const bad = (responses ?? []).filter((r) => r.action === 'unclassified');
+  if (!bad.length) return '';
+  return ` Note: ${bad.map((r) => `${r.issue_id || '(no issue_id)'} (${r.given ? `action "${r.given}"` : 'no action'})`).join(', ')} ${bad.length === 1 ? 'was' : 'were'} recorded as unclassified — neither fixed nor rebutted.`;
+}
+
+/** The optional correction that follows a format note: never required to finish the turn. */
+export const OPTIONAL_CORRECTION =
+  'Optional, not needed to finish: responses take "fixed" or "rebutted" and are for this round\'s Aivenue review issues only; a PR review thread or other outside comment belongs in open_decisions or your report, and where a response and an open decision point at the same source, one of them should say which holds. If you want these counted, you may submit again with corrected responses.';
+
+/** Who may not stand as the decider: the agent itself or another agent role. */
+const SELF = /^(me|myself|i|we|us|agent|the agent|this agent|ai|assistant|model|llm|planner|executor|implementer|reviewer|code reviewer|plan reviewer|author|verifier|aivenue|我|我們|自己|本 ?agent|計畫者|實作者|審查者|作者)$/i;
+
+/**
+ * Open decisions: entries without a question or a side are dropped. "decided" needs the decision, who decided (not the
+ * agent or another agent role) and a source to trace it to; short of that it stays open, and a conclusion written
+ * anyway is kept as the author's proposal.
+ */
+export function parseOpenDecisions(v: unknown): OpenDecision[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const cut = (x: unknown, n = 2000) => s(x).trim().slice(0, n);
+  const out = v
+    .filter((d) => d && typeof d === 'object')
+    .slice(0, 20)
+    .map((d: any, i: number): OpenDecision => {
+      const positions = (Array.isArray(d.positions) ? d.positions : [])
+        .filter((p: any) => p && typeof p === 'object' && cut(p.by) && cut(p.view))
+        .slice(0, 10)
+        .map((p: any) => ({ by: cut(p.by, 200), view: cut(p.view), ...(cut(p.source) ? { source: cut(p.source, 500) } : {}) }));
+      const sources = (Array.isArray(d.sources) ? d.sources : []).map((x: unknown) => cut(x, 500)).filter(Boolean).slice(0, 20);
+      const decision = cut(d.decision);
+      const decidedBy = cut(d.decided_by, 200);
+      const decisionSource = cut(d.decision_source, 500);
+      const decided = d.status === 'decided' && !!decision && !!decidedBy && !SELF.test(decidedBy) && !!decisionSource;
+      return {
+        id: cut(d.id, 20) || `D${i + 1}`,
+        question: cut(d.question),
+        positions,
+        sources,
+        status: decided ? 'decided' : 'open',
+        ...(decided ? { decision, decidedBy, decisionSource } : decision ? { proposal: decision } : {}),
+      };
+    })
+    .filter((d) => d.question && d.positions.length);
+  return out.length ? out : undefined;
+}
+
+export function parsePlan(v: any): { plan: PlanDoc; responses?: IssueResponse[]; openDecisions?: OpenDecision[] } | undefined {
   if (!v || typeof v !== 'object') return undefined;
   const steps = Array.isArray(v.steps)
     ? v.steps.map((st: any, i: number) => (typeof st === 'string' ? { id: String(i + 1), title: st } : { id: s(st.id) || String(i + 1), title: s(st.title), detail: st.detail ? s(st.detail) : undefined }))
     : [];
   if (!v.markdown && !v.summary && !steps.length) return undefined;
-  return { plan: { summary: s(v.summary), markdown: s(v.markdown) || s(v.summary), steps, goal: parseGoal(v.goal) }, responses: parseResponses(v.responses) };
+  return { plan: { summary: s(v.summary), markdown: s(v.markdown) || s(v.summary), steps, goal: parseGoal(v.goal) }, responses: parseResponses(v.responses), openDecisions: parseOpenDecisions(v.open_decisions) };
 }
 
 export function parseGoal(v: any): GoalSpec | undefined {
@@ -589,9 +672,9 @@ export function parseNeedsValidation(v: unknown): NeedsValidation[] {
     }));
 }
 
-export function parseWork(v: any): { summary: string; responses?: IssueResponse[] } | undefined {
+export function parseWork(v: any): { summary: string; responses?: IssueResponse[]; openDecisions?: OpenDecision[] } | undefined {
   if (!v || typeof v !== 'object' || !v.summary) return undefined;
-  return { summary: s(v.summary), responses: parseResponses(v.responses) };
+  return { summary: s(v.summary), responses: parseResponses(v.responses), openDecisions: parseOpenDecisions(v.open_decisions) };
 }
 
 /** Last ```json fenced block in a reply. */

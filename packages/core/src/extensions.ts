@@ -212,7 +212,7 @@ export class ExtensionService {
   // ---------- bundled skills ----------
 
   /** Copy an extension's skills next to the user's (again when the app ships a different copy). */
-  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'security-audit') {
+  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'security-audit' | 'gh-fix-ci' | 'gh-address-comments') {
     const from = path.join(this.o.bundledDir, id);
     const to = path.join(this.skillsRoot, id);
     if (!fs.existsSync(from)) return;
@@ -238,8 +238,18 @@ export class ExtensionService {
     return this.onDemandSkill('security-audit');
   }
 
+  /** OpenAI's gh-fix-ci skill, for a workflow that asks about failing GitHub PR checks (ciDiagnose.ts). */
+  ghFixCiSkill(): string | undefined {
+    return this.onDemandSkill('gh-fix-ci');
+  }
+
+  /** OpenAI's gh-address-comments skill, for a workflow that asks to address a PR's review comments (prReviews.ts). */
+  ghAddressCommentsSkill(): string | undefined {
+    return this.onDemandSkill('gh-address-comments');
+  }
+
   /** A bundled skill a workflow loads only when it needs it: copied next to the user's skills, the path of its SKILL.md. */
-  private onDemandSkill(id: 'security-audit'): string | undefined {
+  private onDemandSkill(id: 'security-audit' | 'gh-fix-ci' | 'gh-address-comments'): string | undefined {
     try {
       this.syncSkills(id);
     } catch {

@@ -1042,10 +1042,38 @@ export interface NeedsValidation {
   how: string;
 }
 
+/**
+ * A point the author does not settle: a suggestion marked optional, people who disagree, a choice for the user. Every
+ * side is kept with where it was said, and it stays open until the user (or whoever it is for) decides.
+ */
+export interface OpenDecision {
+  id: string;
+  question: string;
+  positions: { by: string; view: string; source?: string }[];
+  /** Where it comes from: comment links, thread ids, log lines, file:line. */
+  sources: string[];
+  /** "decided" only with who decided and a source to trace it to. */
+  status: 'open' | 'decided';
+  /** What was decided (only when decided). */
+  decision?: string;
+  decidedBy?: string;
+  /** Where the decision was said: a message, a comment link. */
+  decisionSource?: string;
+  /** A conclusion the author wrote without a decider or a source: its own proposal, not a decision. */
+  proposal?: string;
+}
+
 export interface IssueResponse {
   issue_id: string;
-  action: 'fixed' | 'rebutted';
+  /** "unclassified": the author gave no action, or one other than fixed / rebutted (`given`): neither, never shown as fixed. */
+  action: 'fixed' | 'rebutted' | 'unclassified';
+  /** The action as the author wrote it, when it was not fixed / rebutted (empty when missing). */
+  given?: string;
   note?: string;
+  /** The id is not one of the Aivenue review issues this round asked about (e.g. a GitHub thread id): kept as sent, counted as nothing. */
+  unmatched?: boolean;
+  /** The same source is also an open decision (its id): the two say different things. */
+  conflict?: string;
 }
 
 export type StageKey = 'plan' | 'implement';
@@ -1057,7 +1085,7 @@ export interface Round {
   authorAgentId?: string;
   reviewerAgentId?: string;
   /** What the author submitted (plan or work summary). */
-  submission?: { summary: string; plan?: PlanDoc; responses?: IssueResponse[] };
+  submission?: { summary: string; plan?: PlanDoc; responses?: IssueResponse[]; openDecisions?: OpenDecision[] };
   review?: Review;
   /** Goal verification of this round (verify stage). */
   verification?: Verification;
@@ -1127,6 +1155,10 @@ export interface WorkflowRun {
   waits?: ConditionWait[];
   /** Side-effect actions already done (approved external actions), so a resumed run does not repeat them. */
   sideEffects?: { kind: string; target: string; details: string; agentId: string; ts: number }[];
+  /** The CI diagnosis Aivenue gathered with gh, when the request asked about failing GitHub PR checks (ciDiagnose.ts). */
+  ci?: import('./ciDiagnose').CiDiagnosis;
+  /** The unresolved PR review comments Aivenue read with gh, when the request asked to address them (prReviews.ts). */
+  prReviews?: import('./prReviews').PrReviews;
   /** Why it stopped short: a limit hit or the goal not reached. */
   incompleteReason?: string;
   /** Rulings made when agents disagreed (adjudication). */
