@@ -120,7 +120,7 @@ export function allNotes(run: WorkflowRun): string {
  * and hand-offs always come first; the rest fills the share newest first, and what does not fit stays reachable through
  * read_context and search_records. `recap`: what the agent's own conversation did before its CLI compacted it.
  */
-export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf: (agentId: string) => AgentEvent[], o: { since?: number; maxChars?: number; recap?: (budget: number) => string } = {}): string {
+export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf: (agentId: string) => AgentEvent[], o: { since?: number; maxChars?: number; recap?: (budget: number) => string; measure?: { kept: { key: string; text: string }[]; cut: { key: string; chars: number }[] } } = {}): string {
   const mode = sharingOf(run);
   if (mode === 'summary') return '';
   const since = o.since ?? 0;
@@ -147,9 +147,10 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const act = collectActivity(run, transcriptOf, { since, selfId: self.id });
   const footer =
     "Call the Aivenue tool `read_context` {} for the full overview (complete plan, every review and verification, all summaries), `read_context` {agent_id} for any agent's conversation (its messages, commands and their output; part \"messages\" or \"tools\", page 2 for older parts), or `search_records` {q, role, file, issue_id…} to find something specific. Use `post_note` {text, kind: fact|inference|decision} to tell all later agents about a decision, a gotcha or where something lives. When you submit, list what you learned in `findings` and write your `handoff` for the agent who takes over: the state, what is open, what to do next and where to look.";
+  const progress = progressBlock(run);
   const head = [
     since ? 'SHARED CONTEXT (only what is new since your last turn, plus the current status):' : 'SHARED CONTEXT: You work together with other agents on this workflow.',
-    progressBlock(run),
+    progress,
     'CHECK HERE FIRST: before running a command, reading a file or investigating something, look for it below and call `search_records` {q: "a few keywords"} — another agent may already have done it. Re-run only when files changed since or you need more than what is recorded.',
     status,
     handoffs,
@@ -184,8 +185,54 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   if (since && !handoverText && !recap && !logText && !organized && !list.length && !memory && !notes.length && !handoffs && !knowledge && !activity) return `\nSHARED CONTEXT: nothing new from the other agents since your last turn.${status ? `\n${status}` : ''}`;
   const lines = ['', head, handoverText, recap, logText, organized, index, listText, memText, noteText, knowledge, activity, footer];
   let text = lines.filter((l) => l !== '').join('\n');
+  // The same text as pieces, in order (observation only, docs/workflow-efficiency-plan.md A1): joined with "\n" they
+  // are exactly `text`; what a cut below removes is counted apart, never as sent.
+  const pieces: { key: string; text: string }[] = o.measure
+    ? (
+        [
+          ['instructions', head.split('\n')[0]],
+          ['progress', progress],
+          ['instructions', head.split('\n').find((l) => l.startsWith('CHECK HERE FIRST')) ?? ''],
+          ['status', status],
+          ['handoffs', handoffs],
+          ['handover', handoverText],
+          ['recap', recap],
+          ['log', logText],
+          ['knowledgeDoc', organized],
+          ['index', index],
+          ['agents', listText],
+          ['sharedMemory', memText],
+          ['notes', noteText],
+          ['knowledgeBase', knowledge],
+          ['activity', activity],
+          ['instructions', footer],
+        ] as [string, string][]
+      )
+        .filter(([, t]) => t !== '')
+        .map(([key, t]) => ({ key, text: t }))
+    : [];
   // Still over this agent's share (a huge status or hand-off): keep the start, where the goal and status are.
-  if (o.maxChars && text.length > o.maxChars) text = `${text.slice(0, o.maxChars)}\n… (shortened to fit your model; call read_context {} for the rest)`;
+  const cutAt = o.maxChars && text.length > o.maxChars ? o.maxChars : undefined;
+  if (cutAt !== undefined) text = `${text.slice(0, cutAt)}\n… (shortened to fit your model; call read_context {} for the rest)`;
+  if (o.measure) {
+    const limit = cutAt ?? Infinity;
+    let pos = 0;
+    pieces.forEach((p, i) => {
+      // The "\n" before every piece but the first.
+      if (i > 0) {
+        if (pos < limit) o.measure!.kept.push({ key: 'separators', text: '\n' });
+        else o.measure!.cut.push({ key: 'separators', chars: 1 });
+        pos++;
+      }
+      const keep = Math.max(0, Math.min(p.text.length, limit - pos));
+      if (keep) o.measure!.kept.push({ key: p.key, text: p.text.slice(0, keep) });
+      if (keep < p.text.length) o.measure!.cut.push({ key: p.key, chars: p.text.length - keep });
+      pos += p.text.length;
+    });
+    if (cutAt !== undefined) o.measure.kept.push({ key: 'instructions', text: text.slice(cutAt) });
+    // The leading "\n" of the returned block.
+    o.measure.kept.unshift({ key: 'separators', text: '\n' });
+  }
   return '\n' + text;
 }
 

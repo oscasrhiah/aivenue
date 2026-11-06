@@ -133,6 +133,17 @@ function parseJson(raw: string): Record<string, any> | undefined {
 
 // ---------- Claude Code / Qwen Code (stream-json) ----------
 
+/** The numeric fields of a provider's usage object, as reported (A2: kept next to the converted numbers). */
+function numbers(o: unknown, prefix = ''): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!o || typeof o !== 'object') return out;
+  for (const [k, v] of Object.entries(o as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isFinite(v)) out[prefix + k] = v;
+    else if (v && typeof v === 'object' && !Array.isArray(v) && !prefix) Object.assign(out, numbers(v, `${k}.`));
+  }
+  return out;
+}
+
 class ClaudeStreamParser implements StreamParser {
   sessionId?: string;
   error?: string;
@@ -228,6 +239,9 @@ class ClaudeStreamParser implements StreamParser {
           cached: (u.cache_read_input_tokens ?? 0) + sum('cache_read_input_tokens'),
           costUsd: typeof ev.total_cost_usd === 'number' ? ev.total_cost_usd : undefined,
         };
+        const cacheWrite = (u.cache_creation_input_tokens ?? 0) + sum('cache_creation_input_tokens');
+        const raw = { ...numbers(u), ...(typeof ev.total_cost_usd === 'number' ? { total_cost_usd: ev.total_cost_usd } : {}) };
+        Object.assign(usage, { raw, observed: { uncachedInput: usage.input, cachedInput: usage.cached, output: usage.output, cacheWrite, splitKnown: true } });
         // The main model's context limit (the largest one listed; the advisor's own entry may be there too).
         const windows = Object.values((ev.modelUsage ?? {}) as Record<string, { contextWindow?: number }>).map((m) => m?.contextWindow ?? 0);
         const window = Math.max(0, ...windows) || undefined;
@@ -344,7 +358,20 @@ class CodexParser implements StreamParser {
       case 'turn.completed': {
         const u = ev.usage;
         // Codex reports cached tokens as part of input_tokens.
-        if (u) this.sink.emit({ kind: 'info', usage: { input: (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0), output: u.output_tokens ?? 0, cached: u.cached_input_tokens ?? 0 } });
+        if (u) {
+          const input = (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0);
+          const reasoning = typeof u.reasoning_output_tokens === 'number' ? u.reasoning_output_tokens : undefined;
+          this.sink.emit({
+            kind: 'info',
+            usage: {
+              input,
+              output: u.output_tokens ?? 0,
+              cached: u.cached_input_tokens ?? 0,
+              raw: numbers(u),
+              observed: { uncachedInput: input, cachedInput: u.cached_input_tokens ?? 0, output: u.output_tokens ?? 0, reasoning, splitKnown: true },
+            },
+          });
+        }
         break;
       }
     }
@@ -429,6 +456,8 @@ class GeminiParser implements StreamParser {
         this.flush();
         const st = ev.stats ?? {};
         const usage = { input: st.input_tokens ?? st.input ?? 0, output: st.output_tokens ?? st.output ?? 0, cached: st.cached ?? st.cached_tokens ?? 0 };
+        // Whether input_tokens already includes the cached part is not known: the provider's own numbers only.
+        Object.assign(usage, { raw: numbers(st), observed: { reportedInput: usage.input, reportedCached: usage.cached, output: usage.output, splitKnown: false } });
         if (ev.status === 'error') {
           this.error = ev.error?.message ?? 'error';
           this.sink.emit({ kind: 'error', text: this.error, usage });
@@ -537,6 +566,7 @@ class AgyParser implements StreamParser {
         const status = String(body.status ?? 'SUCCESS').toUpperCase();
         const u = body.usage ?? {};
         const usage = { input: u.input_tokens ?? 0, output: (u.output_tokens ?? 0) + (u.thinking_tokens ?? 0), cached: u.cache_read_tokens ?? 0 };
+        Object.assign(usage, { raw: numbers(u), observed: { reportedInput: usage.input, reportedCached: usage.cached, output: usage.output, reasoning: typeof u.thinking_tokens === 'number' ? u.thinking_tokens : undefined, splitKnown: false } });
         if (status !== 'SUCCESS') {
           this.error = body.error || status;
           this.sink.emit({ kind: 'error', text: this.error, usage });
@@ -611,7 +641,19 @@ class OpenCodeParser implements StreamParser {
         const tk = part.tokens ?? {};
         // A step is one model call: its whole input is how full the conversation is now.
         const used = (tk.input ?? 0) + (tk.cache?.read ?? 0) + (tk.cache?.write ?? 0);
-        this.sink.emit({ kind: 'info', usage: { input: tk.input ?? 0, output: (tk.output ?? 0) + (tk.reasoning ?? 0), cached: tk.cache?.read ?? 0, costUsd: typeof part.cost === 'number' ? part.cost : undefined }, context: used ? { used } : undefined });
+        const write = tk.cache?.write ?? 0;
+        this.sink.emit({
+          kind: 'info',
+          usage: {
+            input: tk.input ?? 0,
+            output: (tk.output ?? 0) + (tk.reasoning ?? 0),
+            cached: tk.cache?.read ?? 0,
+            costUsd: typeof part.cost === 'number' ? part.cost : undefined,
+            raw: { ...numbers(tk), ...(typeof part.cost === 'number' ? { cost: part.cost } : {}) },
+            observed: { uncachedInput: (tk.input ?? 0) + write, cachedInput: tk.cache?.read ?? 0, output: (tk.output ?? 0) + (tk.reasoning ?? 0), reasoning: typeof tk.reasoning === 'number' ? tk.reasoning : undefined, cacheWrite: write, splitKnown: true },
+          },
+          context: used ? { used } : undefined,
+        });
         break;
       }
       case 'error': {

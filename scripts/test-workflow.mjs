@@ -22,7 +22,10 @@ const bundled = await build({
       export { contextBlock, formatTranscript, handoverOf, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
-      export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';`,
+      export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
+      export { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './packages/core/src/promptStats';
+      export { createParser } from './packages/core/src/providers/parsers';
+      export * as P from './packages/core/src/prompts';`,
     resolveDir: process.cwd(),
   },
   bundle: true,
@@ -575,3 +578,154 @@ test('Codex 沒指定模型時：從它的對話紀錄讀出實際用的模型�
   const spec = { id: 'codex~work', name: 'Codex', command: 'codex', run: { args: [] }, output: 'codex-jsonl', accounts: { env: 'CODEX_HOME', home: '~/.codex' }, accountOf: 'codex', accountHome: home };
   assert.deepEqual(W.codexContext(spec, tid), { used: 28800, window: 475000, model: 'gpt-6.1-sol' });
 });
+
+// ---------- 階段 A：成本可解釋（docs/workflow-efficiency-plan.md A1／A2，只觀測、不改行為） ----------
+
+/** contextBlock with its measure; also checks the kept pieces join back into exactly the text returned. */
+function measured(run, self, eventsOf, maxChars) {
+  const plain = W.contextBlock(run, self, eventsOf, { maxChars });
+  const m = { kept: [], cut: [] };
+  const text = W.contextBlock(run, self, eventsOf, { maxChars, measure: m });
+  return { plain, text, m };
+}
+
+test('A1：共享上下文要各區塊時文字完全不變；各區塊接起來正好是送出的文字', () => {
+  const { run, a2, eventsOf } = sharedRun(os.tmpdir());
+  const { plain, text, m } = measured(run, a2, eventsOf, 200000);
+  assert.equal(text, plain);
+  assert.equal(m.kept.map((p) => p.text).join(''), text);
+  assert.deepEqual(m.cut, []);
+  assert.ok(m.kept.some((p) => p.key === 'activity'));
+});
+
+test('A1：共享上下文被截斷時，只統計實際送出的部分；截掉的另外列出', () => {
+  const { run, a2, eventsOf } = sharedRun(os.tmpdir());
+  for (let i = 0; i < 400; i++) run.notes.push({ id: `n${i}`, agentId: 'aaaaaaaa-111', text: `note number ${i} ${'x'.repeat(80)}`, kind: 'fact', ts: 100 + i });
+  const { plain, text, m } = measured(run, a2, eventsOf, 3000);
+  assert.equal(text, plain);
+  assert.equal(m.kept.map((p) => p.text).join(''), text);
+  const turn = W.promptTurn([{ key: 'shared', text, parts: m.kept, cut: m.cut }], false, 1);
+  assert.equal(turn.chars, text.length);
+  assert.ok(turn.cut.length > 0 && turn.cut.every((c) => c.chars > 0));
+  assert.ok(turn.cut.reduce((n, c) => n + c.chars, 0) > 0);
+});
+
+test('A1：每個區塊用自己的文字估算 token（中文與英文不同），整輪是各區塊的和', () => {
+  const zh = '中'.repeat(100);
+  const en = 'a'.repeat(100);
+  const turn = W.promptTurn([{ key: 'shared', text: zh + en, parts: [{ key: 'notes', text: zh }, { key: 'log', text: en }] }], false, 1);
+  const by = Object.fromEntries(turn.blocks.map((b) => [b.key, b.tokens]));
+  assert.equal(by['shared.notes'], 100);
+  assert.equal(by['shared.log'], 25);
+  assert.equal(turn.tokens, 125);
+  // 區塊加總不等於文字時不信任拆分，整組算一塊
+  const bad = W.promptTurn([{ key: 'shared', text: zh + en, parts: [{ key: 'notes', text: zh }] }], false, 1);
+  assert.deepEqual(bad.blocks.map((b) => b.key), ['shared']);
+  // 長度相同、但順序或內容不同：同樣不信任
+  const swapped = W.promptTurn([{ key: 'shared', text: zh + en, parts: [{ key: 'log', text: en }, { key: 'notes', text: zh }] }], false, 1);
+  assert.deepEqual(swapped.blocks.map((b) => b.key), ['shared']);
+  const other = W.promptTurn([{ key: 'shared', text: zh + en, parts: [{ key: 'notes', text: '文'.repeat(100) }, { key: 'log', text: en }] }], false, 1);
+  assert.deepEqual(other.blocks.map((b) => b.key), ['shared']);
+});
+
+test('A1：角色 prompt 依段落切開，接起來正好是整份；任務文字精確比對', () => {
+  const cfg = { cwd: '/w', goal: 'Fix the parser.\nPLAN: this line is part of the goal' };
+  const plan = { summary: 's', markdown: 'Do A then B', steps: [{ id: '1', title: 'A' }], goal: { statement: 'tests pass', metrics: [{ id: 'M1', name: 't', target: 'pass', how: 'npm test' }] } };
+  const prompt = W.P.codeReviewPrompt(cfg, plan, 'I changed the parser', ' M src/a.ts', 2, { review: { verdict: 'revise', summary: 'x', issues: [{ id: 'R1', severity: 'major', title: 'bug' }] }, responses: [] });
+  const pieces = W.roleParts(prompt, cfg.goal);
+  assert.equal(pieces.map((p) => p.text).join(''), prompt);
+  assert.equal(pieces.find((p) => p.key === 'goal').text, `GOAL:\n${cfg.goal}`);
+  for (const k of ['plan', 'priorReview', 'workSummary', 'changedFiles', 'instructions']) assert.ok(pieces.some((p) => p.key === k), k);
+  const turn = W.promptTurn([{ key: 'role', text: prompt, parts: pieces }, { key: 'rules', text: 'abc' }, { key: 'skills', text: '' }], false, 1);
+  assert.equal(turn.chars, prompt.length + 3);
+  assert.equal(turn.blocks.reduce((a, b) => a + b.chars, 0), turn.chars);
+  assert.ok(!turn.blocks.some((b) => b.key === 'skills'));
+});
+
+test('A1：超過 40 輪時，逐輪明細只留最近的，但全程統計不漏', () => {
+  let totals;
+  for (let i = 0; i < 45; i++) totals = W.addTurn(totals, W.promptTurn([{ key: 'role', text: 'x'.repeat(40) }], i > 0, i));
+  assert.equal(totals.turns, 45);
+  assert.equal(totals.chars, 45 * 40);
+  assert.equal(totals.blocks.role.turns, 45);
+  const agent = { id: 'a', role: 'executor', stage: 'implement', task: '', startedAt: 1, endedAt: 2, stats: {}, promptTurns: [], promptTotals: totals };
+  const c = W.costBreakdown({ id: 'r', createdAt: 0, endedAt: 10, agents: { a: agent } }, 10);
+  assert.equal(c.turns, 45);
+  assert.equal(c.rows[0].promptTokens, totals.tokens);
+});
+
+/** Feed a parser some lines; return what it emitted. */
+function parse(format, lines) {
+  const out = [];
+  const p = W.createParser(format, { emit: (e) => (out.push(e), out.length), updateTool: () => undefined }, '/w');
+  for (const l of lines) p.line(JSON.stringify(l));
+  p.end?.();
+  return out.filter((e) => e.usage).map((e) => e.usage);
+}
+
+test('A2：各家用量保留原始欄位，換算成同一口徑；既有欄位的數字不變', () => {
+  const [claude] = parse('claude-stream', [{ type: 'result', subtype: 'success', result: 'ok', session_id: 's', total_cost_usd: 0.02, usage: { input_tokens: 100, cache_creation_input_tokens: 40, cache_read_input_tokens: 500, output_tokens: 70 } }]);
+  assert.deepEqual([claude.input, claude.output, claude.cached, claude.costUsd], [140, 70, 500, 0.02]);
+  assert.deepEqual(claude.observed, { uncachedInput: 140, cachedInput: 500, output: 70, cacheWrite: 40, splitKnown: true });
+  assert.equal(claude.raw.cache_read_input_tokens, 500);
+
+  const [codex] = parse('codex-jsonl', [{ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 90, reasoning_output_tokens: 30 } }]);
+  assert.deepEqual([codex.input, codex.output, codex.cached], [400, 90, 600]);
+  assert.deepEqual(codex.observed, { uncachedInput: 400, cachedInput: 600, output: 90, reasoning: 30, splitKnown: true });
+  assert.equal(codex.raw.input_tokens, 1000);
+
+  const [oc] = parse('opencode-json', [{ type: 'step_finish', part: { cost: 0, tokens: { input: 50, output: 20, reasoning: 5, cache: { read: 300, write: 10 } } } }]);
+  assert.deepEqual([oc.input, oc.output, oc.cached, oc.costUsd], [50, 25, 300, 0]);
+  assert.deepEqual(oc.observed, { uncachedInput: 60, cachedInput: 300, output: 25, reasoning: 5, cacheWrite: 10, splitKnown: true });
+  assert.equal(oc.raw['cache.write'], 10);
+
+  const [gem] = parse('gemini-stream', [{ type: 'result', status: 'success', stats: { input_tokens: 800, output_tokens: 40, cached: 300 } }]);
+  assert.deepEqual([gem.input, gem.output, gem.cached], [800, 40, 300]);
+  assert.deepEqual(gem.observed, { reportedInput: 800, reportedCached: 300, output: 40, splitKnown: false });
+});
+
+test('A2：拆分不明的輸入不放進「未快取／快取」兩欄，另列；價格不明不當成 0', () => {
+  let t = W.addObserved(undefined, { input: 10, output: 5, cached: 0, costUsd: 0.01, observed: { uncachedInput: 10, cachedInput: 0, output: 5, splitKnown: true } });
+  assert.equal(t.costUsd, 0.01);
+  t = W.addObserved(t, { input: 800, output: 40, cached: 300, observed: { reportedInput: 800, reportedCached: 300, output: 40, splitKnown: false } });
+  t = W.addObserved(t, { input: 7, output: 3, cached: 2 });
+  assert.deepEqual([t.uncachedInput, t.cachedInput], [10, 0]);
+  assert.deepEqual(t.unsplit, { input: 807, cached: 302 });
+  assert.equal(t.splitUnknown, true);
+  assert.equal(t.costUnknown, true);
+  assert.equal(t.costUsd, undefined);
+  assert.deepEqual([t.output, t.events], [48, 3]);
+});
+
+test('A2：成本分解依角色與階段、壓縮與整理筆記另列；三種時間分開；等待時間另計', () => {
+  const totals = (tokens) => ({ turns: 1, chars: 400, tokens, blocks: { 'shared.log': { chars: 300, tokens: tokens * 0.75, turns: 1 }, 'role.plan': { chars: 100, tokens: tokens * 0.25, turns: 1 } }, cut: { 'shared.notes': 50 } });
+  const ag = (id, role, stage, startedAt, endedAt, cost, task = '') => ({ id, role, stage, task, startedAt, endedAt, stats: {}, observed: { uncachedInput: 100, cachedInput: 50, output: 10, events: 1, costUsd: cost, costUnknown: cost === undefined }, promptTotals: totals(100) });
+  const run = {
+    id: 'r', createdAt: 0, endedAt: 10000, status: 'completed',
+    agents: {
+      a: ag('a', 'executor', 'implement', 1, 6001, 0.1),
+      b: ag('b', 'code_reviewer', 'implement', 1000, 5000, undefined),
+      c: ag('c', 'compactor', undefined, 6000, 7000, 0, '整理 30 則共用筆記'),
+      d: ag('d', 'compactor', undefined, 7000, 8000, 0, '壓縮共享上下文'),
+    },
+    timing: { waitingMs: 1500 },
+  };
+  const c = W.costBreakdown(run, 20000);
+  assert.equal(c.wallMs, 10000);
+  assert.equal(c.agentMs, 6000 + 4000 + 1000 + 1000);
+  assert.equal(c.waitingMs, 1500);
+  assert.deepEqual(c.rows.map((r) => r.key).sort(), ['code_reviewer@implement', 'compaction', 'executor@implement', 'librarian']);
+  assert.equal(c.total.costUnknown, true);
+  assert.equal(c.blocks[0].key, 'shared.log');
+  assert.equal(c.blocks[0].tokens, 300);
+  assert.deepEqual(c.cut, [{ key: 'shared.notes', chars: 200 }]);
+
+  const live = { status: 'running', timing: undefined };
+  W.trackWaiting(live, 100);
+  live.status = 'waiting_human';
+  W.trackWaiting(live, 200);
+  live.status = 'running';
+  W.trackWaiting(live, 700);
+  assert.equal(live.timing.waitingMs, 500);
+});
+

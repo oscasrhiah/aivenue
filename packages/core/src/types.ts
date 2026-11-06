@@ -409,6 +409,71 @@ export interface TokenUsage {
   output?: number;
   cached?: number;
   costUsd?: number;
+  /** The provider's own numbers, as it reported them (observation only; docs/workflow-efficiency-plan.md A2). */
+  raw?: Record<string, number>;
+  /** The same usage on one basis for every provider (observation only: limits, quotas and routing do not read it). */
+  observed?: ObservedUsage;
+}
+
+/**
+ * Usage on one basis (docs/workflow-efficiency-plan.md A2). When the split is known, uncachedInput + cachedInput +
+ * output is the whole of a call; reasoning is part of output and cacheWrite part of uncachedInput (details, never
+ * added again). When it is not known (splitKnown false), only the provider's own input and cache numbers are given
+ * (reportedInput may or may not include reportedCached): they are never put into the two input columns.
+ */
+export interface ObservedUsage {
+  uncachedInput?: number;
+  cachedInput?: number;
+  reportedInput?: number;
+  reportedCached?: number;
+  output: number;
+  /** Part of output: the model's reasoning, when the provider says. */
+  reasoning?: number;
+  /** Part of uncachedInput: what was written to the cache, when the provider says. */
+  cacheWrite?: number;
+  /** False when the provider's numbers do not say whether input already includes the cached part. */
+  splitKnown: boolean;
+}
+
+/** One agent's observed usage, summed (A2). */
+export interface ObservedTotals {
+  /** From usage whose split is known. */
+  uncachedInput: number;
+  cachedInput: number;
+  output: number;
+  reasoning?: number;
+  cacheWrite?: number;
+  /** Usage whose input/cache split is not known: the provider's own numbers (the input may already include the cache). */
+  unsplit?: { input: number; cached: number };
+  /** Some of its usage came without a known input/cache split (see unsplit). */
+  splitUnknown?: boolean;
+  /** Price reported by the provider (unknown when any usage came without one: not zero). */
+  costUsd?: number;
+  costUnknown?: boolean;
+  /** Usage events counted. */
+  events: number;
+}
+
+/** What one prompt Aivenue sent was made of (A1): sizes Aivenue assembled, not what the provider billed. */
+export interface PromptTurn {
+  at: number;
+  /** A resumed conversation (only what is new was sent). */
+  resumed: boolean;
+  blocks: { key: string; chars: number; tokens: number }[];
+  /** Sum of the blocks: what was sent. */
+  chars: number;
+  tokens: number;
+  /** What shortening to fit removed (characters): not sent, so not in chars or tokens. */
+  cut?: { key: string; chars: number }[];
+}
+
+/** An agent's prompts over its whole run (the per-turn detail keeps only the latest turns). */
+export interface PromptTotals {
+  turns: number;
+  chars: number;
+  tokens: number;
+  blocks: Record<string, { chars: number; tokens: number; turns: number }>;
+  cut: Record<string, number>;
 }
 
 // ---------- Usage / quota ----------
@@ -839,6 +904,12 @@ export interface AgentRunInfo {
   readonly?: boolean;
   /** Tokens the CLI reported for this agent (all its turns). */
   tokens?: { input: number; output: number; cached: number };
+  /** Its usage on one basis (A2, observation only). */
+  observed?: ObservedTotals;
+  /** What each prompt Aivenue sent it was made of (A1): the latest 40 turns, newest last. */
+  promptTurns?: PromptTurn[];
+  /** The same over every turn of the run (not limited to the latest 40). */
+  promptTotals?: PromptTotals;
   stats: { events: number; tools: number; commands: number; filesChanged: string[] };
   /** Spend the CLI reported for it (USD), for the cost limit. */
   costUsd?: number;
@@ -1008,6 +1079,8 @@ export type WorkflowStatus = 'running' | 'paused' | 'waiting_human' | 'completed
 
 export interface WorkflowRun {
   id: string;
+  /** Time spent waiting on the user (decisions, approvals, pauses), for the cost breakdown (A2). */
+  timing?: { waitingMs: number; waitingSince?: number };
   /** The project memory this workflow uses (docs/memory-phase1.md). */
   projectMemory?: RunMemory;
   config: WorkflowConfig;
@@ -1385,4 +1458,37 @@ export interface RunMemoryView {
   leftOut: { memoryId: string; reason: string; text?: string }[];
   injectedTokens: number;
   queued: number;
+}
+
+/** One row of a workflow's cost breakdown (docs/workflow-efficiency-plan.md A2). */
+export interface CostRow {
+  /** Role (and stage), or "compaction" / "librarian" for Aivenue's own upkeep calls. */
+  key: string;
+  role: AgentRole;
+  stage?: string;
+  agents: number;
+  /** Sum of the agents' own running times (parallel agents overlap: not the workflow's time). */
+  agentMs: number;
+  observed: ObservedTotals;
+  /** Tokens of the prompts Aivenue assembled for them (an estimate, not what the provider billed). */
+  promptTokens: number;
+  turns: number;
+}
+
+/** A workflow's cost breakdown (A2, observation only). */
+export interface CostBreakdown {
+  /** Wall-clock time from start to end (or now). */
+  wallMs: number;
+  /** Sum of every agent's running time (overlaps when agents work in parallel). */
+  agentMs: number;
+  /** Time waiting on the user: decisions, approvals, pauses. */
+  waitingMs: number;
+  rows: CostRow[];
+  total: ObservedTotals;
+  /** The prompt blocks that took the most, over every turn (Aivenue's own estimate). */
+  blocks: { key: string; chars: number; tokens: number; turns: number }[];
+  /** What shortening to fit removed from prompts, by block (characters, not sent). */
+  cut: { key: string; chars: number }[];
+  /** Prompt turns counted, and how many of them still have their per-turn detail kept. */
+  turns: number;
 }

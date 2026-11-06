@@ -396,6 +396,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
     'workflows.setMemoryMode': (p: { id: string; mode: 'full' | 'readonly' | 'off' }) => orchestrator.setMemoryMode(p.id, p.mode),
     'workflows.memory': (p: { id: string }) => orchestrator.memoryForRun(p.id),
+    'workflows.cost': (p: { id: string }) => orchestrator.costOf(p.id),
     'workflows.remember': (p: { id: string; text: string; noteId?: string; ts?: number; request?: { id: string; at: number } }) => orchestrator.memoryRemember(p.id, p.text, { noteId: p.noteId, ts: p.ts, request: p.request }),
     'memory.projects': () => orchestrator.memoryProjects(),
     'memory.list': (p: { projectId: string }) => orchestrator.memoryList(p.projectId),

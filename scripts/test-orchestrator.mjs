@@ -1335,3 +1335,33 @@ test('記憶頁 API：刪除後再刻意記住「完全相同」的文字會成�
   assert.equal(merged.status, 'merged');
 });
 
+test('A1／A2：每輪記下的 prompt 組成，加總正好是送出的 prompt；用量另外累加，不動既有 tokens', async () => {
+  const { orch, cwd } = setup();
+  const sent = [];
+  fakeAgents(orch, {});
+  const fake = globalThis.__fakeAgent;
+  globalThis.__fakeAgent = async (o) => {
+    sent.push(o.prompt);
+    o.onEvent?.({ seq: 1, ts: Date.now(), kind: 'info', usage: { input: 100, output: 20, cached: 50, observed: { uncachedInput: 100, cachedInput: 50, output: 20, splitKnown: true } } }, false);
+    return fake(o);
+  };
+  const r = await finished(orch, orch.start(config(cwd, { ...noPlan, goal: 'measure me' })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const turns = Object.values(r.agents).flatMap((a) => (a.promptTurns ?? []).map((t) => ({ a, t })));
+  assert.ok(turns.length >= 2);
+  for (const { t } of turns) {
+    assert.ok(sent.some((p) => p.length === t.chars), `a turn of ${t.chars} chars matches a sent prompt`);
+    assert.equal(t.blocks.reduce((n, b) => n + b.chars, 0), t.chars);
+  }
+  const exec = Object.values(r.agents).find((a) => a.role === 'executor');
+  assert.deepEqual(exec.tokens, { input: 100, output: 20, cached: 50 });
+  assert.equal(exec.observed.uncachedInput, 100);
+  assert.equal(exec.observed.costUnknown, true);
+  assert.equal(exec.promptTotals.turns, exec.promptTurns.length);
+  assert.equal(exec.promptTotals.chars, exec.promptTurns.reduce((n, t) => n + t.chars, 0));
+  const cost = orch.costOf(r.id);
+  assert.ok(cost.rows.some((x) => x.key === 'executor@implement'));
+  assert.ok(cost.blocks.some((b) => b.key.startsWith('shared.')));
+  assert.ok(cost.wallMs > 0);
+});
+

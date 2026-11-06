@@ -32,6 +32,7 @@ import type {
   WorkflowConfig,
   WorkflowRun,
   WorkflowSummary,
+  CostBreakdown,
   MemoryEvidence,
   MemoryLifecycle,
   MemoryMode,
@@ -56,6 +57,7 @@ import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill } from './bundle';
 import { skillsReminder } from './capabilities';
+import { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './promptStats';
 import { memoryContentDigest, MemoryStore, type MemoryCandidate, type MemoryPatch } from './memoryStore';
 import { findProject, listProjects, relinkProject, resolveProject } from './memoryProject';
 import { fingerprint, recordEvent, stateDetail, WHOLE_CHECKOUT } from './memoryVerify';
@@ -974,6 +976,13 @@ export class Orchestrator {
     }[outcome.status];
     this.log(run, said, outcome.status === 'added' || outcome.status === 'merged' ? 'info' : 'warn', true);
     return { ...outcome, message: said };
+  }
+
+  /** Where a workflow's tokens and time went (observation only, docs/workflow-efficiency-plan.md A2). */
+  costOf(workflowId: string): CostBreakdown {
+    const run = this.runs.get(workflowId);
+    if (!run) throw new Error('workflow not found');
+    return costBreakdown(run);
   }
 
   /** What a workflow picked and gave each agent. */
@@ -2971,9 +2980,11 @@ export class Orchestrator {
       // Its CLI compacted this conversation since the last turn: what it read and ran comes back with the shared context.
       const recapIds = resume && this.recapDue.has(resume) ? this.conversationIds(run, resume) : undefined;
       const ev = (id: string) => this.events(run.id, id);
+      const sharedParts = { kept: [] as { key: string; text: string }[], cut: [] as { key: string; chars: number }[] };
       const shared = plain
         ? ''
         : contextBlock(run, info, ev, {
+            measure: sharedParts,
             since: seenKey ? this.sharedSeen.get(seenKey) : undefined,
             maxChars: usable ? Math.floor(usable * share * 4) : undefined,
             recap: recapIds ? (budget) => [ownWorkBlock(run, ev, recapIds, this.findingsOf(run, recapIds), budget), P.checkpointRequest()].filter(Boolean).join('\n') : undefined,
@@ -3006,10 +3017,29 @@ export class Orchestrator {
       };
       if (!plain) for (const m of run.userMessages ?? []) if (!(m.deliveredTo ??= []).includes(info.id)) m.deliveredTo.push(info.id);
       const projectMemory = plain ? '' : this.memoryFor(run, info, resume, !!recapIds);
+      // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects);
+      // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
+      const turn = promptTurn(
+        [
+          { key: 'role', text: prompt, parts: plain ? undefined : roleParts(prompt, run.config.goal) },
+          { key: 'rules', text: rules },
+          { key: 'shared', text: shared, parts: sharedParts.kept, cut: sharedParts.cut },
+          { key: 'projectMemory', text: projectMemory },
+          { key: 'advisor', text: advisorText },
+          { key: 'attachments', text: files },
+          { key: 'skills', text: skills + skillsAgain },
+          { key: 'systemPrompt', text: plain ? '' : (systemPrompt ?? '') },
+        ],
+        !!resume,
+        turnStart,
+      );
+      // The latest 40 turns in detail; the whole run in totals.
+      info.promptTurns = [...(info.promptTurns ?? []), turn].slice(-40);
+      info.promptTotals = addTurn(info.promptTotals, turn);
       const res = await runAgent({
         spec,
-        // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-        prompt: plain ? prompt : prompt + P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects) + shared + projectMemory + advisorText + files + skills + skillsAgain,
+        prompt: plain ? prompt : prompt + rules + shared + projectMemory + advisorText + files + skills + skillsAgain,
         extraDirs,
         advisorModel: nativeAdvisor,
         mcpServers: plain ? [] : mcpServers,
@@ -3095,6 +3125,7 @@ export class Orchestrator {
       t.input += e.usage.input ?? 0;
       t.output += e.usage.output ?? 0;
       t.cached += e.usage.cached ?? 0;
+      info.observed = addObserved(info.observed, e.usage);
     }
     if (!isUpdate) {
       info.stats.events++;
@@ -4363,6 +4394,7 @@ export class Orchestrator {
 
   private touch(run: WorkflowRun) {
     run.updatedAt = now();
+    trackWaiting(run, run.updatedAt);
     this.d.store.save(run);
     if (this.pushTimers.has(run.id)) return;
     this.pushTimers.set(

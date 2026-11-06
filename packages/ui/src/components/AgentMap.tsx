@@ -259,6 +259,7 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
           {` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
           {agent.stats.commands > 0 && ` · ${agent.stats.commands} ${t('個指令', 'commands')}`}
           {agent.stats.filesChanged.length > 0 && ` · ${agent.stats.filesChanged.length} ${t('個檔案', 'files')}`}
+          {agent.observed?.events ? ` · ${t('花費', 'cost')} ${agent.observed.costUnknown || agent.observed.costUsd === undefined ? t('未知', 'unknown') : `${agent.observed.costUsd.toFixed(4)}`}` : ''}
         </div>
       </div>
 

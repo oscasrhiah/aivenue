@@ -5421,3 +5421,44 @@ textarea.code {
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* ---------- cost breakdown ---------- */
+.cost-table-wrap {
+  overflow-x: auto;
+}
+
+.cost-table {
+  border-collapse: collapse;
+  width: 100%;
+  white-space: nowrap;
+}
+
+.cost-table th,
+.cost-table td {
+  padding: 4px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+}
+
+.cost-table th:first-child,
+.cost-table td:first-child {
+  text-align: left;
+}
+
+.cost-table th {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.cost-total td {
+  font-weight: 600;
+}
+
+.cost-bar {
+  display: inline-block;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--accent, var(--ok));
+  flex-shrink: 0;
+  align-self: center;
+}

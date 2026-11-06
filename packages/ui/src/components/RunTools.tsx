@@ -4,6 +4,7 @@ import { hub } from '../api';
 import { useT } from '../i18n';
 import { cx, providerName, roleLabel } from '../util';
 import { RunMemoryWindow } from './Memory';
+import { CostWindow } from './Cost';
 
 interface Hit {
   agentId?: string;
@@ -21,6 +22,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
   const [search, setSearch] = useState(false);
   const [shared, setShared] = useState<string>();
   const [memory, setMemory] = useState(false);
+  const [cost, setCost] = useState(false);
   const [note, setNote] = useState<string>();
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -56,6 +58,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
       {open && (
         <div className="menu">
           <button onClick={() => (setOpen(false), void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)))}>🧠 {t('檢視共享上下文（agent 看到的內容）', 'View the shared context (what agents see)')}</button>
+          <button onClick={() => (setOpen(false), setCost(true))}>📊 {t('成本分解（token、時間、prompt 組成）', 'Cost breakdown (tokens, time, prompt makeup)')}</button>
           <button onClick={() => (setOpen(false), setMemory(true))}>🧩 {t('專案記憶（這次帶入了什麼、記憶模式）', 'Project memory (what this run was given, memory mode)')}</button>
           <button onClick={() => (setOpen(false), setSearch(true))}>🔎 {t('搜尋紀錄', 'Search records')}</button>
           <button onClick={exportRun}>📦 {t('匯出完整紀錄（遮罩金鑰）', 'Export full records (keys masked)')}</button>
@@ -63,6 +66,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
         </div>
       )}
       {memory && <RunMemoryWindow run={run} onClose={() => setMemory(false)} />}
+      {cost && <CostWindow run={run} onClose={() => setCost(false)} />}
       {note && (
         <div className="modal-back" onClick={() => setNote(undefined)}>
           <div className="modal small-modal" onClick={(e) => e.stopPropagation()}>
