@@ -1,5 +1,7 @@
-# Builds the Windows (NSIS + portable), Linux (tar.gz) and VS Code (.vsix) packages and publishes them as a
-# GitHub Release. Runs on a pushed v* tag, or by hand (workflow_dispatch) for a given tag.
+# Builds the Windows (NSIS + portable) and VS Code (.vsix) packages, and the Linux (tar.gz) one when the repository
+# variable RELEASE_LINUX is 'true', and publishes them as a GitHub Release. Runs on a pushed v* tag, or by hand
+# (workflow_dispatch) for a given tag. Linux stays off until a release has been accepted on Linux (memory lock and
+# the main flow); the release then has no Linux package.
 name: Release
 
 on:
@@ -90,8 +92,29 @@ jobs:
           path: packages/desktop/release/*.exe
           if-no-files-found: error
 
+  vscode:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Package VS Code extension (release/aivenue-vscode.vsix)
+        run: npm run package:vscode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode
+          path: release/aivenue-vscode.vsix
+          if-no-files-found: error
+
   linux:
     needs: version
+    if: ${{ vars.RELEASE_LINUX == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,18 +127,16 @@ jobs:
       - run: npm ci
       - name: Package Linux (release/Aivenue-<version>-linux-x64.tar.gz)
         run: npm run package:linux
-      - name: Package VS Code extension (release/aivenue-vscode.vsix)
-        run: npm run package:vscode
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: |
-            release/Aivenue-${{ needs.version.outputs.version }}-linux-x64.tar.gz
-            release/aivenue-vscode.vsix
+          path: release/Aivenue-${{ needs.version.outputs.version }}-linux-x64.tar.gz
           if-no-files-found: error
 
   release:
-    needs: [version, windows, linux]
+    needs: [version, windows, vscode, linux]
+    # Linux is skipped unless RELEASE_LINUX is 'true'; every job that ran must have succeeded.
+    if: ${{ !cancelled() && needs.windows.result == 'success' && needs.vscode.result == 'success' && (needs.linux.result == 'success' || needs.linux.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -135,8 +156,10 @@ jobs:
           # electron-builder's default names: "Aivenue Setup <v>.exe" (NSIS) and "Aivenue <v>.exe" (portable).
           cp "artifacts/windows/Aivenue Setup $VERSION.exe" "dist/Aivenue-Setup-$VERSION.exe"
           cp "artifacts/windows/Aivenue $VERSION.exe" "dist/Aivenue-$VERSION-portable.exe"
-          cp "artifacts/linux/Aivenue-$VERSION-linux-x64.tar.gz" "dist/Aivenue-$VERSION-linux-x64.tar.gz"
-          cp "artifacts/linux/aivenue-vscode.vsix" "dist/aivenue-vscode-$VERSION.vsix"
+          if [ -f "artifacts/linux/Aivenue-$VERSION-linux-x64.tar.gz" ]; then
+            cp "artifacts/linux/Aivenue-$VERSION-linux-x64.tar.gz" "dist/Aivenue-$VERSION-linux-x64.tar.gz"
+          fi
+          cp "artifacts/vscode/aivenue-vscode.vsix" "dist/aivenue-vscode-$VERSION.vsix"
           ls -l dist
       - name: Release notes from CHANGELOG.md
         shell: bash
