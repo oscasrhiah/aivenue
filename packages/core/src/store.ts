@@ -25,6 +25,11 @@ export class RunStore {
     fs.mkdirSync(this.runsDir, { recursive: true });
   }
 
+  /** The folder of a workflow's records (deleted with it): for files kept beside run.json, such as CI logs. */
+  dirOf(id: string): string {
+    return this.runDir(id);
+  }
+
   private runDir(id: string) {
     if (!SAFE_ID.test(id)) throw new Error(`invalid id ${id}`);
     return path.join(this.runsDir, id);

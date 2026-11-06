@@ -45,7 +45,8 @@ import type {
 } from './types';
 import { runAgent, type BridgeLaunch, type RunAgentResult } from './agentRunner';
 import { capture, findNode } from './proc';
-import { ciDiagnosisBlock, diagnoseCi, wantsCiDiagnosis, type GhRun } from './ciDiagnose';
+import { ciDiagnosisBlock, ciLogKey, diagnoseCi, wantsCiDiagnosis, type GhRun } from './ciDiagnose';
+import { ciLogPage, searchCiLogs, storeCiLogs } from './ciLogs';
 import { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './prReviews';
 import { replayGh } from './ghReplay';
 import { writeHandoffSummary } from './handoffSummary';
@@ -1877,7 +1878,9 @@ export class Orchestrator {
       case 'search_records': {
         const str = (k: string) => (typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim().slice(0, 300) : undefined);
         const q: RecordQuery = { q: str('q'), role: str('role'), agentId: str('agent_id'), stage: str('stage'), round: Number(args.round) || undefined, file: str('file'), issueId: str('issue_id'), limit: Number(args.limit) || undefined };
-        const hits = searchRecords(run, (id) => this.events(run.id, id), q);
+        const hits: unknown[] = searchRecords(run, (id) => this.events(run.id, id), q);
+        // And the CI logs kept for this workflow (marked as CI output), when searching by words.
+        if (q.q && !q.role && !q.agentId && !q.stage && !q.round && !q.file && !q.issueId && run.ci) hits.push(...searchCiLogs(this.d.store.dirOf(run.id), run.ci, q.q));
         return hits.length ? JSON.stringify(hits) : 'No matching records.';
       }
       case 'report_skill_use': {
@@ -2006,6 +2009,8 @@ export class Orchestrator {
         return JSON.stringify(d.allow ? { behavior: 'allow', updatedInput: args.input ?? {} } : { behavior: 'deny', message: d.message ?? 'The user denied this action.' });
       }
       case 'read_context': {
+        // A CI log Aivenue kept for this workflow, in pages (only this workflow's records).
+        if (typeof args.ci_log === 'string' && args.ci_log.trim()) return ciLogPage(this.d.store.dirOf(run.id), run.ci, args.ci_log.trim(), Number(args.page) || 1);
         const topic = String(args.topic ?? '').trim();
         if (topic) {
           if (/^user$/i.test(topic)) return userWordsTopic(run, typeof args.from === 'string' ? args.from : undefined);
@@ -4016,6 +4021,15 @@ export class Orchestrator {
       const gh: GhRun = this.ghFor(run.config.cwd);
       p = (run.ci ? Promise.resolve(run.ci) : this.checkoutHead(run.config.cwd).then((checkoutHead) => diagnoseCi({ gh, pr: want.pr, checkoutHead })))
         .then((d) => {
+          // The whole logs it read: kept as files of this workflow's records (bounded), never in the run itself.
+          if (d.logs) {
+            try {
+              storeCiLogs(this.d.store.dirOf(run.id), d);
+            } catch (e) {
+              for (const c of d.checks) if (!c.log && d.logs?.[ciLogKey(c)] !== undefined) c.log = { chars: 0, total: d.logs[ciLogKey(c)].length, obtainedAt: d.at, source: 'GitHub', error: `it could not be kept: ${(e as Error).message}` };
+              delete d.logs;
+            }
+          }
           run.ci = d;
           this.d.store.save(run);
           return ciDiagnosisBlock(d, this.d.ghFixCi?.());
