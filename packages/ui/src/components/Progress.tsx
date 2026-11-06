@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName, subTitle } from '../util';
+import { runOverview, stepState } from '../timeline';
 import { AgentWindow, GpuWindow, ProcessWindow, Window } from './DetailWindows';
 
-type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped';
+type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped' | 'unreported';
 interface Item {
   key: string;
   label: string;
@@ -49,10 +50,15 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
           key: `step-${s.id}`,
           // Steps reported without a plan use free-form ids and often repeat the note as the title.
           label: /^\d/.test(s.id) ? `${s.id}. ${s.title}` : s.title,
-          meta: s.rework?.length ? t(`審查退回，需修正：${s.rework.join('、')}`, `Sent back by the review: ${s.rework.join(', ')}`) : s.note && !s.title.includes(s.note.slice(0, 20)) ? s.note : undefined,
+          meta: [
+            s.rework?.length ? t(`審查退回，需修正：${s.rework.join('、')}`, `Sent back by the review: ${s.rework.join(', ')}`) : s.note && !s.title.includes(s.note.slice(0, 20)) ? s.note : undefined,
+            // As reported: a step its agent never marked done is not shown as done, whatever the stage's outcome.
+            stepState(s, st.status, ended) === 'unreported' ? t('未回報完成', 'not reported done') : undefined,
+          ]
+            .filter(Boolean)
+            .join(' · '),
           sub: true,
-          // Agents don't always mark their last steps done; once the stage is approved they are.
-          state: s.rework?.length && st.status !== 'approved' ? 'failed' : s.status === 'done' || (s.status === 'in_progress' && st.status === 'approved') ? 'done' : s.status === 'in_progress' ? 'active' : s.status === 'blocked' ? 'failed' : s.status === 'skipped' ? 'skipped' : 'pending',
+          state: stepState(s, st.status, ended),
         });
     if (cfg.reviewer)
       items.push({
@@ -179,12 +185,21 @@ export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnT
 
 export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
-  const [open, setOpen] = useState(run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human');
+  const isLive = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
+  const [open, setOpen] = useState(isLive);
+  // When the workflow ends, the panel folds to its one line: the final result is what is read then, and the space
+  // above the input is freed. A step not reported done is still said on that line; the list is one click away.
+  const wasLive = useRef(isLive);
+  useEffect(() => {
+    if (wasLive.current && !isLive) setOpen(false);
+    wasLive.current = isLive;
+  }, [isLive]);
   // A detail window opened from a tag: an agent, the GPUs or a background process.
   const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number } | { goal: true }>();
   const items = buildItems(run, providers, t);
   if (!items.length) return null;
   const done = items.filter((i) => i.state === 'done' || i.state === 'skipped').length;
+  const unreported = items.filter((i) => i.state === 'unreported').length;
   const current = items.find((i) => i.state === 'active');
   const gap = goalGap(run);
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
@@ -198,8 +213,12 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
           <span className="pp-chev">{open ? '▾' : '▸'}</span>
           <span className="pp-title">{t('進度', 'Progress')}</span>
           <span className="muted small pp-summary">
-            {done}/{items.length}
-            {!open && block.length ? ` · ⏸ ${block[0]}` : !open && current ? ` · ${current.label}` : ''}
+            {/* This round, the delegated batches and background processes, each said apart; the count is the
+                workflow's own steps (stages and plan steps), named as such. */}
+            {runOverview(t, run, subTitle).join(' · ')}
+            {live && ` · ${t('工作流步驟', 'workflow steps')} ${done}/${items.length}`}
+            {!live && unreported > 0 && t(` · ${unreported} 個步驟未回報完成`, ` · ${unreported} step(s) not reported done`)}
+            {live && !open && block.length ? ` · ⏸ ${block[0]}` : live && !open && current ? ` · ${current.label}` : ''}
           </span>
         </button>
         {gap.rows.length > 0 && (
@@ -260,7 +279,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
         <div className="pp-list">
           {items.map((i) => (
             <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
-              <span className={cx('pp-icon', i.state)}>{i.state === 'done' ? '✓' : i.state === 'failed' ? '✕' : i.state === 'skipped' ? '–' : ''}</span>
+              <span className={cx('pp-icon', i.state)}>{i.state === 'done' ? '✓' : i.state === 'failed' ? '✕' : i.state === 'skipped' ? '–' : i.state === 'unreported' ? '?' : ''}</span>
               <span className="pp-label">{i.label}</span>
               {i.meta && <span className="pp-meta">{i.meta}</span>}
             </div>

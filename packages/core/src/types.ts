@@ -1170,16 +1170,26 @@ export interface NeedsValidation {
  * A check (tests, build, type check, linter) as Aivenue saw it run — observed, not reported. `outcome`: passed (it
  * ended fine and printed no failure), failed (it ended with an error), output_failure (it ended fine but its output
  * reports a failure), in_longer_command (it ran within a longer command that ended fine: its own result is in the
- * output). `outdated`: files changed after it ran (re-verify); `maybeOutdated`: only a failed edit came after.
+ * output), may_not_run (not known whether it ran at all: after `||`, or after `&&` where the line's end does not show the
+ * steps before it succeeded; `lineOk` says how the line ended).
+ * `outdated`: files changed after it ran (re-verify); `maybeOutdated`: only a failed edit came after.
  */
 export interface ObservedCheck {
   command: string;
   agentId: string;
   by: string;
   ts: number;
-  outcome: 'passed' | 'failed' | 'output_failure' | 'in_longer_command';
+  outcome: 'passed' | 'failed' | 'output_failure' | 'in_longer_command' | 'may_not_run';
+  /** For may_not_run: whether the whole line ended fine. */
+  lineOk?: boolean;
   outdated?: boolean;
   maybeOutdated?: boolean;
+  /** The tool call it comes from (its event number in the agent's records), when that call can be read again. */
+  seq?: number;
+  /** What it printed (the useful part, cut), kept at submission so the result can show its evidence. */
+  output?: string;
+  /** Earlier runs of the same check in the same folder that this one replaced, oldest first (at most 3). */
+  earlier?: { ts: number; outcome: ObservedCheck['outcome']; seq?: number; output?: string }[];
 }
 
 export interface OpenDecision {

@@ -396,6 +396,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         mode: { type: 'string', enum: ['write', 'readonly'], description: 'readonly = must not modify files. Default write.' },
         model: { type: 'string', description: 'Optional model id for that provider. Ignored when the user fixed a model for it.' },
         effort: { type: 'string', description: 'Optional reasoning effort (e.g. low, medium, high). Ignored when the user fixed one.' },
+        retry_of: { type: 'string', description: 'Optional. The subagent_id of one of your sub-agents whose work this one does again (after it failed or stopped): shown to the user as another attempt of that work. Leave it out for new work, even under a similar title.' },
       },
       required: ['provider', 'task'],
     },

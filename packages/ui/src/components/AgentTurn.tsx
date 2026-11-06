@@ -2,11 +2,14 @@ import { useMemo, useState } from 'react';
 import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ObservedCheck, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
-import { agentStatus, cx, elapsed, firstLine, saidOwner, modelLabel, providerColor, providerName, roleLabel, roleTone, similar, STEP_ICON, subTitle } from '../util';
+import { agentStatus, cx, elapsed, firstLine, saidOwner, modelLabel, providerColor, providerName, roleLabel, roleTone, similar, subTitle } from '../util';
 import { Clamp } from './Clamp';
 import { SwitchProvider } from './RunTools';
-import { Transcript, visible } from './Transcript';
+import { LiveFeed, Transcript, visible } from './Transcript';
+import { Approvals } from './Safety';
+import { batchCounts, batchesOf, isInternal, liveLine, readableError, reworkLine, roundOf, turnSummary, type Batch, type BatchState } from '../timeline';
 import { Markdown } from './Markdown';
+import { CheckRows } from './Checks';
 import { extensionSummary } from '../extensionUse';
 import { outcomeText } from './Progress';
 import { RememberButton } from './Memory';
@@ -63,11 +66,6 @@ function Stale({ stale, evidence }: { stale?: boolean; evidence?: { commit?: str
       {evidence.commit ?? evidence.treeHash.slice(0, 8)}
     </span>
   );
-}
-
-function roundOf(run: WorkflowRun, a: AgentRunInfo): Round | undefined {
-  if (!a.stage) return undefined;
-  return run.stages[a.stage]?.rounds.find((r) => r.n === a.round);
 }
 
 const routeLabel = (t: ReturnType<typeof useT>, to: string) => ({ done: t('完成', 'done'), implementer: t('交回實作者', 'back to the implementer'), planner: t('交回計畫者', 'back to the planner'), adjudicate: t('交付裁定', 'to adjudication'), user: t('交給你', 'to you') })[to] ?? to;
@@ -213,7 +211,6 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
           </div>
         ))}
         {round.route && round.route.to !== 'done' && <div className="route small">➜ {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
-        {round.handoff && <HandoffBlock h={round.handoff} />}
       </div>
     );
   }
@@ -281,41 +278,27 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
           </div>
         )}
         {round.route && <div className="route small">➜ {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
-        {round.handoff && <HandoffBlock h={round.handoff} />}
       </div>
     );
   }
 
   if (agent.role === 'executor') {
-    const latestExecutor = Object.values(run.agents)
-      .filter((a) => a.role === 'executor')
-      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
+    // The plan's steps are listed once, in the progress panel. Once the workflow is done the final result is where the
+    // outcome is read (deliverables, every check): the card keeps its one line, the summary moves to its activity log.
+    const final = run.status === 'completed';
     return (
       <>
         {round && <Responses round={round} />}
         {round && <OpenDecisions round={round} />}
-        {latestExecutor?.id === agent.id && run.steps.length > 0 && (
-          <div className="block">
-            <div className="block-label">{t('計畫進度', 'Plan progress')}</div>
-            {run.steps.map((s) => (
-              <div key={s.id} className={cx('pstep', s.status)}>
-                <span className="pstep-icon">{STEP_ICON[s.status]}</span>
-                <span>
-                  {/^\d/.test(s.id) ? `${s.id}. ${s.title}` : s.title}
-                  {s.note && !s.title.includes(s.note.slice(0, 20)) && <span className="muted"> — {s.note}</span>}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-        {done && isAuthor && round?.submission?.summary && round.submission.summary.trim() !== agent.finalText?.trim() && (
+        {done && isAuthor && !final && round?.submission?.summary && (
           <div className="block">
             <div className="block-label">{t('實作摘要', 'Summary')}</div>
-            <Markdown className="prose" text={round.submission.summary} />
+            <Clamp height={160}>
+              <Markdown className="prose" text={round.submission.summary} />
+            </Clamp>
           </div>
         )}
-        {done && isAuthor && <ObservedChecks checks={round?.submission?.checks} />}
-        <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
+        {done && isAuthor && !final && <ObservedChecks run={run} checks={round?.submission?.checks} />}
       </>
     );
   }
@@ -331,11 +314,46 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             </Clamp>
           </div>
         )}
-        <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
       </>
     );
   }
   return null;
+}
+
+/**
+ * The evidence behind a turn, in its activity log: the checks Aivenue saw, the files, the round's hand-off and the
+ * submission as it came in (the main line shows it parsed).
+ */
+function TurnDetails({ run, agent }: { run: WorkflowRun; agent: AgentRunInfo }) {
+  const t = useT();
+  const round = roundOf(run, agent);
+  const isAuthor = round?.authorAgentId === agent.id;
+  const isReviewer = round?.reviewerAgentId === agent.id;
+  const submitted = isAuthor ? round?.submission : isReviewer ? (round?.review ?? round?.verification) : undefined;
+  return (
+    <>
+      {isAuthor && agent.role === 'executor' && run.status === 'completed' && round?.submission?.summary && (
+        <div className="block">
+          <div className="block-label">{t('實作摘要（agent 自己的說法）', "Summary (the agent's own account)")}</div>
+          <Markdown className="prose" text={round.submission.summary} />
+        </div>
+      )}
+      {isAuthor && agent.role === 'executor' && <ObservedChecks run={run} checks={round?.submission?.checks} />}
+      {(agent.stats.filesChanged.length > 0 || (agent.stats.filesMaybeChanged?.length ?? 0) > 0) && (
+        <div className="block">
+          <div className="block-label">{t('以編輯工具改動的檔案（終端指令寫入的檔案不在這裡，見工作流的「這次產生或修改的檔案」）', "Files edited with the edit tool (files written by terminal commands are not here: see the workflow's files produced or changed)")}</div>
+          <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
+        </div>
+      )}
+      {isReviewer && round?.handoff && <HandoffBlock h={round.handoff} />}
+      {submitted && (
+        <details className="raw-submission">
+          <summary>{t('原始提交資料', 'Submission as received')}</summary>
+          <pre>{JSON.stringify(submitted, null, 2)}</pre>
+        </details>
+      )}
+    </>
+  );
 }
 
 /** Notes this agent shared with the others (`post_note`): one line each, the full text on click. */
@@ -431,40 +449,18 @@ function Files({ files, maybe = [] }: { files: string[]; maybe?: string[] }) {
  * account: passed, failed, its output reports a failure, ran within a longer command, and re-verify after a change.
  * Shown only for submissions recorded with it (older ones have no `checks`).
  */
-function ObservedChecks({ checks }: { checks?: ObservedCheck[] }) {
+function ObservedChecks({ run, checks }: { run: WorkflowRun; checks?: ObservedCheck[] }) {
   const t = useT();
   if (!checks) return null;
-  const label = t('Aivenue 看到的檢查（提交時；不是 agent 的自述）', 'Checks Aivenue saw run (at submission; not the agent\'s own account)');
-  if (!checks.length)
-    return (
-      <div className="block">
-        <div className="block-label">{label}</div>
-        <span className="ext-chip warn">{t('沒有看到任何檢查執行：摘要裡說的通過或完成，是 agent 自己的說法', 'No check seen: any "passed" or "done" in the summary is the agent\'s own account')}</span>
-      </div>
-    );
-  const outcome = (c: ObservedCheck) =>
-    c.outcome === 'passed'
-      ? { cls: 'ok', text: t('✓ 通過', '✓ passed') }
-      : c.outcome === 'failed'
-        ? { cls: 'bad', text: t('✗ 失敗', '✗ failed') }
-        : c.outcome === 'output_failure'
-          ? { cls: 'bad', text: t('⚠ 執行完成，但輸出回報失敗', '⚠ ran, its output reports a failure') }
-          : { cls: 'muted', text: t('◦ 在較長的指令中執行，結果要看輸出', '◦ ran within a longer command; its result is in the output') };
+  const label = t('Aivenue 看到的檢查（提交時；不是 agent 的自述）', "Checks Aivenue saw run (at submission; not the agent's own account)");
   return (
     <div className="block">
       <div className="block-label">{label}</div>
-      <div className="checks-seen">
-        {checks.map((c) => {
-          const o = outcome(c);
-          const stale = c.outdated ? t('之後有改檔，需重驗', 'files changed since: re-verify') : c.maybeOutdated ? t('之後有編輯失敗，檔案可能已變，請確認', 'a failed edit since may have changed files') : '';
-          return (
-            <div key={`${c.agentId}|${c.command}`} className="check-seen">
-              <span className={cx('ext-chip', stale ? 'warn' : o.cls)}>{o.text}</span> <code>{c.command}</code> <span className="muted">{t(`（${c.by} 執行）`, `(run by ${c.by})`)}</span>
-              {stale && <span className="ext-chip warn"> · {stale}</span>}
-            </div>
-          );
-        })}
-      </div>
+      {checks.length ? (
+        <CheckRows checks={checks} />
+      ) : (
+        <span className="ext-chip warn">{t('沒有看到任何檢查執行：摘要裡說的通過或完成，是 agent 自己的說法', "No check seen: any 'passed' or 'done' in the summary is the agent's own account")}</span>
+      )}
     </div>
   );
 }
@@ -485,12 +481,14 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
   const steps = visible(events, false);
   const ext = useMemo(() => extensionSummary(events), [events]);
   const said = (run.userMessages ?? []).filter((m) => saidOwner(run, m.ts) === agent.id);
-  const hidden = Math.max(0, steps.length - LIVE_LINES);
   const [showClosed, setShowClosed] = useState(false);
   const [taskOpen, setTaskOpen] = useState(false);
-  // The result this card shows (to spot notes that only repeat it).
-  const round = roundOf(run, agent);
-  const shownResult = [round?.review?.summary, round?.verification?.summary, round?.submission?.summary, agent.finalText].filter((x): x is string => !!x);
+  const summary = turnSummary(t, run, agent);
+  const rework = reworkLine(t, run, agent);
+  const mine = (run.approvals ?? []).filter((a) => a.agentId === agent.id);
+  const now = liveLine(agent, events, mine.length, run.status === 'paused');
+  const noteCount = (run.notes ?? []).filter((n) => n.agentId === agent.id).length;
+  const internalCount = new Set(events.filter(isInternal).map((e) => e.seq)).size;
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
   const act = (method: 'agents.stop' | 'agents.close' | 'agents.rerun') => hub.call(method, { workflowId: run.id, agentId: agent.id }).catch((e) => alert((e as Error).message));
   const parentLive = !agent.parentId || ['running', 'paused', 'queued'].includes(run.agents[agent.parentId]?.status ?? '');
@@ -626,60 +624,181 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
       {agent.role === 'advisor' && <div className="turn-task">❓ {agent.task}</div>}
 
       <div className="turn-body">
-        {expanded ? (
-          <Transcript events={events} raw={raw} said={said} />
-        ) : (
-          <>
-            {hidden > 0 && (
-              <button className="more" onClick={() => setExpanded(true)}>
-                + {t(`另外 ${hidden} 個步驟`, `${hidden} earlier steps`)}
-              </button>
-            )}
-            <Transcript events={events} limit={LIVE_LINES} said={said} />
-          </>
-        )}
-        {running && (
+        {/* Why the work came back here, joined to the round that starts now. */}
+        {rework && <div className="turn-rework">↺ {rework}</div>}
+        {/* Working: what it does now (routine calls folded, failures kept in view). Done: one line on how it ended. */}
+        {/* A failure is said once: by its error line below, not again as a bare "Failed" here. */}
+        {running ? <LiveFeed events={events} said={said} limit={LIVE_LINES} hideMessages={agent.role === 'compactor'} /> : summary.length > 0 && !(agent.status === 'failed' && agent.error && summary.length === 1) && <div className={cx('turn-summary', agent.status === 'failed' && 'bad')}>{summary.join(' · ')}</div>}
+        {now?.kind === 'waiting' && (
           <div className="working">
-            <span className="spark">✻</span> {agent.waiting ?? agent.activity?.replace(/^\S+\s/, '') ?? t('啟動中…', 'Starting…')}
+            <span className="spark">✻</span> {now.text}
             <span className="muted"> · {elapsed(agent.startedAt)}</span>
           </div>
         )}
-        {/* An advisor's note repeats its advice, which the card already shows. */}
-        {agent.role !== 'advisor' && <Notes run={run} agentId={agent.id} against={shownResult} />}
-        <Screenshots run={run} agentId={agent.id} />
-        <Outcome run={run} agent={agent} lastMessage={events.filter((e) => e.kind === 'message').pop()?.text} />
+        {now?.kind === 'paused' && (
+          <div className="working">
+            <span className="spark">❚❚</span> {t('已暫停：按 ▶ 繼續', 'Paused: press ▶ to continue')}
+          </div>
+        )}
+        {now?.kind === 'approval' && (
+          <div className="working">
+            <span className="spark">✋</span> {t(`等你核准 ${now.n} 個動作（在下方）`, `Waiting for your approval of ${now.n} action(s) (below)`)}
+          </div>
+        )}
+        {now?.kind === 'working' && (
+          <div className="working">
+            <span className="spark">✻</span> {events.length ? t('正在處理', 'Working') : t('啟動中…', 'Starting…')}
+            <span className="muted"> · {elapsed(agent.startedAt)}</span>
+          </div>
+        )}
+        {/* An approval this agent waits for: beside its work, not at the bottom of the page. */}
+        {mine.length > 0 && <Approvals run={run} providers={providers} agentId={agent.id} />}
+        {agent.role !== 'compactor' && <Outcome run={run} agent={agent} lastMessage={events.filter((e) => e.kind === 'message').pop()?.text} />}
         {agent.status === 'failed' && agent.error && <div className="tx-err">✕ {agent.error}</div>}
+        {/* The details: always here, in the same place, for every card. */}
         <div className="turn-foot">
-          {(expanded || hidden === 0) && steps.length > 0 && (
-            <button className="link" onClick={() => setExpanded(!expanded)}>
-              {expanded ? t('收起', 'Collapse') : t('完整紀錄', 'Full log')}
-            </button>
-          )}
+          <button className="link activity-toggle" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
+            {expanded ? '▾' : '▸'} {t('活動紀錄', 'Activity log')}
+          </button>
+          <span className="muted">
+            {agent.stats.tools} {t('個動作', 'actions')}
+            {agent.stats.filesChanged.length > 0 && ` · ${t(`以編輯工具改 ${agent.stats.filesChanged.length} 個檔案`, `${agent.stats.filesChanged.length} file(s) changed with the edit tool`)}`}
+            {noteCount > 0 && ` · ${t(`${noteCount} 則筆記`, `${noteCount} note(s)`)}`}
+            {agent.sessionId && ` · ${agent.resumed ? '↻ ' : ''}${agent.sessionId.slice(0, 8)}`}
+          </span>
           {expanded && (
             <label className="toggle">
               <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> {t('原始紀錄', 'Raw log')}
             </label>
           )}
-          <span className="muted">
-            {agent.stats.tools} {t('個動作', 'actions')}
-            {agent.stats.filesChanged.length > 0 && ` · ${agent.stats.filesChanged.length} ${t('個檔案', 'files')}`}
-            {agent.sessionId && ` · ${agent.resumed ? '↻ ' : ''}${agent.sessionId.slice(0, 8)}`}
-          </span>
         </div>
+        {expanded && (
+          <div className="turn-details">
+            {steps.length > 0 || raw ? <Transcript events={events} raw={raw} said={said} /> : <div className="muted small">{t('還沒有紀錄', 'Nothing recorded yet')}</div>}
+            {!raw && internalCount + (agent.role !== 'advisor' ? noteCount : 0) > 0 && (
+              <details className="internal-log">
+                <summary>{t(`Aivenue 的紀錄、進度回報、筆記與交接（${internalCount + (agent.role !== 'advisor' ? noteCount : 0)}）`, `Aivenue's records, progress reports, notes and hand-offs (${internalCount + (agent.role !== 'advisor' ? noteCount : 0)})`)}</summary>
+                <Transcript events={events} internal />
+                {agent.role !== 'advisor' && <Notes run={run} agentId={agent.id} against={[]} />}
+              </details>
+            )}
+            <Screenshots run={run} agentId={agent.id} />
+            <TurnDetails run={run} agent={agent} />
+          </div>
+        )}
       </div>
 
       {allChildren.length > 0 && (
+        <BatchOverview run={run} parent={agent} items={allChildren.filter((c) => c.role === 'subagent' && (!c.closed || showClosed))} providers={providers} />
+      )}
+      {allChildren.some((c) => c.role === 'advisor') && (
         <div className="subs">
           {allChildren
-            .filter((c) => !c.closed || showClosed)
+            .filter((c) => c.role === 'advisor' && (!c.closed || showClosed))
             .map((c) => (
               <AgentTurn key={c.id} run={run} agent={c} providers={providers} />
             ))}
-          {allChildren.some((c) => c.closed) && (
-            <button className="link small" onClick={() => setShowClosed(!showClosed)}>
-              {showClosed ? t('隱藏已關閉的 sub agent', 'Hide closed sub-agents') : t(`顯示 ${allChildren.filter((c) => c.closed).length} 個已關閉的 sub agent`, `Show ${allChildren.filter((c) => c.closed).length} closed sub-agent(s)`)}
+        </div>
+      )}
+      {allChildren.some((c) => c.closed) && (
+        <button className="link small" onClick={() => setShowClosed(!showClosed)}>
+          {showClosed ? t('隱藏已關閉的 sub agent', 'Hide closed sub-agents') : t(`顯示 ${allChildren.filter((c) => c.closed).length} 個已關閉的 sub agent`, `Show ${allChildren.filter((c) => c.closed).length} closed sub-agent(s)`)}
+        </button>
+      )}
+    </div>
+  );
+}
+
+const BATCH_ORDER: BatchState[] = ['blocked', 'running', 'stopped', 'done'];
+
+/**
+ * A parent's sub-agents by the work they were given: one row per batch (re-runs joined to it) saying who has it
+ * now, how its latest attempt ended, and — when it is stuck — why, with what can be done right there. Every attempt
+ * (its time, errors and output) is behind the row.
+ */
+function BatchOverview({ run, parent, items, providers }: { run: WorkflowRun; parent: AgentRunInfo; items: AgentRunInfo[]; providers: ProviderInfo[] }) {
+  const t = useT();
+  const list = batchesOf(items, subTitle);
+  const counts = batchCounts(list);
+  // A few batches: the running ones stay open, so their live activity shows without a click.
+  const [open, setOpen] = useState<Set<string>>(() => new Set(list.length <= 3 ? list.filter((b) => b.state === 'running').map((b) => b.key) : []));
+  const [showDone, setShowDone] = useState(false);
+  if (!list.length) return null;
+  const parentLive = ['running', 'paused', 'queued'].includes(parent.status);
+  const label: Record<BatchState, string> = { blocked: t('受阻', 'Blocked'), running: t('執行中', 'Running'), stopped: t('已停止', 'Stopped'), done: t('完成', 'Done') };
+  const toggle = (k: string) => setOpen((s) => new Set(s.has(k) ? [...s].filter((x) => x !== k) : [...s, k]));
+  return (
+    <div className="subs batches">
+      <div className="batch-head">
+        {t('子代理批次', 'Sub-agent batches')} ·{' '}
+        {BATCH_ORDER.filter((s) => counts[s])
+          .map((s) => `${label[s]} ${counts[s]}`)
+          .join(t('、', ', '))}
+      </div>
+      {BATCH_ORDER.map((state) => {
+        const rows = list.filter((b) => b.state === state);
+        if (!rows.length) return null;
+        const folded = state === 'done' && rows.length > 5 && !showDone;
+        return (
+          <div key={state} className={cx('batch-group', state)}>
+            {(folded ? [] : rows).map((b) => (
+              <BatchRow key={b.key} run={run} b={b} providers={providers} open={open.has(b.key)} onToggle={() => toggle(b.key)} parentLive={parentLive} />
+            ))}
+            {state === 'done' && rows.length > 5 && (
+              <button className="link small" onClick={() => setShowDone(!showDone)}>
+                {showDone ? t('收起已完成的批次', 'Hide finished batches') : t(`顯示 ${rows.length} 個已完成的批次`, `Show ${rows.length} finished batches`)}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BatchRow({ run, b, providers, open, onToggle, parentLive }: { run: WorkflowRun; b: Batch; providers: ProviderInfo[]; open: boolean; onToggle: () => void; parentLive: boolean }) {
+  const t = useT();
+  const a = b.latest;
+  const who = `${providerName(providers, a.provider)}${a.model ? ` · ${modelLabel(a.model)}` : ''}`;
+  const icon = { blocked: '✕', running: '●', stopped: '■', done: '✓' }[b.state];
+  // Only the latest attempt's trouble is a blocker; earlier failures are in the attempts behind the row.
+  const why =
+    b.state === 'blocked'
+      ? [a.failure ? failureLabel(t, a.failure.kind) : a.endedWithoutResult ? t('沒有交出結果', 'no result handed in') : t('失敗', 'failed'), firstLine(readableError(a.failure?.message ?? a.error)).slice(0, 200)].filter(Boolean).join(' · ')
+      : b.state === 'running'
+        ? run.status === 'paused'
+          ? t('已暫停', 'paused')
+          : (a.waiting ?? a.activity?.replace(/^\S+\s/, '') ?? t('正在處理', 'working')).slice(0, 160)
+        : b.state === 'done'
+          ? turnSummary(t, run, a).join(' · ')
+          : t('已停止', 'stopped');
+  const rerun = () => hub.call('agents.rerun', { workflowId: run.id, agentId: a.id }).catch((e) => alert((e as Error).message));
+  return (
+    <div className={cx('batch', b.state)}>
+      <div className="batch-row">
+        <button className="batch-main" onClick={onToggle} aria-expanded={open}>
+          <span className={cx('batch-icon', b.state)}>{icon}</span>
+          <span className="batch-title">{b.title}</span>
+          <span className="batch-who muted">{who}</span>
+          {b.attempts.length > 1 && <span className="badge muted">{t(`第 ${b.attempts.length} 次嘗試`, `attempt ${b.attempts.length}`)}</span>}
+          <span className={cx('batch-why', b.state === 'blocked' && 'bad')}>{why}</span>
+        </button>
+        {b.state === 'blocked' && parentLive && (
+          <span className="batch-actions">
+            <button className="btn small" onClick={rerun} title={t('用同樣的任務、同一個模型再試一次（會通知上層 agent）', 'Try the same task again with the same model (its parent is told)')}>
+              ↻ {t('重試', 'Retry')}
             </button>
-          )}
+            <SwitchProvider compact workflowId={run.id} agentId={a.id} urgent={a.failure?.kind === 'quota' || a.failure?.kind === 'rate_limit'} />
+          </span>
+        )}
+      </div>
+      {/* What to do about it, while something still can be done here; once the work has ended, it is history. */}
+      {b.state === 'blocked' && parentLive && a.failure?.action && <div className="batch-next muted small">➜ {a.failure.action}</div>}
+      {open && (
+        <div className="batch-attempts">
+          {b.attempts.map((x) => (
+            <AgentTurn key={x.id} run={run} agent={x} providers={providers} />
+          ))}
         </div>
       )}
     </div>

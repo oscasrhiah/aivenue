@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
-import { fileUrl, hub, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
+import { fileUrl, hub, useAgentEvents, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
@@ -17,7 +17,9 @@ import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type R
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { followUpGoal } from '../followUp';
-import { cx, elapsed, modelLabel, providerName, saidOwner, wfStatus } from '../util';
+import { deliverableRows, verificationScope } from '../timeline';
+import { CheckRows } from '../components/Checks';
+import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
 import { RememberButton } from '../components/Memory';
@@ -310,13 +312,30 @@ function Composer({
   const [confirmStop, setConfirmStop] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const input = useRef<HTMLInputElement>(null);
-  useLayoutEffect(() => {
+  // The box fits its text — again when the window or the hint changes (a size taken while the window was tiny
+  // would otherwise stay and squeeze the conversation).
+  const fit = () => {
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 320) + 'px';
     el.classList.toggle('scroll', el.scrollHeight > 320);
-  }, [text]);
+  };
+  useLayoutEffect(fit, [text, placeholder]);
+  useEffect(() => {
+    // Measured before it had its width (every character on a line of its own): fit again once the width is known.
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    let width = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth !== width) {
+        width = el.clientWidth;
+        fit();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const update = (key: string, patch: Partial<Pending>) => setFiles((cur) => cur.map((f) => (f.key === key ? { ...f, ...patch } : f)));
   const addFiles = (list: FileList | File[]) => {
@@ -503,8 +522,8 @@ function Composer({
             <h3>{t('確定要終止這個工作流嗎？', 'End this workflow?')}</h3>
             <p className="small">
               {t(
-                '正在工作的 agent 會立刻停止。工作流結束後無法再繼續，只能重新發起任務（已經完成的檔案與紀錄會保留）。',
-                'Working agents stop right away. Once it has ended the workflow cannot be resumed; you can only start the task again (files and history so far are kept).',
+                '正在工作的 agent 會立刻停止，已改動的檔案與紀錄都保留。之後有兩種接著做的方式：在這段對話送出新訊息之前，可以按「接續原工作流」，從停下的階段與輪次繼續同一個工作流（計畫、步驟進度、審查與共用上下文都保留）；或送出新訊息，用相同設定開始下一段工作流。',
+                'Working agents stop right away; files changed and records so far are kept. You can then go on in two ways: until you send a new message in this chat, "Resume this workflow" continues the same workflow from the stage and round it stopped in (plan, step progress, reviews and shared context kept); or send a new message to start the next workflow with the same setup.',
               )}
             </p>
             <div className="row end gap">
@@ -601,8 +620,6 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
  */
 function FinalResult({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
-  // Folded by default: the agent's own turn above already ends with the same text.
-  const [open, setOpen] = useState(false);
   if (run.status !== 'completed') return null;
   const main = Object.values(run.agents).filter((a) => a.depth === 0 && a.status === 'completed');
   const last = (role: AgentRunInfo['role']) => main.filter((a) => a.role === role).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
@@ -613,10 +630,13 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   if (!text) return null;
   const author = exec ?? last('planner');
   const review = (exec ? implRound : planRound)?.review;
+  const rows = deliverableRows(run);
+  const scope = verificationScope(t, run);
+  const checks = exec ? implRound?.submission?.checks : undefined;
+  const lastVerification = [...(run.stages.verify?.rounds ?? [])].reverse().find((r) => r.verification)?.verification;
   return (
-    <div className={cx('final-result', !open && 'folded')}>
-      <div className="final-head fold-head" onClick={() => setOpen(!open)}>
-        <span className="chev">{open ? '▾' : '▸'}</span>
+    <div className="final-result">
+      <div className="final-head">
         <span className="final-title">{exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}</span>
         {author && (
           <span className="muted small">
@@ -626,7 +646,93 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         )}
         {review && <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}</span>}
       </div>
-      {open ? <Markdown className="prose" text={text} /> : <div className="muted small fold-preview">{text.replace(/[#*`>_-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 140)}…</div>}
+      {/* What was delivered, from the workflow's file list (not an agent's account): each file with where it came from. */}
+      {rows.length > 0 && (
+        <div className="final-row">
+          <span className="final-label">{t('交付', 'Delivered')}</span>
+          <div className="final-files">
+            {rows.slice(0, 8).map((r) => (
+              <DeliverableRow key={r.path} run={run} row={r} />
+            ))}
+            {rows.length > 8 && <span className="muted small">{t(`等 ${rows.length} 個（見下方檔案清單）`, `${rows.length} in all (file list below)`)}</span>}
+          </div>
+        </div>
+      )}
+      {/* Every check once, with its state: a rerun, the user's scope, a later file change are on its own row. */}
+      {!!checks?.length && (
+        <div className="final-row">
+          <span className="final-label">{t('檢查', 'Checks')}</span>
+          <CheckRows checks={checks} />
+        </div>
+      )}
+      {scope.length > 0 && (
+        <div className="final-row">
+          <span className="final-label">{t('驗證範圍', 'Checked')}</span>
+          <span className="small">{scope.join(' · ')}</span>
+        </div>
+      )}
+      {/* The author's own account, in full, once: the card above keeps one line, its details keep the same text. */}
+      <div className="final-text">
+        <div className="muted tiny">{exec ? t('實作者的說明（agent 自述）', "The implementer's account (its own words)") : t('計畫', 'Plan')}</div>
+        <Markdown className="prose" text={text} />
+      </div>
+      {/* The goal verification's own evidence, kept even when it is out of date (what was measured, on what). */}
+      {lastVerification && (
+        <details className="final-evidence">
+          <summary className="small">{lastVerification.stale ? t('上次驗收的證據（之後有改動）', 'Evidence of the last verification (changed since)') : t('驗收證據', 'Verification evidence')}</summary>
+          {lastVerification.evidence && (
+            <div className="muted tiny">
+              {t('量測於', 'Measured on')} {lastVerification.evidence.commit ? `commit ${lastVerification.evidence.commit} · ` : ''}tree {lastVerification.evidence.treeHash.slice(0, 8)} · {new Date(lastVerification.evidence.at).toLocaleString()}
+            </div>
+          )}
+          {lastVerification.metrics.map((m) => (
+            <div key={m.id} className="small">
+              {m.met ? '✓' : '✕'} <b>{m.id}</b> {run.plan?.goal?.metrics.find((x) => x.id === m.id)?.name ?? ''} — {m.value}
+              {m.evidence && <div className="muted tiny mono">{m.evidence}</div>}
+            </div>
+          ))}
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** A delivered file: added or modified, and — on click — whether an agent's edit tool changed it, or only the folder's comparison found it (then the commands that name it). */
+function DeliverableRow({ run, row }: { run: WorkflowRun; row: ReturnType<typeof deliverableRows>[number] }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={cx('deliverable', open && 'open')}>
+      <span className="deliverable-head" onClick={() => setOpen(!open)} title={t('點一下看這個檔案的來源', 'Click to see where this file came from')}>
+        <span className="check-caret">{open ? '▾' : '▸'}</span>
+        <span className={cx('pill', row.status === 'added' ? 'ok' : '')}>{row.status === 'added' ? t('新增', 'added') : t('修改', 'modified')}</span> <code>{row.path}</code>
+        {row.count ? <span className="muted small"> · {t(`${row.count} 個檔案`, `${row.count} files`)}</span> : null}
+      </span>
+      {open && <DeliverableSource run={run} row={row} />}
+    </div>
+  );
+}
+
+function DeliverableSource({ run, row }: { run: WorkflowRun; row: ReturnType<typeof deliverableRows>[number] }) {
+  const t = useT();
+  const exec = Object.values(run.agents).filter((a) => a.role === 'executor').sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
+  const events = useAgentEvents(run.id, exec?.id ?? '');
+  const name = row.path.split(/[\\/]/).pop() ?? row.path;
+  // A file no edit tool changed: the implementer's commands whose text names it (latest state of each call), to look at.
+  const named = row.editedBy.length ? [] : [...new Map(events.filter((e) => e.kind === 'tool' && e.tool?.category === 'command').map((e) => [e.seq, e])).values()].filter((e) => e.tool!.title.includes(name));
+  return (
+    <div className="deliverable-body small">
+      {row.editedBy.length ? (
+        <div>{t(`以編輯工具改動：${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join('、')}`, `Changed with the edit tool by: ${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join(', ')}`)}</div>
+      ) : (
+        <div className="muted">{t('由資料夾比對發現：工作流結束時比對工作資料夾得知這個改動，紀錄裡沒有哪個 agent 用編輯工具改了這個檔案。', 'Found by comparing the folder: the working folder changed here when the workflow ended; no agent edited this file with the edit tool in the records.')}</div>
+      )}
+      {named.map((e) => (
+        <div key={e.seq} className="deliverable-cmd">
+          <div className="muted tiny">{t(`指令文字提到這個檔名（活動紀錄第 ${e.seq} 筆；只是文字比對，不代表就是它寫的）`, `A command whose text has this file name (activity log event ${e.seq}; a text match, not proof that it wrote the file)`)}</div>
+          <pre>{e.tool!.title}</pre>
+        </div>
+      ))}
     </div>
   );
 }
@@ -671,7 +777,15 @@ export function Chat({ id }: { id?: string }) {
   const [agentMap, setAgentMap] = useState(false);
   const [, tick] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
+  // Following the newest entries while the user is at the bottom; reading older ones (scrolled up, or opened something
+  // above) keeps the place, with a way back to the newest.
   const follow = useRef(true);
+  const [away, setAway] = useState(false);
+  const toLatest = () => {
+    follow.current = true;
+    setAway(false);
+    if (scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  };
 
   // The saved draft, or the default only when the saved settings were read and hold none (draftInit.ts). Until then
   // the page shows "loading" (or the read error with a retry), so nothing can save over the saved draft.
@@ -703,6 +817,18 @@ export function Chat({ id }: { id?: string }) {
   const items = useMemo(() => (run ? timeline(run) : []), [run]);
   const preview = useAssignPreview(run ? null : draft, providers);
 
+  // Content that grows on its own (a card's records arriving, a live step) keeps a following view at the bottom.
+  const lastInput = useRef(0);
+  const column = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = column.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [!!run]); // eslint-disable-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   });
@@ -910,7 +1036,7 @@ export function Chat({ id }: { id?: string }) {
               📁
             </button>
             {active ? (
-              <button className="btn small danger" onClick={async () => (await ask(t('停止這個工作流？正在執行的 agent 會被中止。', 'Stop this workflow? Running agents will be terminated.'), { danger: true })) && hub.call('workflows.cancel', { id: run.id })}>
+              <button className="btn small danger" onClick={async () => (await ask(t('停止這個工作流？正在執行的 agent 會被中止。之後可以「接續原工作流」（在送出新訊息之前），或送出新訊息開始下一段。', 'Stop this workflow? Running agents are terminated. Afterwards you can resume this workflow (until you send a new message) or send a new message to start the next one.'), { danger: true })) && hub.call('workflows.cancel', { id: run.id })}>
                 {t('停止', 'Stop')}
               </button>
             ) : (
@@ -949,10 +1075,29 @@ export function Chat({ id }: { id?: string }) {
             ref={scroller}
             onScroll={() => {
               const el = scroller.current!;
-              follow.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+              // Only the user leaves the newest entries (wheel, touch, keys, the scroll bar): a scroll the page made
+              // itself while content grew is put back at the bottom.
+              if (atEnd) follow.current = true;
+              else if (Date.now() - lastInput.current < 1000) follow.current = false;
+              else if (follow.current) el.scrollTop = el.scrollHeight;
+              setAway(!follow.current);
+            }}
+            onWheel={() => (lastInput.current = Date.now())}
+            onTouchMove={() => (lastInput.current = Date.now())}
+            onKeyDown={() => (lastInput.current = Date.now())}
+            onMouseDown={() => (lastInput.current = Date.now())}
+            onClickCapture={(e) => {
+              // Opening something that is not at the bottom (an output, a log) keeps it where it is.
+              const el = scroller.current!;
+              const box = (e.target as HTMLElement).getBoundingClientRect();
+              if (box.bottom < el.getBoundingClientRect().bottom - 160) {
+                follow.current = false;
+                setAway(true);
+              }
             }}
           >
-            <div className="column">
+            <div className="column" ref={column}>
               <FullAccessBanner run={run} />
               {earlier.map((r, i) => (
                 <EarlierMessage key={r.id} run={r} before={earlier.slice(0, i)} providers={providers} onImage={setLightbox} />
@@ -1003,7 +1148,7 @@ export function Chat({ id }: { id?: string }) {
               <DeniedActions run={run} providers={providers} />
               <OutsideChanges run={run} />
               <Outputs run={run} onImage={setLightbox} />
-              <Approvals run={run} providers={providers} />
+              <Approvals run={run} providers={providers} unclaimed />
               <WorktreeCard run={run} />
               <ContextAsk run={run} providers={providers} />
               <CompactFailedAsk run={run} providers={providers} />
@@ -1019,10 +1164,10 @@ export function Chat({ id }: { id?: string }) {
                 Object.values(run.stages).some((s) => s?.status === 'cancelled') &&
                 !summaries.some((s) => (s.threadId ?? s.id) === threadKey && s.createdAt > run.createdAt) && (
                   <div className="note">
-                    {t('這個工作流已停止。可以從停下的階段與輪次接著做，計畫、步驟進度、審查與共用上下文都保留；也可以在下方輸入訊息，用相同設定接續。', 'This workflow was stopped. It can go on from the stage and round it stopped in, keeping the plan, step progress, reviews and shared context; or send a message below to continue with the same setup.')}
+                    {t('這個工作流已停止。「接續原工作流」會從停下的階段與輪次繼續同一個工作流，計畫、步驟進度、審查與共用上下文都保留；在下方送出新訊息則會用相同設定開始下一段工作流（之後就不能再接續這一個）。', 'This workflow was stopped. "Resume this workflow" continues the same workflow from the stage and round it stopped in, keeping the plan, step progress, reviews and shared context; a new message below starts the next workflow with the same setup (after which this one can no longer be resumed).')}
                     <div className="row gap" style={{ marginTop: 8 }}>
                       <button className="btn small" onClick={() => hub.call('workflows.resumeInterrupted', { id: run.id }).catch((e) => setError((e as Error).message))}>
-                        {t('從停止的地方接續', 'Resume from where it stopped')}
+                        {t('接續原工作流', 'Resume this workflow')}
                       </button>
                     </div>
                   </div>
@@ -1050,6 +1195,11 @@ export function Chat({ id }: { id?: string }) {
                 </div>
               )}
             </div>
+            {away && (
+              <button className="to-latest" onClick={toLatest}>
+                ↓ {t('回到最新', 'Back to latest')}
+              </button>
+            )}
           </div>
           <div className="dock">
             <div className="column">

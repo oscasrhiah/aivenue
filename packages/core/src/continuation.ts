@@ -36,7 +36,7 @@ export function earlierPlanOf(prev: WorkflowRun, o: { now: number; checks: (Obse
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const checkLine = (c: EarlierPlan['checks'][number]) =>
-  `- ${c.outcome === 'failed' ? '✗ failed' : c.outcome === 'output_failure' ? '⚠ ran, its output reports a failure' : c.outcome === 'in_longer_command' ? '◦ ran within a longer command' : '✓ passed'}: \`${c.command}\` (by ${c.by})${c.outdated ? ' — files changed after it, in that message' : c.maybeOutdated ? ' — a failed edit came after it' : ''}`;
+  `- ${c.outcome === 'failed' ? '✗ failed' : c.outcome === 'output_failure' ? '⚠ ran, its output reports a failure' : c.outcome === 'in_longer_command' ? '◦ ran within a longer command' : c.outcome === 'may_not_run' ? '◦ not known whether it ran' : '✓ passed'}: \`${c.command}\` (by ${c.by})${c.outdated ? ' — files changed after it, in that message' : c.maybeOutdated ? ' — a failed edit came after it' : ''}`;
 
 /**
  * The previous message's state for a planner's or implementer's prompt, within `budget` characters. When it did not

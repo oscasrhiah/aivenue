@@ -27,6 +27,41 @@ export const who = (a: AgentRunInfo | undefined) => (a ? `${a.id.slice(0, 8)} ${
 const flat = (s: string | undefined) => (s ?? '').replace(/\s+/g, ' ').trim();
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+/**
+ * `node ./test.js`: the `./` before the script path, the first word after `node`. Only a forward slash: in bash an
+ * unquoted `\` escapes the next character (`node .\test.js` runs `.test.js`), and the record does not say which shell
+ * ran it, so `.\` stays as written — in PowerShell that may list one check twice, never hide a failure.
+ */
+const SCRIPT_DOT = /^(node(?:\.exe)? )\.\/(?=[^\s"'-])/i;
+
+/**
+ * A command evened out outside its quotes only: runs of whitespace there become one space. Quoted text stays as
+ * written — `--grep "Login  flow"` and `--grep "Login flow"` are two different filters. Nothing else is touched.
+ */
+function evenOut(s: string): string {
+  let out = '';
+  let quote: string | null = null;
+  let space = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      out += ch;
+      if (ch === '\\' && quote === '"' && i + 1 < s.length) out += s[++i];
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      space = true;
+      continue;
+    }
+    if (space && out) out += ' ';
+    space = false;
+    if (ch === '"' || ch === "'") quote = ch;
+    out += ch;
+  }
+  return out;
+}
+
 /** The end of a command's output: usually its verdict ("12 passed", "exit 1", the error). */
 function outcome(output: string | undefined, n = 180): string {
   // eslint-disable-next-line no-control-regex
@@ -78,7 +113,13 @@ export interface LedgerEntry {
   ts: number;
   agent: AgentRunInfo;
   kind: 'command' | 'graph';
+  /** For reading: whitespace evened out outside quotes. */
   what: string;
+  /**
+   * The command as the agent ran it (only trimmed): what recognising a check and telling two runs apart use, so
+   * nothing in its arguments — the spaces inside quotes, a newline between steps — is rewritten.
+   */
+  command: string;
   ok: boolean;
   result: string;
   /** Files changed after it ran: its result may be out of date. */
@@ -172,7 +213,8 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
         continue;
       }
       if (t.category !== 'command' && t.category !== 'search') continue;
-      const what = flat(t.title || t.input);
+      const command = (t.title || t.input || '').trim();
+      const what = evenOut(command);
       if (!what) continue;
       // Printing one file is reading it.
       const file = t.category === 'command' && t.status === 'ok' ? fileReadOf(what) : undefined;
@@ -184,7 +226,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
       const important = !graph && (t.status !== 'ok' || IMPORTANT.test(what) || FAILED.test(t.output ?? ''));
       const chars = plainOutput(t.output).length;
       const source = chars && seqs.get(e.seq) === 1 ? { seq: e.seq, chars } : undefined;
-      entries.push({ ts: e.ts, agent: a, kind: graph ? 'graph' : 'command', what, ok: t.status === 'ok', result: graph ? clip(flat(t.output), 2000) : important ? keyOutput(t.output, 2000) : outcome(t.output, 400), ...(source ? { source } : {}) });
+      entries.push({ ts: e.ts, agent: a, kind: graph ? 'graph' : 'command', what, command, ok: t.status === 'ok', result: graph ? clip(flat(t.output), 2000) : important ? keyOutput(t.output, 2000) : outcome(t.output, 400), ...(source ? { source } : {}) });
     }
   }
   const changes = [...changed.entries()];
@@ -211,9 +253,201 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
 /** The same command run again keeps only its latest result. */
 function latestPerCommand(entries: LedgerEntry[]): LedgerEntry[] {
   const by = new Map<string, LedgerEntry>();
-  for (const e of entries) by.set(e.what, e);
+  for (const e of entries) by.set(e.command, e);
   return [...by.values()].sort((x, y) => x.ts - y.ts);
 }
+
+/**
+ * The latest run of each check. A later run replaces an earlier one only when the record shows it is the same check
+ * in the same folder (`cd packages/api && npm test` and `cd packages/web && npm test` are two checks) and that it
+ * surely ran (`true || node test.js` may have skipped it). Otherwise the earlier run — a confirmed failure, say —
+ * stays, and the later command is listed beside it with its own state.
+ */
+function latestPerCheck(entries: LedgerEntry[]): (LedgerEntry & { earlier?: LedgerEntry[] })[] {
+  const by = new Map<string, { main?: LedgerEntry; earlier: LedgerEntry[]; unsure: Map<string, LedgerEntry> }>();
+  for (const e of entries) {
+    const c = checkRun(e.command, e.ok, e.result);
+    const slot = by.get(c.key) ?? by.set(c.key, { earlier: [], unsure: new Map() }).get(c.key)!;
+    if (c.surelyRan) {
+      // The runs it replaces stay with it as its history ("passed · failed before the fix").
+      if (slot.main) slot.earlier.push(slot.main);
+      slot.main = e;
+      slot.unsure.clear();
+    } else slot.unsure.set(e.command, e);
+  }
+  return [...by.values()].flatMap((s) => [...(s.main ? [s.earlier.length ? { ...s.main, earlier: s.earlier } : s.main] : []), ...s.unsure.values()]).sort((x, y) => x.ts - y.ts);
+}
+
+/**
+ * A path as a key: forward slashes, no quotes or trailing slash. Its case is kept (only a drive letter is lowered):
+ * on a case-sensitive file system `API` and `api` are two folders, and Aivenue cannot tell which kind it ran on.
+ */
+const pathKey = (p: string) => {
+  const s = p.trim().replace(/^["']|["']$/g, '').replace(/\\/g, '/').replace(/\/+$/, '');
+  return s.replace(/^([a-z]):/i, (_, d: string) => `${d.toLowerCase()}:`);
+};
+
+/** `dir` after `cd to` (relative to it unless absolute; `..` steps up). */
+function moveTo(dir: string, to: string): string {
+  const t = pathKey(to);
+  if (/^([a-z]:)?\//i.test(t) || /^~/.test(t)) return t;
+  const parts = dir ? dir.split('/') : [];
+  for (const p of t.split('/')) {
+    if (!p || p === '.') continue;
+    if (p === '..') parts.pop();
+    else parts.push(p);
+  }
+  return parts.join('/');
+}
+
+/**
+ * The top-level parts of a shell command and the separator after each (`;`, newline, `&&`, `||`, `|`; '' after the
+ * last). Quoted text is kept whole: `printf 'x; node test.js'` is one part, its `;` is text, not a separator.
+ */
+export function shellParts(what: string): { text: string; sep: string }[] {
+  const out: { text: string; sep: string }[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  for (let i = 0; i < what.length; i++) {
+    const ch = what[i];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\' && quote === '"' && i + 1 < what.length) cur += what[++i];
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    const two = what.slice(i, i + 2);
+    if (two === '&&' || two === '||') {
+      out.push({ text: cur, sep: two });
+      cur = '';
+      i++;
+    } else if (ch === ';' || ch === '|' || ch === '\n') {
+      out.push({ text: cur, sep: ch });
+      cur = '';
+    } else cur += ch;
+  }
+  out.push({ text: cur, sep: '' });
+  return out;
+}
+
+/** A shell saying a folder it was asked to enter is not there (bash, cmd, PowerShell, in English or Chinese). */
+const CD_FAILED = /no such file or directory|cannot find path|cannot find the path|the system cannot find the path|系統找不到指定的路徑|找不到路徑/i;
+
+/** Quoted text emptied (`printf "npm test"` → `printf ""`): what is inside quotes is an argument, never a command. */
+const unquoted = (s: string) => s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+
+/** Whether a part of a command, outside its quotes, runs a check. */
+const runsCheck = (part: string) => CHECK.test(unquoted(part.trim()));
+
+/** A command that runs a check somewhere in it — outside quotes (a check named in a string or an echo is not one). */
+export const isCheckCommand = (what: string) => shellParts(what).some((p) => runsCheck(p.text));
+
+/**
+ * A step that changes how the rest of the line runs, or whether it runs at all: leaving the shell (`exit`, `return`,
+ * `exec`, `logout`, `throw`, `kill`), loops and branches, grouping and subshells, sourcing or evaluating other code,
+ * a background job (`&`). After one of these, Aivenue cannot tell from the line what ran.
+ */
+const FLOW_WORD = /^(?:exit|return|exec|logout|throw|kill|break|continue|trap|source|eval|wait|if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function)\b|^\.\s|(?:^|[^&])&\s*$/i;
+
+/**
+ * A step that changes the flow: a flow word, or brackets left open across a separator (`(cd x; npm test)` splits
+ * into `(cd x` and `npm test)`: a subshell or a block). A group closed within the step — PowerShell's
+ * `(Get-Content a) -replace …` — is only an expression.
+ */
+const isFlow = (step: string) => {
+  const s = unquoted(step);
+  const count = (re: RegExp) => (s.match(re) ?? []).length;
+  return FLOW_WORD.test(s) || count(/\(/g) !== count(/\)/g) || count(/\{/g) !== count(/\}/g);
+};
+
+/** `set -e` (bash) or `$ErrorActionPreference = 'Stop'` (PowerShell): a failing step ends the line, whatever comes after. */
+const ERREXIT = /^set\s+(?:-\w*e\w*|-o\s+errexit)\b|\$ErrorActionPreference\s*=\s*['"]?stop/i;
+
+/** A change of folder; `popd` (and `cd -`) go back to a folder the line does not name. */
+const CD = /^(?:cd|chdir|pushd|set-location|sl)\s+(?:-path\s+|\/d\s+)?(.+)$/i;
+const CD_UNKNOWN = /^(?:popd|pop-location)\b|^cd\s+-\s*$|^cd\s*$/i;
+
+/**
+ * The check in a command and how sure the record is that it ran, and where. Its key is the folder it ran in
+ * (relative to the agent's working folder) and the check itself. The rule is strict: it counts as surely run only
+ * when the line shows that control reached it — every step before it was reached and passes control on, by `;`, a
+ * newline or a pipe (or `&&` after a change of folder that did not report a failure), with nothing before it that may
+ * leave the shell or change the flow (`exit`, a branch, a subshell, `set -e`…). One more case: in the last list of
+ * the line, a chain of `&&` that ended fine ran every step. After `||` it ran only if what came before failed
+ * (`mayNotRun`). Its folder counts only when every change of folder before it surely ran and the output reports no
+ * failed cd; when not (`false && cd x; npm test`, `cd x; npm test` printing "No such file or directory"), where it
+ * ran is not known, so it is not sure either. The check keeps its case. One rule over all of it: a record replaces an
+ * earlier one only when it is the same check, in the same known folder, and surely ran; short of that, both are listed.
+ */
+export function checkRun(what: string, ok = true, output = ''): { key: string; check: string; dir: string; surelyRan: boolean; mayNotRun: boolean; why?: 'flow' | 'or' | 'and' | 'dir' } {
+  const parts = shellParts(what);
+  const ends = (p: { sep: string }) => p.sep === ';' || p.sep === '\n' || p.sep === '';
+  const cdFailed = CD_FAILED.test(output);
+  const errexit = parts.some((p) => ERREXIT.test(p.text.trim()));
+  let dir = '';
+  let dirKnown = true;
+  // Whether control surely reached the current step, and whether something before it may have changed the flow.
+  let reached = true;
+  let flow = false;
+  let afterOr = false;
+  for (let i = 0; i < parts.length; i++) {
+    const seg = parts[i].text.trim();
+    if (i > 0) {
+      const prev = parts[i - 1].text.trim();
+      const sep = parts[i - 1].sep;
+      if (isFlow(prev) || (errexit && !ok)) flow = true;
+      const prevCd = CD.test(prev) && !cdFailed;
+      if (sep === '|') {
+        // a pipeline runs every stage
+      } else if (sep === ';' || sep === '\n') {
+        reached = true;
+        afterOr = false;
+      } else if (sep === '&&') reached = reached && prevCd;
+      else if (sep === '||') {
+        reached = false;
+        afterOr = true;
+      }
+    }
+    const cd = CD.exec(seg);
+    // A change of folder counts only when it surely ran and nothing says it failed. When the output says a cd failed,
+    // the line cannot say which one, nor where the shell stayed: every folder after a cd is unknown.
+    if (CD_UNKNOWN.test(seg) || (cd && (!reached || flow || cdFailed))) dirKnown = false;
+    else if (cd) dir = moveTo(dir, cd[1]);
+    else if (runsCheck(seg)) {
+      // The tool's own folder option: npm --prefix x, pnpm -C x, yarn --cwd x, make -C x, go -C x.
+      const own = /\s(?:--prefix|-C|--cwd|--dir)[=\s]+("[^"]+"|'[^']+'|\S+)/.exec(seg);
+      const at = own ? moveTo(dir, own[1]) : dir;
+      // Only what is surely the same is evened out: spaces outside quotes, and the `./` of the script `node` is given
+      // right after its name (a file path, read from the working folder either way). Everything
+      // else stays as written: case (`tests/API.test.js`, `tests/api.test.js`), quoted text (`"Login  flow"`) and
+      // any other argument (`--grep ./Login` is a pattern, not a path).
+      const check = evenOut(seg.replace(own?.[0] ?? '', '')).replace(SCRIPT_DOT, '$1');
+      // Its list: from just after the last `;`/newline before it to the next one (or the end).
+      let start = i;
+      while (start > 0 && !ends(parts[start - 1])) start--;
+      let end = i;
+      while (!ends(parts[end])) end++;
+      const inList = parts.slice(start, end).map((p) => p.sep);
+      // The last list decides how the line ended: `&&` only there, and the line ended fine, ran every step of it —
+      // provided the list itself was reached (nothing before it may have left the shell).
+      const chainOk = ok && end === parts.length - 1 && inList.every((s) => s === '&&' || s === '|') && !flow;
+      const surelyRan = !flow && !isFlow(seg) && (reached || chainOk) && dirKnown;
+      // Why it is not sure, in the order a reader would look for it.
+      const why = surelyRan ? undefined : flow || isFlow(seg) ? 'flow' : afterOr ? 'or' : !(reached || chainOk) ? 'and' : 'dir';
+      return { key: `${dirKnown ? at : '?'}::${check}`, check, dir: dirKnown ? at : '?', surelyRan, mayNotRun: afterOr, ...(why ? { why } : {}) };
+    }
+  }
+  const check = evenOut(what.trim());
+  return { key: `::${check}`, check, dir: '', surelyRan: true, mayNotRun: false };
+}
+
+/** The part of a command that is the check, with the folder it ran in (`cd app && npm test` → `app::npm test`). */
+export const checkKey = (what: string) => checkRun(what).key;
 
 /** As many of `lines` as fit in `budget`, newest (last) first, shown oldest first. */
 export function fit(lines: string[], budget: number, head: string): string {
@@ -359,26 +593,42 @@ export function knowledgeBlock(run: WorkflowRun, act: ReturnType<typeof collectA
  * records prove, as opposed to what an agent says it verified. Marked when files changed after it ran.
  */
 export function verifiedChecks(act: ReturnType<typeof collectActivity>, limit = 5): string[] {
-  return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
+  return latestPerCheck(act.entries.filter((e) => e.kind === 'command' && isCheckCommand(e.command)))
     .slice(-limit)
     .map((e) => `- ${checkOutcome(e)}: \`${clip(e.what, 100)}\` (run by ${who(e.agent)})${e.outdated ? ' — files changed since: re-run it before relying on it' : e.maybeOutdated ? ' — a failed edit since may have changed files' : ''}`);
 }
 
 /** The latest run of each check (the same as verifiedChecks), as data: for the record of a submission and the UI. */
-export function checkRecords(act: ReturnType<typeof collectActivity>, limit = 10, o: { output?: boolean } = {}): (ObservedCheck & { output?: string })[] {
-  return latestPerCommand(act.entries.filter((e) => e.kind === 'command' && CHECK.test(e.what)))
+export function checkRecords(act: ReturnType<typeof collectActivity>, limit = 10, o: { output?: boolean | 'short' } = {}): (ObservedCheck & { output?: string })[] {
+  return latestPerCheck(act.entries.filter((e) => e.kind === 'command' && isCheckCommand(e.command)))
     .slice(-limit)
     .map((e) => {
-      const compound = isCompound(e.what);
-      const outcome: ObservedCheck['outcome'] = !e.ok ? 'failed' : FAILED.test(e.result) ? 'output_failure' : compound ? 'in_longer_command' : 'passed';
-      return { command: clip(e.what, 200), agentId: e.agent.id, by: who(e.agent), ts: e.ts, outcome, ...(e.outdated ? { outdated: true } : e.maybeOutdated ? { maybeOutdated: true } : {}), ...(o.output && e.result ? { output: e.result } : {}) };
+      // Whether it ran at all is not known (after `||`, or after `&&` where the line's end does not tell): said so,
+      // with how the line ended — never as passed or failed.
+      const unsure = !checkRun(e.command, e.ok, e.result).surelyRan;
+      const outcomeOf = (x: LedgerEntry): ObservedCheck['outcome'] => (!x.ok ? 'failed' : FAILED.test(x.result) ? 'output_failure' : isCompound(x.command) ? 'in_longer_command' : 'passed');
+      const outcome: ObservedCheck['outcome'] = unsure ? 'may_not_run' : outcomeOf(e);
+      // Earlier runs of the same check (same folder, surely ran) that this one replaced: its history, oldest first.
+      const earlier = e.earlier?.slice(-3).map((x) => ({ ts: x.ts, outcome: outcomeOf(x), ...(x.source ? { seq: x.source.seq } : {}), ...(o.output && x.result ? { output: clip(x.result, 1500) } : {}) }));
+      return {
+        command: clip(e.what, 200),
+        agentId: e.agent.id,
+        by: who(e.agent),
+        ts: e.ts,
+        outcome,
+        ...(e.source ? { seq: e.source.seq } : {}),
+        ...(unsure ? { lineOk: e.ok } : {}),
+        ...(e.outdated ? { outdated: true } : e.maybeOutdated ? { maybeOutdated: true } : {}),
+        ...(earlier?.length ? { earlier } : {}),
+        ...(o.output && e.result ? { output: o.output === 'short' ? clip(e.result, 1500) : e.result } : {}),
+      };
     });
 }
 
 /** Every check Aivenue saw run (not only the latest per command), with when and by whom: observed, not reported. */
 export function observedChecks(act: ReturnType<typeof collectActivity>): { ts: number; agentId: string; line: string }[] {
   return act.entries
-    .filter((e) => e.kind === 'command' && CHECK.test(e.what))
+    .filter((e) => e.kind === 'command' && isCheckCommand(e.command))
     .map((e) => ({ ts: e.ts, agentId: e.agent.id, line: `${checkOutcome(e)}: \`${clip(e.what, 100)}\` (run by ${who(e.agent)})${e.outdated ? ' — files changed since' : ''}` }));
 }
 
@@ -390,17 +640,25 @@ export function observedChecks(act: ReturnType<typeof collectActivity>): { ts: n
 const isCompound = (what: string) => /[;&|\n]/.test(what.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
 
 function checkOutcome(e: LedgerEntry): string {
-  const compound = isCompound(e.what);
+  const compound = isCompound(e.command);
   if (!compound) return !e.ok ? '✗ failed' : FAILED.test(e.result) ? '⚠ ran, its output reports a failure' : '✓ passed';
+  // Whether it ran at all is not known: the record does not show it, whatever the line's end.
+  const run = checkRun(e.command, e.ok, e.result);
+  if (!run.surelyRan) {
+    const why = { flow: 'a step before it may leave the shell or change the flow', or: 'it comes after `||`', and: "it comes after `&&` and the line's end does not show those steps succeeded", dir: 'a change of folder before it may not have happened, so where it ran is not known' }[run.why ?? 'and'];
+    return `◦ not known whether it ran (${why}; the line ${e.ok ? 'ended fine' : 'failed'})`;
+  }
   if (!e.ok) return '✗ the longer command it ran in failed (which step failed: check the output)';
-  return FAILED.test(e.result) ? '⚠ ran within a longer command whose output reports a failure' : '◦ ran within a longer command (the command ended fine; the check\'s own result: read the output)';
+  if (FAILED.test(e.result)) return '⚠ ran within a longer command whose output reports a failure';
+  return '◦ ran within a longer command (the command ended fine; the check\'s own result: read the output)';
 }
 
 /**
  * A command that runs a check (tests, a build, a type check, a linter) — the tool itself, not a file that merely has
- * "test" in its name (`Get-Content test/a.test.js` edits or reads a file; it checks nothing).
+ * "test" in its name (`Get-Content test/a.test.js` edits or reads a file; it checks nothing). Node running a test
+ * script is one (`node test.js`, `node tests/run.js`, `node src/a.test.js`); node running anything else is not.
  */
-const CHECK = /(^|[;&|(]\s*)(npm(\.cmd)?\s+(run\s+)?(test|build|lint|typecheck)|pnpm\s+(run\s+)?(test|build|lint)|yarn\s+(test|build|lint)|node\s+--test|npx\s+(tsc|vitest|jest|eslint|mocha)|pytest|python3?\s+-m\s+(pytest|unittest|mypy)|tsc\b|cargo\s+(test|build|check|clippy)|go\s+(test|build|vet)|dotnet\s+(test|build)|mvn\s|gradle\w*\s|make\b|eslint\b|ruff\b|mypy\b|vitest\b|jest\b)/i;
+const CHECK = /(^|[;&|(]\s*)(npm(\.cmd)?\s+(run\s+)?(test|build|lint|typecheck)|pnpm\s+(run\s+)?(test|build|lint)|yarn\s+(test|build|lint)|node\s+--test|node\s+(\.?[\\/])?([\w.-]+[\\/])*((tests?|spec|__tests__)[\\/][\w.\\/-]+|(tests?|spec)\b[\w.-]*|[\w.-]+\.(test|spec))\.[cm]?[jt]s\b|npx\s+(tsc|vitest|jest|eslint|mocha)|pytest|python3?\s+-m\s+(pytest|unittest|mypy)|tsc\b|cargo\s+(test|build|check|clippy)|go\s+(test|build|vet)|dotnet\s+(test|build)|mvn\s|gradle\w*\s|make\b|eslint\b|ruff\b|mypy\b|vitest\b|jest\b)/i;
 
 /** Where the workflow stands right now: goal and gap, open issues, routing, waits, locks, processes, blockers. */
 export function statusBlock(run: WorkflowRun, o: { openIssues?: boolean } = {}): string {

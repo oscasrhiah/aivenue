@@ -3,7 +3,7 @@ import { Fragment, type ReactNode } from 'react';
 /** Inline: `code`, **bold**, *italic*, [text](url) — rendered as React elements (never innerHTML). */
 function inline(text: string, key = 0): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\s][^*\n]*\*)|(\[[^\]\n]+\]\((https?:\/\/[^)\s]+)\))/g;
+  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\s][^*\n]*\*)|(\[[^\]\n]+\]\(([^)\s]+)\))/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
@@ -15,9 +15,16 @@ function inline(text: string, key = 0): ReactNode[] {
     else if (m[3]) out.push(<em key={k}>{m[3].slice(1, -1)}</em>);
     else if (m[4])
       out.push(
-        <a key={k} href={m[5]} target="_blank" rel="noreferrer">
-          {m[4].slice(1, m[4].indexOf(']'))}
-        </a>,
+        /^https?:\/\//.test(m[5]) ? (
+          <a key={k} href={m[5]} target="_blank" rel="noreferrer">
+            {m[4].slice(1, m[4].indexOf(']'))}
+          </a>
+        ) : (
+          // A file or other local target: its text, the target on hover (not a link the page could follow).
+          <span key={k} className="md-ref" title={m[5]}>
+            {m[4].slice(1, m[4].indexOf(']'))}
+          </span>
+        ),
       );
     last = m.index + m[0].length;
   }

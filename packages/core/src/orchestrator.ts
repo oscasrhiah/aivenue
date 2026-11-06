@@ -55,6 +55,7 @@ import { applyMemoryOps, parseMemoryOps, renderMemory } from './memoryEntries';
 import { memoryBatch } from './memoryBatch';
 import { earlierUserWordsBlock, userWordsTopic } from './userWords';
 import { applyCarried, carriedState, earlierPlanBlock, earlierPlanTopic } from './continuation';
+import { batchCounts, runBatches } from './batches';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
@@ -2299,7 +2300,13 @@ export class Orchestrator {
       this.startWatchdog(run);
       await this.cycle(run, from);
       run.status = 'completed';
-      this.log(run, run.config.verify?.enabled ? L('工作流完成 ✅ 目標驗收通過', 'Workflow completed ✅ goal verified') : L('工作流完成 ✅', 'Workflow completed ✅'), 'info', true);
+      // This round of agents ended: said as such, and apart from what still runs or was left blocked, so it is not
+      // read as "the task is done".
+      const procs = (run.processes ?? []).filter((p) => p.alive).length;
+      // The batches as the screen shows them (batches.ts): blocked when the latest attempt of one failed.
+      const blocked = batchCounts(runBatches(Object.values(run.agents), (a) => a.title ?? a.task ?? '')).blocked;
+      const rest = [procs ? L(`背景程序 ${procs} 個仍在執行`, `${procs} background process(es) still running`) : '', blocked ? L(`${blocked} 個子代理批次最後一次嘗試失敗`, `${blocked} sub-agent batch(es) failed on their last attempt`) : ''].filter(Boolean).join(L('；', '; '));
+      this.log(run, `${run.config.verify?.enabled ? L('本輪工作流完成 ✅ 目標驗收通過', 'This round of the workflow is complete ✅ goal verified') : L('本輪工作流完成 ✅', 'This round of the workflow is complete ✅')}${rest ? L(`（${rest}）`, ` (${rest})`) : ''}`, 'info', true);
     } catch (e) {
       const why = e instanceof Incomplete ? e.message : this.incompleteWhy.get(run.id);
       const cancelled = !why && (e instanceof Cancelled || this.aborts.get(run.id)?.signal.aborted);
@@ -2741,7 +2748,7 @@ export class Orchestrator {
         run.steps = plan.steps.map((st) => ({ ...st, status: 'pending' }));
       } else if (authorResult.work) {
         // With what Aivenue itself saw run by then: the summary is the author's own account, the checks are not.
-        const checks = checkRecords(collectActivity(run, (id) => this.events(run.id, id)));
+        const checks = checkRecords(collectActivity(run, (id) => this.events(run.id, id)), 10, { output: 'short' });
         round.submission = { summary: authorResult.work.summary, responses: authorResult.work.responses, openDecisions: authorResult.work.openDecisions, checks };
         // Reviews and verifications of the code before this change no longer count.
         if (this.hasEvidence(run)) {
@@ -3282,8 +3289,13 @@ export class Orchestrator {
     if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && e.tool.category === 'edit') this.lastEditAt.set(run.id, e.ts);
     if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'read')) this.watchCommand(run, info, e);
     if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'read')) this.memoryToolEvent(run, info, e);
-    const act = activityOf(e);
-    if (act && !(isUpdate && e.tool?.status !== 'running')) info.activity = act;
+    // What it is doing right now: a tool call only while it runs (once it ends, nothing confirms what comes next, so
+    // the line is cleared rather than left on a finished command).
+    if (e.kind === 'tool' && e.tool && e.tool.status !== 'running') info.activity = undefined;
+    else {
+      const act = activityOf(e);
+      if (act) info.activity = act;
+    }
     this.d.push({ topic: 'agentEvent', data: { workflowId: run.id, agentId: info.id, event: e } });
     this.touch(run);
   }
@@ -3342,6 +3354,14 @@ export class Orchestrator {
     const effort = pinned?.effort || asked('effort') || target.effort;
     // A sub-agent never gets more than its parent: a read-only agent can only start read-only helpers.
     const mode = args.mode === 'readonly' || parent.readonly ? 'readonly' : 'write';
+    // Another attempt at the same work: only by an explicit link to one of this parent's sub-agents that has ended
+    // (two batches may share a title and still be different work).
+    const retryOf = typeof args.retry_of === 'string' && args.retry_of.trim() ? args.retry_of.trim() : undefined;
+    if (retryOf) {
+      const prev = run.agents[retryOf];
+      if (!prev || prev.role !== 'subagent' || prev.parentId !== parent.id) throw new Error(`retry_of "${retryOf.slice(0, 40)}" is not one of your sub-agents.`);
+      if (['running', 'queued', 'paused'].includes(prev.status)) throw new Error(`Sub-agent ${retryOf} is still running: wait for it or stop it before starting its work again.`);
+    }
     if ((run.config.permission ?? 'auto') === 'ask') {
       // The user approves each action, so starting another agent is theirs to decide too
       // (most CLIs can't ask per action and would fall back to their nearest setting).
@@ -3355,7 +3375,7 @@ export class Orchestrator {
       if (!d.allow) throw new Error(d.message ?? 'The user did not allow this sub-agent.');
     }
     const title = typeof args.title === 'string' && args.title.trim() ? args.title.replace(/\s+/g, ' ').trim().slice(0, 60) : undefined;
-    const child = this.launchChild(run, parent, { provider, model, effort, task, mode, title });
+    const child = this.launchChild(run, parent, { provider, model, effort, task, mode, title, rerunOf: retryOf });
     const round = parent.role === 'advisor' ? this.nextFactRound(run, parent, child) : undefined;
     return JSON.stringify({ subagent_id: child.id, status: 'running', provider, model: model ?? 'default', effort: effort ?? 'default', ...(round ? { fact_finding_round: round } : {}) });
   }
@@ -3407,12 +3427,15 @@ export class Orchestrator {
     return child;
   }
 
-  /** Tell a parent about one of its sub-agents (on its next Aivenue tool result) and show it in the conversation. */
+  /**
+   * Tell a parent about one of its sub-agents (on its next Aivenue tool result). Kept in the run log, not as a line in
+   * the conversation: the parent's batch overview already shows each sub-agent's state where it belongs.
+   */
   private notifyParent(run: WorkflowRun, child: AgentRunInfo, text: string) {
     const parent = child.parentId ? run.agents[child.parentId] : undefined;
     if (!parent || !['running', 'paused', 'queued'].includes(parent.status)) return;
     this.inbox.set(parent.id, [...(this.inbox.get(parent.id) ?? []), text]);
-    this.log(run, L(`已通知 ${this.label(parent)}：${text}`, `Told ${this.label(parent)}: ${text}`), 'warn', true);
+    this.log(run, L(`已通知 ${this.label(parent)}：${text}`, `Told ${this.label(parent)}: ${text}`), 'warn');
   }
 
   /** A parent may only hand in its result once each of its sub-agents finished, was stopped or was handed off. */
@@ -3488,7 +3511,7 @@ export class Orchestrator {
     const seen = checkRecords(collectActivity(run, (aid) => this.events(run.id, aid), { onlyIds: new Set([child.id]) }));
     const checks = seen.map((c) => ({ command: c.command, outcome: c.outcome, ...(c.outdated ? { outdated: true } : c.maybeOutdated ? { maybe_outdated: true } : {}) }));
     const bad = seen.filter((c) => c.outcome === 'failed' || c.outcome === 'output_failure').length;
-    const unread = seen.filter((c) => c.outcome === 'in_longer_command').length;
+    const unread = seen.filter((c) => c.outcome === 'in_longer_command' || c.outcome === 'may_not_run').length;
     const stale = seen.filter((c) => c.outdated || c.maybeOutdated).length;
     const note = !checks.length
       ? 'Aivenue saw this sub-agent run no check (tests, build, type check, linter): "completed" only means it ended; nothing it says passed was seen to pass.'

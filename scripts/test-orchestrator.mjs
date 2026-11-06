@@ -2662,3 +2662,70 @@ test('同一工作流重啟後接手：照舊看到核准的計畫與步驟進�
   assert.match(prompt, /- 1\. parse dates \[done\] — parser handles 2d\n- 2\. fix the failing date test \[pending\]/);
   assert.doesNotMatch(prompt, /THE PREVIOUS MESSAGE/);
 });
+
+test('即時狀態：工具執行中時 activity 是那個指令；同一個呼叫結束後清掉，不會停在已完成的指令上；完成訊息說的是「本輪」', async () => {
+  const { orch, cwd } = setup();
+  const seen = [];
+  const activity = () => Object.values([...orch.runs.values()][0].agents).find((x) => x.role === 'executor')?.activity;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        const call = (status) => ({ seq: 900, ts: Date.now(), kind: 'tool', tool: { id: 't900', name: 'bash', category: 'command', title: 'npm test', status, output: status === 'ok' ? '5 passing' : '' } });
+        a.onEvent(call('running'), false);
+        seen.push(activity());
+        a.onEvent(call('ok'), true);
+        seen.push(activity());
+        a.onEvent({ seq: 901, ts: Date.now(), kind: 'message', text: 'Tests pass; writing the summary.' }, false);
+        seen.push(activity());
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, implement: { enabled: true, author: { provider: 'fake' }, reviewer: null, maxRounds: 1 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(seen[0], /npm test/);
+  assert.equal(seen[1], undefined, 'a finished call is not shown as what it does now');
+  assert.match(seen[2], /Tests pass/);
+  assert.ok(r.log.some((l) => l.chat && /This round of the workflow is complete|本輪工作流完成/.test(l.text)));
+});
+
+test('子代理批次回歸：同名的兩批是兩批（失敗的那批算受阻）；retry_of 明確接回原批次；不是自己的或還在跑的不能當 retry_of', async () => {
+  const subCfg = { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, implement: { enabled: true, author: { provider: 'fake' }, reviewer: null, maxRounds: 1 }, subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 3 } };
+  const outcomes = {};
+  for (const retry of [false, true]) {
+    const { orch, cwd } = setup();
+    const errors = [];
+    fakeAgents(orch, {
+      // The first range fails (out of quota: no automatic retry), every later attempt works.
+      subagent: [{ error: 'You have hit your usage limit. Resets at 08:00.' }, async () => ({ lastSeq: 1, exitCode: 0, resumed: false, finalText: 'judged' })],
+      executor: [
+        async (o, secret) => {
+          const a = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', title: '判讀', task: 'items 1-100' }));
+          await o.callTool(secret, 'wait_subagent', { subagent_id: a.subagent_id, timeout_sec: 5 });
+          const b = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', title: '判讀', task: 'items 101-200' }));
+          await o.callTool(secret, 'wait_subagent', { subagent_id: b.subagent_id, timeout_sec: 5 });
+          for (const bad of ['no-such-id', 'main']) await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: 'x', retry_of: bad }).catch((e) => errors.push(e.message));
+          if (retry) {
+            const c = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', title: '判讀', task: 'items 1-100', retry_of: a.subagent_id }));
+            await o.callTool(secret, 'wait_subagent', { subagent_id: c.subagent_id, timeout_sec: 5 });
+          }
+          await o.callTool(secret, 'submit_work', { summary: 'done' });
+        },
+      ],
+    });
+    const r = await settle(orch, orch.start(config(cwd, subCfg)).id);
+    assert.equal(r.status, 'completed', r.error);
+    const subs = Object.values(r.agents).filter((x) => x.role === 'subagent');
+    outcomes[retry] = { subs, log: r.log.filter((l) => l.chat).map((l) => l.text).join('\n'), errors };
+  }
+  // Without a re-run: two batches of the same name, the first one blocked — said in the completion note.
+  assert.equal(outcomes.false.subs.length, 2);
+  assert.ok(outcomes.false.subs.every((s) => !s.rerunOf));
+  assert.match(outcomes.false.log, /1 個子代理批次最後一次嘗試失敗|1 sub-agent batch\(es\) failed on their last attempt/);
+  assert.match(outcomes.false.errors[0], /not one of your sub-agents/);
+  assert.match(outcomes.false.errors[1], /not one of your sub-agents/);
+  // With retry_of: the third attempt is joined to the first batch, and nothing is left blocked.
+  const [first, , third] = outcomes.true.subs.sort((x, y) => (x.startedAt ?? 0) - (y.startedAt ?? 0));
+  assert.equal(third.rerunOf, first.id);
+  assert.doesNotMatch(outcomes.true.log, /最後一次嘗試失敗|failed on their last attempt/);
+});

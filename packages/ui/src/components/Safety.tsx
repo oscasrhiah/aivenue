@@ -4,6 +4,7 @@ import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerName } from '../util';
 import { ask } from './Ask';
+import { byFolder } from '../timeline';
 
 export const PERMISSION_ICON: Record<PermissionLevel, string> = { plan: '📋', ask: '✋', edit: '✏️', auto: '⚡', full: '🛑' };
 
@@ -98,14 +99,36 @@ export function FullAccessBanner({ run }: { run: WorkflowRun }) {
 /** Files agents changed outside the working folder and the extra folders, from their file tools. */
 export function OutsideChanges({ run }: { run: WorkflowRun }) {
   const t = useT();
+  const [open, setOpen] = useState<Set<string>>(new Set());
   const files = run.outsideChanges ?? [];
   if (!files.length) return null;
+  // By folder: the warning stays, the file names one click away.
+  const groups = byFolder(files);
+  const norm = (s: string) => s.replace(/\\/g, '/').toLowerCase();
+  const goal = norm(run.config.goal);
   return (
     <div className="decision outside-changes">
-      <div className="decision-q">📂 {t(`工作資料夾外的改動（${files.length}）`, `Changes outside the working folder (${files.length})`)}</div>
-      <div className="mono small">
-        {files.map((f) => (
-          <div key={f}>{f}</div>
+      <div className="decision-q">
+        📂 {t(`工作資料夾外有 ${files.length} 筆寫檔工具紀錄`, `${files.length} file-tool write(s) outside the working folder`)}
+        {groups.length > 1 && <span className="muted small">{t(`（${groups.length} 個資料夾）`, ` (${groups.length} folders)`)}</span>}
+      </div>
+      <div className="outside-groups">
+        {groups.map((g) => (
+          <div key={g.dir} className="outside-group">
+            <button className="link mono small" title={g.dir} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
+              {open.has(g.dir) ? '▾' : '▸'} {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
+            </button>
+            {/* Only a hint: the request's own text names this folder (Aivenue does not know it was meant as the output). */}
+            {g.dir && goal.includes(norm(g.dir)) && <span className="badge muted">{t('任務文字提到這個資料夾', 'named in the request')}</span>}
+            {open.has(g.dir) && (
+              <div className="mono small outside-files">
+                <div className="muted">{g.dir}</div>
+                {g.files.map((f) => (
+                  <div key={f}>{f}</div>
+                ))}
+              </div>
+            )}
+          </div>
         ))}
       </div>
       <div className="muted tiny">
@@ -210,10 +233,14 @@ export function SafetySection({ permission, isolation, providers, roleProviders,
 }
 
 /** Pending approvals ("ask" level) for a run. */
-export function Approvals({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
+/**
+ * Actions waiting for the user's approval. With `agentId`: that agent's, shown in its card beside its work; with
+ * `unclaimed`: those no card of this message shows (an agent of another message, or one not listed).
+ */
+export function Approvals({ run, providers, agentId, unclaimed }: { run: WorkflowRun; providers: ProviderInfo[]; agentId?: string; unclaimed?: boolean }) {
   const t = useT();
   const [open, setOpen] = useState<string>();
-  const list = run.approvals ?? [];
+  const list = (run.approvals ?? []).filter((a) => (agentId ? a.agentId === agentId : unclaimed ? !run.agents[a.agentId] : true));
   if (!list.length) return null;
   const decide = (approvalId: string, decision: 'allow' | 'always' | 'deny') => hub.call('workflows.approve', { id: run.id, approvalId, decision }).catch(() => undefined);
   return (

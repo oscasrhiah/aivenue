@@ -102,7 +102,7 @@ export function subagentBlock(sub: SubagentConfig, depth: number, available: { i
   return [
     '',
     'SUB-AGENTS: You may delegate self-contained sub-tasks to other AI agents with the Aivenue tools:',
-    `- \`spawn_subagent\` {provider, title, task, mode?: "write"|"readonly", model?, effort?} starts one (title: a few words naming the task for the user) and returns a subagent_id immediately. Available providers: ${available.map(describe).join(', ')}. Leave model/effort out unless the task clearly needs a different one.`,
+    `- \`spawn_subagent\` {provider, title, task, mode?: "write"|"readonly", model?, effort?, retry_of?} starts one (title: a few words naming the task for the user) and returns a subagent_id immediately. Available providers: ${available.map(describe).join(', ')}. Leave model/effort out unless the task clearly needs a different one. When you start the same work again after a sub-agent failed or stopped, pass its subagent_id as retry_of (the user then sees it as another attempt of that work); never for new work.`,
     '- `wait_subagent` {subagent_id} waits up to ~50 seconds and returns its status/result; call it again while it is still running. Its `result` is the sub-agent\'s own account and status "completed" only means it ended: before you rely on it, look at `checks_seen` (the checks Aivenue saw it run, and how they ended) and the files it changed. A long result comes in pages: `result_truncated` says how to read the next one.',
     `- At most ${sub.maxConcurrent} sub-agents run at once. Give each a complete, specific task (it cannot see this conversation). Sub-agents share this working directory, so give parallel sub-agents disjoint files.`,
   ].join('\n');

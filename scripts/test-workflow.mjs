@@ -18,7 +18,7 @@ const bundled = await build({
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
-      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords } from './packages/core/src/ledger';
+      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords, verifiedChecks, checkKey, checkRun, isCheckCommand, shellParts } from './packages/core/src/ledger';
       export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
@@ -30,6 +30,7 @@ const bundled = await build({
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
+      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationScope } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
       export { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './packages/core/src/prReviews';
@@ -2998,4 +2999,556 @@ test('續接訊息的目標：前一段沒完成時寫明狀態，不把最後�
   assert.equal(W.followUpGoal('繼續', { status: 'completed', config: cfg, agents }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: done)');
   assert.equal(W.followUpGoal('繼續', { status: 'cancelled', config: cfg, agents }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: it did not finish (status: cancelled); the last report before that: done)');
   assert.equal(W.followUpGoal('繼續', { status: 'failed', config: cfg, agents: {} }), '繼續\n\n(Context: this continues an earlier task in the same folder: "Add days.". Its outcome: it did not finish (status: failed))');
+});
+
+// ---------- the workflow timeline (packages/ui/src/timeline.ts): plain data, no React ----------
+
+const tr = (zh, en) => en;
+const tev = (seq, category, title, status = 'ok', o = {}) => ({ seq, ts: seq * 1000, kind: 'tool', tool: { id: `t${seq}`, name: category === 'command' ? 'bash' : category, category, title, status, output: o.output ?? '' } });
+const msg = (seq, text) => ({ seq, ts: seq * 1000, kind: 'message', text });
+
+test('時間線：連續的例行讀檔與搜尋收成一行；終端指令不會被說成讀檔；失敗、執行中與說的話逐筆留著', () => {
+  const events = [
+    tev(1, 'read', 'src/a.js'), tev(2, 'read', 'src/b.js'), tev(3, 'read', 'src/c.js'),
+    tev(4, 'search', 'grep parse'), tev(5, 'search', 'grep slug'),
+    msg(6, 'Now I will run the tests.'),
+    tev(7, 'command', 'cat src/a.js'),
+    tev(8, 'command', 'npm test', 'error', { output: '1 failing' }),
+    { seq: 9, ts: 9000, kind: 'thinking', text: 'hmm' },
+    tev(10, 'edit', 'src/a.js'),
+    tev(11, 'command', 'npm test', 'running'),
+  ];
+  const f = W.feed(events);
+  assert.deepEqual(f.map((x) => (x.type === 'group' ? `${x.kind}×${x.events.length}` : `${x.e.kind}:${x.e.tool?.status ?? ''}${x.important ? '!' : ''}`)), ['read×3', 'search×2', 'message:', 'tool:ok', 'tool:error!', 'tool:ok', 'tool:running!']);
+  assert.equal(W.groupLabel(tr, 'read', 3), 'Read 3 files');
+  assert.equal(W.groupLabel(tr, 'search', 2), '2 searches');
+  // `cat` run in a shell stays a terminal command: only the event's own category says "read".
+  assert.equal(f[3].e.tool.category, 'command');
+  // The newest few, and the failure even when newer items would push it out.
+  const pv = W.feedPreview([...f, ...Array.from({ length: 8 }, (_, i) => ({ type: 'event', e: msg(20 + i, `step ${i}`), important: false }))], 6);
+  assert.ok(pv.some((p) => p.item.type === 'event' && p.item.e.tool?.status === 'error'), 'the failure stays in view');
+  assert.ok(pv.some((p) => p.item.type === 'event' && p.item.e.tool?.status === 'running'), 'the running call stays in view');
+  assert.equal(pv.filter((p) => p.item.type === 'event' && p.item.e.kind === 'message').length, 6);
+  assert.ok(pv[0].skipped > 0, 'what is left out before it is counted');
+});
+
+test('時間線的即時狀態：工具執行中只在原位顯示；結束後不再顯示剛才的指令；沒有可確認的動作就是「正在處理」；等待時說在等什麼', () => {
+  const run1 = { status: 'running' };
+  // The same call updated in place (same seq): running, then ok.
+  assert.equal(W.liveLine(run1, [tev(1, 'command', 'npm test', 'running')]).kind, 'tool');
+  assert.deepEqual(W.liveLine(run1, [tev(1, 'command', 'npm test', 'running'), tev(1, 'command', 'npm test', 'ok')]), { kind: 'working' });
+  assert.deepEqual(W.liveLine(run1, [tev(1, 'command', 'npm test', 'ok'), msg(2, 'done with tests')]), { kind: 'working' });
+  assert.deepEqual(W.liveLine({ status: 'running', waiting: 'Waiting for your approval' }, [tev(1, 'command', 'rm -rf build', 'running')]), { kind: 'waiting', text: 'Waiting for your approval' });
+  assert.equal(W.liveLine({ status: 'completed' }, [tev(1, 'command', 'npm test', 'running')]), undefined);
+  // Two calls at once: both are what runs now.
+  assert.equal(W.liveLine(run1, [tev(1, 'command', 'npm run build', 'running'), tev(2, 'read', 'a.js', 'running')]).calls.length, 2);
+  // Held up by the user: an approval it waits for, or the workflow paused — said as such, not as work going on.
+  assert.deepEqual(W.liveLine(run1, [tev(1, 'command', 'git push', 'running')], 1), { kind: 'approval', n: 1 });
+  assert.deepEqual(W.liveLine(run1, [tev(1, 'command', 'npm test', 'running')], 0, true), { kind: 'paused' });
+  assert.deepEqual(W.liveLine({ status: 'paused' }, []), { kind: 'paused' });
+});
+
+test('時間線的一行結果與返工原因：只用紀錄裡的事實；送回時接上新的一輪', () => {
+  const agent = (o) => ({ id: 'a', role: 'executor', status: 'completed', stage: 'implement', round: 1, stats: { events: 3, tools: 3, commands: 1, filesChanged: ['src/a.js', 'src/b.js'] }, ...o });
+  const run = {
+    agents: {},
+    stages: {
+      plan: { status: 'approved', rounds: [] },
+      implement: {
+        status: 'running',
+        rounds: [
+          { n: 1, authorAgentId: 'a', reviewerAgentId: 'r', submission: { summary: 'did it', checks: [{ command: 'npm test', agentId: 'a', by: 'x', ts: 1, outcome: 'failed' }, { command: 'npm run lint', agentId: 'a', by: 'x', ts: 1, outcome: 'passed' }] }, review: { verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'major', title: 't' }, { id: 'R2', severity: 'minor', title: 'u' }] } },
+          { n: 2, authorAgentId: 'b' },
+        ],
+      },
+    },
+  };
+  assert.deepEqual(W.turnSummary(tr, run, agent()), ['Implemented', '2 file(s) changed with the edit tool', '1 check(s) passed, 1 check(s) failed']);
+  assert.deepEqual(W.turnSummary(tr, run, agent({ id: 'r', role: 'code_reviewer', stats: { events: 1, tools: 1, commands: 0, filesChanged: [] } })), ['Changes requested · 2 issue(s)']);
+  assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'running' })), []);
+  assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'failed', round: 2, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] } })), ['Failed']);
+  assert.equal(W.reworkLine(tr, run, agent({ id: 'b', round: 2, status: 'running' })), 'The review found R1, R2 → implementation round 2');
+  assert.equal(W.reworkLine(tr, run, agent()), undefined, 'a first round came back from nothing');
+});
+
+test('時間線的結果預覽與提交 JSON：去掉 Markdown 語法與長路徑，只留可讀的文字；提交的 JSON 認得出來', () => {
+  const md = '## Done\n\nFixed **slug** handling in [the slug module](C:\\Users\\me\\proj\\src\\slug.js) and `src/report.js`.\n\n- see /home/me/work/proj/docs/notes.md\n\n```js\nconsole.log(1)\n```';
+  assert.equal(W.plainPreview(md), 'Done Fixed slug handling in the slug module and src/report.js. see notes.md');
+  assert.doesNotMatch(W.plainPreview(md), /\]\(|\*\*|```|C:\\Users/);
+  const long = W.plainPreview('word '.repeat(200), 50);
+  assert.ok(long.length <= 51 && long.endsWith('…'));
+  assert.equal(W.isSubmissionText('```json\n{"summary": "x", "responses": []}\n```'), true);
+  assert.equal(W.isSubmissionText('{"verdict":"approve","issues":[]}'), true);
+  assert.equal(W.isSubmissionText('I changed {a} and {b}.'), false);
+  assert.equal(W.isSubmissionText('{"foo": 1}'), false);
+});
+
+test('時間線的計畫步驟：沒回報完成的步驟在階段結束後標成「未回報」，不會被補成完成；執行中照實顯示', () => {
+  assert.equal(W.stepState({ status: 'pending' }, 'approved', true), 'unreported');
+  assert.equal(W.stepState({ status: 'in_progress' }, 'approved', true), 'unreported');
+  assert.equal(W.stepState({ status: 'done' }, 'approved', true), 'done');
+  assert.equal(W.stepState({ status: 'in_progress' }, 'running', false), 'active');
+  assert.equal(W.stepState({ status: 'pending' }, 'running', false), 'pending');
+  assert.equal(W.stepState({ status: 'pending', rework: ['R1'] }, 'running', false), 'failed');
+  assert.equal(W.stepState({ status: 'pending' }, 'cancelled', true), 'unreported');
+});
+
+test('長工作流：子代理依批次收合，重跑接在原批次下；批次狀態看最後一次嘗試，已恢復的失敗只留在歷史', () => {
+  const sub = (id, title, status, o = {}) => ({ id, role: 'subagent', parentId: 'p', title, status, startedAt: o.at ?? 0, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] }, ...o });
+  const kids = [
+    sub('a1', 'p2_001–015', 'failed', { at: 1, failure: { kind: 'model_service', message: 'model not available', action: 'switch model' } }),
+    sub('a2', 'p2_001–015', 'failed', { at: 5, rerunOf: 'a1', failure: { kind: 'quota', message: 'free quota used up', action: 'resets at 08:00' } }),
+    sub('a3', 'p2_001–015', 'completed', { at: 9, rerunOf: 'a2' }),
+    sub('b1', 'p2_016–030', 'failed', { at: 2, failure: { kind: 'quota', message: 'limit reached', action: 'resets at 08:00' } }),
+    // Started again by the parent with an explicit link (retry_of).
+    sub('b2', 'p2_016–030', 'running', { at: 6, rerunOf: 'b1' }),
+    sub('c1', 'p2_031–045', 'failed', { at: 3, failure: { kind: 'model_service', message: 'unavailable', action: 'switch model' } }),
+    sub('d1', 'p2_046–060', 'completed', { at: 4, endedWithoutResult: true }),
+  ];
+  const list = W.batchesOf(kids, (a) => a.title);
+  assert.deepEqual(list.map((b) => [b.title, b.attempts.map((a) => a.id).join(','), b.state]), [
+    ['p2_001–015', 'a1,a2,a3', 'done'],
+    ['p2_016–030', 'b1,b2', 'running'],
+    ['p2_031–045', 'c1', 'blocked'],
+    ['p2_046–060', 'd1', 'blocked'],
+  ]);
+  assert.deepEqual(W.batchCounts(list), { blocked: 2, running: 1, done: 1, stopped: 0 });
+});
+
+test('批次回歸：兩個同名但範圍不同的批次算兩批，第一批失敗不會被第二批的完成蓋掉；只有明確的重跑才接回原批次', () => {
+  const sub = (id, task, status, o = {}) => ({ id, role: 'subagent', parentId: 'p', title: '判讀', task, status, startedAt: o.at ?? 0, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] }, ...o });
+  const kids = [sub('x1', 'items 1–100', 'failed', { at: 1, failure: { kind: 'quota', message: 'limit', action: 'wait' } }), sub('x2', 'items 101–200', 'completed', { at: 2 })];
+  const list = W.batchesOf(kids, (a) => a.title);
+  assert.deepEqual(list.map((b) => [b.attempts.map((a) => a.id).join(','), b.state]), [['x1', 'blocked'], ['x2', 'done']]);
+  assert.deepEqual(W.batchCounts(list), { blocked: 1, running: 0, done: 1, stopped: 0 });
+  // The failed one done again through a real re-run: joined to its batch, which is then done.
+  const again = W.batchesOf([...kids, sub('x3', 'items 1–100', 'completed', { at: 3, rerunOf: 'x1' })], (a) => a.title);
+  assert.deepEqual(again.map((b) => [b.attempts.map((a) => a.id).join(','), b.state]), [['x1,x3', 'done'], ['x2', 'done']]);
+  // The overview counts the same way.
+  const run = { status: 'completed', agents: Object.fromEntries([...kids, { id: 'p', role: 'executor', status: 'completed' }].map((a) => [a.id, a])), stages: {} };
+  assert.match(W.runOverview(tr, run, (a) => a.title)[1], /1\/2 done, 1 blocked/);
+});
+
+test('過期的目標驗收：最終結果標成「上次驗收 1/1，之後有改動，需重驗」，不當成目前的 1/1', () => {
+  const v = (stale) => ({ outcome: 'met', summary: 's', metrics: [{ id: 'M1', value: 'pass', met: true, evidence: 'npm test: 6 passing' }], issues: [], ...(stale ? { stale: true } : {}) });
+  const run = (stale) => ({ stages: { implement: { rounds: [] }, verify: { rounds: [{ n: 1, verification: v(stale) }] } } });
+  assert.deepEqual(W.verificationScope(tr, run(false)), ['goal 1/1']);
+  assert.deepEqual(W.verificationScope(tr, run(true)), ['last goal verification 1/1; changed since, needs checking again']);
+});
+
+test('長工作流的總覽：本輪狀態、子代理批次與背景程序分開說；本輪完成不等於任務做完', () => {
+  const sub = (id, title, status, o = {}) => ({ id, role: 'subagent', parentId: 'm', title, status, startedAt: o.at ?? 0, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] }, ...o });
+  const run = {
+    status: 'completed',
+    agents: { m: { id: 'm', role: 'executor', status: 'completed' }, s1: sub('s1', 'b1', 'completed', { at: 1 }), s2: sub('s2', 'b2', 'failed', { at: 2 }), s3: sub('s3', 'b3', 'running', { at: 3 }) },
+    processes: [{ pid: 1, alive: true }, { pid: 2, alive: false }],
+    stages: {},
+  };
+  assert.deepEqual(W.runOverview(tr, run, (a) => a.title), ['This round of the workflow is complete', 'sub-agent batches 1/3 done, 1 running, 1 blocked', '1 background process(es) still running']);
+  assert.equal(W.runOverview(tr, { ...run, status: 'running', pending: { id: 'd' } }, (a) => a.title)[0], 'Waiting for you');
+  assert.deepEqual(W.runOverview(tr, { status: 'running', agents: {}, stages: {} }, (a) => a.title), ['This round is running']);
+});
+
+test('工作資料夾外的改動依資料夾收合：最多的資料夾先列；長指令在主線只顯示短名稱', () => {
+  const g = W.byFolder(['C:\\data\\proj\\results\\a.json', 'C:\\data\\proj\\results\\b.json', 'C:\\data\\proj\\results\\c.json', '/tmp/x/y.log']);
+  assert.deepEqual(g.map((x) => [x.label, x.files.length]), [['…/proj/results/', 3], ['/tmp/x/', 1]]);
+  assert.deepEqual(g[0].files, ['a.json', 'b.json', 'c.json']);
+  const long = `python - <<'EOF'\n${'x = 1\n'.repeat(1000)}EOF`;
+  assert.ok(W.shortTitle(long).length <= 160);
+  assert.equal(W.shortTitle('npm test'), 'npm test');
+});
+
+test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄，沒看到檢查時明說', () => {
+  const run = {
+    outputs: [
+      { path: 'src/a.js', status: 'modified' },
+      { path: 'report.md', status: 'added' },
+      { path: 'human_check.csv', status: 'added' },
+      { path: 'old.txt', status: 'deleted' },
+      { path: 'cache', status: 'added', count: 40 },
+    ],
+    stages: {
+      implement: { rounds: [{ n: 1, submission: { summary: 's', checks: [{ command: 'npm test', outcome: 'passed' }, { command: 'npm run lint', outcome: 'passed', outdated: true }] }, review: { verdict: 'approve', issues: [], needsValidation: [{ id: 'V1' }, { id: 'V2' }] } }] },
+    },
+  };
+  assert.deepEqual(W.deliverables(run), { shown: ['human_check.csv', 'report.md', 'src/a.js', 'cache'], total: 4 });
+  assert.deepEqual(W.verificationScope(tr, run), ['2 check(s): 2 passed', '2 item(s) not confirmed by the review']);
+  const none = { stages: { implement: { rounds: [{ n: 1, submission: { summary: 's', checks: [] } }] } } };
+  assert.match(W.verificationScope(tr, none)[0], /no check seen run/);
+});
+
+test('檢查判定回歸：node 執行測試腳本（node test.js、tests/、*.test.js）算檢查；node 跑其他腳本或只是讀測試檔不算', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = [
+    tool(1, 'node test.js', '3 checks passed'),
+    tool(2, 'node tests/run.js', 'AssertionError: expected 2', 'error'),
+    tool(3, 'node ./src/slug.test.mjs', 'ok'),
+    tool(4, 'Get-Content -Encoding UTF8 src/sum.js; node test.js', 'module.exports = { sum };\n3 checks passed'),
+    tool(5, 'node build.js', 'built'),
+    tool(6, 'Get-Content test.js', "const assert = require('node:assert');"),
+    tool(7, 'node -e "console.log(1)"', '1'),
+  ];
+  const got = W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  // `node test.js` ran twice (alone, then inside a longer command): one check, its latest run.
+  assert.deepEqual(got, [
+    ['node tests/run.js', 'failed'],
+    ['node ./src/slug.test.mjs', 'passed'],
+    ['Get-Content -Encoding UTF8 src/sum.js; node test.js', 'in_longer_command'],
+  ]);
+});
+
+test('檢查依檢查本身去重（真實 Codex 實測回歸）：先失敗、後來在較長指令中又跑同一個檢查，只留後面那次', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = [
+    tool(1, 'Get-Content -Encoding UTF8 src/sum.js; node test.js', 'TypeError: sum is not a function', 'error'),
+    tool(2, "(Get-Content src/sum.js) -replace 'a','b' | Set-Content src/sum.js; node test.js", '3 checks passed'),
+    tool(3, 'npm run lint', 'ok'),
+    tool(4, 'cd app && npm run lint', '1 problem', 'error'),
+  ];
+  const got = W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  // `npm run lint` here and in app/ are two checks (two folders).
+  assert.deepEqual(got, [
+    ["(Get-Content src/sum.js) -replace 'a','b' | Set-Content src/sum.js; node test.js", 'in_longer_command'],
+    ['npm run lint', 'passed'],
+    ['cd app && npm run lint', 'failed'],
+  ]);
+  assert.equal(W.checkKey('Get-Content x; node ./test.js | tail -5'), '::node test.js');
+});
+
+test('檢查去重回歸：不同目錄的 npm test 是兩項檢查，API 的失敗不會被 web 的通過蓋掉；同一目錄後來確實重跑才取代', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const recs = (events) => W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  // The user's case: API fails, then web passes.
+  assert.deepEqual(recs([tool(1, 'cd packages/api && npm test', '1 failing', 'error'), tool(2, 'cd packages/web && npm test', '12 passing')]), [
+    ['cd packages/api && npm test', 'failed'],
+    ['cd packages/web && npm test', 'in_longer_command'],
+  ]);
+  // The same folder, written differently, and the later run surely ran: it replaces the failure.
+  assert.deepEqual(recs([tool(1, 'cd packages/api && npm test', '1 failing', 'error'), tool(2, 'cd ./packages/api/; npm test', '8 passing')]), [['cd ./packages/api/; npm test', 'in_longer_command']]);
+  assert.deepEqual(recs([tool(1, 'cd packages/api && npm test', '1 failing', 'error'), tool(2, 'npm test --prefix packages/api', '8 passing')]), [['npm test --prefix packages/api', 'passed']]);
+  // Windows paths and Set-Location name the same folder (backslashes, quotes and the drive letter evened out);
+  // a folder written in another case may be another folder, so it keeps its own record.
+  assert.equal(W.checkKey('Set-Location C:\\Repo\\Pkg; npm test'), W.checkKey('cd "c:/Repo/Pkg" && npm test'));
+  assert.notEqual(W.checkKey('Set-Location C:\\Repo\\Pkg; npm test'), W.checkKey('cd "c:/repo/pkg" && npm test'));
+  assert.notEqual(W.checkKey('cd packages/api && npm test'), W.checkKey('cd packages/web && npm test'));
+});
+
+test('檢查去重回歸：可能沒執行的命令（|| 之後、失敗的 && 鏈）不取代已確認的失敗，另列它的狀態；之後確實重跑才取代', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const act = (events) => W.collectActivity(run, () => events);
+  const recs = (events) => W.checkRecords(act(events)).map((c) => [c.command, c.outcome]);
+  const first = [tool(1, 'node test.js', 'AssertionError: expected 5', 'error'), tool(2, 'true || node test.js', '')];
+  // The user's case: the failure stays, the skipped run is listed beside it as "may not have run".
+  assert.deepEqual(recs(first), [
+    ['node test.js', 'failed'],
+    ['true || node test.js', 'may_not_run'],
+  ]);
+  // A failed && chain may have stopped before the check (npm ci failed): no replacement, and not "failed" either.
+  assert.deepEqual(recs([tool(1, 'node test.js', 'x', 'error'), tool(2, 'npm ci && node test.js', 'npm ERR! code E404', 'error')]), [
+    ['node test.js', 'failed'],
+    ['npm ci && node test.js', 'may_not_run'],
+  ]);
+  // Later surely run again (alone): it replaces both.
+  assert.deepEqual(recs([...first, tool(3, 'node test.js', '3 checks passed')]), [['node test.js', 'passed']]);
+});
+
+test('檢查去重回歸：被 && 跳過的測試（false && node test.js; true）與引號內的文字（printf）都不能蓋掉先前的失敗', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const recs = (events) => W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome, ...(c.lineOk === undefined ? [] : [c.lineOk])]);
+  const failed = tool(1, 'node test.js', 'AssertionError: expected 5', 'error');
+  // 1. The line ends fine (from `true`), but `false &&` skipped the test: whether it ran is not known.
+  assert.deepEqual(recs([failed, tool(2, 'false && node test.js; true', '')]), [
+    ['node test.js', 'failed'],
+    ['false && node test.js; true', 'may_not_run', true],
+  ]);
+  // 2. Quoted text is an argument: printf runs no check at all, so it is not listed and the failure stays alone.
+  assert.deepEqual(recs([failed, tool(2, "printf 'x; node test.js; y'", 'x; node test.js; y')]), [['node test.js', 'failed']]);
+  assert.deepEqual(recs([failed, tool(2, 'echo "npm test && node test.js"', '')]), [['node test.js', 'failed']]);
+  assert.equal(W.isCheckCommand("printf 'x; node test.js; y'"), false);
+  assert.equal(W.isCheckCommand('npm test -- --grep "a; b"'), true);
+  assert.deepEqual(W.shellParts("printf 'a; b' && npm test").map((p) => [p.text.trim(), p.sep]), [["printf 'a; b'", '&&'], ['npm test', '']]);
+  // More of the same kind: `&&` before the check with `||` after it (the line's end may come from the `||` side),
+  // `&&` before it in a list that is not the last one, a cd that reports it failed.
+  assert.deepEqual(recs([failed, tool(2, 'false && node test.js || true', '')]).at(-1), ['false && node test.js || true', 'may_not_run', true]);
+  assert.deepEqual(recs([failed, tool(2, 'npm ci && node test.js; echo done', 'done')]).at(-1), ['npm ci && node test.js; echo done', 'may_not_run', true]);
+  assert.deepEqual(recs([failed, tool(2, 'cd nowhere && node test.js', 'bash: cd: nowhere: No such file or directory', 'error')]).at(-1), ['cd nowhere && node test.js', 'may_not_run', false]);
+  assert.equal(recs([failed, tool(2, 'cd nowhere && node test.js', 'bash: cd: nowhere: No such file or directory', 'error')]).length, 2);
+  // Still replaced when the record does show it ran: the last list, `&&` only, the line ended fine.
+  assert.deepEqual(recs([failed, tool(2, 'npm ci && node test.js', '3 checks passed')]), [['npm ci && node test.js', 'in_longer_command']]);
+  assert.deepEqual(recs([failed, tool(2, 'echo start; node test.js', '3 checks passed')]), [['echo start; node test.js', 'in_longer_command']]);
+});
+
+test('檢查去重回歸：被跳過的 cd 不改變檢查的目錄（false && cd packages/api; npm test），提前結束的 shell 後面的測試不算執行（exit 0; node test.js）', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const recs = (events) => W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  // 1. The user's case: the cd is skipped, so npm test ran in the original folder — or where, the line cannot say.
+  //    Either way it is not the API's npm test: the API failure stays, the new run is listed apart.
+  const api = tool(1, 'cd packages/api && npm test', '1 failing', 'error');
+  assert.deepEqual(recs([api, tool(2, 'false && cd packages/api; npm test', '5 passing')]), [
+    ['cd packages/api && npm test', 'failed'],
+    ['false && cd packages/api; npm test', 'may_not_run'],
+  ]);
+  assert.match(W.checkRun('false && cd packages/api; npm test').key, /^\?::/);
+  // 2. The user's case: the shell left before the test.
+  const failed = tool(1, 'node test.js', 'AssertionError: expected 5', 'error');
+  assert.deepEqual(recs([failed, tool(2, 'exit 0; node test.js', '')]), [
+    ['node test.js', 'failed'],
+    ['exit 0; node test.js', 'may_not_run'],
+  ]);
+  // More flow the line cannot settle: return, exec, a branch, a subshell left open across `;`, a background job,
+  // `set -e` on a line that failed, `popd` or `cd -` before the check.
+  for (const line of ['return 0; node test.js', 'exec true; node test.js', 'if false; then node test.js; fi', '(cd sub; node test.js)', 'node test.js &', 'set -e; false; node test.js', 'popd; node test.js', 'cd -; node test.js', 'false || cd sub; node test.js']) {
+    const got = recs([failed, tool(2, line, '', line.startsWith('set -e') ? 'error' : 'ok')]);
+    assert.deepEqual(got[0], ['node test.js', 'failed'], line);
+    // Listed beside it as not known — or not taken for a check at all (`then node test.js` is a branch, not a step).
+    assert.ok(got.slice(1).every(([c, o]) => c === line && o === 'may_not_run'), line);
+  }
+  // Still replaced when the line shows it ran, in the same folder: cd that ran, `;`, a PowerShell expression group.
+  assert.deepEqual(recs([api, tool(2, 'cd packages/api; npm test', '8 passing')]), [['cd packages/api; npm test', 'in_longer_command']]);
+  assert.deepEqual(recs([failed, tool(2, "(Get-Content a.js) -replace 'x','y' | Set-Content a.js; node test.js", '3 checks passed')]), [["(Get-Content a.js) -replace 'x','y' | Set-Content a.js; node test.js", 'in_longer_command']]);
+  assert.deepEqual(recs([failed, tool(2, 'set -e; npm ci; node test.js', '3 checks passed')]), [['set -e; npm ci; node test.js', 'in_longer_command']]);
+});
+
+test('檢查去重回歸：cd 明確失敗時，後續檢查不用目標目錄的鍵（cd packages/api; npm test 印出找不到目錄）；去重鍵保留測試路徑的大小寫（tests/API.test.js 與 tests/api.test.js）', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const recs = (events) => W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  // 1. The cd says it failed, so npm test ran where the shell stayed — not in packages/api. The API failure stays.
+  const api = tool(1, 'cd packages/api && npm test', '1 failing', 'error');
+  for (const out of ['bash: cd: packages/api: No such file or directory\n5 passing', "Set-Location : Cannot find path 'C:\\x\\packages\\api' because it does not exist.\n5 passing", '系統找不到指定的路徑。\n5 passing']) {
+    assert.deepEqual(recs([api, tool(2, 'cd packages/api; npm test', out)]), [
+      ['cd packages/api && npm test', 'failed'],
+      ['cd packages/api; npm test', 'may_not_run'],
+    ], out);
+    const r = W.checkRun('cd packages/api; npm test', true, out);
+    assert.match(r.key, /^\?::/, out);
+    assert.equal(r.why, 'dir', out);
+  }
+  // Without a failed cd in the output, the same line still replaces the API failure.
+  assert.deepEqual(recs([api, tool(2, 'cd packages/api; npm test', '8 passing')]), [['cd packages/api; npm test', 'in_longer_command']]);
+  // 2. Case is kept: on a case-sensitive file system these are two tests. The API.test.js failure stays.
+  const upper = tool(1, 'node tests/API.test.js', 'AssertionError: expected 5', 'error');
+  assert.deepEqual(recs([upper, tool(2, 'node tests/api.test.js', '3 passing')]), [
+    ['node tests/API.test.js', 'failed'],
+    ['node tests/api.test.js', 'passed'],
+  ]);
+  assert.notEqual(W.checkKey('node tests/API.test.js'), W.checkKey('node tests/api.test.js'));
+  // Arguments and folders keep their case too; only spaces, a leading `./` and a drive letter are evened out.
+  assert.notEqual(W.checkKey('npm test -- --grep Login'), W.checkKey('npm test -- --grep login'));
+  assert.notEqual(W.checkKey('cd App && npm test'), W.checkKey('cd app && npm test'));
+  assert.equal(W.checkKey('node  ./tests/API.test.js'), W.checkKey('node tests/API.test.js'));
+  assert.equal(W.checkKey('cd C:/repo/App && npm test'), W.checkKey('cd c:\\repo\\App && npm test'));
+  // The same test, run again and surely run, still replaces the failure.
+  assert.deepEqual(recs([upper, tool(2, 'node tests/API.test.js', '3 passing')]), [['node tests/API.test.js', 'passed']]);
+});
+
+test('檢查去重回歸：引號內的空白不合併（--grep "Login  flow" 失敗與 --grep "Login flow" 通過並列），從工具事件到摘要都用原樣的指令辨識', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const two = 'npm test -- --grep "Login  flow"';
+  const one = 'npm test -- --grep "Login flow"';
+  const events = [tool(1, two, '1 failing', 'error'), tool(2, one, '3 passing')];
+  // Collection keeps the command as run; what is shown evens out only the spaces outside quotes.
+  const act = W.collectActivity(run, () => events);
+  assert.deepEqual(act.entries.map((e) => e.command), [two, one]);
+  assert.deepEqual(act.entries.map((e) => e.what), [two, one]);
+  // Two filters, two records: the failure stays beside the pass.
+  assert.deepEqual(W.checkRecords(act).map((c) => [c.command, c.outcome]), [
+    [two, 'failed'],
+    [one, 'passed'],
+  ]);
+  assert.notEqual(W.checkKey(two), W.checkKey(one));
+  // The summaries for the next agent keep both, too.
+  const lines = W.verifiedChecks(act);
+  assert.equal(lines.length, 2);
+  assert.ok(lines.some((l) => l.includes(two)) && lines.some((l) => l.includes(one)));
+  // Single quotes, and a quoted path: the same.
+  assert.notEqual(W.checkKey("pytest -k 'login  flow'"), W.checkKey("pytest -k 'login flow'"));
+  assert.notEqual(W.checkKey('node "tests/a  b.test.js"'), W.checkKey('node "tests/a b.test.js"'));
+  // Outside quotes, spacing and a leading ./ still do not make another check; the later pass replaces the failure.
+  assert.equal(W.checkKey('npm  test   --  --grep "Login  flow"'), W.checkKey(two));
+  assert.deepEqual(W.checkRecords(W.collectActivity(run, () => [tool(1, two, '1 failing', 'error'), tool(2, 'npm  test   --  --grep "Login  flow"', '3 passing')])).map((c) => [c.command, c.outcome]), [
+    ['npm test -- --grep "Login  flow"', 'passed'],
+  ]);
+  // A newline between steps is kept for the check (a separator, not a space): `exit 0` then the test did not surely run.
+  const nl = W.checkRecords(W.collectActivity(run, () => [tool(1, 'node test.js', 'AssertionError', 'error'), tool(2, 'exit 0\nnode test.js', '')]));
+  assert.deepEqual(nl.map((c) => c.outcome), ['failed', 'may_not_run']);
+});
+
+test('檢查去重回歸：一般參數開頭的 ./ 保留（--grep ./Login 失敗與 --grep Login 通過並列），只有 node 後面的腳本路徑才去掉 ./', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  // From the tool events to the summary: `./Login` is a pattern (it selects other tests), so two checks.
+  const dot = 'npm test -- --grep ./Login';
+  const bare = 'npm test -- --grep Login';
+  const act = W.collectActivity(run, () => [tool(1, dot, '1 failing', 'error'), tool(2, bare, '3 passing')]);
+  assert.deepEqual(act.entries.map((e) => e.command), [dot, bare]);
+  assert.deepEqual(W.checkRecords(act).map((c) => [c.command, c.outcome]), [
+    [dot, 'failed'],
+    [bare, 'passed'],
+  ]);
+  const lines = W.verifiedChecks(act);
+  assert.equal(lines.length, 2);
+  assert.ok(lines.some((l) => l.includes(dot)) && lines.some((l) => l.includes(bare)));
+  // Other arguments keep their ./ too: a jest path pattern, a pytest node, an option value, a script run by name.
+  for (const [x, y] of [['npx jest ./src', 'npx jest src'], ['pytest ./tests', 'pytest tests'], ['npm test -- --config=./a.json', 'npm test -- --config=a.json'], ['./test.sh', 'test.sh'], ['node --test ./t', 'node --test t']]) {
+    assert.notEqual(W.checkKey(x), W.checkKey(y), x);
+  }
+  // The script path right after node, written with `./`, is a file read from the working folder: the same check.
+  for (const [x, y] of [['node ./test.js', 'node test.js'], ['cd app && node ./tests/b.test.js --verbose', 'cd app; node tests/b.test.js --verbose']]) {
+    assert.equal(W.checkKey(x), W.checkKey(y), x);
+  }
+  // With `.\` it is not known to be: bash reads `.\tests\a.test.js` as `.testsa.test.js`. Kept apart.
+  assert.notEqual(W.checkKey('node .\\tests\\a.test.js'), W.checkKey('node tests\\a.test.js'));
+  assert.deepEqual(W.checkRecords(W.collectActivity(run, () => [tool(1, 'node test.js', 'AssertionError', 'error'), tool(2, 'node ./test.js', '3 checks passed')])).map((c) => [c.command, c.outcome]), [['node ./test.js', 'passed']]);
+});
+
+test('檢查去重回歸：node .\\test.js 不和 node test.js 合併（Git Bash 會把 .\\test.js 讀成 .test.js），從工具事件到摘要兩筆並列', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const back = 'node .\\test.js';
+  const bare = 'node test.js';
+  const act = W.collectActivity(run, () => [tool(1, back, "Error: Cannot find module 'C:\\x\\.test.js'", 'error'), tool(2, bare, '3 checks passed')]);
+  assert.deepEqual(act.entries.map((e) => e.command), [back, bare]);
+  assert.deepEqual(W.checkRecords(act).map((c) => [c.command, c.outcome]), [
+    [back, 'failed'],
+    [bare, 'passed'],
+  ]);
+  const lines = W.verifiedChecks(act);
+  assert.equal(lines.length, 2);
+  assert.ok(lines.some((l) => l.includes(back)) && lines.some((l) => l.includes(bare)));
+  // The other order too: a later `.\` pass does not hide the plain run's failure.
+  assert.deepEqual(W.checkRecords(W.collectActivity(run, () => [tool(1, bare, 'AssertionError', 'error'), tool(2, back, '3 checks passed')])).map((c) => [c.command, c.outcome]), [
+    [bare, 'failed'],
+    [back, 'passed'],
+  ]);
+  // `./` still merges.
+  assert.deepEqual(W.checkRecords(W.collectActivity(run, () => [tool(1, bare, 'AssertionError', 'error'), tool(2, 'node ./test.js', '3 checks passed')])).map((c) => [c.command, c.outcome]), [['node ./test.js', 'passed']]);
+});
+
+test('時間線：收合的一行列出指令本身，不是指令裡路徑的最後一段；改檔數標明只算編輯工具（0.3.0 候選版實機驗收發現）', () => {
+  // The titles of the candidate's real Codex run: a test command and a PowerShell here-string that wrote NOTES.md.
+  const here = "@'\nUpdated \"'`src/slug.js` to lowercase titles, remove characters outside ASCII letters, digits, and spaces.\n'@ | Set-Content -Encoding UTF8 NOTES.md";
+  const names = W.groupNames('command', ['node test/slug.test.js', here]);
+  assert.equal(names[0], 'node test/slug.test.js');
+  assert.ok(names[1].startsWith("@' Updated"), names[1]);
+  assert.ok(names[1].length <= 40, names[1]);
+  assert.ok(!names.some((n) => n.startsWith('slug')), names.join(' | '));
+  // Reads and writes still name the files.
+  assert.deepEqual(W.groupNames('read', ['src\\slug.js', 'test/slug.test.js']), ['slug.js', 'slug.test.js']);
+  assert.deepEqual(W.groupNames('write', ['C:/p/src/a.ts']), ['a.ts']);
+  // The card's line counts the agent's edits only and says so (a file written by a terminal command is in the
+  // workflow's file list, not in the agent's count).
+  const zh = (a) => a;
+  const run = { id: 'r', status: 'completed', config: { cwd: 'C:/p' }, agents: {}, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } } };
+  const a = { id: 'x', role: 'subagent', status: 'completed', stage: 'implement', round: 1, depth: 1, stats: { events: 1, tools: 2, commands: 1, filesChanged: ['C:/p/src/slug.js'] } };
+  run.agents.x = a;
+  assert.ok(W.turnSummary(zh, run, a).includes('以編輯工具改了 1 個檔案'), W.turnSummary(zh, run, a).join(' | '));
+});
+
+test('完成摘要：每項檢查一列，重跑與過期放在該列；legacy 範圍外只依使用者原話（slug 案例，0.3.0 候選版驗收）', () => {
+  const tool = (seq, title, output, status = 'ok', category = 'command') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: ['C:/p/src/slug.js'] } : {}) });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: { events: 1, tools: 6, commands: 4, filesChanged: ['C:/p/src/slug.js'] } };
+  const goal = [
+    'Fix the slug function in this folder. Work step by step in the terminal:',
+    '2. Run `node test/legacy.test.js` once. It is a KNOWN failure outside this task: do not change it, and do not change src/slug.js for it. Just report its output.',
+    '3. Run `node test/slug.test.js`. It fails at first.',
+  ].join('\n');
+  const run = { id: 'r', status: 'completed', config: { cwd: 'C:/p', goal }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [], userMessages: [] };
+  const assertion = "node:assert:152\n  throw new AssertionError(obj);\n  ^\n\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n+ actual - expected\n\n+ 'Hello-World'\n- 'Hello_World'\n    at Object.<anonymous> (C:\\p\\test\\legacy.test.js:4:8)\n{\n  generatedMessage: true,\n  code: 'ERR_ASSERTION',\n  actual: 'Hello-World',\n  expected: 'Hello_World',\n  operator: 'strictEqual'\n}\n\nNode.js v24.20.0";
+  const events = [
+    tool(1, 'node test/legacy.test.js', assertion, 'error'),
+    tool(2, 'node test/slug.test.js', 'AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:', 'error'),
+    tool(3, 'update src\\slug.js', '', 'ok', 'edit'),
+    tool(4, 'node test/slug.test.js', 'slug: 3 checks passed'),
+  ];
+  const checks = W.checkRecords(W.collectActivity(run, () => events), 10, { output: 'short' });
+  // Two checks: the slug test with its earlier failure as history, the legacy failure kept (files changed after it).
+  assert.deepEqual(checks.map((c) => [c.command, c.outcome, !!c.outdated, (c.earlier ?? []).map((e) => e.outcome)]), [
+    ['node test/legacy.test.js', 'failed', true, []],
+    ['node test/slug.test.js', 'passed', false, ['failed']],
+  ]);
+  assert.match(checks[1].earlier[0].output, /AssertionError/);
+  assert.equal(checks[1].output, 'slug: 3 checks passed');
+  const en = (_zh, x) => x;
+  // What happened, only: the legacy test failed (the user's words about its scope are not turned into a label), the
+  // slug test passed after an earlier failure.
+  const rows = checks.map((c) => W.checkRow(en, c));
+  assert.deepEqual(rows.map((r) => [r.status, r.notes]), [
+    ['failed', []],
+    ['passed', ['failed before, passed on rerun']],
+  ]);
+  // The later file change is in the legacy row's details; both runs of the slug test are behind its row.
+  assert.ok(rows[0].details.some((d) => /files changed after this check/.test(d)), rows[0].details.join(' | '));
+  assert.ok(!rows[0].details.some((d) => /outside|your words/i.test(d)), rows[0].details.join(' | '));
+  assert.deepEqual(rows[1].runs.map((x) => [x.outcome, x.latest]), [['failed', false], ['passed', true]]);
+  // The summary counts each check once.
+  run.stages.implement.rounds = [{ n: 1, authorAgentId: a.id, submission: { summary: 's', checks } }];
+  assert.deepEqual(W.verificationScope(en, run), ['2 check(s): 1 passed, 1 failed']);
+  assert.ok(W.turnSummary(en, run, a).includes('1 check(s) passed, 1 check(s) failed'), W.turnSummary(en, run, a).join(' | '));
+  // A failure's preview: the message and actual / expected first, not the stack.
+  assert.deepEqual(W.errorPreview(assertion), ["AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:", "actual: 'Hello-World',", "expected: 'Hello_World',"]);
+  assert.deepEqual(W.errorPreview("Error: boom\n+ got\n- want\n    at x (y:1:2)"), ['Error: boom', '+ got', '- want']);
+});
+
+test('完成摘要：交付物來自工作流的檔案清單，標出是否經由編輯工具；Aivenue 自己的呼叫不在預設時間軸；打開的一筆不會被新事件擠掉', () => {
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, stats: { events: 1, tools: 2, commands: 1, filesChanged: ['C:\\p\\src\\slug.js'] } };
+  const run = { id: 'r', status: 'completed', config: { cwd: 'C:/p', goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, outputs: [
+    { path: 'src/slug.js', abs: 'C:/p/src/slug.js', status: 'modified', size: 1 },
+    { path: 'NOTES.md', abs: 'C:/p/NOTES.md', status: 'added', size: 1 },
+  ] };
+  assert.deepEqual(W.deliverableRows(run).map((r) => [r.status, r.path, r.editedBy]), [
+    ['added', 'NOTES.md', []],
+    ['modified', 'src/slug.js', [a.id]],
+  ]);
+  const ev = (seq, category, status = 'ok', title = 'x') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'n', category, title, status } });
+  assert.equal(W.isInternal(ev(1, 'hub')), true);
+  assert.equal(W.isInternal(ev(2, 'hub', 'running')), false);
+  assert.equal(W.isInternal(ev(3, 'hub', 'error')), false);
+  assert.equal(W.isInternal(ev(4, 'command')), false);
+  // A line the reader opened stays in the live list however many events come after it.
+  const items = W.feed([ev(1, 'command', 'ok', 'node a.js'), { seq: 2, ts: 2, kind: 'message', text: 'm1' }, { seq: 3, ts: 3, kind: 'message', text: 'm2' }, { seq: 4, ts: 4, kind: 'message', text: 'm3' }]);
+  assert.equal(W.feedPreview(items, 2).some((s) => s.item.type === 'event' && s.item.e.seq === 1), false);
+  assert.equal(W.feedPreview(items, 2, (it) => it.type === 'event' && it.e.seq === 1).some((s) => s.item.type === 'event' && s.item.e.seq === 1), true);
+});
+
+test('檢查列不從自由文字推斷範圍：使用者怎麼說都只顯示實際結果與重跑歷史；交付物以工作資料夾下的完整路徑歸因（Codex 複審重現的案例）', () => {
+  const en = (_zh, x) => x;
+  const check = (command, extra = {}) => ({ command, agentId: 'a', by: 'a implementer', ts: 1, outcome: 'failed', ...extra });
+  // Whatever the user wrote about a check — "not outside", "only legacy is outside", "do not run it only once" — the row
+  // says what happened and nothing it would have to guess from the words.
+  for (const c of [check('node test/slug.test.js'), check('node test/legacy.test.js'), check('node test/slug.test.js', { outcome: 'passed', earlier: [{ ts: 0, outcome: 'failed' }] })]) {
+    const r = W.checkRow(en, c);
+    assert.ok(!r.notes.some((n) => /outside|once|as you asked/i.test(n)), r.notes.join(' | '));
+    assert.ok(!r.details.some((d) => /outside|your words/i.test(d)), r.details.join(' | '));
+  }
+  assert.deepEqual(W.checkRow(en, check('node test/legacy.test.js')).notes, []);
+  assert.deepEqual(W.checkRow(en, check('node test/slug.test.js', { outcome: 'passed', earlier: [{ ts: 0, outcome: 'failed' }] })).notes, ['failed before, passed on rerun']);
+  assert.equal(W.userScope, undefined);
+
+  // Deliverables: the same file only, as a full path under the working folder.
+  const agent = (id, files) => ({ id, role: 'executor', status: 'completed', depth: 0, stats: { events: 1, tools: 1, commands: 0, filesChanged: files } });
+  const run = (agents, cwd = 'C:/work/proj') => ({ id: 'r', status: 'completed', config: { cwd, goal: 'g' }, agents: Object.fromEntries(agents.map((a) => [a.id, a])), stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, outputs: [{ path: 'src/slug.js', abs: 'C:/work/proj/src/slug.js', status: 'modified', size: 1 }] });
+  assert.deepEqual(W.deliverableRows(run([agent('other', ['C:/other/src/slug.js'])]))[0].editedBy, []);
+  assert.deepEqual(W.deliverableRows(run([agent('x', ['C:\\Work\\Proj\\src\\slug.js'])]))[0].editedBy, ['x']);
+  assert.deepEqual(W.deliverableRows(run([agent('x', ['src/slug.js'])]))[0].editedBy, ['x']);
+  assert.deepEqual(W.deliverableRows(run([agent('x', ['./src/../src/slug.js'])]))[0].editedBy, ['x']);
+  assert.deepEqual(W.deliverableRows(run([agent('x', ['lib/src/slug.js'])]))[0].editedBy, []);
+  assert.equal(W.fullPath('src/a.js', undefined), undefined);
 });
