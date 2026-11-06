@@ -241,7 +241,9 @@ function readCodexQuotaLive(spec: ProviderSpec): Promise<ProviderUsage['official
     let buf = '';
     child.on('error', () => done(undefined));
     child.on('exit', () => done(undefined));
-    child.stdout?.on('data', (d) => {
+    // Decoded as a stream: a character split between two chunks stays whole.
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
       buf += d;
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {

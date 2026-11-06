@@ -96,6 +96,8 @@ export interface OrchestratorDeps {
   /** Through a router provider (OmniRoute): the models that actually answered between two times. */
   servedBy?: (provider: string, model: string | undefined, from: number, to: number) => Promise<string[] | undefined>;
   /** nvidia-smi's CSV output (tests pass their own). */
+  /** The platform the agents' CLIs run on (default: this process's); tests set another one. */
+  platform?: NodeJS.Platform;
   gpuQuery?: () => string;
   /** nvidia-smi with any arguments (tests). */
   gpuSmi?: (args: string[]) => string;
@@ -3019,7 +3021,7 @@ export class Orchestrator {
       if (!plain) for (const m of run.userMessages ?? []) if (!(m.deliveredTo ??= []).includes(info.id)) m.deliveredTo.push(info.id);
       const projectMemory = plain ? '' : this.memoryFor(run, info, resume, !!recapIds);
       // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + P.doneEffectsBlock(run.sideEffects);
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + P.doneEffectsBlock(run.sideEffects);
       // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
       const turn = promptTurn(
         [
@@ -3138,8 +3140,17 @@ export class Orchestrator {
       // Inside the working folder: relative; outside it: the full path, not a long ..\..\ chain.
       const fromCwd = path.relative(run.config.cwd, abs);
       const rel = fromCwd && !fromCwd.startsWith('..') && !path.isAbsolute(fromCwd) ? fromCwd : abs;
-      if (!info.stats.filesChanged.includes(rel)) info.stats.filesChanged.push(rel);
-      // Changes outside the working folder and the extra folders are listed for the user (whole-computer access).
+      // By what was observed: an edit that went through changed the file; one that failed (some CLIs still name its
+      // files) only possibly did, until an edit of it goes through.
+      const maybe = (info.stats.filesMaybeChanged ??= []);
+      if (e.tool?.status === 'error') {
+        if (!info.stats.filesChanged.includes(rel) && !maybe.includes(rel)) maybe.push(rel);
+      } else {
+        if (!info.stats.filesChanged.includes(rel)) info.stats.filesChanged.push(rel);
+        if (maybe.includes(rel)) maybe.splice(maybe.indexOf(rel), 1);
+      }
+      // Changes outside the working folder and the extra folders are listed for the user (whole-computer access); a
+      // failed edit there is listed too, since it may have written part of the file.
       const inside = [run.config.cwd, ...(run.config.extraDirs ?? [])].some((root) => {
         const r = path.relative(root, abs);
         return !r.startsWith('..') && !path.isAbsolute(r);
@@ -3334,6 +3345,8 @@ export class Orchestrator {
       ...(finished ? { result: (child.finalText ?? '').slice(0, 20000), error: child.error } : { activity: child.activity, hint: 'Still running; call wait_subagent again.' }),
       ...(child.status === 'failed' ? { failure: child.failure?.kind, next: 'Decide: retry it (spawn_subagent again), adjust the task, or replace it with another provider (list_providers).' } : {}),
       files_changed: child.stats.filesChanged,
+      // Every edit of these failed: they may or may not have changed.
+      ...(child.stats.filesMaybeChanged?.length ? { files_possibly_changed: child.stats.filesMaybeChanged } : {}),
       ...(finished ? this.factRoundNote(run, child) : {}),
     });
   }
@@ -4135,8 +4148,11 @@ export class Orchestrator {
       return [`git status --porcelain:\n${st.stdout.trim() || '(clean)'}`, stat.stdout.trim() ? `git diff --stat:\n${stat.stdout.trim()}` : ''].filter(Boolean).join('\n\n');
     }
     const files = new Set<string>();
+    const maybe = new Set<string>();
     for (const a of Object.values(run.agents)) if (a.stage === 'implement') a.stats.filesChanged.forEach((f) => files.add(f));
-    return files.size ? [...files].map((f) => `- ${f}`).join('\n') + '\n(not a git repository; list collected from agent tool calls)' : '';
+    for (const a of Object.values(run.agents)) if (a.stage === 'implement') (a.stats.filesMaybeChanged ?? []).forEach((f) => !files.has(f) && maybe.add(f));
+    const list = [...[...files].map((f) => `- ${f}`), ...[...maybe].map((f) => `- ${f} (possibly changed: every edit of it failed; check it)`)];
+    return list.length ? list.join('\n') + '\n(not a git repository; list collected from agent tool calls)' : '';
   }
 
   /**

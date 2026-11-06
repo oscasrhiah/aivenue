@@ -302,6 +302,16 @@ export function adjudicatePrompt(cfg: WorkflowConfig, disputes: { id: string; ti
  */
 /** Told to writing agents when the user granted whole-computer access. Prompt rules only: nothing enforces them. */
 /** Implementers, sub-agents and verifiers: background jobs are registered, and waited for with wait_for. */
+/**
+ * For agents that change files on Windows: Windows PowerShell 5.1 reads a UTF-8 file without a BOM in the ANSI code
+ * page (e.g. "Café" becomes "Caf矇" on code page 950), and writing that text back damages the file
+ * (docs/workflow-efficiency-plan.md §6.6). Empty on every other platform.
+ */
+export function windowsFilesRule(platform: string = process.platform): string {
+  if (platform !== 'win32') return '';
+  return '\n\nWINDOWS FILES: when you read a file known to be UTF-8 with Windows PowerShell 5.1, use `Get-Content -Encoding UTF8`. For a partial change prefer `apply_patch` over reading the whole file and writing it back.';
+}
+
 export function backgroundRule(): string {
   return '\n\nBACKGROUND JOBS (REQUIRED): right after you start anything in the background (nohup, &, a new terminal, tmux, Start-Process, a script that backgrounds itself, a run_in_background command), register it with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is, its status and its progress. Aivenue also finds unregistered jobs from your commands and your GPUs, and refuses your submission until every one is registered. To wait for one, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops: it does not spend your turns, and the user sees what you are waiting for.';
 }

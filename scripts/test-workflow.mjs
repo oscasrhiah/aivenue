@@ -19,13 +19,14 @@ const bundled = await build({
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock } from './packages/core/src/ledger';
-      export { contextBlock, formatTranscript, handoverOf, toolInputText } from './packages/core/src/context';
+      export { contextBlock, conversationLog, formatTranscript, handoverOf, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
       export { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './packages/core/src/promptStats';
       export { createParser } from './packages/core/src/providers/parsers';
-      export { cliEnv } from './packages/core/src/proc';
+      export { capture, cliEnv, consoleCodePage, decodeShellOutput } from './packages/core/src/proc';
+      export { runAgent } from './packages/core/src/agentRunner';
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit } from './packages/ui/src/draftInit';
       export * as P from './packages/core/src/prompts';`,
@@ -927,5 +928,265 @@ test('設定載入：較舊的讀取晚回來帶著 draft 也不採用，以最�
   pending[1]({ draft: { name: 'newer' } });
   await b;
   assert.deepEqual(log, [['newer', 'saved']]);
+});
+
+// ---------- C：prompt 裡的對話紀錄不重複同一個 prompt 已有的工具呼叫 ----------
+
+function logRun(cwd) {
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 50, stats: {}, summary: 'fixed the parser' };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, stage: 'implement', round: 1, startedAt: 60, stats: {} };
+  const run = {
+    id: 'r', config: { cwd, goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } },
+    notes: [{ id: 'n1', agentId: 'aaaaaaaa-111', text: 'keep the public API of parseDuration', kind: 'decision', ts: 25 }],
+    userMessages: [{ ts: 35, text: 'Please do not touch formatDuration.' }],
+  };
+  const tool = (ts, category, name, title, status = 'ok', output = 'done') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name, category, title, output, status } });
+  const events = {
+    [a1.id]: [
+      { seq: 5, ts: 5, kind: 'message', text: 'I will read the parser first.' },
+      tool(10, 'command', 'shell', 'cat src/duration.js', 'ok', 'export function parseDuration() {}'),
+      tool(12, 'command', 'shell', 'npm test', 'error', '1 failing'),
+      tool(14, 'hub', 'report_progress', '回報進度'),
+      tool(16, 'hub', 'search_records', '搜尋紀錄'),
+      tool(18, 'hub', 'post_note', '留下筆記', 'error', 'note refused: too long'),
+      tool(20, 'edit', 'apply_patch', 'src/duration.js'),
+      { seq: 30, ts: 30, kind: 'error', text: 'the CLI lost its connection once' },
+      tool(40, 'hub', 'submit_work', '提交實作'),
+    ],
+    [a2.id]: [],
+  };
+  return { run, a2, eventsOf: (id) => events[id] ?? [] };
+}
+
+test('C：prompt 的對話紀錄略過其他區塊已有摘要的成功工具呼叫；失敗的呼叫一律保留', () => {
+  const { run, a2, eventsOf } = logRun(os.tmpdir());
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+  const log = text.slice(text.indexOf('RECENT CONVERSATION'), text.indexOf('\n', text.indexOf('ended [completed]')));
+  // 保留：說的話、錯誤、失敗的工具呼叫（指令與 Aivenue 工具）、使用者訊息、決定、結束摘要。
+  assert.match(log, /said: I will read the parser first\./);
+  assert.match(log, /error: the CLI lost its connection once/);
+  assert.match(log, /post_note: 留下筆記 → error \(note refused: too long\)/);
+  assert.match(log, /shell: npm test → error \(1 failing\)/);
+  assert.match(log, /USER: Please do not touch formatDuration\./);
+  assert.match(log, /DECISION: keep the public API of parseDuration/);
+  assert.match(log, /ended \[completed\]/);
+  // 略過：成功的指令、改檔與 Aivenue 呼叫（其他區塊有摘要）。
+  assert.doesNotMatch(log, /shell: cat src\/duration\.js/);
+  assert.doesNotMatch(log, /report_progress|search_records|submit_work|apply_patch/);
+  // 那些指令與檔案仍在同一個 prompt 裡，含失敗的測試。
+  // Printing a file counts as reading it: cat src/duration.js is under the files read (changed since, so marked).
+  assert.match(text, /FILES OTHER AGENTS ALREADY READ[\s\S]*src\/duration\.js \(read by aaaaaaaa\)/);
+  assert.match(text, /COMMANDS ALREADY RUN BY OTHER AGENTS/);
+  assert.match(text, /npm test[\s\S]*1 failing/);
+  assert.match(text, /FILES CHANGED:[\s\S]*src\/duration\.js/);
+  assert.match(log, /failed tool calls/);
+  assert.match(log, /read_context \{topic: "log"\} has the full log with every tool call/);
+});
+
+test('C：read_context 的完整對話紀錄不變，仍有每一個工具呼叫', () => {
+  const { run, eventsOf } = logRun(os.tmpdir());
+  const full = W.conversationLog(run, eventsOf).join('\n');
+  for (const s of ['shell: cat src/duration.js', 'shell: npm test', 'report_progress', 'search_records', 'apply_patch', 'submit_work', 'post_note', 'USER: Please', 'DECISION: keep']) assert.ok(full.includes(s), s);
+  const prompt = W.conversationLog(run, eventsOf, 600, { inPrompt: true });
+  assert.ok(prompt.length < W.conversationLog(run, eventsOf).length);
+  // 判斷規則本身。
+  assert.equal(W.shownElsewhere({ category: 'command', status: 'ok' }), true);
+  for (const category of ['command', 'search', 'read', 'edit', 'hub']) assert.equal(W.shownElsewhere({ category, status: 'error' }), false, `a failed ${category} call stays`);
+  assert.equal(W.shownElsewhere({ category: 'hub', status: 'ok' }), true);
+  assert.equal(W.shownElsewhere({ category: 'hub', status: 'error' }), false);
+  assert.equal(W.shownElsewhere({ category: 'web', status: 'ok' }), false);
+  assert.equal(W.shownElsewhere({ category: 'agent', status: 'ok' }), false);
+});
+
+test('C：三個 agent：第一位的 apply_patch 失敗、中間隔一位，第三位的 prompt 仍看得到失敗原因', () => {
+  const tool = (ts, category, name, title, status = 'ok', output = 'done') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name, category, title, output, status } });
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 50, stats: {}, summary: 'tried to fix the parser' };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 60, endedAt: 90, stats: {}, summary: 'revise: parser untouched', handoff: 'Please fix the parser; tests still fail.' };
+  const a3 = { id: 'cccccccc-333', role: 'executor', provider: 'claude', status: 'running', depth: 0, stage: 'implement', round: 2, startedAt: 100, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2, [a3.id]: a3 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const events = {
+    [a1.id]: [tool(10, 'edit', 'apply_patch', 'src/duration.js', 'error', 'patch failed: context mismatch at line 12 of src/duration.js'), { seq: 20, ts: 20, kind: 'message', text: 'The patch did not apply.' }],
+    [a2.id]: [tool(70, 'command', 'shell', 'npm test', 'ok', '3 passing')],
+    [a3.id]: [],
+  };
+  const eventsOf = (id) => events[id] ?? [];
+  const text = W.contextBlock(run, a3, eventsOf, { maxChars: 200000 });
+  // The hand-off comes from the one in between (the code reviewer), not the first: the reason cannot rely on it.
+  assert.match(text, /THE AGENT BEFORE YOU — bbbbbbbb/);
+  const handover = text.slice(text.indexOf('HAND-OFF TO YOU'), text.indexOf('RECENT CONVERSATION'));
+  assert.doesNotMatch(handover, /context mismatch/);
+  const log = text.slice(text.indexOf('RECENT CONVERSATION'), text.indexOf('\n', text.lastIndexOf('ended [completed]')));
+  assert.match(log, /aaaaaaaa implementer claude implement#1 apply_patch: src\/duration\.js → error \(patch failed: context mismatch at line 12/);
+  // The successful command of the one in between is summarized under the commands, not repeated in the log.
+  assert.doesNotMatch(log, /shell: npm test/);
+  assert.match(text, /COMMANDS ALREADY RUN BY OTHER AGENTS[\s\S]*npm test/);
+});
+
+// ---------- 輸出解碼：多位元字元跨 chunk 時，原始輸出、保存的紀錄與共享上下文一致 ----------
+
+const KNOWN = '中文測試 Café au lait 𝄞';
+
+/**
+ * A node script that writes `lines` (each a string ending in \n) to stdout, each line cut into pieces at the given
+ * byte offsets with a pause in between, so the pieces arrive as separate chunks; every cut falls inside a character.
+ */
+function chunkedWriter(dir, name, lines) {
+  const file = path.join(dir, name);
+  fs.writeFileSync(
+    file,
+    `const lines = ${JSON.stringify(lines)};
+// "now": write right away (a check command gets no input); otherwise after reading the prompt from stdin.
+const write = async () => {
+  for (const line of lines) {
+    const b = Buffer.from(line, 'utf8');
+    // Cut inside every multi-byte character: right after its first byte.
+    const cuts = [];
+    for (let i = 0; i < b.length; i++) if (b[i] >= 0xc0) cuts.push(i + 1);
+    let at = 0;
+    for (const c of [...cuts, b.length]) {
+      process.stdout.write(b.subarray(at, c));
+      at = c;
+      await new Promise((r) => setTimeout(r, 15));
+    }
+  }
+  process.exit(0);
+};
+if (process.argv.includes('now')) write();
+else {
+  process.stdin.on('end', write);
+  process.stdin.on('data', () => undefined);
+}
+`,
+  );
+  return file;
+}
+
+test('解碼：CLI 的 JSON 輸出把多位元字元切在 chunk 中間，保存的事件與共享上下文仍和原文一字不差', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-decode-'));
+  const lines = [
+    { type: 'thread.started', thread_id: 'th-1' },
+    { type: 'item.started', item: { id: 'c1', type: 'command_execution', command: 'cat known.txt' } },
+    { type: 'item.completed', item: { id: 'c1', type: 'command_execution', command: 'cat known.txt', aggregated_output: KNOWN, exit_code: 0, status: 'completed' } },
+    { type: 'item.completed', item: { id: 'm1', type: 'agent_message', text: `I read it: ${KNOWN}` } },
+    { type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 } },
+  ].map((l) => JSON.stringify(l) + '\n');
+  // The raw bytes the CLI writes are exactly the UTF-8 of these lines.
+  assert.ok(Buffer.from(lines.join(''), 'utf8').toString('utf8').includes(KNOWN));
+  const script = chunkedWriter(dir, 'fake-codex.js', lines);
+  const spec = { id: 'fakecodex', name: 'Fake Codex', command: process.execPath, run: { fresh: [[script]], common: [], prompt: 'stdin' }, output: 'codex-jsonl' };
+  const events = [];
+  const res = await W.runAgent({ spec, prompt: 'read known.txt', cwd: dir, mode: 'write', tmpDir: dir, signal: new AbortController().signal, onEvent: (e) => events.push(e) });
+  assert.equal(res.exitCode, 0, res.error);
+  const toolEvent = events.find((e) => e.kind === 'tool' && e.tool?.id === 'c1');
+  assert.equal(toolEvent.tool.output, KNOWN, '保存的工具輸出');
+  assert.equal(events.find((e) => e.kind === 'message').text, `I read it: ${KNOWN}`, '保存的訊息');
+  assert.ok(!events.some((e) => /�/.test(JSON.stringify(e))), '沒有替換字元');
+  // The shared context the next agent gets from those events.
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'fakecodex', status: 'completed', depth: 0, startedAt: 1, endedAt: 2, stats: {} };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'fakecodex', status: 'running', depth: 0, startedAt: 3, stats: {} };
+  const run = { id: 'r', config: { cwd: dir, goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const stamped = events.map((e, i) => ({ ...e, ts: 1 + i / 100 }));
+  const text = W.contextBlock(run, a2, (id) => (id === a1.id ? stamped : []), { maxChars: 200000 });
+  assert.ok(text.includes(`said: I read it: ${KNOWN}`), '共享上下文的對話紀錄');
+  assert.match(text, /FILES OTHER AGENTS ALREADY READ[\s\S]*known\.txt/);
+  assert.ok(text.includes(KNOWN.slice(0, 4)) && text.split(KNOWN).length >= 3, '共享上下文中的讀檔內容與訊息都和原文相同');
+  assert.ok(!/�/.test(text));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('解碼：capture（git 等指令）與 wait_for 的檢查指令，輸出跨 chunk 也不會斷字', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-decode-'));
+  const script = chunkedWriter(dir, 'writer.js', [`${KNOWN}\n`]);
+  const r = await W.capture(process.execPath, [script], { input: '' });
+  assert.equal(r.stdout, `${KNOWN}\n`);
+  const rm = new W.ResourceManager(dir);
+  // node writes UTF-8 itself, so this checks only the chunk boundaries, not a console code page.
+  const c = await rm.check(rm.newWait('a', { check: `"${process.execPath.replace(/\\/g, '/')}" "${script.replace(/\\/g, '/')}" now`, contains: KNOWN }), dir);
+  assert.equal(c.output, KNOWN);
+  assert.equal(c.ok, true);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- 失敗的編輯：依實際觀察標示，不列為確定改動 ----------
+
+function editRun(edits) {
+  const a1 = { id: 'aaaaaaaa-111', role: 'executor', provider: 'claude', status: 'completed', depth: 0, startedAt: 1, endedAt: 90, stats: {} };
+  const a2 = { id: 'bbbbbbbb-222', role: 'code_reviewer', provider: 'codex', status: 'running', depth: 0, startedAt: 100, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a1.id]: a1, [a2.id]: a2 }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const tool = (ts, category, name, title, status, output = '') => ({ seq: ts, ts, kind: 'tool', tool: { id: `t${ts}`, name, category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
+  const events = {
+    [a1.id]: [
+      tool(10, 'command', 'shell', 'cat src/duration.js', 'ok', 'export function parseDuration() {}'),
+      tool(12, 'command', 'shell', 'npm test', 'ok', '3 passing'),
+      ...edits.map(([ts, status]) => tool(ts, 'edit', 'apply_patch', 'src/duration.js', status, status === 'error' ? 'patch failed: context mismatch' : '')),
+    ],
+    [a2.id]: [],
+  };
+  return { run, a1, a2, eventsOf: (id) => events[id] ?? [] };
+}
+
+test('失敗的編輯：只有失敗時列為「可能改動，需確認」，不列在 FILES CHANGED；先前的讀檔與指令標成需確認', () => {
+  const { run, a2, eventsOf } = editRun([[20, 'error']]);
+  const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+  assert.doesNotMatch(text, /FILES CHANGED:/);
+  assert.match(text, /FILES POSSIBLY CHANGED \(every edit of them failed[^\n]*\):\n- src\/duration\.js \(by aaaaaaaa/);
+  assert.match(text, /src\/duration\.js \(read by aaaaaaaa\) — possibly changed since \(an edit of it failed\): check it/);
+  // What was read is still shown (flagged), since the file may well be unchanged.
+  assert.match(text, /possibly changed since[^\n]*\n\s+export function parseDuration/);
+  assert.match(text, /npm test` \(a failed edit since may have changed files; check before relying on it\)/);
+  assert.doesNotMatch(text, /CHANGED since, read it again/);
+});
+
+test('失敗的編輯：有任何一次成功就是確定改動（不論先後）；失敗不會把成功蓋掉', () => {
+  for (const edits of [[[20, 'ok'], [30, 'error']], [[20, 'error'], [30, 'ok']]]) {
+    const { run, a2, eventsOf } = editRun(edits);
+    const text = W.contextBlock(run, a2, eventsOf, { maxChars: 200000 });
+    assert.match(text, /FILES CHANGED:\n- src\/duration\.js/, JSON.stringify(edits));
+    assert.doesNotMatch(text, /FILES POSSIBLY CHANGED/);
+    assert.match(text, /src\/duration\.js \(read by aaaaaaaa\) — CHANGED since, read it again/);
+  }
+});
+
+test('失敗的編輯：壓縮後的「自己做過的事」也分開列出確定改動與可能改動', () => {
+  const failed = editRun([[20, 'error']]);
+  const own = W.ownWorkBlock(failed.run, failed.eventsOf, new Set([failed.a1.id]), [], 20000);
+  assert.match(own, /Files you possibly changed \(your edits of them failed; check them\):\n- src\/duration\.js/);
+  assert.doesNotMatch(own, /Files you changed:/);
+  const done = editRun([[20, 'ok']]);
+  const own2 = W.ownWorkBlock(done.run, done.eventsOf, new Set([done.a1.id]), [], 20000);
+  assert.match(own2, /Files you changed:\n- src\/duration\.js/);
+  assert.doesNotMatch(own2, /possibly changed/);
+});
+
+test('Windows 檔案提醒：只在 Windows 回傳；其他平台是空字串，prompt 不變', () => {
+  assert.match(W.P.windowsFilesRule('win32'), /^\n\nWINDOWS FILES: when you read a file known to be UTF-8 with Windows PowerShell 5\.1, use `Get-Content -Encoding UTF8`\. For a partial change prefer `apply_patch`/);
+  for (const p of ['linux', 'darwin', 'freebsd']) assert.equal(W.P.windowsFilesRule(p), '');
+});
+
+// ---------- wait_for 檢查指令的輸出：依實際位元組解碼，不強制轉 UTF-8 ----------
+
+test('shell 輸出解碼：合法 UTF-8 照 UTF-8；不是 UTF-8 時用主控台代碼頁；代碼頁不明時和以前一樣', () => {
+  const utf8 = Buffer.from('中文測試 Café 𝄞', 'utf8');
+  assert.equal(W.decodeShellOutput(utf8, 950), '中文測試 Café 𝄞', 'valid UTF-8 is never re-read in the code page');
+  const big5 = Buffer.from(new Uint8Array([0xa4, 0xa4, 0xa4, 0xe5, 0xb4, 0xfa, 0xb8, 0xd5])); // 中文測試 in code page 950
+  assert.equal(W.decodeShellOutput(big5, 950), '中文測試');
+  const latin = Buffer.from([0x43, 0x61, 0x66, 0xe9]); // Café in code page 1252
+  assert.equal(W.decodeShellOutput(latin, 1252), 'Café');
+  // Unknown code page (or not Windows): UTF-8 with replacement characters, as before.
+  assert.equal(W.decodeShellOutput(big5, null), big5.toString('utf8'));
+  assert.equal(W.decodeShellOutput(big5, 12345), big5.toString('utf8'));
+  assert.equal(W.decodeShellOutput(Buffer.from('plain ascii'), 950), 'plain ascii');
+});
+
+test('wait_for：Windows PowerShell 5.1 以主控台代碼頁輸出的中文，檢查結果讀得正確', { skip: process.platform !== 'win32' && 'Windows only' }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-cp-'));
+  const rm = new W.ResourceManager(dir);
+  const c = await rm.check(rm.newWait('a', { check: "Write-Output '中文測試 完成'", shell: 'powershell', contains: '中文測試 完成' }), dir);
+  assert.equal(c.output, '中文測試 完成', `code page ${W.consoleCodePage()}`);
+  assert.equal(c.ok, true);
+  // A test that does not hold still reads as failed: the "False" stays last.
+  const f = await rm.check(rm.newWait('a', { check: "Write-Error '找不到檔案' 2>$null; Test-Path 'C:\\no\\such\\file'", shell: 'powershell' }), dir);
+  assert.equal(f.ok, false);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 

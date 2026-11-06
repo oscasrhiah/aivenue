@@ -63,6 +63,8 @@ export function handoverOf(run: WorkflowRun, a: AgentRunInfo, events: AgentEvent
   const result = agentResult(run, a);
   if (result) lines.push(`What it reported:\n${cut(result, 4000)}`);
   if (a.stats?.filesChanged?.length) lines.push(`Files it changed: ${a.stats.filesChanged.slice(-40).join(', ')}${a.stats.filesChanged.length > 40 ? ` (+${a.stats.filesChanged.length - 40} more)` : ''}`);
+  const maybe = a.stats?.filesMaybeChanged ?? [];
+  if (maybe.length) lines.push(`Files it possibly changed (every edit of them failed, which does not show whether they changed; check them): ${maybe.slice(-40).join(', ')}${maybe.length > 40 ? ` (+${maybe.length - 40} more)` : ''}`);
   const tools = events.filter((e) => e.kind === 'tool' && e.tool && e.tool.status !== 'running' && (e.tool.category === 'command' || e.tool.category === 'edit'));
   if (tools.length) lines.push(`Its last commands and edits:\n${tools.slice(-8).map((e) => `- ${oneLine(e.tool!.title || e.tool!.input, 200)} → ${e.tool!.status}${e.tool!.status === 'error' && e.tool!.output ? `: ${oneLine(e.tool!.output, 300)}` : ''}`).join('\n')}`);
   return { text: lines.join('\n') || '(it did nothing that was recorded)', auto: true };
@@ -173,9 +175,11 @@ export function contextBlock(run: WorkflowRun, self: AgentRunInfo, transcriptOf:
   const organized = take(knowledgeDoc ? `SHARED KNOWLEDGE (organized by subject from the shared notes, with sources [n:id]; read_context {topic: "knowledge"} for all of it):\n${cut(knowledgeDoc, Math.floor(room * 0.25))}` : '');
   const index = take(topicIndexBlock(buildTopics(run, transcriptOf), Math.max(1500, Math.floor(room * 0.06)), since));
   // The newest of the raw conversation log (every agent and the user); the rest is one read_context away.
-  const log = since ? [] : conversationLog(run, transcriptOf, 400);
+  // Without the successful tool calls other blocks summarize (shownElsewhere); every failed call stays, with what was
+  // said, results, errors, the user's messages and decisions.
+  const log = since ? [] : conversationLog(run, transcriptOf, 400, { inPrompt: true });
   const recent = log.slice(-LOG_PAGE);
-  const logText = take(recent.length ? fit(recent, Math.floor(room * 0.3), `RECENT CONVERSATION (the newest ${recent.length} of ${log.length} entries of the full conversation log; read_context {topic: "log", page: 2} for older ones):`) : '');
+  const logText = take(recent.length ? fit(recent, Math.floor(room * 0.3), `RECENT CONVERSATION (the newest ${recent.length} of ${log.length} entries: what agents said and ended with, failed tool calls, errors, the user's messages and decisions; successful commands, file reads and edits are summarized below, and read_context {topic: "log"} has the full log with every tool call):`) : '');
   const carriedText = carriedOut ? `(${carriedOut} more notes from earlier messages of this conversation are in the shared records${run.knowledge ? ", organized in the shared knowledge" : ""}: search_records {q} or read_context {topic: "facts"} when you need one.)` : '';
   const noteText = take([notes.length ? fit(notes, Math.floor(room * 0.3), `Shared notes${since ? ' (new)' : ''}:`) : since ? '' : 'Shared notes:\n(no notes yet)', carriedText].filter(Boolean).join('\n'));
   const listText = take(list.length ? fit(list, Math.floor(room * 0.2), `Agents${since ? ' (new or updated)' : ' so far'} — read_context {agent_id} for any one's whole conversation:`) : since ? '' : 'You are the first agent in this workflow.');
@@ -260,7 +264,21 @@ export const LOG_PAGE = 100;
  * The conversation log: everything said and run in this workflow, every agent and the user, oldest first, one line
  * each. Kept apart from the organized shared context; an agent gets the newest entries and pages back for more.
  */
-export function conversationLog(run: WorkflowRun, transcriptOf: (agentId: string) => AgentEvent[], entryChars = 600): string[] {
+/**
+ * Successful tool calls whose gist other blocks of the prompt summarize: commands, searches, file reads and edits
+ * (COMMANDS ALREADY RUN, FILES … READ, FILES CHANGED) and Aivenue's own tools (progress, hand-offs, agent list). Those
+ * blocks have budgets of their own, so a given call is not guaranteed to be in the same prompt; the full log stays one
+ * read_context away. A failed call is never dropped: the other blocks do not carry why it failed (FILES CHANGED lists
+ * a file whose patch failed without the reason).
+ */
+export const shownElsewhere = (t: NonNullable<AgentEvent['tool']>) => t.status === 'ok' && ['command', 'search', 'read', 'edit', 'hub'].includes(t.category ?? '');
+
+/**
+ * The conversation log, oldest first. `inPrompt`: the version for an agent's prompt, without the tool calls the same
+ * prompt shows elsewhere (shownElsewhere); what agents said, their results, errors, the user's messages and decisions
+ * all stay. read_context {topic: "log"} keeps every entry.
+ */
+export function conversationLog(run: WorkflowRun, transcriptOf: (agentId: string) => AgentEvent[], entryChars = 600, o: { inPrompt?: boolean } = {}): string[] {
   const rows: { ts: number; text: string }[] = [];
   const at = (ts: number) => new Date(ts).toISOString().slice(5, 16).replace('T', ' ');
   for (const a of Object.values(run.agents)) {
@@ -268,7 +286,7 @@ export function conversationLog(run: WorkflowRun, transcriptOf: (agentId: string
     const who = `${a.id.slice(0, 8)} ${ROLE[a.role]} ${a.provider}${a.stage ? ` ${a.stage}#${a.round ?? ''}` : ''}`;
     for (const e of transcriptOf(a.id)) {
       if (e.kind === 'message' && e.text?.trim()) rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} said: ${oneLine(e.text, entryChars)}` });
-      else if (e.kind === 'tool' && e.tool && e.tool.status !== 'running')
+      else if (e.kind === 'tool' && e.tool && e.tool.status !== 'running' && !(o.inPrompt && shownElsewhere(e.tool)))
         rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} ${e.tool.name}: ${oneLine(e.tool.title || e.tool.input, 200)} → ${e.tool.status}${e.tool.status === 'error' && e.tool.output ? ` (${oneLine(e.tool.output, 200)})` : ''}` });
       else if (e.kind === 'error' && e.text?.trim()) rows.push({ ts: e.ts, text: `[${at(e.ts)}] ${who} error: ${oneLine(e.text, 300)}` });
     }

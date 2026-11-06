@@ -324,6 +324,16 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
           </div>
         </div>
       )}
+      {(agent.stats.filesMaybeChanged?.length ?? 0) > 0 && (
+        <div className="am-section">
+          <div className="am-label">{t('可能改動的檔案（編輯失敗，請確認）', 'Possibly changed (the edit failed; check them)')}</div>
+          <div className="am-files mono small">
+            {agent.stats.filesMaybeChanged!.map((f) => (
+              <div key={f}>{f}</div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="am-section">
         <div className="am-label row gap">

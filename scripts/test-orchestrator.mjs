@@ -62,6 +62,7 @@ function setup(o = {}) {
     push: () => undefined,
     gpuQuery: o.gpuQuery ?? (() => { throw new Error('no GPU'); }),
     gpuSmi: o.gpuSmi ?? (() => { throw new Error('no GPU'); }),
+    platform: o.platform,
   });
   return { orch, cwd, dir, caps };
 }
@@ -1398,5 +1399,81 @@ test('標準模式：程式審查最多 2 輪，第 2 輪仍要求修改就停�
   assert.equal(calls.filter((x) => x === 'code_reviewer').length, 2);
   assert.equal(calls.filter((x) => x === 'executor').length, 2);
   assert.ok(!calls.includes('planner'));
+});
+
+// ---------- Windows 讀寫 UTF-8 的提醒：只給會改檔的角色，每份 prompt 一次 ----------
+
+const WIN_RULE = 'WINDOWS FILES: when you read a file known to be UTF-8 with Windows PowerShell 5.1, use `Get-Content -Encoding UTF8`.';
+
+/** Every prompt each role got in a full run (plan → plan review → implement → code review). */
+async function promptsOn(platform) {
+  const { orch, cwd } = setup({ platform });
+  const prompts = {};
+  const keep = (role, then) => async (o, secret, opts) => {
+    (prompts[role] ??= []).push(opts.prompt);
+    await o.callTool(secret, then.tool, then.args);
+  };
+  fakeAgents(orch, {
+    planner: [keep('planner', defaults.planner)],
+    plan_reviewer: [keep('plan_reviewer', defaults.plan_reviewer)],
+    executor: [keep('executor', defaults.executor)],
+    code_reviewer: [keep('code_reviewer', defaults.code_reviewer)],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined })).id);
+  assert.equal(r.status, 'completed', r.error);
+  return prompts;
+}
+
+const count = (text, part) => text.split(part).length - 1;
+
+test('Windows：會改檔的實作者 prompt 有一次 UTF-8 提醒；唯讀的計畫、計畫審查、程式審查沒有', async () => {
+  const p = await promptsOn('win32');
+  assert.equal(p.executor.length, 1);
+  assert.equal(count(p.executor[0], WIN_RULE), 1, '實作者剛好一次');
+  assert.match(p.executor[0], /For a partial change prefer `apply_patch` over reading the whole file and writing it back\./);
+  for (const role of ['planner', 'plan_reviewer', 'code_reviewer']) for (const text of p[role]) assert.equal(count(text, 'WINDOWS FILES'), 0, role);
+});
+
+test('其他平台：沒有任何角色的 prompt 出現 Windows 提醒', async () => {
+  for (const platform of ['linux', 'darwin']) {
+    const p = await promptsOn(platform);
+    for (const [role, list] of Object.entries(p)) for (const text of list) assert.equal(count(text, 'WINDOWS FILES'), 0, `${platform} ${role}`);
+  }
+});
+
+// ---------- agent 的改動清單：依實際結果分成「已改動」與「可能改動」 ----------
+
+test('改動清單：編輯失敗的檔案記為「可能改動」，之後成功才算改動；交接與審查者看得到這個區分', async () => {
+  const { orch, cwd } = setup();
+  let reviewerPrompt = '';
+  let seq = 100;
+  const edit = (opts, file, status) => opts.onEvent({ seq: ++seq, ts: Date.now(), kind: 'tool', tool: { id: `e${seq}`, name: 'apply_patch', category: 'edit', title: file, status, output: status === 'error' ? 'patch failed: context mismatch' : '' }, files: [file] }, false);
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        edit(opts, 'src/a.js', 'error'); // only failed: possibly changed
+        edit(opts, 'src/b.js', 'ok'); // changed
+        edit(opts, 'src/c.js', 'error'); // failed, then went through: changed
+        edit(opts, 'src/c.js', 'ok');
+        edit(opts, 'src/b.js', 'error'); // a failure after a success does not undo it
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+    code_reviewer: [
+      async (o, secret, opts) => {
+        reviewerPrompt = opts.prompt;
+        await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  const ex = Object.values(r.agents).find((a) => a.role === 'executor');
+  assert.deepEqual(ex.stats.filesChanged.map((f) => f.replace(/\\/g, '/')).sort(), ['src/b.js', 'src/c.js']);
+  assert.deepEqual((ex.stats.filesMaybeChanged ?? []).map((f) => f.replace(/\\/g, '/')), ['src/a.js']);
+  // The next agent's hand-off (put together by Aivenue: the executor wrote none) keeps them apart.
+  assert.match(reviewerPrompt, /Files it changed: [^\n]*src[\\/]b\.js/);
+  assert.match(reviewerPrompt, /Files it possibly changed \(every edit of them failed[^\n]*\): src[\\/]a\.js/);
+  assert.doesNotMatch(reviewerPrompt.match(/Files it changed: [^\n]*/)?.[0] ?? '', /a\.js/);
 });
 

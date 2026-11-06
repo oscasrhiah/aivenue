@@ -91,7 +91,9 @@ export function opencodeModel(spec: ProviderSpec, sessionId: string, cwd: string
       let out = '';
       const child = spawnResolved(cmd, args, { cwd, env: childEnv({ ...(spec.run.env ?? {}), ...accountEnv(spec) }), stdio: ['ignore', 'pipe', 'ignore'] });
       const timer = setTimeout(() => child.kill(), timeoutMs);
-      child.stdout?.on('data', (d: Buffer) => (out += d.toString('utf8')));
+      // Decoded as a stream: a character split between two chunks stays whole.
+      child.stdout?.setEncoding('utf8');
+      child.stdout?.on('data', (d: string) => (out += d));
       child.on('error', () => (clearTimeout(timer), resolve('')));
       child.on('close', () => (clearTimeout(timer), resolve(out)));
     });
@@ -138,7 +140,9 @@ export function compactCodexThread(spec: ProviderSpec, threadId: string, timeout
     let buf = '';
     child.on('error', (e) => done(e));
     child.on('exit', () => done(started ? undefined : new Error('codex app-server exited')));
-    child.stdout?.on('data', (d) => {
+    // Decoded as a stream: a character split between two chunks stays whole.
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => {
       buf += d;
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {

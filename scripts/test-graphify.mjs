@@ -26,11 +26,14 @@ const bundled = await build({
         import { EventEmitter } from 'node:events';
         export function spawnResolved(cmd, args) {
           const child = new EventEmitter();
-          child.stdout = new EventEmitter();
-          child.stderr = new EventEmitter();
+          // Like a real stream after setEncoding('utf8'): it emits strings.
+          const stream = () => Object.assign(new EventEmitter(), { encoding: undefined, setEncoding(e) { this.encoding = e; return this; } });
+          child.stdout = stream();
+          child.stderr = stream();
+          const out = (s, text) => s.emit('data', s.encoding ? text : Buffer.from(text));
           Promise.resolve(capture(cmd.file, args)).then((r) => {
-            if (r.stdout) child.stdout.emit('data', Buffer.from(r.stdout));
-            if (r.stderr) child.stderr.emit('data', Buffer.from(r.stderr));
+            if (r.stdout) out(child.stdout, r.stdout);
+            if (r.stderr) out(child.stderr, r.stderr);
             child.emit('close', r.code);
           });
           return child;

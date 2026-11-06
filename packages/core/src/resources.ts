@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CheckShell, ConditionWait, GpuDetail } from './types';
-import { childEnv } from './proc';
+import { childEnv, decodeShellOutput } from './proc';
 
 /** A GPU as nvidia-smi reports it. */
 export interface GpuInfo {
@@ -184,13 +184,19 @@ export class ResourceManager {
             ? spawn(bash ?? 'bash', ['-c', w.check], { cwd, env: childEnv(), windowsHide: true })
             : // cmd.exe on Windows (its quoting rules), /bin/sh elsewhere.
               spawn(w.check, { shell: true, cwd, env: childEnv(), windowsHide: true });
-      let out = '';
+      // Kept as bytes and decoded once at the end, each stream whole: a character split between two chunks stays
+      // whole, and output that is not UTF-8 (Windows PowerShell 5.1 and cmd write in the console code page) is read in
+      // that code page instead of turning into replacement characters (decodeShellOutput).
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
       const timer = setTimeout(() => child.kill(), 60000);
-      child.stdout?.on('data', (d) => (out += d));
-      child.stderr?.on('data', (d) => (out += d));
+      child.stdout?.on('data', (d: Buffer) => stdout.push(d));
+      child.stderr?.on('data', (d: Buffer) => stderr.push(d));
       child.on('error', (e) => (clearTimeout(timer), resolve({ ok: false, output: e.message, broken: true })));
       child.on('close', (code) => {
         clearTimeout(timer);
+        // Errors first, the output last: a PowerShell "False" at the very end still reads as a failed test.
+        const out = [stderr, stdout].map((b) => (b.length ? decodeShellOutput(Buffer.concat(b)) : '')).filter((s) => s.trim()).join('\n');
         const output = out.trim().slice(-2000);
         // PowerShell prints False (and still exits 0) for a test that does not hold, e.g. Test-Path.
         const falsy = shell === 'powershell' && /(^|\n)\s*False\s*$/.test(output);

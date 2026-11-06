@@ -96,6 +96,48 @@ export function childEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   return { ...env, ...extra };
 }
 
+let consoleCp: number | null | undefined;
+
+/** The console code page Windows programs (PowerShell 5.1, cmd) print in when their output goes to a pipe; null elsewhere. */
+export function consoleCodePage(): number | null {
+  if (process.platform !== 'win32') return null;
+  if (consoleCp === undefined) {
+    try {
+      // "Active code page: 950" in whatever language: the number is ASCII.
+      const out = execFileSync('cmd', ['/d', '/c', 'chcp'], { encoding: 'latin1', windowsHide: true, timeout: 5000 });
+      consoleCp = Number(/(\d+)\s*$/.exec(out.trim())?.[1]) || null;
+    } catch {
+      consoleCp = null;
+    }
+  }
+  return consoleCp;
+}
+
+/** Code pages Node's TextDecoder reads, by number. */
+const CODE_PAGE: Record<number, string> = { 950: 'big5', 936: 'gbk', 54936: 'gb18030', 932: 'shift_jis', 949: 'euc-kr', 866: 'ibm866', 874: 'windows-874', 1250: 'windows-1250', 1251: 'windows-1251', 1252: 'windows-1252', 1253: 'windows-1253', 1254: 'windows-1254', 1255: 'windows-1255', 1256: 'windows-1256', 1257: 'windows-1257', 1258: 'windows-1258', 65001: 'utf-8' };
+
+/**
+ * A shell's whole output, decoded by what the bytes are, not forced: valid UTF-8 (git, node and most tools) stays
+ * UTF-8; anything else is read in the console code page `cp` (Windows PowerShell 5.1 and cmd write in it, e.g. 950),
+ * and only when that is unknown or unreadable as UTF-8 with replacement characters, as before.
+ */
+export function decodeShellOutput(buf: Buffer, cp: number | null = consoleCodePage()): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    // not UTF-8
+  }
+  const label = cp ? CODE_PAGE[cp] : undefined;
+  if (label && label !== 'utf-8') {
+    try {
+      return new TextDecoder(label).decode(buf);
+    } catch {
+      // this Node has no decoder for it
+    }
+  }
+  return buf.toString('utf8');
+}
+
 /**
  * The environment of an agent CLI working in `cwd`: PWD and INIT_CWD say the same folder as the working directory
  * (inherited ones point wherever Aivenue was started from; OpenCode sessions were seen placed there), OLDPWD dropped.
@@ -257,8 +299,11 @@ export function capture(command: string, args: string[], opts: { cwd?: string; t
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => killTree(child), opts.timeoutMs ?? 20000);
-    child.stdout?.on('data', (d) => (stdout += d.toString()));
-    child.stderr?.on('data', (d) => (stderr += d.toString()));
+    // Decoded as a stream: a character split between two chunks stays whole (same encoding as before, UTF-8).
+    child.stdout?.setEncoding('utf8');
+    child.stderr?.setEncoding('utf8');
+    child.stdout?.on('data', (d: string) => (stdout += d));
+    child.stderr?.on('data', (d: string) => (stderr += d));
     child.on('error', (e) => {
       clearTimeout(timer);
       resolve({ code: null, stdout, stderr, error: e.message });

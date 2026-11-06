@@ -229,7 +229,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             <Markdown className="prose" text={round.submission.summary} />
           </div>
         )}
-        <Files files={agent.stats.filesChanged} />
+        <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
       </>
     );
   }
@@ -245,7 +245,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             </Clamp>
           </div>
         )}
-        <Files files={agent.stats.filesChanged} />
+        <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
       </>
     );
   }
@@ -319,13 +319,21 @@ function Screenshots({ run, agentId }: { run: WorkflowRun; agentId: string }) {
   );
 }
 
-function Files({ files }: { files: string[] }) {
-  if (!files.length) return null;
+/** Files an edit went through, then (marked) files whose every edit failed: they may or may not have changed. */
+function Files({ files, maybe = [] }: { files: string[]; maybe?: string[] }) {
+  const t = useT();
+  if (!files.length && !maybe.length) return null;
+  const tip = t('編輯失敗：可能有改動，也可能沒有，請確認', 'The edit failed: it may or may not have changed; check it');
   return (
     <div className="files">
       {files.map((f) => (
         <span key={f} className="file">
           {f}
+        </span>
+      ))}
+      {maybe.map((f) => (
+        <span key={f} className="file maybe" title={tip}>
+          {f} · {t('可能改動', 'possibly changed')}
         </span>
       ))}
     </div>

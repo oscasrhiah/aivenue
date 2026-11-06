@@ -313,8 +313,7 @@ export class ExtensionService {
       const child = spawnResolved(resolved, args, { env: childEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
-      const onData = (chunk: Buffer, to: 'out' | 'err') => {
-        const text = chunk.toString();
+      const onData = (text: string, to: 'out' | 'err') => {
         if (to === 'out') stdout += text;
         else stderr += text;
         // eslint-disable-next-line no-control-regex
@@ -323,8 +322,11 @@ export class ExtensionService {
         p.lines += text.split('\n').length - 1;
         this.progressTimer ??= setTimeout(() => ((this.progressTimer = undefined), this.changed()), 500);
       };
-      child.stdout?.on('data', (d: Buffer) => onData(d, 'out'));
-      child.stderr?.on('data', (d: Buffer) => onData(d, 'err'));
+      // Decoded as a stream: a character split between two chunks stays whole.
+      child.stdout?.setEncoding('utf8');
+      child.stderr?.setEncoding('utf8');
+      child.stdout?.on('data', (d: string) => onData(d, 'out'));
+      child.stderr?.on('data', (d: string) => onData(d, 'err'));
       const timer = setTimeout(() => killTree(child), timeoutMs);
       const done = (r: CaptureResult) => {
         clearTimeout(timer);

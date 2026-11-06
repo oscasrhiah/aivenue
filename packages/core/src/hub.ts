@@ -412,7 +412,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const readBody = (req: http.IncomingMessage) =>
     new Promise<string>((resolve, reject) => {
       let body = '';
-      req.on('data', (c) => {
+      // Decoded as a stream: a character split between two chunks (e.g. a hand-off in Chinese from the bridge) stays whole.
+      req.setEncoding('utf8');
+      req.on('data', (c: string) => {
         body += c;
         if (body.length > 5_000_000) reject(new Error('body too large'));
       });

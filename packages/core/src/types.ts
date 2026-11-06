@@ -912,7 +912,11 @@ export interface AgentRunInfo {
   promptTurns?: PromptTurn[];
   /** The same over every turn of the run (not limited to the latest 40). */
   promptTotals?: PromptTotals;
-  stats: { events: number; tools: number; commands: number; filesChanged: string[] };
+  /**
+   * filesChanged: files an edit of it went through. filesMaybeChanged: files whose every edit failed — a failure shows
+   * neither that the file changed nor that it did not, so it needs checking.
+   */
+  stats: { events: number; tools: number; commands: number; filesChanged: string[]; filesMaybeChanged?: string[] };
   /** Spend the CLI reported for it (USD), for the cost limit. */
   costUsd?: number;
   /** Last time it showed any sign of life (an event from its CLI). */

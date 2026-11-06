@@ -83,6 +83,19 @@ export interface LedgerEntry {
   result: string;
   /** Files changed after it ran: its result may be out of date. */
   outdated?: boolean;
+  /** Only a failed edit came after it: a file may or may not have changed. */
+  maybeOutdated?: boolean;
+}
+
+/**
+ * A file an edit touched. `sure`: an edit of it went through. Without one, every edit of it failed, which proves
+ * neither that it changed (the edit may have been refused before writing) nor that it did not (it may have written
+ * part): "possibly changed, check it".
+ */
+export interface ChangedFile {
+  ts: number;
+  by: AgentRunInfo;
+  sure: boolean;
 }
 
 /** A file an agent read, with what it saw (the newest read). */
@@ -94,6 +107,8 @@ export interface ReadEntry {
   excerpt: string;
   /** Changed after the newest read: read it again. */
   outdated?: boolean;
+  /** Only a failed edit came after the newest read: it may have changed. */
+  maybeOutdated?: boolean;
 }
 
 /** The command ran, but what it printed says the check failed (a test run, `…; echo exit=$?`). */
@@ -111,7 +126,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
     return r && !r.startsWith('..') && !path.isAbsolute(r) ? r.replace(/\\/g, '/') : f;
   };
   const entries: LedgerEntry[] = [];
-  const changed = new Map<string, { ts: number; by: AgentRunInfo }>();
+  const changed = new Map<string, ChangedFile>();
   const read = new Map<string, ReadEntry>();
   const addRead = (f: string, ts: number, a: AgentRunInfo, output?: string) => {
     if (!f) return;
@@ -131,7 +146,15 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
       const t = e.tool;
       if (t.category === 'edit') {
         lastEdit = Math.max(lastEdit, e.ts);
-        for (const f of e.files?.length ? e.files : [t.title]) changed.set(rel(f), { ts: e.ts, by: a });
+        const ok = t.status === 'ok';
+        for (const f of e.files?.length ? e.files : [t.title]) {
+          const key = rel(f);
+          const was = changed.get(key);
+          // A successful edit makes it changed for sure; a failed one only "possibly", and never undoes a success.
+          if (ok) changed.set(key, { ts: e.ts, by: a, sure: true });
+          else if (!was?.sure) changed.set(key, { ts: e.ts, by: a, sure: false });
+          else if (e.ts > was.ts) changed.set(key, { ...was, ts: e.ts });
+        }
         continue;
       }
       if (o.onlyIds ? !o.onlyIds.has(a.id) : a.id === o.selfId) continue;
@@ -154,9 +177,17 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
     }
   }
   const changes = [...changed.entries()];
-  for (const en of entries) en.outdated = changes.some(([, c]) => c.ts > en.ts);
+  const sure = changes.filter(([, c]) => c.sure);
+  const maybe = changes.filter(([, c]) => !c.sure);
+  for (const en of entries) {
+    en.outdated = sure.some(([, c]) => c.ts > en.ts);
+    en.maybeOutdated = !en.outdated && maybe.some(([, c]) => c.ts > en.ts);
+  }
   const same = (x: string, y: string) => x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
-  for (const r of read.values()) r.outdated = changes.some(([f, c]) => c.ts > r.ts && same(f, r.file));
+  for (const r of read.values()) {
+    r.outdated = sure.some(([f, c]) => c.ts > r.ts && same(f, r.file));
+    r.maybeOutdated = !r.outdated && maybe.some(([f, c]) => c.ts > r.ts && same(f, r.file));
+  }
   const since = o.since ?? 0;
   return {
     entries: entries.filter((e) => e.ts > since).sort((x, y) => x.ts - y.ts),
@@ -190,11 +221,11 @@ const indent = (s: string) => s.replace(/\n/g, '\n    ');
 
 /** One command line: who ran it, how it ended and what it printed. */
 const commandLine = (e: LedgerEntry, showWho = true) =>
-  `- ${showWho ? `[${who(e.agent)}] ` : ''}${!e.ok ? '✗' : FAILED.test(e.result) ? '⚠' : '✓'} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : ''}${e.result ? (e.result.includes('\n') ? `\n    ${indent(e.result)}` : ` → ${e.result}`) : ''}`;
+  `- ${showWho ? `[${who(e.agent)}] ` : ''}${!e.ok ? '✗' : FAILED.test(e.result) ? '⚠' : '✓'} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : e.maybeOutdated ? ' (a failed edit since may have changed files; check before relying on it)' : ''}${e.result ? (e.result.includes('\n') ? `\n    ${indent(e.result)}` : ` → ${e.result}`) : ''}`;
 
 /** One file read: who read it and the start of what they saw. */
 const readLine = (r: ReadEntry, excerpt: number, showWho = true) =>
-  `- ${r.file}${showWho ? ` (read by ${[...r.agents].join(',')})` : ''}${r.outdated ? ' — CHANGED since, read it again' : ''}${r.excerpt && !r.outdated ? `\n    ${indent(clip(r.excerpt, excerpt))}` : ''}`;
+  `- ${r.file}${showWho ? ` (read by ${[...r.agents].join(',')})` : ''}${r.outdated ? ' — CHANGED since, read it again' : r.maybeOutdated ? ' — possibly changed since (an edit of it failed): check it before relying on this' : ''}${r.excerpt && !r.outdated ? `\n    ${indent(clip(r.excerpt, excerpt))}` : ''}`;
 
 /** Characters per file excerpt: fewer when many were read, so the newest ones all show something. */
 const excerptSize = (budget: number, files: number) => Math.max(300, Math.min(6000, Math.floor(budget / Math.max(1, Math.min(files, 40)))));
@@ -213,7 +244,10 @@ export function activityBlock(act: ReturnType<typeof collectActivity>, budget: n
       Math.floor(budget * 0.4),
       'FILES OTHER AGENTS ALREADY READ (with the start of what they saw; read again only what is marked CHANGED or what you need in full):',
     ),
-    act.changed.length ? fit(act.changed.map(([f, c]) => `- ${f} (by ${who(c.by)})`), Math.floor(budget * 0.1), 'FILES CHANGED:') : '',
+    act.changed.some(([, c]) => c.sure) ? fit(act.changed.filter(([, c]) => c.sure).map(([f, c]) => `- ${f} (by ${who(c.by)})`), Math.floor(budget * 0.1), 'FILES CHANGED:') : '',
+    act.changed.some(([, c]) => !c.sure)
+      ? fit(act.changed.filter(([, c]) => !c.sure).map(([f, c]) => `- ${f} (by ${who(c.by)})`), Math.floor(budget * 0.05), 'FILES POSSIBLY CHANGED (every edit of them failed, which does not show whether they changed; check them):')
+      : '',
   ];
   return parts.filter(Boolean).join('\n\n');
 }
@@ -224,14 +258,16 @@ export function activityBlock(act: ReturnType<typeof collectActivity>, budget: n
  */
 export function ownWorkBlock(run: WorkflowRun, eventsOf: (agentId: string) => AgentEvent[], ids: Set<string>, notes: string[], budget: number): string {
   const act = collectActivity(run, eventsOf, { onlyIds: ids });
-  const mine = act.changed.filter(([, c]) => ids.has(c.by.id));
-  if (!act.entries.length && !act.read.length && !mine.length && !notes.length) return '';
+  const mine = act.changed.filter(([, c]) => ids.has(c.by.id) && c.sure);
+  const maybeMine = act.changed.filter(([, c]) => ids.has(c.by.id) && !c.sure);
+  if (!act.entries.length && !act.read.length && !mine.length && !maybeMine.length && !notes.length) return '';
   return [
     'YOUR OWN WORK BEFORE YOUR CONVERSATION WAS COMPACTED (recorded by Aivenue; still valid unless marked CHANGED — use it instead of reading or running it again):',
     notes.length ? fit(notes.map((n) => `- ${n}`), Math.floor(budget * 0.15), 'What you reported:') : '',
     fit(act.read.map((r) => readLine(r, excerptSize(budget * 0.5, act.read.length), false)), Math.floor(budget * 0.5), 'Files you read:'),
     fit(latestPerCommand(act.entries.filter((e) => e.kind === 'command')).map((e) => commandLine(e, false)), Math.floor(budget * 0.3), 'Commands you ran:'),
     mine.length ? fit(mine.map(([f]) => `- ${f}`), Math.floor(budget * 0.05), 'Files you changed:') : '',
+    maybeMine.length ? fit(maybeMine.map(([f]) => `- ${f}`), Math.floor(budget * 0.05), 'Files you possibly changed (your edits of them failed; check them):') : '',
   ]
     .filter(Boolean)
     .join('\n');

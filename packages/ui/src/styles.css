@@ -896,6 +896,13 @@ p {
   color: var(--text-2);
 }
 
+/* A file whose every edit failed: it may or may not have changed. */
+.file.maybe {
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  color: var(--muted);
+}
+
 /* ---- outputs ---- */
 .outputs {
   border: 1px solid var(--line);
