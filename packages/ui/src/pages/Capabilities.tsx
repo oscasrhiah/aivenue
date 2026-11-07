@@ -1116,28 +1116,28 @@ const PACK_INFO: Record<PackSkillId, { title: string; use: [string, string]; whe
   'architecture-review': {
     title: 'improve-codebase-architecture + codebase-design',
     use: ['架構檢視。由撰寫計畫的角色唯讀找出難改、難測的模組，提出重構方向和取捨。', 'Architecture review. The planner finds hard-to-change, hard-to-test modules read-only and proposes refactoring directions and trade-offs.'],
-    when: ['任務要求檢視架構時使用。只在回覆裡給報告，不改程式、不開瀏覽器。', 'Used when the task asks for an architecture review. The report comes in the reply; no code changes, no browser.'],
+    when: ['適用於檢視架構的任務。只在回覆裡給報告，不改程式、不開瀏覽器。', 'For tasks that ask for an architecture review. The report comes in the reply; no code changes, no browser.'],
     url: 'https://github.com/mattpocock/skills',
     license: 'MIT',
   },
   'diagnosing-bugs': {
     title: 'diagnosing-bugs',
     use: ['深入除錯。先建立能重現的驗證，再逐一排除假設，適合偶發或跨平台問題。', 'Deep debugging. Builds a check that reproduces the bug first, then rules out hypotheses one by one; for intermittent or cross-platform problems.'],
-    when: ['任務是除錯、偶發失敗或回歸問題時使用。需要人協助時用 Aivenue 的提問，不執行等待終端機輸入的腳本。', 'Used when the task is a bug, an intermittent failure or a regression. When a person is needed it asks through Aivenue instead of a script that waits for terminal input.'],
+    when: ['適用於除錯、偶發失敗或回歸問題。需要人協助時用 Aivenue 的提問，不執行等待終端機輸入的腳本。', 'For bugs, intermittent failures and regressions. When a person is needed it asks through Aivenue instead of a script that waits for terminal input.'],
     url: 'https://github.com/mattpocock/skills',
     license: 'MIT',
   },
   'gha-security-review': {
     title: 'gha-security-review',
     use: ['GitHub Actions 安全審查。專查 PR 輸入、憑證、權限，以及發布流程的信任邊界。', 'GitHub Actions security review: untrusted PR input, credentials, permissions and the trust boundaries of release workflows.'],
-    when: ['變更動到 .github/workflows 或 action.yml 時使用。只做靜態審查，不執行參考資料或專案裡的任何指令。', 'Used when a change touches .github/workflows or action.yml. Static only: nothing quoted in its references or in the project is run.'],
+    when: ['適用於 GitHub Actions 的變更（.github/workflows、action.yml）。只做靜態審查，不執行參考資料或專案裡的任何指令。', 'For GitHub Actions changes (.github/workflows, action.yml). Static only: nothing quoted in its references or in the project is run.'],
     url: 'https://github.com/getsentry/skills',
     license: 'Apache-2.0',
   },
   'web-design-guidelines': {
     title: 'web-design-guidelines',
     use: ['網頁介面審查。找出表單、導覽、響應式版面和互動細節的具體問題，以 file:line 回報。', 'Web UI review: concrete problems in forms, navigation, responsive layout and interaction details, reported as file:line.'],
-    when: ['變更動到網頁介面檔案時使用。規則固定在 web-interface-guidelines 的 434b7f9，不連網抓取最新版。', 'Used when a change touches web UI files. The rules are pinned to web-interface-guidelines 434b7f9 and never fetched from the network.'],
+    when: ['適用於網頁介面的變更。規則固定在 web-interface-guidelines 的 434b7f9，不連網抓取最新版。', 'For web UI changes. The rules are pinned to web-interface-guidelines 434b7f9 and never fetched from the network.'],
     url: 'https://github.com/vercel-labs/web-interface-guidelines',
     license: 'MIT',
   },
@@ -1180,8 +1180,8 @@ function PackSkills() {
           <h3>{t('可開關的內建 Skill', 'Built-in skills you can turn on')}</h3>
           <p className="muted small">
             {t(
-              '隨 Aivenue 提供，預設全部關閉。開啟後，列出的角色會在技能清單看到它，任務用得上時才讀全文；不會自己安裝工具或連網。',
-              'Shipped with Aivenue and off by default. When one is on, the roles listed find it in their skills index and read it only when the task calls for it; none installs tools or goes online.',
+              '隨 Aivenue 提供，預設全部關閉。開啟後就提供給列出的角色：每次都出現在它們的技能清單，由 agent 依任務決定要不要讀；Aivenue 不會先檢查變更的檔案才提供。不會自己安裝工具或連網。',
+              'Shipped with Aivenue and off by default. When one is on it is offered to the roles listed: it is in their skills index every time and the agent decides from the task whether to read it; Aivenue does not check the changed files first. None installs tools or goes online.',
             )}
           </p>
         </div>
@@ -1202,11 +1202,11 @@ function PackSkills() {
               </div>
               <div className="small">{t(...info.use)}</div>
               <div className="muted small">
-                {t('觸發方式：', 'How it is used: ')}
+                {t('適用情境：', 'Best for: ')}
                 {t(...info.when)}
               </div>
               <div className="row gap wrap">
-                <span className="muted tiny">{t('角色：', 'Roles: ')}</span>
+                <span className="muted tiny">{t('開啟後提供給：', 'Offered to: ')}</span>
                 {s.roles.map((r) => (
                   <span key={r} className="tag">
                     {roleName(t, r)}

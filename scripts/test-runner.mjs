@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import * as path from 'node:path';
+import { test } from './lib/test-shard.mjs';
+
+// scripts/run-tests.mjs and scripts/lib/test-shard.mjs: a file split across processes reports the same tests, with
+// the same status, as a plain node --test run of it.
+const fixture = path.join('scripts', 'lib', 'fixtures', 'shard-sample.mjs');
+// Without NODE_TEST_CONTEXT, which node sets for a test file's own children and which changes how they report.
+const clean = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('AIVENUE_TEST_') && k !== 'NODE_TEST_CONTEXT'));
+const totals = (out) => Object.fromEntries(['tests', 'pass', 'fail', 'skipped', 'todo'].map((k) => [k, Number(out.match(new RegExp(`^ℹ ${k} (\\d+)`, 'm'))?.[1] ?? -1)]));
+// "name → status" for each test line of the spec reporter (✔ pass, ✖ fail, ﹣ skip; "# TODO" marks a todo).
+const statuses = (out) =>
+  Object.fromEntries(
+    [...out.matchAll(/^\s*([✔✖﹣]) (.+?) \([\d.]+ms\)( # (SKIP|TODO))?\s*$/gm)].map((m) => [m[2], m[4] ? m[4].toLowerCase() : m[1] === '✔' ? 'pass' : m[1] === '✖' ? 'fail' : 'skip']),
+  );
+function plain(flags = []) {
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...flags, fixture], { encoding: 'utf8', env: clean() });
+  return { totals: totals(r.stdout + r.stderr), statuses: statuses(r.stdout + r.stderr) };
+}
+function runner(jobs, shards, flags = []) {
+  const r = spawnSync(process.execPath, [path.join('scripts', 'run-tests.mjs'), ...flags, fixture], { encoding: 'utf8', env: { ...clean(), AIVENUE_TEST_JOBS: String(jobs), AIVENUE_TEST_SHARDS: String(shards), AIVENUE_TEST_VERBOSE: '1' } });
+  const out = r.stdout + r.stderr;
+  return { code: r.status, totals: totals(out.slice(out.lastIndexOf('ℹ tests'))), statuses: statuses(out) };
+}
+
+test('平行測試：一般、skip、todo、only 與獨佔測試，直接執行、單核心、多核心的測試數與每項狀態都一樣', () => {
+  const want = plain();
+  assert.deepEqual(want.totals, { tests: 11, pass: 6, fail: 0, skipped: 3, todo: 2 });
+  for (const [jobs, shards] of [[1, 1], [1, 3], [4, 4], [8, 11]]) {
+    const got = runner(jobs, shards);
+    assert.equal(got.code, 0, `${jobs} jobs, ${shards} shards`);
+    assert.deepEqual(got.totals, want.totals, `${jobs} jobs, ${shards} shards: totals`);
+    assert.deepEqual(got.statuses, want.statuses, `${jobs} jobs, ${shards} shards: each test`);
+  }
+});
+
+test('平行測試：--test-only 交給每個程序，只跑 only 的測試，和直接執行一樣', () => {
+  const want = plain(['--test-only']);
+  assert.deepEqual(Object.keys(want.statuses).sort(), ['h test.only', 'i only option']);
+  for (const [jobs, shards] of [[1, 1], [4, 4]]) {
+    const got = runner(jobs, shards, ['--test-only']);
+    assert.equal(got.code, 0);
+    assert.deepEqual(got.totals, want.totals, `${jobs} jobs, ${shards} shards: totals`);
+    assert.deepEqual(got.statuses, want.statuses, `${jobs} jobs, ${shards} shards: each test`);
+  }
+});

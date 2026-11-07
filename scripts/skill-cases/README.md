@@ -2,6 +2,8 @@
 
 每個案例都有一個 `fixture/`、要給 Aivenue 的任務文字、使用的角色與通過條件。
 
+**載入方式**：Skill 開啟後，就提供給它對應的角色，每次都出現在該角色的技能清單（名稱、一句說明、涵蓋的段落），由 agent 依任務決定要不要讀全文。Aivenue 不會先檢查變更的檔案，才決定提供哪一項。下面的「適用情境」是 agent 選用的依據，不是系統的觸發條件。例如開啟 gha-security-review 後，就算這次沒改 `.github/workflows`，程式碼審查者也看得到它；這時沒讀它才是正確的。
+
 **怎麼跑**
 - 先把 `fixture/` 複製到一個新的空資料夾，當作工作資料夾，不要直接在這個 repo 裡跑。
 - 只開啟要驗收的那一項 Skill：「設定 → 能力 → 可開關的內建 Skill」，其他三項保持關閉。
@@ -47,7 +49,7 @@
 - **比較對象**：Agent Skills 的 `debugging-and-error-recovery`，同一份 fixture、同一個任務。
   - 看先跑重現再提假設的順序、修法對不對，以及除錯輸出有沒有清乾淨。
 
-## 3. gha-security-review（與 security-audit 比較）
+## 3. gha-security-review（適用於 Actions 變更；與 security-audit 比較）
 
 - **fixture**：`gha-security-review/fixture/.github/workflows/pr-greet.yml`，用法是把它放進一個新的 commit 當作要審查的變更。
 - **角色**：審查程式碼。
