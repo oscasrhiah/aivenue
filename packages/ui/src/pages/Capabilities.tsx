@@ -1009,6 +1009,54 @@ function Extensions() {
   );
 }
 
+/**
+ * The skills Aivenue ships and uses on its own when a task or the workflow's settings call for them. A description
+ * only: no switch and no "enabled" state here (security-audit is turned on per workflow, in role settings).
+ */
+const BUILTIN_SKILLS: { name: string; use: [string, string]; when: [string, string] }[] = [
+  {
+    name: 'gh-fix-ci',
+    use: ['診斷 GitHub CI 失敗。', 'Diagnoses failing GitHub CI.'],
+    when: ['在工作流提供 GitHub PR 連結，並請 Aivenue 診斷失敗的檢查。', 'Give the workflow a GitHub PR link and ask Aivenue to diagnose the failing checks.'],
+  },
+  {
+    name: 'gh-address-comments',
+    use: ['整理 GitHub PR 審查留言。', 'Sorts out GitHub PR review comments.'],
+    when: ['在工作流提供 GitHub PR 連結，並請 Aivenue 整理或處理審查意見。', 'Give the workflow a GitHub PR link and ask Aivenue to sort out or address the review comments.'],
+  },
+  {
+    name: 'security-audit',
+    use: ['檢查程式碼變更的安全風險。', 'Checks code changes for security risks.'],
+    when: ['在該次工作流的角色設定開啟「安全檢查」，由程式碼審查者使用。', 'Turn on "Security check" in that workflow\'s role settings; the code reviewer uses it.'],
+  },
+];
+
+function BuiltinSkills() {
+  const t = useT();
+  return (
+    <section className="cap">
+      <div className="cap-head">
+        <div>
+          <h3>{t('按需使用的內建 Skill', 'Built-in skills used on demand')}</h3>
+          <p className="muted small">{t('這些 Skill 隨 Aivenue 提供，會依任務或該次工作流的設定使用。', 'These skills ship with Aivenue and are used according to the task or that workflow\'s settings.')}</p>
+        </div>
+      </div>
+      <div className="clist builtin-skills">
+        {BUILTIN_SKILLS.map((s) => (
+          <div key={s.name} className="crow">
+            <div className="crow-name mono">{s.name}</div>
+            <div className="small">{t(...s.use)}</div>
+            <div className="muted small">
+              {t('觸發方式：', 'How it is used: ')}
+              {t(...s.when)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function CapabilitiesPane() {
   const t = useT();
   return (
@@ -1021,6 +1069,7 @@ export function CapabilitiesPane() {
       </div>
       <GithubCard />
       <Extensions />
+      <BuiltinSkills />
       <Instructions />
       <McpServers />
       <Skills />

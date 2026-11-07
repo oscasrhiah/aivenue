@@ -3026,6 +3026,12 @@ textarea.code {
   padding: 14px;
 }
 
+/* Capabilities → built-in skills used on demand: name, what it does, how it is used; wraps in narrow windows. */
+.builtin-skills .crow {
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+
 .role-filter {
   padding-left: 46px;
 }
