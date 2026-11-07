@@ -134,6 +134,35 @@ test('平行測試：外部環境帶著分片設定時，--test-only 的失敗�
   }
 });
 
+test('平行測試：只載入分片包裝、實際用原生 node:test 登記測試的檔案直接失敗，不會被當成空檔案', () => {
+  // node also reports one top-level entry for a file that ran no test; that one is recognised from node's events (named
+  // after the file, line 1, no test of the file's own), so a real test of the file never passes for it.
+  const file = path.join('scripts', 'lib', 'fixtures', 'native-only.mjs');
+  const want = plain([], file);
+  assert.equal(want.code, 0);
+  assert.deepEqual(want.totals, { tests: 1, pass: 1, fail: 0, skipped: 0, todo: 0 });
+  for (const [jobs, shards] of [[1, undefined], [4, undefined], [4, 2]]) {
+    const got = runner(jobs, shards, [], file);
+    assert.equal(got.code, 1, `${jobs} jobs, ${shards ?? 'auto'} shards`);
+    assert.match(got.out, /runs 1 test\(s\) not taken from scripts\/lib\/test-shard\.mjs.*"straight from node:test"/);
+  }
+});
+
+test('平行測試：統計來自 node 的事件，測試日誌印出像統計的文字也照實際結果回報', () => {
+  const file = path.join('scripts', 'lib', 'fixtures', 'prints-summary.mjs');
+  const want = plain([], file);
+  assert.equal(want.code, 0);
+  for (const [jobs, shards] of [[1, undefined], [4, 3]]) {
+    const got = runner(jobs, shards, [], file);
+    const at = `${jobs} jobs, ${shards ?? 'auto'} shards`;
+    assert.match(got.out, /ℹ fail 1/, `${at}: the test's own log is still shown`);
+    assert.equal(got.code, 0, at);
+    assert.deepEqual(got.totals, { tests: 1, pass: 1, fail: 0, skipped: 0, todo: 0 }, `${at}: totals`);
+    assert.deepEqual(got.statuses, want.statuses, `${at}: each test`);
+    assert.match(got.out, /prints-summary\.mjs +1 tests +1 pass +0 fail +0 skipped +0 todo/, `${at}: the file's line`);
+  }
+});
+
 test('平行測試：同一檔案混用分片包裝與原生 node:test 時直接失敗並列出那些測試，不論拆成幾份', () => {
   const file = path.join('scripts', 'lib', 'fixtures', 'mixed-wrapper.mjs');
   // Run plainly the file is fine (3 tests); split, the node:test one would run in every process.

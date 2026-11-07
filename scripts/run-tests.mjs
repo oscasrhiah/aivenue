@@ -61,8 +61,9 @@ for (const file of files) {
 // Longest first, so the slow shards start at once and the short files fill the gaps.
 plan.sort((x, y) => weight(y.file) - weight(x.file));
 
-const KEYS = ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'];
-const count = (out, key) => Number(out.match(new RegExp(`^ℹ ${key} (\\d+)`, 'm'))?.[1] ?? 0);
+// The totals of a process come from node's own summary event (scripts/lib/test-top-level.mjs), not from its printed
+// output: a test may log a line that looks like "ℹ fail 1". The text is kept only to show what happened.
+const KEYS = { tests: 'tests', pass: 'passed', fail: 'failed', cancelled: 'cancelled', skipped: 'skipped', todo: 'todo' };
 // The runner's own settings for each process replace anything of the kind in its environment: a split inherited from
 // outside (AIVENUE_TEST_SHARD=1/2 with --test-only, say) would make that process skip tests and still pass. So does
 // NODE_TEST_CONTEXT, which node sets when the runner itself is started from a test and which changes how a child reports.
@@ -96,31 +97,26 @@ function run(job) {
       try {
         top = JSON.parse(fs.readFileSync(topFile, 'utf8'));
       } catch {}
-      const r = { ...job, code, out, ms: Date.now() - t0, report, ...Object.fromEntries(KEYS.map((k) => [k, count(out, k)])) };
+      const r = { ...job, code, out, ms: Date.now() - t0, report, top, ...Object.fromEntries(Object.entries(KEYS).map(([k, from]) => [k, top?.counts?.[from] ?? 0])) };
       const rel = path.relative(root, job.file);
+      const fail = (why) => {
+        r.code = r.code || 1;
+        r.out += `\n${rel}${why}\n`;
+      };
+      if (!top?.counts) fail(': node did not report what ran (scripts/lib/test-top-level.mjs)');
       // A file that ran to the end without loading the shard wrapper would run every test in every process.
-      if (code === 0 && !report) {
-        r.code = 1;
-        r.out += `\n${rel} does not take \`test\` from scripts/lib/test-shard.mjs, so it cannot be split\n`;
-      }
-      // Nor may a file mix the two: a test made straight from node:test runs in each of its processes. The one
-      // exception is node's own entry for a process that registered nothing (the file itself, as one test).
-      const extra = report && top ? unregistered(top, report.names) : [];
-      if (extra.length && !(report.registered === 0 && top.length === 1)) {
-        r.code = r.code || 1;
-        r.out += `\n${rel} runs ${extra.length} test(s) not taken from scripts/lib/test-shard.mjs, which every process of the file would run again: ${extra.map((n) => JSON.stringify(n)).join(', ')}\n`;
-      }
-      if (report && !top) {
-        r.code = r.code || 1;
-        r.out += `\n${rel}: node did not report which tests ran (scripts/lib/test-top-level.mjs)\n`;
-      }
+      if (code === 0 && !report) fail(' does not take `test` from scripts/lib/test-shard.mjs, so it cannot be split');
+      // Nor may a file mix the two: a test made straight from node:test runs in each of its processes. node's own
+      // entry for a file that ran no test is not among `names` (the reporter recognises it from node's events).
+      const extra = report && top ? unregistered(top.names, report.names) : [];
+      if (extra.length) fail(` runs ${extra.length} test(s) not taken from scripts/lib/test-shard.mjs, which every process of the file would run again: ${extra.map((n) => JSON.stringify(n)).join(', ')}`);
       resolve(r);
     });
   });
 }
-// A process that registered no test still passes: node reports the file itself as one test. It ran nothing, so it
-// is not counted, unless the file has no test at all (then a plain run reports that one, and so does this).
-const empty = (r) => r.code === 0 && r.report?.registered === 0 && r.tests <= 1 && !r.fail && !r.cancelled;
+// A process that registered no test and ran none still passes: node reports the file itself as one test. It ran
+// nothing, so it is not counted, unless the file has no test at all (then a plain run reports that one, and so does this).
+const empty = (r) => r.code === 0 && r.report?.registered === 0 && r.top?.fileEntry && !r.top.fileEntryFailed && !r.top.names.length;
 async function pool(list, size) {
   const results = [];
   let next = 0;
