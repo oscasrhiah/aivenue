@@ -1561,6 +1561,8 @@ p {
 /* Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute). */
 .ext-grid {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  /* Each card is as tall as its own content: a short card is not stretched to match a long one in its row. */
+  align-items: start;
 }
 
 .ext-card {
@@ -1576,6 +1578,17 @@ p {
 
 .ext-card .note {
   margin: 0;
+}
+
+/* An extension's longer controls open in a window instead of growing the card. */
+.modal.ext-window {
+  width: min(680px, 94vw);
+  max-height: 86vh;
+}
+
+.ext-skills.in-window {
+  max-height: none;
+  overflow: visible;
 }
 
 .ext-skills {
@@ -2534,9 +2547,12 @@ textarea.code {
   overflow-y: auto;
 }
 
+/* Fills the settings column at any window size (no fixed width): the side padding scales with the window, and the
+   card grids (auto-fill) fit more cards per row as it grows. Only running text keeps a readable line length. */
 .pane {
-  max-width: 820px;
-  padding: 28px 32px 48px;
+  width: 100%;
+  min-width: 0;
+  padding: 28px clamp(16px, 3.5vw, 56px) 48px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -2547,6 +2563,14 @@ textarea.code {
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+}
+
+.pane-head p {
+  max-width: 80ch;
+}
+
+.setting > :first-child {
+  max-width: 80ch;
 }
 
 .setting {
@@ -2954,7 +2978,7 @@ textarea.code {
 }
 
 .cap-head p {
-  max-width: 560px;
+  max-width: 80ch;
 }
 
 .cap textarea {

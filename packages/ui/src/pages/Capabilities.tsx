@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
 import { hub, useCapabilities, useExtensions, useHostInfo, useProviders } from '../api';
 import { useT, type T } from '../i18n';
@@ -815,12 +815,38 @@ const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en
 
 const ROLE_SHORT = (t: T, r: InstructionRole) => roleName(t, r);
 
+/**
+ * A window for an extension's longer controls (Agent Skills' skill list, OmniRoute's providers), so the cards stay
+ * short and the same height in their grid instead of one card stretching its row.
+ */
+function ExtWindow({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  return (
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal ext-window" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-head">
+          <h3>{title}</h3>
+          <button className="icon-btn" onClick={onClose} aria-label="✕">
+            ✕
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ExtensionCard({ s }: { s: ExtensionStatus }) {
   const t = useT();
   const info = EXT_INFO[s.id];
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [guide, setGuide] = useState(false);
+  const [providers, setProviders] = useState(false);
   const { error, busy, run } = useBusy();
   const pill =
     s.state === 'ready' ? (
@@ -877,20 +903,26 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
 
       {s.id === 'agent-skills' && s.enabled && (
         <>
-          <button className="link tiny" onClick={() => setOpen(!open)}>
-            {t(`已開啟 ${on} / ${skills.length} 個技能`, `${on} of ${skills.length} skills on`)} {open ? '▴' : '▾'}
-          </button>
+          <div className="row gap wrap">
+            <span className="small">{t(`已開啟 ${on} / ${skills.length} 個技能`, `${on} of ${skills.length} skills on`)}</span>
+            <button className="btn small ghost" onClick={() => setOpen(true)}>
+              {t('選擇技能…', 'Choose skills…')}
+            </button>
+          </div>
           {open && (
-            <div className="ext-skills">
-              {skills.map((k) => (
-                <label key={k.name} className="ext-skill" title={k.description}>
-                  <input type="checkbox" checked={k.enabled} onChange={(e) => run(() => hub.call('extensions.setOptions', { id: 'agent-skills', skill: k.name, on: e.target.checked }))} />
-                  <span className="mono small">{k.name}</span>
-                  {k.interactive && <span className="tag">{t('需要問答', 'asks questions')}</span>}
-                  <span className="muted tiny ext-skill-roles">{k.roles.map((r) => ROLE_SHORT(t, r)).join('、')}</span>
-                </label>
-              ))}
-            </div>
+            <ExtWindow title={t(`${info.name}：選擇技能（已開啟 ${on} / ${skills.length}）`, `${info.name}: choose skills (${on} of ${skills.length} on)`)} onClose={() => setOpen(false)}>
+              <div className="ext-skills in-window">
+                {skills.map((k) => (
+                  <label key={k.name} className="ext-skill" title={k.description}>
+                    <input type="checkbox" checked={k.enabled} onChange={(e) => run(() => hub.call('extensions.setOptions', { id: 'agent-skills', skill: k.name, on: e.target.checked }))} />
+                    <span className="mono small">{k.name}</span>
+                    {k.interactive && <span className="tag">{t('需要問答', 'asks questions')}</span>}
+                    <span className="muted tiny ext-skill-roles">{k.roles.map((r) => ROLE_SHORT(t, r)).join('、')}</span>
+                  </label>
+                ))}
+              </div>
+              {error && <div className="note err">{error}</div>}
+            </ExtWindow>
           )}
           <div className="muted tiny">{t('agent 只會看到技能名稱與一句說明，用到才讀全文，幾乎不增加 token。', 'Agents only see each skill\'s name and one-line description and read the rest when needed, so it costs almost no tokens.')}</div>
         </>
@@ -940,11 +972,20 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
           )}
           <div className="muted tiny">
             {s.omniroute && !s.omniroute.connections
-              ? t('下一步：在下方連接至少一家免費供應商。OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: connect at least one free provider below. OmniRoute’s built-in no-sign-in models are too short to run an agent.')
+              ? t('下一步：按「連接免費供應商」接上至少一家。OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: press "Connect free providers" and connect at least one. OmniRoute’s built-in no-sign-in models are too short to run an agent.')
               : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型；自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')}{' '}
             {t('只在這台電腦上執行（127.0.0.1），管理密碼是自動產生的亂數。', 'Runs on this computer only (127.0.0.1) with a generated dashboard password.')}
           </div>
-          {s.omniroute && <OmniProviders s={s} />}
+          {s.omniroute && (
+            <button className={cx('btn small', !s.omniroute.connections ? 'primary' : 'ghost')} onClick={() => setProviders(true)}>
+              {t(`連接免費供應商…（已連接 ${s.omniroute.connections} 家）`, `Connect free providers… (${s.omniroute.connections} connected)`)}
+            </button>
+          )}
+          {s.omniroute && providers && (
+            <ExtWindow title={t(`${info.name}：連接免費供應商`, `${info.name}: connect free providers`)} onClose={() => setProviders(false)}>
+              <OmniProviders s={s} />
+            </ExtWindow>
+          )}
         </>
       )}
 
