@@ -195,7 +195,7 @@ function osSuspend(pid, resume = false) {
   } else process.kill(pid, resume ? 'SIGCONT' : 'SIGSTOP');
 }
 
-test('鎖：持有者被作業系統暫停時不被接管、等待者不寫入；恢復後兩筆都在；暫停中被結束後等待者接著寫', { exclusive: true }, { skip: !['win32', 'linux'].includes(process.platform) && 'locks are Windows and Linux only' }, async () => {
+test('鎖：持有者被作業系統暫停時不被接管、等待者不寫入；恢復後兩筆都在；暫停中被結束後等待者接著寫', { exclusive: true, skip: !['win32', 'linux'].includes(process.platform) && 'locks are Windows and Linux only' }, async () => {
   for (const ending of ['resume', 'kill']) {
     const dir = freshDir();
     const release = path.join(dir, 'release');
