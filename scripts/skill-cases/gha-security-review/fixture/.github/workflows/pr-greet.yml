@@ -1,0 +1,33 @@
+name: PR greet
+on:
+  pull_request_target:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      note:
+        description: A note to print
+        required: false
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: npm ci && npm test
+      - name: Thank the author
+        run: echo "Thanks for ${{ github.event.pull_request.title }}"
+      - name: PR number (decoy, numeric)
+        run: echo "PR #${{ github.event.pull_request.number }}"
+      - name: Only for docs PRs (decoy, expression in if)
+        if: contains(github.event.pull_request.title, 'docs')
+        run: echo "docs change"
+      - name: Manual note (decoy, workflow_dispatch input from a maintainer)
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "${{ inputs.note }}"
+      - uses: some-org/labeler@v1
+        with:
+          token: ${{ secrets.BOT_PAT }}

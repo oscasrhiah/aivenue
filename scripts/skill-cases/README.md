@@ -1,0 +1,92 @@
+# 可開關內建 Skill 的驗收案例
+
+每個案例都有一個 `fixture/`、要給 Aivenue 的任務文字、使用的角色與通過條件。
+
+**怎麼跑**
+- 先把 `fixture/` 複製到一個新的空資料夾，當作工作資料夾，不要直接在這個 repo 裡跑。
+- 只開啟要驗收的那一項 Skill：「設定 → 能力 → 可開關的內建 Skill」，其他三項保持關閉。
+- 和既有功能比較時，同一個案例各跑一次。
+
+這些案例會呼叫真實模型、消耗 CLI 額度，所以不在自動測試裡。自動測試（`scripts/test-graphify.mjs`）只驗證三件事：
+- 開關會影響技能清單和規則。
+- 每個角色拿到的 Skill 正確。
+- 檔案都有複製到位。
+
+## 1. 架構審查（improve-codebase-architecture + codebase-design）
+
+- **準備**：複製 `architecture-review/fixture/`，然後在新資料夾裡執行：
+  ```bash
+  git init -q && git add -A && git commit -qm "orders: first version" && \
+  echo "// tweak" >> src/orders/priceOrder.ts && git commit -qam "orders: coupon" && \
+  echo "// tweak" >> src/api.ts && git commit -qam "orders: quote endpoint"
+  ```
+- **角色**：撰寫計畫（只開「計畫」階段，或在工作流設定裡只留計畫者）。
+- **任務**：「審查這個 repo 的架構，找出值得加深的模組，只產出報告，不要改程式。」
+- **通過條件**：
+  - orders 這條管線被列為主要候選，並列出相關檔案。fixture 裡的線索：`OrderService` 只是轉呼叫，`api.ts` 又複製了一份計價邏輯。
+  - `logger.ts`（本來就夠深）沒有被列為候選。
+  - 提到 `OrderController.ts` 直接呼叫付款函式，違反 `docs/adr/0001-payment-port.md`。
+  - 報告寫在回覆裡（Markdown）：沒有產生 HTML 檔，沒有開瀏覽器，沒有寫 `GLOSSARY.md` 或 ADR。
+  - 結束後 `git status` 是乾淨的。報告以候選清單結束，沒有停下來追問。
+- **比較對象**：Agent Skills 的 `code-review-and-quality`（架構一軸）與 Ponytail 的 `ponytail-audit`，在同一份 fixture 上比。
+  - 看抓到的淺模組群、誤報數，以及有沒有尊重 ADR。
+
+## 2. diagnosing-bugs
+
+- **fixture**：`diagnosing-bugs/fixture/`。`cache.test.js` 偶爾失敗：同時呼叫兩次 `getUser` 時，快取在 `await` 之後才寫入。
+  - 實測 40 次失敗 29 次。
+  - 改成快取「進行中的 promise」後，40 次都通過。
+- **角色**：實作。
+- **任務**：「`npm test` 偶爾失敗，找出原因並修好。」
+- **通過條件**：
+  - 提出假設之前，活動紀錄裡先看到重複執行測試，並報出失敗率。
+  - 修法是快取進行中的 promise（或同等的去重做法），而不是固定亂數、加延遲或放寬斷言。
+  - 修好後連跑至少 50 次都通過。
+  - 沒有留下暫時的除錯輸出，diff 只動 `cache.js`（與測試，如果有補）。
+  - 沒有執行 `scripts/hitl-loop.template.sh`。
+- **比較對象**：Agent Skills 的 `debugging-and-error-recovery`，同一份 fixture、同一個任務。
+  - 看先跑重現再提假設的順序、修法對不對，以及除錯輸出有沒有清乾淨。
+
+## 3. gha-security-review（與 security-audit 比較）
+
+- **fixture**：`gha-security-review/fixture/.github/workflows/pr-greet.yml`，用法是把它放進一個新的 commit 當作要審查的變更。
+- **角色**：審查程式碼。
+- **兩次執行**：
+  - **A**：開啟該次工作流的「安全檢查」（security-audit），gha-security-review 關閉。
+  - **B**：開啟 gha-security-review，「安全檢查」關閉。
+- **任務**：「審查這次新增的 GitHub Actions workflow。」
+- **通過條件**（兩次各自對照）：
+  - 以高嚴重度報出 `pull_request_target` 加上 checkout PR 的 head 再執行 `npm ci && npm test`（pwn request），並附修法。
+  - 以高嚴重度報出 `run:` 裡直接展開 `github.event.pull_request.title`（指令注入），修法是改用環境變數。
+  - 列出沒有釘選到 commit SHA 的第三方 action `some-org/labeler@v1` 拿到 `secrets.BOT_PAT`。
+  - 三個誘餌不報：`run` 裡的 `pull_request.number`、`if:` 裡的 title、`workflow_dispatch` 的 `inputs.note`。
+  - 沒有執行任何指令；PoC 只寫成文字。
+- **比較**：兩次的召回率、誤報數，以及「待驗證」的歸類。
+
+## 4. web-design-guidelines
+
+- **fixture**：`web-design-guidelines/fixture/src/`。
+  - `Toolbar.tsx` 埋了 9 個違規：
+    1. 用 `div onClick` 做導覽
+    2. 圖示按鈕沒有名稱
+    3. 刪除不需要確認
+    4. 輸入框沒有 label
+    5. placeholder 用 `...` 而不是 `…`
+    6. `onPaste` 被 `preventDefault`
+    7. `<img>` 沒有 alt 也沒有寬高
+    8. `Loading...`
+    9. `transition: all` 與 `outline: none`
+  - `Card.tsx` 是乾淨的對照組。
+- **角色**：審查程式碼。
+- **任務**：「依 web-design-guidelines 審查 src/。」
+- **通過條件**：
+  - 9 個違規至少抓到 8 個，行號正確，用 `file:line` 格式。
+  - `Card.tsx` 回報通過，或誤報不超過 1 個。
+  - 沒有任何網路請求：規則來自內附的 `command.md`（web-interface-guidelines `434b7f9`）。
+  - 遇到和專案慣例衝突的規則（例如繁中文案的標點）時，會說明暫不採用。
+
+## 設計參考（不載入，沒有開關）
+
+- **impeccable**：工作流時間線的 critique 試點，是只讀程式碼、只用部分方法的評估，不是 Skill 驗收。
+- **frontend-testing-debugging**：介面實測請改用 Agent Skills 的 `browser-testing-with-devtools`，搭配 Playwright 或 Chrome DevTools MCP。
+- **accessibility-inspect**：目前由 web-design-guidelines 的無障礙規則做靜態檢查；要做互動式的無障礙實測，得等上游補齊檔案和授權後再評估。

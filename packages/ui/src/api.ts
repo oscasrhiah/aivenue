@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus } from '../../core/src/types';
+import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus } from '../../core/src/types';
 import { setPickedColors } from './util';
 
 type Listener = (data: any) => void;
@@ -154,6 +154,11 @@ export function useCapabilities(): { config: CapabilitiesConfig; skills: SkillIn
 
 export function useExtensions(): ExtensionStatus[] {
   return useSynced<ExtensionStatus[]>('extensions.list', undefined, 'extensions', [])[0];
+}
+
+/** The bundled third-party skills the user turns on one by one. */
+export function usePackSkills(): PackSkillStatus[] {
+  return useSynced<PackSkillStatus[]>('extensions.packSkills', undefined, 'packSkills', [])[0];
 }
 
 const NO_GITHUB: GithubStatus = { git: { installed: false }, gh: { installed: false }, auth: { loggedIn: false }, gitCredential: false, checkedAt: 0 };

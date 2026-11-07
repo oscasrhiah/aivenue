@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
-import { hub, useCapabilities, useExtensions, useHostInfo, useProviders } from '../api';
+import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PackSkillId, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
+import { hub, useCapabilities, useExtensions, useHostInfo, usePackSkills, useProviders } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
@@ -1111,6 +1111,131 @@ const BUILTIN_SKILLS: { name: string; use: [string, string]; when: [string, stri
   },
 ];
 
+/** Bundled third-party skills the user turns on one by one (PACK_SKILLS in packages/core/src/extensions.ts). */
+const PACK_INFO: Record<PackSkillId, { title: string; use: [string, string]; when: [string, string]; url: string; license: string }> = {
+  'architecture-review': {
+    title: 'improve-codebase-architecture + codebase-design',
+    use: ['架構檢視。由撰寫計畫的角色唯讀找出難改、難測的模組，提出重構方向和取捨。', 'Architecture review. The planner finds hard-to-change, hard-to-test modules read-only and proposes refactoring directions and trade-offs.'],
+    when: ['任務要求檢視架構時使用。只在回覆裡給報告，不改程式、不開瀏覽器。', 'Used when the task asks for an architecture review. The report comes in the reply; no code changes, no browser.'],
+    url: 'https://github.com/mattpocock/skills',
+    license: 'MIT',
+  },
+  'diagnosing-bugs': {
+    title: 'diagnosing-bugs',
+    use: ['深入除錯。先建立能重現的驗證，再逐一排除假設，適合偶發或跨平台問題。', 'Deep debugging. Builds a check that reproduces the bug first, then rules out hypotheses one by one; for intermittent or cross-platform problems.'],
+    when: ['任務是除錯、偶發失敗或回歸問題時使用。需要人協助時用 Aivenue 的提問，不執行等待終端機輸入的腳本。', 'Used when the task is a bug, an intermittent failure or a regression. When a person is needed it asks through Aivenue instead of a script that waits for terminal input.'],
+    url: 'https://github.com/mattpocock/skills',
+    license: 'MIT',
+  },
+  'gha-security-review': {
+    title: 'gha-security-review',
+    use: ['GitHub Actions 安全審查。專查 PR 輸入、憑證、權限，以及發布流程的信任邊界。', 'GitHub Actions security review: untrusted PR input, credentials, permissions and the trust boundaries of release workflows.'],
+    when: ['變更動到 .github/workflows 或 action.yml 時使用。只做靜態審查，不執行參考資料或專案裡的任何指令。', 'Used when a change touches .github/workflows or action.yml. Static only: nothing quoted in its references or in the project is run.'],
+    url: 'https://github.com/getsentry/skills',
+    license: 'Apache-2.0',
+  },
+  'web-design-guidelines': {
+    title: 'web-design-guidelines',
+    use: ['網頁介面審查。找出表單、導覽、響應式版面和互動細節的具體問題，以 file:line 回報。', 'Web UI review: concrete problems in forms, navigation, responsive layout and interaction details, reported as file:line.'],
+    when: ['變更動到網頁介面檔案時使用。規則固定在 web-interface-guidelines 的 434b7f9，不連網抓取最新版。', 'Used when a change touches web UI files. The rules are pinned to web-interface-guidelines 434b7f9 and never fetched from the network.'],
+    url: 'https://github.com/vercel-labs/web-interface-guidelines',
+    license: 'MIT',
+  },
+};
+
+/** Evaluated and not loaded: what Aivenue took from them, and why they are not skills you can turn on. */
+const DESIGN_REFS: { name: string; text: [string, string] }[] = [
+  {
+    name: 'impeccable',
+    text: [
+      'App 介面設計參考。工作流時間線的評估採用它 critique 的評分方法；它需要自己的 CLI、偵測器、瀏覽器與專案設計檔，Aivenue 不載入也不執行。',
+      'App UI design reference. The workflow timeline review uses its critique scoring method; it needs its own CLI, detector, browser and project design files, which Aivenue neither loads nor runs.',
+    ],
+  },
+  {
+    name: 'frontend-testing-debugging',
+    text: [
+      '介面實測參考。它依賴 Codex 的 Browser 外掛，上游也沒有授權檔；請改用 Agent Skills 的 browser-testing-with-devtools，搭配上方的 Playwright 或 Chrome DevTools。',
+      "UI testing reference. It relies on Codex's Browser plugin and its repository has no LICENSE file; use Agent Skills' browser-testing-with-devtools with Playwright or Chrome DevTools above instead.",
+    ],
+  },
+  {
+    name: 'accessibility-inspect',
+    text: [
+      '無障礙檢查參考。它缺少依賴的檔案與 MCP 伺服器、會要求安裝工具，上游也沒有授權檔；目前由 web-design-guidelines 的無障礙規則做靜態檢查。',
+      'Accessibility reference. It is missing files and an MCP server it depends on, asks to install tools, and its repository has no LICENSE file; web-design-guidelines covers the static accessibility rules for now.',
+    ],
+  },
+];
+
+function PackSkills() {
+  const t = useT();
+  const list = usePackSkills();
+  const { error, busy, run } = useBusy();
+  if (!list.length) return null;
+  return (
+    <section className="cap">
+      <div className="cap-head">
+        <div>
+          <h3>{t('可開關的內建 Skill', 'Built-in skills you can turn on')}</h3>
+          <p className="muted small">
+            {t(
+              '隨 Aivenue 提供，預設全部關閉。開啟後，列出的角色會在技能清單看到它，任務用得上時才讀全文；不會自己安裝工具或連網。',
+              'Shipped with Aivenue and off by default. When one is on, the roles listed find it in their skills index and read it only when the task calls for it; none installs tools or goes online.',
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="clist builtin-skills">
+        {list.map((s) => {
+          const info = PACK_INFO[s.id];
+          return (
+            <div key={s.id} className="crow">
+              <div className="crow-head">
+                <label className="switch">
+                  <input type="checkbox" checked={s.enabled} disabled={busy || !s.available} aria-label={info.title} onChange={(e) => run(() => hub.call('extensions.setPackSkill', { id: s.id, on: e.target.checked }))} />
+                  <span />
+                </label>
+                <div className="grow min0">
+                  <div className="crow-name mono">{info.title}</div>
+                </div>
+              </div>
+              <div className="small">{t(...info.use)}</div>
+              <div className="muted small">
+                {t('觸發方式：', 'How it is used: ')}
+                {t(...info.when)}
+              </div>
+              <div className="row gap wrap">
+                <span className="muted tiny">{t('角色：', 'Roles: ')}</span>
+                {s.roles.map((r) => (
+                  <span key={r} className="tag">
+                    {roleName(t, r)}
+                  </span>
+                ))}
+                <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
+                  {t('來源', 'Source')}
+                </button>
+                <span className="muted tiny">{info.license}</span>
+                {!s.available && <span className="muted tiny">{t('這個版本沒有附上', 'Not shipped in this build')}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {error && <div className="note err">{error}</div>}
+      <div className="block-label">{t('設計參考（不會載入）', 'Design references (not loaded)')}</div>
+      <div className="clist builtin-skills">
+        {DESIGN_REFS.map((d) => (
+          <div key={d.name} className="crow">
+            <div className="crow-name mono">{d.name}</div>
+            <div className="muted small">{t(...d.text)}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function BuiltinSkills() {
   const t = useT();
   return (
@@ -1150,6 +1275,7 @@ export function CapabilitiesPane() {
       <GithubCard />
       <Extensions />
       <BuiltinSkills />
+      <PackSkills />
       <Instructions />
       <McpServers />
       <Skills />

@@ -6,7 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { AttachmentStore } from './attachments';
-import type { ExtensionId, PonytailLevel } from './types';
+import type { ExtensionId, PackSkillId, PonytailLevel } from './types';
 import type { MemoryPatch } from './memoryStore';
 import type { AppSettings, Attachment, CapabilitiesConfig, HostInfo, InstructionRole, McpServerConfig, ProviderSpec, PushMessage, RpcRequest, RpcResponse, WorkflowConfig, WorkflowPreset } from './types';
 import { CapabilityStore } from './capabilities';
@@ -155,7 +155,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const store = new RunStore(dataDir);
   const attachments = new AttachmentStore(dataDir);
   // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
-  const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }) });
+  const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }) });
   void extensions.init().catch(() => undefined);
   let baseUrl = '';
   const orchestrator = new Orchestrator({
@@ -244,6 +244,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.list': () => extensions.list(),
     'extensions.setEnabled': (p: { id: ExtensionId; enabled: boolean }) => extensions.setEnabled(p.id, !!p.enabled),
     'extensions.setOptions': (p: { id: ExtensionId; level?: PonytailLevel; skill?: string; on?: boolean }) => extensions.setOptions(p),
+    'extensions.packSkills': () => extensions.packSkills(),
+    'extensions.setPackSkill': (p: { id: PackSkillId; on: boolean }) => extensions.setPackSkill(p.id, !!p.on),
     'extensions.retry': (p: { id: ExtensionId }) => extensions.retry(p.id),
     'extensions.refresh': () => extensions.refreshOmni(true),
     'extensions.omniPassword': () => extensions.omniPassword(),

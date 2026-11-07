@@ -286,6 +286,23 @@ export interface ExtensionsConfig {
   graphify?: { enabled: boolean };
   /** port: where OmniRoute listens (picked once, kept). pinned: models picked from an auto pool, kept in the menus. */
   omniroute?: { enabled: boolean; port?: number; pinned?: string[] };
+  /** Bundled third-party skills turned on one by one (all off until the user turns one on). */
+  packSkills?: Partial<Record<PackSkillId, boolean>>;
+}
+
+/** A bundled third-party skill the user turns on by itself (Capabilities → built-in skills you can turn on). */
+export type PackSkillId = 'architecture-review' | 'diagnosing-bugs' | 'gha-security-review' | 'web-design-guidelines';
+
+/** One such skill, as the settings list it. */
+export interface PackSkillStatus {
+  id: PackSkillId;
+  enabled: boolean;
+  /** The app ships its files (false: left out of this build). */
+  available: boolean;
+  /** The roles whose skills index lists it when it is on. */
+  roles: InstructionRole[];
+  /** The SKILL.md names it adds (one entry may add two, e.g. the architecture review). */
+  skills: string[];
 }
 
 /** One bundled skill of an extension, as the settings list it. */
@@ -1527,6 +1544,7 @@ export type PushMessage =
   | { topic: 'github'; data: GithubStatus }
   | { topic: 'capabilities'; data: { config: CapabilitiesConfig; skills: SkillInfo[] } }
   | { topic: 'extensions'; data: ExtensionStatus[] }
+  | { topic: 'packSkills'; data: PackSkillStatus[] }
   | { topic: 'test'; data: { testId: string; providerId: string; event?: AgentEvent; isUpdate?: boolean; result?: TestResult } };
 
 export interface TestResult {
