@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
 import { hub, useCapabilities, useExtensions, useHostInfo, useProviders } from '../api';
 import { useT, type T } from '../i18n';
@@ -819,18 +819,57 @@ const ROLE_SHORT = (t: T, r: InstructionRole) => roleName(t, r);
  * A window for an extension's longer controls (Agent Skills' skill list, OmniRoute's providers), so the cards stay
  * short and the same height in their grid instead of one card stretching its row.
  */
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keyboard: focus moves into the window when it opens (its first control), Tab and Shift+Tab stay inside it, Escape
+ * closes it, and focus goes back to the button that opened it.
+ */
 function ExtWindow({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const t = useT();
+  const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  const titleId = useId();
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+    const opener = document.activeElement as HTMLElement | null;
+    const items = () => [...(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.offsetParent !== null);
+    // The first control after the close button (the window's content), else the close button.
+    const list = items();
+    (list[1] ?? list[0] ?? box.current)?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const all = items();
+      if (!all.length) return e.preventDefault();
+      const first = all[0];
+      const last = all[all.length - 1];
+      const inside = box.current?.contains(document.activeElement);
+      if (e.shiftKey && (document.activeElement === first || !inside)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, []);
   return (
     <div className="modal-back" onClick={onClose}>
-      <div className="modal ext-window" role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div ref={box} className="modal ext-window" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
         <div className="drawer-head">
-          <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="✕">
+          <h3 id={titleId}>{title}</h3>
+          <button className="icon-btn" onClick={onClose} aria-label={t('關閉', 'Close')}>
             ✕
           </button>
         </div>
