@@ -90,7 +90,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 | VS Code 插件 | [`aivenue-vscode-<版本>.vsix`](https://github.com/oscasrhiah/aivenue/releases/latest) | 在 VS Code 中「從 VSIX 安裝」 |
 | Linux x64 | [`Aivenue-<版本>-linux-x64.tar.gz`](https://github.com/oscasrhiah/aivenue/releases/latest) | 見下方 [Linux](#linuxx64) |
 
-> **0.3.0 的 Linux 版是事後補發**：0.3.0 先發布 Windows 版與 VS Code 插件，`Aivenue-0.3.0-linux-x64.tar.gz` 在 Ubuntu 上驗收過之後，才加到同一個 Release。驗收範圍、SHA-256 與已知限制，見 [v0.3.0 Release](https://github.com/oscasrhiah/aivenue/releases/tag/v0.3.0) 說明的「Linux x64 補發」。VS Code 插件裝在 Linux、WSL 或 Remote 連到的 Linux 機器上仍未經驗證。
+> **0.3.0 的 Linux 版是事後補發**：0.3.0 先發布 Windows 版與 VS Code 插件，`Aivenue-0.3.0-linux-x64.tar.gz` 在 Ubuntu 上驗收過之後，才加到同一個 Release。驗收範圍、SHA-256 與已知限制，見 [v0.3.0 Release](https://github.com/oscasrhiah/aivenue/releases/tag/v0.3.0) 說明的「Linux x64 補發」。Ubuntu 20.04 上桌面版與 VS Code 同時寫入記憶，是用本機重建的測試版 `.vsix` 驗證的。已發布的 `.vsix` 在 Linux 上，以及 WSL 與 Remote 的完整流程，都還沒有驗收。
 
 ### Windows
 
@@ -113,7 +113,7 @@ cd Aivenue-<版本>-linux-x64
 - 移除：執行安裝資料夾（或解壓資料夾）中的 `./uninstall.sh`。
 - 0.3.0 Linux 套件的安裝與卸載：
   - 自訂位置的安裝不必再設定 `AIVENUE_INSTALL_DIR` 就能卸載：腳本會找它所在的安裝，或 `aivenue` 指令指向的那份。
-  - 只會刪除套件清單（`.aivenue-files`）上的檔案；安裝資料夾裡的其他檔案，以及對話與設定（`~/.aivenue`），都會保留。
+  - 卸載會依安裝紀錄，移除能確認屬於 Aivenue 的檔案。安裝紀錄包括套件清單 `.aivenue-files`，以及安裝中斷時留下的安裝計畫。安裝資料夾裡的使用者檔案，以及對話與設定（`~/.aivenue`），都會保留。
   - `AIVENUE_INSTALL_DIR` 要指定一個專用的資料夾：不存在、空的，或之前的 Aivenue 安裝。非空又不是 Aivenue 安裝的資料夾，安裝時會拒絕。
 - **自己打包的差別**：0.3.0 Linux 套件的安裝、卸載腳本與 `EPIPE` 修正，還沒有合併進這個分支。從這裡用 `npm run package:linux` 打包，得到的是舊的安裝與卸載腳本，也沒有那個修正。
 
@@ -123,7 +123,7 @@ cd Aivenue-<版本>-linux-x64
    （或在終端機執行 `code --install-extension aivenue-vscode-<版本>.vsix`）。
 2. 安裝後狀態列左下會出現「Aivenue」，右側次要側邊欄會多一個 Aivenue 圖示。
 3. 需要 VS Code 1.143 以上才會顯示在右側次要側邊欄；舊版可用「Aivenue: 在編輯器分頁中開啟 Aivenue」。
-4. 插件自帶完整引擎，**不需要**另外安裝桌面 App 或 Node.js；Remote / WSL / SSH 也能用（AI 工具要裝在遠端那台機器上）。插件在 Linux、WSL 遠端上沒有驗收過。
+4. 插件自帶完整引擎，**不需要**另外安裝桌面 App 或 Node.js；Remote / WSL / SSH 也能用（AI 工具要裝在遠端那台機器上）。Ubuntu 20.04 的並行寫入，是用本機重建的測試版 `.vsix` 驗證的；已發布的 `.vsix` 在 Linux 上，以及 WSL 與 Remote 的完整流程，都還沒有驗收。
 5. 在同一台電腦上，桌面版與 VS Code 插件可以同時開，共用 `~/.aivenue/` 裡的設定、對話紀錄與[專案記憶](#專案記憶)。
 
 <table align="center"><tr>
@@ -518,7 +518,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
   | 完全不用 | ✗ | ✗（專案 Skill 照常載入） |
 
 - **這次帶入了什麼**：標題列 ⋯ →「🧩 專案記憶」看這次選了哪些記憶、每個 agent 收到哪些、哪些沒帶入與原因、累計注入的 token 估算（只是估算，不是供應商計費的數字）。執行中也能在這裡切換模式，只影響之後開始的對話。
-- **桌面版與 VS Code 同時開**：兩邊用作業系統的鎖（Windows 上是具名管道）輪流寫入同一份記憶，程序結束或當掉時自動釋放。已在 Windows 上驗收同時寫入與程序被暫停的情況；Linux（Ubuntu 20.04）驗收過桌面版與 VS Code 同時寫入；WSL 還沒有驗收。
+- **桌面版與 VS Code 同時開**：兩邊用作業系統的鎖（Windows 上是具名管道）輪流寫入同一份記憶，程序結束或當掉時自動釋放。已在 Windows 上驗收同時寫入與程序被暫停的情況；Linux（Ubuntu 20.04）的桌面版與 VS Code 同時寫入，用本機重建的測試版 `.vsix` 驗證過。已發布的 `.vsix`、WSL 與 Remote 的完整流程還沒有驗收。
 
 ### 內建擴充
 
