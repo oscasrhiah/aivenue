@@ -315,7 +315,9 @@ test('初測：相對路徑依呼叫的工作目錄解析；../ 跑出 checkout 
   const a = withCodexHome(viaShell, () => PILOT.readSession('codex', 's-up', co));
   assert.equal(a.location, 'outside');
   assert.ok(a.outsidePaths.some((p) => p.includes('outside-canary')), JSON.stringify(a.outsidePaths));
-  const viaCode = fakeCodexHome('s-up2', [...meta(co), code('const r = await tools.exec_command({cmd:"type ..\\\\..\\\\secret.txt",workdir:' + JSON.stringify(co) + '}); text(r.output);')]);
+  // `..\..\` climbs only on Windows; on Linux and macOS a backslash is part of a file name, so use what that system's shell would.
+  const up2 = process.platform === 'win32' ? 'type ..\\\\..\\\\secret.txt' : 'cat ../../secret.txt';
+  const viaCode = fakeCodexHome('s-up2', [...meta(co), code('const r = await tools.exec_command({cmd:"' + up2 + '",workdir:' + JSON.stringify(co) + '}); text(r.output);')]);
   assert.equal(withCodexHome(viaCode, () => PILOT.readSession('codex', 's-up2', co)).location, 'outside');
   // 沒有寫工作目錄時，以 session 的工作目錄為準。
   const noWorkdir = fakeCodexHome('s-up3', [...meta(co), call('exec_command', { cmd: 'cat ../../x' })]);
