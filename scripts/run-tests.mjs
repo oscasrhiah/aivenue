@@ -110,6 +110,20 @@ function run(job) {
       // entry for a file that ran no test is not among `names` (the reporter recognises it from node's events).
       const extra = report && top ? unregistered(top.names, report.names) : [];
       if (extra.length) fail(` runs ${extra.length} test(s) not taken from scripts/lib/test-shard.mjs, which every process of the file would run again: ${extra.map((n) => JSON.stringify(n)).join(', ')}`);
+      // And the other way: every test this process registered must have a result (skipped and todo ones have one).
+      // One without did not run to the end: a test before it ended the process, say. With --test-only node runs only
+      // the `only` ones, so only those are expected.
+      const missing = report && top ? unregistered(only ? report.onlyNames : report.names, top.names) : [];
+      if (missing.length) {
+        fail(` registered ${missing.length} test(s) that have no result, so they did not run to the end (did a test end the process?): ${missing.map((n) => JSON.stringify(n)).join(', ')}`);
+        // Counted as failed. node's entry for the file itself, if it made one, stands for these and is not counted.
+        if (top.fileEntry) {
+          r.tests -= 1;
+          r[top.fileEntryFailed ? 'fail' : 'pass'] -= 1;
+        }
+        r.tests += missing.length;
+        r.fail += missing.length;
+      }
       resolve(r);
     });
   });

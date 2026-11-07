@@ -163,6 +163,29 @@ test('平行測試：統計來自 node 的事件，測試日誌印出像統計�
   }
 });
 
+test('平行測試：已登記的測試沒有結果時（測試提前結束程序）列出名稱並失敗，不會被 node 的檔案結果算成通過', () => {
+  const file = path.join('scripts', 'lib', 'fixtures', 'exits-early.mjs');
+  // node itself reports only the file, as passing: neither test has a result of its own.
+  const want = plain([], file);
+  assert.equal(want.code, 0);
+  assert.deepEqual(want.totals, { tests: 1, pass: 1, fail: 0, skipped: 0, todo: 0 });
+  for (const [jobs, shards] of [[1, undefined], [4, undefined], [4, 2]]) {
+    const got = runner(jobs, shards, [], file);
+    const at = `${jobs} jobs, ${shards ?? 'auto'} shards`;
+    assert.equal(got.code, 1, at);
+    assert.match(got.out, /registered \d test\(s\) that have no result.*"ends the process"/, at);
+    // Both are failures: the one that ended the process has no result, the other has none or failed.
+    assert.deepEqual(got.totals, { tests: 2, pass: 0, fail: 2, skipped: 0, todo: 0 }, `${at}: totals`);
+  }
+  // Tests that do have a result of their own pass the check: skipped, todo, the `only` ones under --test-only, and a
+  // process left without tests (an exclusive-only file's parallel process).
+  for (const [flags, name, jobs, shards] of [[[], 'shard-sample.mjs', 8, 11], [['--test-only'], 'shard-sample.mjs', 4, 4], [['--test-only'], 'comment-exclusive.mjs', 1, 1], [[], 'exclusive-only.mjs', 4, undefined]]) {
+    const got = runner(jobs, shards, flags, path.join('scripts', 'lib', 'fixtures', name));
+    assert.equal(got.code, 0, `${name} ${flags.join(' ')}`);
+    assert.doesNotMatch(got.out, /have no result/, `${name} ${flags.join(' ')}`);
+  }
+});
+
 test('平行測試：同一檔案混用分片包裝與原生 node:test 時直接失敗並列出那些測試，不論拆成幾份', () => {
   const file = path.join('scripts', 'lib', 'fixtures', 'mixed-wrapper.mjs');
   // Run plainly the file is fine (3 tests); split, the node:test one would run in every process.

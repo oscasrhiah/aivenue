@@ -29,7 +29,9 @@ let seen = 0;
 let registered = 0;
 let exclusives = 0;
 const names = [];
-if (report) process.on('exit', () => fs.writeFileSync(report, JSON.stringify({ registered, exclusives, names })));
+const onlyNames = [];
+// Written on exit, also when a test ends the process early: the runner then sees which registered tests have no result.
+if (report) process.on('exit', () => fs.writeFileSync(report, JSON.stringify({ registered, exclusives, names, onlyNames })));
 
 function register(method, name, ...rest) {
   // node's own forms: (name), (name, fn), (name, options), (name, options, fn). Anything longer, or a function slot
@@ -46,6 +48,8 @@ function register(method, name, ...rest) {
   if (phase !== 'exclusive' && seen++ % shards !== shard) return undefined;
   registered++;
   names.push(String(name));
+  // With --test-only node runs (and reports) only these; the runner expects a result for each of them then.
+  if (method === base.only || options.only) onlyNames.push(String(name));
   return fn === undefined ? method(name, options) : method(name, options, fn);
 }
 
