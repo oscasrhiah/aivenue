@@ -5,7 +5,7 @@
   <a href="https://github.com/oscasrhiah/aivenue/releases"><img alt="所有版本" src="https://img.shields.io/badge/%E6%89%80%E6%9C%89-%E7%89%88%E6%9C%AC-555555?style=for-the-badge"></a>
 </p>
 
-> **English summary** — Aivenue lets the subscription-based AI coding CLIs you already have (Claude Code, Codex, Antigravity, GitHub Copilot CLI, OpenCode, Qwen Code) work together in one workflow: one writes the plan and another reviews it, one implements and another verifies the code, looping until the reviewer approves. Any agent can hand sub-tasks to another vendor's CLI as a sub-agent. It runs locally as a desktop app (Windows; version 0.3.0 has no Linux build) or a VS Code extension, uses your own accounts or API keys, and never handles your passwords. Licensed under MIT. **Warning:** Google's Antigravity terms prohibit access through third-party tools; using Antigravity through Aivenue may get your Google account suspended or blocked.
+> **English summary** — Aivenue lets the subscription-based AI coding CLIs you already have (Claude Code, Codex, Antigravity, GitHub Copilot CLI, OpenCode, Qwen Code) work together in one workflow: one writes the plan and another reviews it, one implements and another verifies the code, looping until the reviewer approves. Any agent can hand sub-tasks to another vendor's CLI as a sub-agent. It runs locally as a desktop app (Windows, Linux x64) or a VS Code extension, uses your own accounts or API keys, and never handles your passwords. Licensed under MIT. **Warning:** Google's Antigravity terms prohibit access through third-party tools; using Antigravity through Aivenue may get your Google account suspended or blocked.
 
 讓多家訂閱制 AI coding CLI 在同一個工作流裡分工合作：一家寫計畫、另一家審查，來回修改直到通過；接著實作，再由審查者驗收程式碼，直到通過為止。任何 agent 在工作中都能透過 Aivenue 把子任務派給其他家的 agent 當 sub agent。全程即時顯示每個 agent 讀了什麼、改了什麼、跑了什麼指令。
 
@@ -49,7 +49,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 - **用你已經有的帳號**：各家 CLI 用自己官方的瀏覽器流程登入，Aivenue 不經手帳號密碼；也可以改用 API 金鑰。
 - **不同家互相審查**：審查者預設一定和撰寫者不同家，降低同一個模型的盲點。
 - **完全在本機執行**：Aivenue 只在 127.0.0.1 開服務（以隨機權杖保護），設定、對話紀錄與用量統計存在 `~/.aivenue/`（可用環境變數 `AIVENUE_HOME` 改位置）。
-- **兩種外殼、同一套引擎**：桌面 App（Windows；0.3.0 沒有 Linux 版）與 VS Code 插件共用相同的引擎與介面。
+- **兩種外殼、同一套引擎**：桌面 App（Windows、Linux x64）與 VS Code 插件共用相同的引擎與介面。
 - **看得到證據，不只看 agent 怎麼說**：每個結果旁邊都分開列出 Aivenue 自己看到執行的檢查，以及還需要重驗的部分。
 
 ## 支援的 AI 工具
@@ -88,9 +88,9 @@ Aivenue 把這些 CLI 串成一個工作流：
 | Windows 安裝版 | [`Aivenue-Setup-<版本>.exe`](https://github.com/oscasrhiah/aivenue/releases/latest) | 執行安裝程式，可自選安裝資料夾 |
 | Windows 免安裝版 | [`Aivenue-<版本>-portable.exe`](https://github.com/oscasrhiah/aivenue/releases/latest) | 直接執行，不需安裝 |
 | VS Code 插件 | [`aivenue-vscode-<版本>.vsix`](https://github.com/oscasrhiah/aivenue/releases/latest) | 在 VS Code 中「從 VSIX 安裝」 |
-| Linux x64 | 0.3.0 **沒有提供**；0.2.4 以前的版本有 `Aivenue-<版本>-linux-x64.tar.gz` | 見下方 [Linux](#linuxx64) |
+| Linux x64 | [`Aivenue-<版本>-linux-x64.tar.gz`](https://github.com/oscasrhiah/aivenue/releases/latest) | 見下方 [Linux](#linuxx64) |
 
-> **0.3.0 只在 Windows 上驗收過**。新的專案記憶在 Linux 上用另一套鎖（抽象 Unix socket），還沒有實測，主要流程也沒在 Linux 上跑過，所以這一版不發布 Linux 安裝檔。VS Code 插件裝在 Linux、WSL 或 Remote 連到的 Linux 機器上同樣未經驗證。
+> **0.3.0 的 Linux 版是事後補發**：0.3.0 先發布 Windows 版與 VS Code 插件。Linux 安裝包等專案記憶的鎖、主要流程，以及安裝、升級、卸載在 Ubuntu 上驗收過之後，才加到同一個 Release。驗收範圍與已知限制見 [CHANGELOG](CHANGELOG.md) 的「Linux x64 補發」。VS Code 插件裝在 Linux、WSL 或 Remote 連到的 Linux 機器上仍未經驗證。
 
 ### Windows
 
@@ -100,7 +100,7 @@ Aivenue 把這些 CLI 串成一個工作流：
 
 ### Linux（x64）
 
-0.3.0 沒有 Linux 安裝檔（原因見上方說明）。以下是 0.2.4 以前的 Linux 版、或自己用 `npm run package:linux` 打包後的安裝方式：
+下載 `Aivenue-<版本>-linux-x64.tar.gz`（或自己用 `npm run package:linux` 打包）後：
 
 ```bash
 tar -xzf Aivenue-<版本>-linux-x64.tar.gz
@@ -110,7 +110,8 @@ cd Aivenue-<版本>-linux-x64
 
 - 不需要 sudo，安裝到目前使用者：程式在 `~/.local/share/aivenue`（可用環境變數 `AIVENUE_INSTALL_DIR` 改位置），指令 `~/.local/bin/aivenue`，並加入應用程式選單。
 - 安裝後從應用程式選單開啟，或在終端機執行 `aivenue`。
-- 移除：執行解壓資料夾（或安裝資料夾）中的 `./uninstall.sh`。
+- 移除：執行安裝資料夾（或解壓資料夾）中的 `./uninstall.sh`。自訂位置的安裝不必再設定 `AIVENUE_INSTALL_DIR`：腳本會找它所在的安裝，或 `aivenue` 指令指向的那份。只會刪除套件清單（`.aivenue-files`）上的檔案；安裝資料夾裡的其他檔案，以及對話與設定（`~/.aivenue`），都會保留。
+- `AIVENUE_INSTALL_DIR` 要指定一個專用的資料夾：不存在、空的，或之前的 Aivenue 安裝。非空又不是 Aivenue 安裝的資料夾，安裝時會拒絕。
 
 ### VS Code 插件
 
@@ -118,7 +119,7 @@ cd Aivenue-<版本>-linux-x64
    （或在終端機執行 `code --install-extension aivenue-vscode-<版本>.vsix`）。
 2. 安裝後狀態列左下會出現「Aivenue」，右側次要側邊欄會多一個 Aivenue 圖示。
 3. 需要 VS Code 1.143 以上才會顯示在右側次要側邊欄；舊版可用「Aivenue: 在編輯器分頁中開啟 Aivenue」。
-4. 插件自帶完整引擎，**不需要**另外安裝桌面 App 或 Node.js；Remote / WSL / SSH 也能用（AI 工具要裝在遠端那台機器上）。0.3.0 在 Linux、WSL 遠端上沒有驗收過，見上方說明。
+4. 插件自帶完整引擎，**不需要**另外安裝桌面 App 或 Node.js；Remote / WSL / SSH 也能用（AI 工具要裝在遠端那台機器上）。插件在 Linux、WSL 遠端上沒有驗收過。
 5. 在同一台電腦上，桌面版與 VS Code 插件可以同時開，共用 `~/.aivenue/` 裡的設定、對話紀錄與[專案記憶](#專案記憶)。
 
 <table align="center"><tr>
@@ -513,7 +514,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
   | 完全不用 | ✗ | ✗（專案 Skill 照常載入） |
 
 - **這次帶入了什麼**：標題列 ⋯ →「🧩 專案記憶」看這次選了哪些記憶、每個 agent 收到哪些、哪些沒帶入與原因、累計注入的 token 估算（只是估算，不是供應商計費的數字）。執行中也能在這裡切換模式，只影響之後開始的對話。
-- **桌面版與 VS Code 同時開**：兩邊用作業系統的鎖（Windows 上是具名管道）輪流寫入同一份記憶，程序結束或當掉時自動釋放。已在 Windows 上驗收同時寫入與程序被暫停的情況；Linux（含 WSL）還沒有驗收。
+- **桌面版與 VS Code 同時開**：兩邊用作業系統的鎖（Windows 上是具名管道）輪流寫入同一份記憶，程序結束或當掉時自動釋放。已在 Windows 上驗收同時寫入與程序被暫停的情況；Linux（Ubuntu 20.04）驗收過桌面版與 VS Code 同時寫入；WSL 還沒有驗收。
 
 ### 內建擴充
 
@@ -750,7 +751,7 @@ scripts/
 目前的安裝檔沒有程式碼簽章。SmartScreen 警告可以按「其他資訊 → 仍要執行」；但如果 Windows 11 的「智慧型應用程式控制」（Smart App Control）是開啟的，未簽章的程式可能會被直接擋下，沒有略過的選項。這時可以改用 [VS Code 插件](#vs-code-插件)，或[從原始碼建置](#從原始碼建置)後以 `npm run desktop` 執行。「智慧型應用程式控制」的開關在「Windows 安全性 → 應用程式與瀏覽器控制」；在部分 Windows 版本中關閉後無法直接再開啟，請自行評估是否要關閉。
 
 **有 Linux 版嗎？**
-0.3.0 沒有。這一版新增的專案記憶在 Linux 上用另一套鎖，還沒有實測，主要流程也沒在 Linux 上跑過，所以只發布 Windows 版與 VS Code 插件。需要在 Linux 上用，可以用 0.2.4 的 Linux 版，或[從原始碼建置](#從原始碼建置)（未經驗收）。
+有，x64 的 `.tar.gz`，見 [Linux](#linuxx64)。0.3.0 的 Linux 版是在 Ubuntu 上驗收過之後才補發到同一個 Release 的，範圍見 [CHANGELOG](CHANGELOG.md) 的「Linux x64 補發」。
 
 **升級後，我的 skill 為什麼變成「待確認」、沒有給 agent 用？**
 0.3.0 起，匯入或手動放入的 skill 要先經你確認那一版才會載入；升級前用編輯器建立的 skill，因為舊版沒有留下紀錄，也要確認一次。到「設定 → 能力」打開它的開關，看過掃描結果後按「啟用這一版」即可，見 [Skills 與審查](#skills-與審查)。

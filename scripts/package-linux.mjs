@@ -34,6 +34,16 @@ walk(unpacked, name);
 // Shell scripts with Unix line endings, and the icon for the menu entry.
 for (const f of ['aivenue.sh', 'install.sh', 'uninstall.sh']) entries.push({ path: `${name}/${f}`, data: Buffer.from(fs.readFileSync(path.join(desktop, 'linux', f), 'utf8').replace(/\r\n/g, '\n')), exec: true });
 entries.push({ path: `${name}/aivenue.png`, file: path.join(desktop, 'build', 'icon.png') });
+// The files of an install from before the list (0.2.4 and earlier): what install.sh may replace and uninstall.sh may remove there.
+const LEGACY = '.aivenue-legacy-files';
+const legacy = fs.readFileSync(path.join(desktop, 'linux', 'legacy-0.3.0-files.txt'), 'utf8').split(/\r?\n/).filter((l) => l && !l.startsWith('#'));
+entries.push({ path: `${name}/${LEGACY}`, data: Buffer.from(legacy.join('\n') + '\n') });
+// Every file of the package, one relative path per line: install.sh copies exactly these, and uninstall.sh / a
+// reinstall remove only these, so anything else in the install folder (a user's data, notes) is never deleted.
+const MANIFEST = '.aivenue-files';
+const files = [...new Set(entries.filter((e) => !e.dir).map((e) => e.path.slice(name.length + 1))), MANIFEST].sort();
+for (const f of [...files, ...legacy]) if (/[\n\r]/.test(f) || f.startsWith('/') || f.split('/').includes('..')) throw new Error(`unsafe file name for the manifest: ${f}`);
+entries.push({ path: `${name}/${MANIFEST}`, data: Buffer.from(files.join('\n') + '\n') });
 
 const octal = (n, len) => n.toString(8).padStart(len - 1, '0') + '\0';
 function header(p, size, mode, type) {

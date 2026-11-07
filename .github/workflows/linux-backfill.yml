@@ -1,0 +1,114 @@
+# Linux x64 package for the existing v0.3.0 release (backfill): builds Aivenue-0.3.0-linux-x64.tar.gz from this
+# branch's commit, runs the test suite on Linux, then accepts that same file on Ubuntu 22.04 and 24.04
+# (scripts/linux-accept/accept.sh). Read-only: it never creates, edits or uploads to a GitHub Release.
+name: Linux backfill (0.3.0)
+
+on:
+  push:
+    branches:
+      - linux-0.3.0-backfill
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # bash -eo pipefail: a failing command before `| tee` fails the step.
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.pkg.outputs.sha256 }}
+      file: ${{ steps.pkg.outputs.file }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Tests (node --test scripts/test-*.mjs)
+        run: node --test scripts/test-*.mjs 2>&1 | tee test-all.log
+      - name: Linux install tests on their own
+        run: node --test scripts/test-linux-install.mjs 2>&1 | tee test-linux-install.log
+      - run: mkdir -p release
+      - name: Package Linux
+        run: npm run package:linux 2>&1 | tee package-linux.log
+      - id: pkg
+        name: SHA-256
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./packages/desktop/package.json').version")"
+          f="Aivenue-$v-linux-x64.tar.gz"
+          cd release
+          sha256sum "$f" | tee SHA256SUMS.txt
+          echo "file=$f" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 SHA256SUMS.txt)" >> "$GITHUB_OUTPUT"
+          echo "Built $f from $GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: |
+            release/${{ steps.pkg.outputs.file }}
+            release/SHA256SUMS.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs
+          path: |
+            test-all.log
+            test-linux-install.log
+            package-linux.log
+
+  accept:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-package
+          path: pkg
+      - name: The published 0.2.4 Linux package (for the upgrade cases)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download v0.2.4 -R "$GITHUB_REPOSITORY" -p 'Aivenue-0.2.4-linux-x64.tar.gz' -D old
+          echo "0f25f76bdba11347d5e331d1dfb0f3dabc99f731820702cb7a95e71539307897  old/Aivenue-0.2.4-linux-x64.tar.gz" | sha256sum -c
+      - name: X server and Electron's libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb libnss3 libgbm1 libxss1 libxtst6
+          sudo apt-get install -y -q libasound2t64 || sudo apt-get install -y -q libasound2
+          sudo apt-get install -y -q libgtk-3-0t64 || sudo apt-get install -y -q libgtk-3-0
+      - name: System
+        run: |
+          lsb_release -ds; uname -srm
+          echo "unprivileged user namespaces: $(unshare --user --map-root-user true 2>/dev/null && echo allowed || echo restricted)"
+      - name: Accept the package
+        run: |
+          set -o pipefail
+          Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          sleep 2
+          DISPLAY=:99 bash scripts/linux-accept/accept.sh "pkg/${{ needs.build.outputs.file }}" "${{ needs.build.outputs.sha256 }}" "$GITHUB_SHA" old/Aivenue-0.2.4-linux-x64.tar.gz "$RUNNER_TEMP/acc" 2>&1 | tee accept-${{ matrix.os }}.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: accept-${{ matrix.os }}
+          path: |
+            accept-${{ matrix.os }}.log
+            ${{ runner.temp }}/acc/shots
+            ${{ runner.temp }}/acc/out

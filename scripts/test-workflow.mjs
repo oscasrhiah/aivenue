@@ -1126,6 +1126,23 @@ test('解碼：capture（git 等指令）與 wait_for 的檢查指令，輸出�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('capture：指令不讀輸入就結束（如 git --version），寫入的 EPIPE 不會變成未捕捉的錯誤', async () => {
+  // More input than a pipe holds, to a child that exits at once: the write always fails with EPIPE.
+  const uncaught = [];
+  const onUncaught = (e) => uncaught.push(e);
+  process.on('uncaughtException', onUncaught);
+  try {
+    for (let i = 0; i < 5; i++) {
+      const r = await W.capture(process.execPath, ['-e', 'process.exit(3)'], { input: 'x'.repeat(1 << 20) });
+      assert.equal(r.code, 3);
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  } finally {
+    process.off('uncaughtException', onUncaught);
+  }
+  assert.deepEqual(uncaught.map((e) => e.code), []);
+});
+
 // ---------- 失敗的編輯：依實際觀察標示，不列為確定改動 ----------
 
 function editRun(edits) {
