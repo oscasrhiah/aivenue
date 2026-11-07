@@ -9,6 +9,11 @@
 - 只開啟要驗收的那一項 Skill：「設定 → 能力 → 可開關的內建 Skill」，其他三項保持關閉。
 - 和既有功能比較時，同一個案例各跑一次。
 
+**自動跑**：`npm run build` 之後，用 `node scripts/skill-cases/run.mjs pack <輸出資料夾>` 跑四項都開啟的版本，用 `baseline` 跑對照組（Skill 關閉、改開 Agent Skills；GitHub Actions 案例改開工作流的「安全檢查」）。
+- 腳本會用自己的 `AIVENUE_HOME` 啟動 hub，所有角色都用 OpenCode，預設是免費模型 `opencode/deepseek-v4.1-flash-free`，可以用 `SKILL_MODEL` 換掉。
+- 跑完用 `analyze.mjs` 看每個角色的技能清單、讀了哪些 Skill 檔案、跑了哪些指令，用 `issues.mjs` 取出每輪完整的交付與審查結果。
+- 審查案例只跑一輪：審查者要求修改後，工作流會停下來問要不要再跑一輪，腳本等 1 分鐘就取消；判讀用的是審查者已經交出的結果。
+
 這些案例會呼叫真實模型、消耗 CLI 額度，所以不在自動測試裡。自動測試（`scripts/test-graphify.mjs`）只驗證三件事：
 - 開關會影響技能清單和規則。
 - 每個角色拿到的 Skill 正確。
