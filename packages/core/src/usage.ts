@@ -237,6 +237,8 @@ function readCodexQuotaLive(spec: ProviderSpec): Promise<ProviderUsage['official
       resolve(v);
     };
     const timer = setTimeout(() => done(undefined), 15000);
+    // app-server may exit before reading (old CLI, not logged in): the write fails with EPIPE, handled by `exit`.
+    child.stdin?.on('error', () => undefined);
     const send = (m: unknown) => child.stdin?.write(JSON.stringify(m) + '\n');
     let buf = '';
     child.on('error', () => done(undefined));

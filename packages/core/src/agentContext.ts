@@ -135,6 +135,8 @@ export function compactCodexThread(spec: ProviderSpec, threadId: string, timeout
       else resolve();
     };
     const timer = setTimeout(() => done(new Error('Codex compaction timed out')), timeoutMs);
+    // app-server may exit before reading (old CLI, not logged in): the write fails with EPIPE, handled by `exit`.
+    child.stdin?.on('error', () => undefined);
     const send = (m: unknown) => child.stdin?.write(JSON.stringify(m) + '\n');
     let started = false;
     let buf = '';

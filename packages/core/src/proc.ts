@@ -312,6 +312,9 @@ export function capture(command: string, args: string[], opts: { cwd?: string; t
       clearTimeout(timer);
       resolve({ code, stdout, stderr });
     });
+    // A command that exits without reading its input (`git --version`) closes the pipe first; the write then fails
+    // with EPIPE. Without a listener that error is uncaught and takes down the process (the app's main process).
+    child.stdin?.on('error', () => undefined);
     child.stdin?.end(opts.input ?? '');
   });
 }
