@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const args = process.argv.slice(2);
@@ -63,12 +63,27 @@ plan.sort((x, y) => weight(y.file) - weight(x.file));
 
 const KEYS = ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'];
 const count = (out, key) => Number(out.match(new RegExp(`^ℹ ${key} (\\d+)`, 'm'))?.[1] ?? 0);
+// The runner's own settings for each process replace anything of the kind in its environment: a split inherited from
+// outside (AIVENUE_TEST_SHARD=1/2 with --test-only, say) would make that process skip tests and still pass. So does
+// NODE_TEST_CONTEXT, which node sets when the runner itself is started from a test and which changes how a child reports.
+const INHERITED = new Set(['AIVENUE_TEST_SHARD', 'AIVENUE_TEST_PHASE', 'AIVENUE_TEST_REPORT', 'NODE_TEST_CONTEXT']);
+const baseEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => !INHERITED.has(k)));
+const topLevelReporter = pathToFileURL(path.join(root, 'scripts', 'lib', 'test-top-level.mjs')).href;
+// Names in `ran` that the wrapper did not register (counting repeats): tests made straight from node:test.
+function unregistered(ran, names) {
+  const left = new Map();
+  for (const n of names) left.set(n, (left.get(n) ?? 0) + 1);
+  return ran.filter((n) => (left.get(n) ?? 0) > 0 ? (left.set(n, left.get(n) - 1), false) : true);
+}
 function run(job) {
   return new Promise((resolve) => {
     const t0 = Date.now();
-    const reportFile = path.join(reports, `${jobId++}.json`);
-    const env = { ...process.env, ...job.env, AIVENUE_TEST_REPORT: reportFile };
-    const child = spawn(process.execPath, ['--test', '--test-reporter=spec', ...nodeFlags, job.file], { cwd: root, env });
+    const id = jobId++;
+    const reportFile = path.join(reports, `${id}.json`);
+    const topFile = path.join(reports, `${id}.top.json`);
+    const env = { ...baseEnv, ...job.env, AIVENUE_TEST_REPORT: reportFile };
+    const reporters = ['--test-reporter=spec', '--test-reporter-destination=stdout', `--test-reporter=${topLevelReporter}`, `--test-reporter-destination=${topFile}`];
+    const child = spawn(process.execPath, ['--test', ...reporters, ...nodeFlags, job.file], { cwd: root, env });
     let out = '';
     child.stdout.setEncoding('utf8').on('data', (d) => (out += d));
     child.stderr.setEncoding('utf8').on('data', (d) => (out += d));
@@ -77,11 +92,27 @@ function run(job) {
       try {
         report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
       } catch {}
+      let top = null;
+      try {
+        top = JSON.parse(fs.readFileSync(topFile, 'utf8'));
+      } catch {}
       const r = { ...job, code, out, ms: Date.now() - t0, report, ...Object.fromEntries(KEYS.map((k) => [k, count(out, k)])) };
+      const rel = path.relative(root, job.file);
       // A file that ran to the end without loading the shard wrapper would run every test in every process.
       if (code === 0 && !report) {
         r.code = 1;
-        r.out += `\n${path.relative(root, job.file)} does not take \`test\` from scripts/lib/test-shard.mjs, so it cannot be split\n`;
+        r.out += `\n${rel} does not take \`test\` from scripts/lib/test-shard.mjs, so it cannot be split\n`;
+      }
+      // Nor may a file mix the two: a test made straight from node:test runs in each of its processes. The one
+      // exception is node's own entry for a process that registered nothing (the file itself, as one test).
+      const extra = report && top ? unregistered(top, report.names) : [];
+      if (extra.length && !(report.registered === 0 && top.length === 1)) {
+        r.code = r.code || 1;
+        r.out += `\n${rel} runs ${extra.length} test(s) not taken from scripts/lib/test-shard.mjs, which every process of the file would run again: ${extra.map((n) => JSON.stringify(n)).join(', ')}\n`;
+      }
+      if (report && !top) {
+        r.code = r.code || 1;
+        r.out += `\n${rel}: node did not report which tests ran (scripts/lib/test-top-level.mjs)\n`;
       }
       resolve(r);
     });

@@ -114,3 +114,33 @@ test('平行測試：選項拆成兩個物件、或檔案沒用分片包裝時�
   assert.equal(got.code, 1);
   assert.match(got.out, /does not take `test` from scripts\/lib\/test-shard\.mjs/);
 });
+
+test('平行測試：外部環境帶著分片設定時，--test-only 的失敗測試仍然被執行並回報失敗', () => {
+  const file = path.join('scripts', 'lib', 'fixtures', 'only-failing.mjs');
+  const want = plain(['--test-only'], file);
+  assert.equal(want.code, 1);
+  assert.deepEqual(want.totals, { tests: 1, pass: 0, fail: 1, skipped: 0, todo: 0 });
+  // A split or phase left in the environment (from an outer run, or set by hand) is the runner's to set, not inherit.
+  for (const inherited of [{}, { AIVENUE_TEST_SHARD: '1/2' }, { AIVENUE_TEST_SHARD: '1/2', AIVENUE_TEST_PHASE: 'exclusive' }]) {
+    for (const flags of [['--test-only'], []]) {
+      const env = { ...clean(), AIVENUE_TEST_JOBS: '4', AIVENUE_TEST_VERBOSE: '1', ...inherited };
+      const r = spawnSync(process.execPath, [path.join('scripts', 'run-tests.mjs'), ...flags, file], { encoding: 'utf8', env });
+      const out = r.stdout + r.stderr;
+      const at = `${JSON.stringify(inherited)} ${flags.join(' ')}`;
+      assert.equal(r.status, 1, at);
+      assert.deepEqual(totals(out.slice(out.lastIndexOf('ℹ tests'))), want.totals, `${at}: totals`);
+      assert.deepEqual(statuses(out), want.statuses, `${at}: each test`);
+    }
+  }
+});
+
+test('平行測試：同一檔案混用分片包裝與原生 node:test 時直接失敗並列出那些測試，不論拆成幾份', () => {
+  const file = path.join('scripts', 'lib', 'fixtures', 'mixed-wrapper.mjs');
+  // Run plainly the file is fine (3 tests); split, the node:test one would run in every process.
+  assert.deepEqual(plain([], file).totals, { tests: 3, pass: 3, fail: 0, skipped: 0, todo: 0 });
+  for (const shards of [1, 2, 3]) {
+    const got = runner(4, shards, [], file);
+    assert.equal(got.code, 1, `${shards} shards`);
+    assert.match(got.out, /runs 1 test\(s\) not taken from scripts\/lib\/test-shard\.mjs.*"straight from node:test"/, `${shards} shards`);
+  }
+});

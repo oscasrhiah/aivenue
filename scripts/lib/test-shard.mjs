@@ -4,9 +4,9 @@
 //                               neighbours land in different processes);
 //   AIVENUE_TEST_PHASE=parallel tests marked { exclusive: true } are left out;
 //   AIVENUE_TEST_PHASE=exclusive only those tests run (the runner starts them alone, after the parallel phase);
-//   AIVENUE_TEST_REPORT=<file>  on exit, write how many tests this process registered and how many exclusive tests
-//                               the file has. The runner plans from these, never from the source text, so a comment
-//                               or a test made in a loop cannot change what runs.
+//   AIVENUE_TEST_REPORT=<file>  on exit, write the names of the tests this process registered and how many exclusive
+//                               tests the file has. The runner plans from these, never from the source text, so a
+//                               comment or a test made in a loop cannot change what runs.
 // test.skip, test.todo and test.only take the same path as test, so each is registered by exactly one process and
 // the totals match a plain run. `only` keeps node's meaning: ignored unless --test-only is given (the runner passes
 // that flag on to every process), then only those tests run.
@@ -28,7 +28,8 @@ delete process.env.AIVENUE_TEST_REPORT;
 let seen = 0;
 let registered = 0;
 let exclusives = 0;
-if (report) process.on('exit', () => fs.writeFileSync(report, JSON.stringify({ registered, exclusives })));
+const names = [];
+if (report) process.on('exit', () => fs.writeFileSync(report, JSON.stringify({ registered, exclusives, names })));
 
 function register(method, name, ...rest) {
   // node's own forms: (name), (name, fn), (name, options), (name, options, fn). Anything longer, or a function slot
@@ -44,6 +45,7 @@ function register(method, name, ...rest) {
   if (phase === 'parallel' && exclusive) return undefined;
   if (phase !== 'exclusive' && seen++ % shards !== shard) return undefined;
   registered++;
+  names.push(String(name));
   return fn === undefined ? method(name, options) : method(name, options, fn);
 }
 
