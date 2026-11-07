@@ -14,12 +14,14 @@ const statuses = (out) =>
   Object.fromEntries(
     [...out.matchAll(/^\s*([✔✖﹣]) (.+?) \([\d.]+ms\)( # (SKIP|TODO))?\s*$/gm)].map((m) => [m[2], m[4] ? m[4].toLowerCase() : m[1] === '✔' ? 'pass' : m[1] === '✖' ? 'fail' : 'skip']),
   );
-function plain(flags = []) {
-  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...flags, fixture], { encoding: 'utf8', env: clean() });
+function plain(flags = [], file = fixture) {
+  const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', ...flags, file], { encoding: 'utf8', env: clean() });
   return { totals: totals(r.stdout + r.stderr), statuses: statuses(r.stdout + r.stderr) };
 }
-function runner(jobs, shards, flags = []) {
-  const r = spawnSync(process.execPath, [path.join('scripts', 'run-tests.mjs'), ...flags, fixture], { encoding: 'utf8', env: { ...clean(), AIVENUE_TEST_JOBS: String(jobs), AIVENUE_TEST_SHARDS: String(shards), AIVENUE_TEST_VERBOSE: '1' } });
+function runner(jobs, shards, flags = [], file = fixture) {
+  const env = { ...clean(), AIVENUE_TEST_JOBS: String(jobs), AIVENUE_TEST_VERBOSE: '1' };
+  if (shards !== undefined) env.AIVENUE_TEST_SHARDS = String(shards);
+  const r = spawnSync(process.execPath, [path.join('scripts', 'run-tests.mjs'), ...flags, file], { encoding: 'utf8', env });
   const out = r.stdout + r.stderr;
   return { code: r.status, totals: totals(out.slice(out.lastIndexOf('ℹ tests'))), statuses: statuses(out) };
 }
@@ -43,5 +45,32 @@ test('平行測試：--test-only 交給每個程序，只跑 only 的測試，�
     assert.equal(got.code, 0);
     assert.deepEqual(got.totals, want.totals, `${jobs} jobs, ${shards} shards: totals`);
     assert.deepEqual(got.statuses, want.statuses, `${jobs} jobs, ${shards} shards: each test`);
+  }
+});
+
+test('平行測試：只有獨佔測試的檔案直接進獨佔階段，直接執行、單核心、多核心都只有 1 項通過', () => {
+  const file = path.join('scripts', 'lib', 'fixtures', 'exclusive-only.mjs');
+  const want = plain([], file);
+  assert.deepEqual(want.totals, { tests: 1, pass: 1, fail: 0, skipped: 0, todo: 0 });
+  for (const [jobs, shards] of [[1, undefined], [4, undefined], [4, 3]]) {
+    const got = runner(jobs, shards, [], file);
+    assert.equal(got.code, 0, `${jobs} jobs, ${shards ?? 'auto'} shards`);
+    assert.deepEqual(got.totals, want.totals, `${jobs} jobs, ${shards ?? 'auto'} shards: totals`);
+    assert.deepEqual(got.statuses, want.statuses, `${jobs} jobs, ${shards ?? 'auto'} shards: each test`);
+  }
+});
+
+test('平行測試：拆分數或同時程序數不是正整數時直接失敗並說明，不會漏跑測試卻回報成功', () => {
+  for (const [name, value] of [['AIVENUE_TEST_SHARDS', '1.5'], ['AIVENUE_TEST_SHARDS', '0'], ['AIVENUE_TEST_SHARDS', 'abc'], ['AIVENUE_TEST_JOBS', '2.5']]) {
+    const r = spawnSync(process.execPath, [path.join('scripts', 'run-tests.mjs'), fixture], { encoding: 'utf8', env: { ...clean(), [name]: value } });
+    assert.equal(r.status, 2, `${name}=${value}`);
+    assert.match(r.stderr, new RegExp(`${name} must be a whole number`));
+    assert.doesNotMatch(r.stdout, /ℹ tests/, 'nothing ran');
+  }
+  // The shard wrapper refuses a malformed split of its own, so a file run by hand with one fails instead of shrinking.
+  for (const value of ['0/1.5', '2/2', 'x']) {
+    const r = spawnSync(process.execPath, ['--test', '--test-reporter=spec', fixture], { encoding: 'utf8', env: { ...clean(), AIVENUE_TEST_SHARD: value } });
+    assert.notEqual(r.status, 0, `AIVENUE_TEST_SHARD=${value}`);
+    assert.match(r.stdout + r.stderr, /AIVENUE_TEST_SHARD must be i\/n/);
   }
 });

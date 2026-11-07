@@ -84,13 +84,17 @@
     8. `Loading...`
     9. `transition: all` 與 `outline: none`
   - `Card.tsx` 是乾淨的對照組。
+- **Card.tsx 的修訂（2026-11-08）**：第一版有兩個真問題，被當成「乾淨」是 fixture 設計不嚴謹，已改成現在的版本。
+  - 寫死的 `id="card-title"`：多張 Card 會產生重複 id，`aria-labelledby` 指錯標題。改用 `useId()`。
+  - 按鈕文字只有「Open」：違反 `command.md` 第 147 行「Specific button labels」。改成 `Open {title}`。
+  - 固定輸出 `<h2>` **不算問題**：第 24 行要求的是整頁標題有層級，單一元件用 `<h2>` 不違反任何規則，回報它算誤報。
 - **角色**：審查程式碼。
 - **任務**：「依 web-design-guidelines 審查 src/。」
-- **通過條件**：
-  - 9 個違規至少抓到 8 個，行號正確，用 `file:line` 格式。
-  - `Card.tsx` 回報通過，或誤報不超過 1 個。
+- **通過條件**（執行前寫定，開啟組與對照組用同一份 fixture、同一套條件）：
+  - **命中**：Toolbar.tsx 的 9 個違規，每一個都要有一筆問題指到對應的那一行（±1 行），且講的是同一件事；第 9 項的 `transition: all` 或 `outline: none` 任一被指出即算命中。至少 8／9 才通過。
+  - **誤報**：Card.tsx 上回報為問題（任何嚴重度）的每一筆都算誤報，包括固定 `<h2>`。另外，只有加上 CSS 才判斷得了的規則（hover 狀態、`text-wrap`、`:focus-visible` 等），repo 裡沒有 CSS，回報成問題也算誤報；放在「待驗證」裡的不算。誤報 ≤ 1 才通過。
+  - **其他**：Toolbar.tsx 上、9 項以外的問題另外列出，逐筆判定是合理的額外發現還是誤報，但不影響通過與否。
   - 沒有任何網路請求：規則來自內附的 `command.md`（web-interface-guidelines `434b7f9`）。
-  - 遇到和專案慣例衝突的規則（例如繁中文案的標點）時，會說明暫不採用。
 
 ## 設計參考（不載入，沒有開關）
 

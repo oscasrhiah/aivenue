@@ -18,8 +18,19 @@ const args = process.argv.slice(2);
 const nodeFlags = args.filter((a) => a === '--test-only');
 const named = args.filter((a) => !a.startsWith('--'));
 const files = (named.length ? named : fs.readdirSync(path.join(root, 'scripts')).filter((f) => /^test-.*\.mjs$/.test(f)).map((f) => path.join('scripts', f))).map((f) => path.resolve(root, f));
+// A setting that must be a whole number of at least 1. Anything else stops the run: a split of 1.5 would make every
+// process skip tests and still report success.
+function wholeNumber(name) {
+  const v = process.env[name];
+  if (v === undefined || v === '') return undefined;
+  if (!/^[1-9]\d*$/.test(v.trim())) {
+    console.error(`${name} must be a whole number of at least 1, not "${v}"`);
+    process.exit(2);
+  }
+  return Number(v);
+}
 // As many processes at once as this machine has cores (AIVENUE_TEST_JOBS overrides it).
-const jobs = Math.max(1, Number(process.env.AIVENUE_TEST_JOBS) || os.availableParallelism());
+const jobs = wholeNumber('AIVENUE_TEST_JOBS') ?? os.availableParallelism();
 // How long each file takes alone, relative to the others (seconds on one machine; files not listed are quick). Each
 // file is split in proportion to its share of the whole and the number of cores, so a machine with more cores splits
 // further and one with fewer splits less; the extra quarter keeps every core busy while the short files finish.
@@ -27,19 +38,27 @@ const jobs = Math.max(1, Number(process.env.AIVENUE_TEST_JOBS) || os.availablePa
 const COST = { 'test-bench.mjs': 64, 'test-orchestrator.mjs': 62, 'test-memory.mjs': 27, 'test-workflow.mjs': 6 };
 const cost = (file) => COST[path.basename(file)] ?? 2;
 const total = files.reduce((s, f) => s + cost(f), 0);
-// The tests of the parallel phase (exclusive ones run later): no process may be left without a test, or node reports
-// the file itself as one.
-const testsIn = (file) => {
+// The tests of the parallel phase (exclusive ones run later). No process may be left without a test, or node reports
+// the file itself as one: a file is never split into more processes than this, and one with none (only exclusive
+// tests) gets no parallel process at all.
+const parallelTests = (file) => {
   const src = fs.readFileSync(file, 'utf8');
-  return Math.max(1, (src.match(/^test(\.(skip|todo|only))?\(/gm) ?? []).length - (src.match(/exclusive:\s*true/g) ?? []).length);
+  return Math.max(0, (src.match(/^test(\.(skip|todo|only))?\(/gm) ?? []).length - (src.match(/exclusive:\s*true/g) ?? []).length);
 };
-const forced = Number(process.env.AIVENUE_TEST_SHARDS) || 0;
+const hasExclusive = (file) => /exclusive:\s*true/.test(fs.readFileSync(file, 'utf8'));
+const forced = wholeNumber('AIVENUE_TEST_SHARDS');
 // With --test-only each file runs whole in one process: a process left without any `only` test would report the
 // file itself as a test, so splitting would change the totals (and a focused run gains nothing from it).
 const only = nodeFlags.includes('--test-only');
-const shardsOf = (f) => (only ? 1 : Math.max(1, Math.min(testsIn(f), forced || Math.ceil((cost(f) / total) * jobs * 1.25))));
+const shardsOf = (f) => {
+  if (only) return 1;
+  const n = parallelTests(f);
+  // A file with no test found at all still gets one plain process, so it is run (and its failure seen) as before.
+  if (!n) return hasExclusive(f) ? 0 : 1;
+  return Math.max(1, Math.min(n, forced ?? Math.ceil((cost(f) / total) * jobs * 1.25)));
+};
 const SHARDS = new Map(files.map((f) => [f, shardsOf(f)]));
-const weight = (file) => cost(file) / SHARDS.get(file);
+const weight = (file) => cost(file) / Math.max(1, SHARDS.get(file));
 
 const plan = [];
 const exclusive = [];
@@ -50,7 +69,7 @@ for (const file of files) {
     continue;
   }
   for (let i = 0; i < n; i++) plan.push({ file, env: { AIVENUE_TEST_SHARD: `${i}/${n}`, AIVENUE_TEST_PHASE: 'parallel' } });
-  if (/exclusive:\s*true/.test(fs.readFileSync(file, 'utf8'))) exclusive.push({ file, env: { AIVENUE_TEST_PHASE: 'exclusive' } });
+  if (hasExclusive(file)) exclusive.push({ file, env: { AIVENUE_TEST_PHASE: 'exclusive' } });
 }
 // Longest first, so the slow shards start at once and the short files fill the gaps.
 plan.sort((x, y) => weight(y.file) - weight(x.file));

@@ -11,8 +11,13 @@
 // computer, or it judges a lock by timing.
 import { test as base } from 'node:test';
 
-const [shard, shards] = (process.env.AIVENUE_TEST_SHARD ?? '0/1').split('/').map(Number);
+// "i/n" with whole numbers, 0 <= i < n. Anything else would make tests vanish from every process, so it stops the file.
+const spec = process.env.AIVENUE_TEST_SHARD ?? '0/1';
+const m = /^(\d+)\/([1-9]\d*)$/.exec(spec);
+if (!m || Number(m[1]) >= Number(m[2])) throw new Error(`AIVENUE_TEST_SHARD must be i/n with whole numbers and i < n, not "${spec}"`);
+const [shard, shards] = [Number(m[1]), Number(m[2])];
 const phase = process.env.AIVENUE_TEST_PHASE;
+if (phase !== undefined && phase !== 'parallel' && phase !== 'exclusive') throw new Error(`AIVENUE_TEST_PHASE must be parallel or exclusive, not "${phase}"`);
 let seen = 0;
 
 function register(method, name, opts, fn) {
