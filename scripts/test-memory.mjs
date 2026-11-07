@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { build } from 'esbuild';
 
 // 專案記憶的儲存層（docs/memory-phase1.md §5、§6、§10）：多個子程序同時寫、鎖、崩潰復原、刪除不復活。
@@ -163,7 +163,7 @@ test('鎖：六個子程序爭用同一把鎖，任何時刻只有一個在臨�
   assert.equal(fs.existsSync(overlaps) ? fs.readFileSync(overlaps, 'utf8').length : 0, 0);
 });
 
-test('鎖：持有者事件迴圈阻塞時拿不到；持有者被強制結束後拿得到', async () => {
+test('鎖：持有者事件迴圈阻塞時拿不到；持有者被強制結束後拿得到', { exclusive: true }, async () => {
   const dir = freshDir();
   const name = M.lockName(dir, 'p1');
   const blocked = worker(['hold', dir, 'block']);
@@ -195,7 +195,7 @@ function osSuspend(pid, resume = false) {
   } else process.kill(pid, resume ? 'SIGCONT' : 'SIGSTOP');
 }
 
-test('鎖：持有者被作業系統暫停時不被接管、等待者不寫入；恢復後兩筆都在；暫停中被結束後等待者接著寫', { skip: !['win32', 'linux'].includes(process.platform) && 'locks are Windows and Linux only' }, async () => {
+test('鎖：持有者被作業系統暫停時不被接管、等待者不寫入；恢復後兩筆都在；暫停中被結束後等待者接著寫', { exclusive: true }, { skip: !['win32', 'linux'].includes(process.platform) && 'locks are Windows and Linux only' }, async () => {
   for (const ending of ['resume', 'kill']) {
     const dir = freshDir();
     const release = path.join(dir, 'release');

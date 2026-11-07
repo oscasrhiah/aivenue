@@ -724,6 +724,7 @@ npm run package:vscode    # 產生 release/aivenue-vscode.vsix
 ```bash
 npm run dev:hub           # 不開 Electron，只啟動引擎；用瀏覽器開啟印出的網址
 npm run typecheck         # 所有套件的 TypeScript 型別檢查
+npm test                  # 全部測試，用上這台電腦的所有核心（慢的測試檔會拆成多個程序同時跑）
 ```
 
 推送 `v*` 標籤時，[.github/workflows/release.yml](.github/workflows/release.yml) 會自動打包上述檔案並建立 GitHub Release。

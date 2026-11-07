@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { build } from 'esbuild';
 import { spawn } from 'node:child_process';
 
@@ -562,7 +562,7 @@ test('CLI 自己壓縮對話：記下實際上限、交還它做過的事；輪�
   assert.ok(r.log.some((l) => /自己壓縮了對話/.test(l.text)));
 });
 
-test('agent 自己在背景開的程序：沒有 track_process 也會被找到並追蹤', async () => {
+test('agent 自己在背景開的程序：沒有 track_process 也會被找到並追蹤', { exclusive: true }, async () => {
   const { orch, cwd } = setup();
   const script = path.join(cwd, 'aivenue-slowjob.js');
   fs.writeFileSync(script, 'setTimeout(() => {}, 60000);');
@@ -707,7 +707,7 @@ test('壓縮者額度用完：錯誤訊息不會被當成整理結果，問使�
   assert.equal(calls, 2);
 });
 
-test('GPU 鎖住的卡上有沒人登記的程序：自動當成鎖卡的 agent 的背景程序', async () => {
+test('GPU 鎖住的卡上有沒人登記的程序：自動當成鎖卡的 agent 的背景程序', { exclusive: true }, async () => {
   const job = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
   job.unref();
   const smi = (args) =>

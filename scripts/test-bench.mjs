@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { fileURLToPath } from 'node:url';
 
 // 效率基準跑法（scripts/bench/run.mjs）本身的測試：用替身 CLI／hub，不呼叫任何模型。

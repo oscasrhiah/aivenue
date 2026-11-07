@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { build } from 'esbuild';
 
 // 模型清單不能因為 CLI 讀取失敗就變成空的：先重試，再用上一次成功的清單，最後用內建的免費模型。

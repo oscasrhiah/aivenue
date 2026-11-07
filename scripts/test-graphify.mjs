@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { build } from 'esbuild';
 
 // 僅替換程序邊界，實際執行擴充服務的安裝、狀態和重試流程。

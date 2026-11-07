@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 
 // install.sh / uninstall.sh on a stub package in a throwaway HOME: default and custom install folders, folders that are
 // not Aivenue's, and the user's files — in ~/.aivenue or inside the install folder itself — which are always kept.

@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createRequire } from 'node:module';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import { build } from 'esbuild';
 
 // 工作流的控制規則（路由、限制、錯誤分類、紀錄、匯出）都是純函式，直接打包原始碼測試。

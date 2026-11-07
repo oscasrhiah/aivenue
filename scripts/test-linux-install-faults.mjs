@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 
 // Every step of install.sh and uninstall.sh, made to fail one at a time: each call of each outside command they use
 // (reading, hashing, writing the records, copying and renaming files, removing them, resolving paths) fails once, as a
