@@ -2,6 +2,32 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 0.4.0 - 未發布（候選）
+
+> ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
+
+新增四項可以自己打開的內建 Skill，「設定」各頁改成跟著視窗寬度調整。升級後這四項都是關閉的，原有設定不受影響。
+
+### 「設定 → 能力」
+
+- **可開關的內建 Skill**（新區塊，四項都預設關閉）：打開後，每次都會提供給對應的角色，由 agent 依任務決定要不要讀。每項都附一條規則，說明 Aivenue 怎麼調整原文的假設。
+  - **architecture-review**（mattpocock/skills 的 improve-codebase-architecture＋codebase-design，MIT）：給計畫者。結果寫在回覆裡，不產生 HTML、不開瀏覽器；列出候選後就停下。
+  - **diagnosing-bugs**（同一來源，MIT）：給實作者和 sub agent。需要你回答時用 Aivenue 的提問，不用終端機腳本。
+  - **gha-security-review**（getsentry/skills，Apache-2.0）：給程式審查者，審查 GitHub Actions 工作流。只做靜態檢查，不執行參考資料裡引用的攻擊字串。
+  - **web-design-guidelines**：給程式審查者。規則是 vercel-labs/web-interface-guidelines 釘選版本的內容（MIT），隨 Aivenue 附帶，不會上網抓取。
+- **按需使用的內建 Skill**（新區塊，說明用）：列出 gh-fix-ci、gh-address-comments、security-audit 各自做什麼、什麼時候會用到，沒有開關。
+- **設計參考（不會載入）**：impeccable、frontend-testing-debugging、accessibility-inspect 評估後只列為參考，Aivenue 不會載入或執行。
+- **內建擴充的卡片**：卡片高度跟著自己的內容，不再被同一列最高的卡片撐開。OmniRoute 的供應商清單、Agent Skills 的技能清單改在視窗裡開（「連接免費供應商…」、「選擇技能…」），這兩個視窗可以只用鍵盤操作：開啟時焦點移入、Tab 留在視窗內、Esc 關閉、關閉後焦點回到原按鈕。
+- **Ponytail 圖示**：從 🪮 改成 🎀。🪮 是 Unicode 15 才加入的字，Ubuntu 20.04 等較舊系統的表情符號字型沒有，會顯示成空白方框；agent 標題列的標記也一起改。
+
+### 介面
+
+- **「設定」各頁跟著視窗寬度調整**：原本固定 820px、靠在左邊，現在填滿設定欄，兩側留白跟著視窗縮放，卡片一列能放幾張也跟著寬度變化；只有長段文字保持好讀的行寬。
+
+### 開發
+
+- **`npm test` 用上所有核心**：測試檔平行執行，慢的檔案依核心數拆開；不能和其他測試同時跑的測試最後單獨執行。結果與直接執行 `node --test` 逐項相同（名稱、狀態、次數），有測試沒跑到、混用原生 `node:test`、或提前結束都會明確報錯。
+
 ## 0.3.1 - 2026-11-08
 
 > ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
