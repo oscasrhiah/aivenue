@@ -1559,17 +1559,23 @@ p {
 }
 
 /* Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute). */
+/* The cards' own width decides the layout, not the window's (the settings sidebar comes and goes). */
+.ext-grid-wrap {
+  container-type: inline-size;
+}
+
 .ext-grid {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  /* Every card is the same size: each row as tall as the tallest card, and every card fills its cell. */
-  grid-auto-rows: 1fr;
+  /* One card per row: each card keeps its own height. */
+  grid-auto-rows: auto;
   align-items: stretch;
 }
 
-/* One card per row (narrow windows): no need to match heights, each card keeps its own. */
-@media (max-width: 760px) {
+/* Two or more cards per row (two 320px columns and the 10px gap fit in 650px): every card is the same size, each row
+   as tall as the tallest card. Keep 650 in step with the column minimum above and the gap of .presets-grid. */
+@container (min-width: 650px) {
   .ext-grid {
-    grid-auto-rows: auto;
+    grid-auto-rows: 1fr;
   }
 }
 

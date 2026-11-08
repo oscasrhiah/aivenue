@@ -1080,10 +1080,12 @@ function Extensions() {
           <p className="muted small">{t('隨 Aivenue 附上，預設全部關閉，打開就能用。Graphify 與 OmniRoute 第一次打開時會自動下載需要的工具。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time.')}</p>
         </div>
       </div>
-      <div className="presets-grid ext-grid">
-        {list.map((s) => (
-          <ExtensionCard key={s.id} s={s} />
-        ))}
+      <div className="ext-grid-wrap">
+        <div className="presets-grid ext-grid">
+          {list.map((s) => (
+            <ExtensionCard key={s.id} s={s} />
+          ))}
+        </div>
       </div>
     </section>
   );
