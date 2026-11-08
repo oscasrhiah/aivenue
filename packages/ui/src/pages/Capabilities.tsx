@@ -1035,7 +1035,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
       )}
       {error && <div className="note err">{error}</div>}
       {guide && <ExtensionGuide id={s.id} onClose={() => setGuide(false)} />}
-      <div className="row gap">
+      <div className="row gap ext-foot">
         <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
           {t('來源', 'Source')}
         </button>

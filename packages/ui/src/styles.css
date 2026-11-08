@@ -1561,12 +1561,25 @@ p {
 /* Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute). */
 .ext-grid {
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  /* Each card is as tall as its own content: a short card is not stretched to match a long one in its row. */
-  align-items: start;
+  /* Every card is the same size: each row as tall as the tallest card, and every card fills its cell. */
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+}
+
+/* One card per row (narrow windows): no need to match heights, each card keeps its own. */
+@media (max-width: 760px) {
+  .ext-grid {
+    grid-auto-rows: auto;
+  }
 }
 
 .ext-card {
   align-items: stretch;
+}
+
+/* The source and license line sits at the bottom of every card, so the cards end alike. */
+.ext-card > .ext-foot {
+  margin-top: auto;
 }
 
 .ext-head {
