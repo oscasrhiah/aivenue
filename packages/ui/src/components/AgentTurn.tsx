@@ -538,7 +538,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           <span className="turn-ext">
             {agent.alwaysOn?.map((a) => (
               <span key={a} className="ext-chip" title={t(`整個任務都套用：${a}`, `Applied for the whole task: ${a}`)}>
-                🪮 {a}
+                🎀 {a}
               </span>
             ))}
             {agent.skillUses?.map((u) => (

@@ -780,7 +780,7 @@ function Skills() {
 
 const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en: string; url: string; license: string }> = {
   ponytail: {
-    icon: '🪮',
+    icon: '🎀',
     name: 'Ponytail',
     zh: '「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計、不加沒人要的功能。',
     en: '"The laziest senior dev in the room": the smallest change that fully solves the task, no over-engineering, no features nobody asked for.',
