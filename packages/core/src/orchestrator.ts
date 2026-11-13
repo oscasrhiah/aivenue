@@ -386,16 +386,31 @@ export class Orchestrator {
     return [...this.runs.values()].sort((a, b) => b.createdAt - a.createdAt).map(RunStore.summary);
   }
 
-  /** Auto mode: pick providers per role from what is ready right now. */
-  autoAssignment(config: Pick<WorkflowConfig, 'assignment' | 'attachments'>): AssignmentResult {
+  /** Auto mode: pick providers per role from what is ready (by default, as the registry says right now). */
+  autoAssignment(config: Pick<WorkflowConfig, 'assignment' | 'attachments'>, providers: ProviderInfo[] = this.d.registry.list()): AssignmentResult {
     return autoAssign({
-      providers: this.d.registry.list(),
+      providers,
       usage: this.d.usage.cachedSummary(this.d.registry.specs()),
       prefs: config.assignment?.auto ?? DEFAULT_AUTO,
       needsVision: (config.attachments ?? []).some(isImage),
       needsAudio: (config.attachments ?? []).some((a) => a.kind === 'audio'),
       needsVideo: (config.attachments ?? []).some((a) => a.kind === 'video'),
     });
+  }
+
+  /** autoAssignment once the providers' sign-in checks have settled (the assignment preview asks this). */
+  async settledAssignment(config: Pick<WorkflowConfig, 'assignment' | 'attachments'>): Promise<AssignmentResult> {
+    return this.autoAssignment(config, await this.settledProviders());
+  }
+
+  /** A provider whose sign-in is not known yet: its check still runs (as right after Aivenue starts), or never ran. */
+  private unsettled(p: ProviderInfo): boolean {
+    return p.installed && (p.auth.state === 'checking' || (p.auth.state === 'unknown' && !p.auth.checkedAt));
+  }
+
+  /** The providers (only those in `only`, if given) with each unsettled sign-in waited for, at most AUTH_WAIT_MS. */
+  private async settledProviders(only?: Set<string>): Promise<ProviderInfo[]> {
+    return Promise.all(this.d.registry.list().map(async (p) => ((!only || only.has(p.spec.id)) && this.unsettled(p) ? { ...p, auth: await this.d.registry.settledAuth(p.spec.id, AUTH_WAIT_MS) } : p)));
   }
 
   private applyAssignment(config: WorkflowConfig, a: AssignmentResult): WorkflowConfig {
@@ -432,7 +447,10 @@ export class Orchestrator {
     if (!config.plan.enabled && !config.implement.enabled) throw new Error(L('至少要啟用一個階段', 'Enable at least one stage'));
     // A pre-approval is never inherited by follow-ups or edits; only continueDenied() sets one.
     config = { ...config, extraDirs: checkExtraDirs(config.extraDirs, config.cwd), preApproved: undefined };
-    const assignment = config.assignment?.mode === 'auto' ? this.autoAssignment(config) : undefined;
+    // Auto mode while some sign-in check still runs (right after Aivenue starts): the roles are picked when the run
+    // begins (execute), once the checks have settled, instead of failing for "no provider is ready".
+    const assignLater = config.assignment?.mode === 'auto' && this.d.registry.list().some((p) => this.unsettled(p));
+    const assignment = config.assignment?.mode === 'auto' && !assignLater ? this.autoAssignment(config) : undefined;
     if (assignment) config = this.applyAssignment(config, assignment);
     const id = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14) + '-' + randomUUID().slice(0, 6);
     const attachments = this.d.attachments.adopt(id, config.attachments);
@@ -459,7 +477,8 @@ export class Orchestrator {
       log: [],
       projectMemory: { mode: config.memory?.mode ?? 'full', picks: [], given: {}, injectedTokens: 0, queued: 0 },
     };
-    if (prev) this.carryOver(prev, run);
+    // Which CLI conversations go on depends on each role's provider: with the roles picked later, so is this.
+    if (prev && !assignLater) this.carryOver(prev, run);
     this.runs.set(id, run);
     this.aborts.set(id, new AbortController());
     this.log(run, L(`工作流開始：${run.config.title}`, `Workflow started: ${run.config.title}`));
@@ -1599,7 +1618,13 @@ export class Orchestrator {
   async preflight(config: WorkflowConfig): Promise<PreflightItem[]> {
     const out: PreflightItem[] = [];
     const add = (level: PreflightItem['level'], area: PreflightItem['area'], message: string) => out.push({ level, area, message });
-    if (config.assignment?.mode === 'auto' && !config.dryRun) config = this.applyAssignment(config, this.autoAssignment(config));
+    // Auto mode picks among the providers that are ready: right after Aivenue starts their sign-in checks still run,
+    // so wait for them first (else it fails for "no provider is ready").
+    let settled: ProviderInfo[] | undefined;
+    if (config.assignment?.mode === 'auto' && !config.dryRun) {
+      settled = await this.settledProviders();
+      config = this.applyAssignment(config, this.autoAssignment(config, settled));
+    }
     // folders
     const writable = (d: string) => {
       try {
@@ -1614,29 +1639,22 @@ export class Orchestrator {
     else add('ok', 'path', L(`工作資料夾可讀寫：${config.cwd}`, `Working folder is readable and writable: ${config.cwd}`));
     for (const d of config.extraDirs ?? []) if (!fs.existsSync(d)) add('error', 'path', L(`找不到額外資料夾：${d}`, `Extra folder not found: ${d}`));
     // providers, models, efforts
-    const infos = this.d.registry.list();
     const roles: [string, RoleConfig | null | undefined][] = [];
     if (config.plan.enabled) roles.push([L('計畫撰寫', 'Planner'), config.plan.author], [L('計畫審查', 'Plan reviewer'), config.plan.reviewer]);
     if (config.implement.enabled) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
     if (config.verify?.enabled) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
     if (config.advisor?.mode === 'cross' && config.advisor.provider) roles.push([L('顧問', 'Advisor'), { provider: config.advisor.provider, model: config.advisor.model }]);
     // Right after Aivenue starts, every provider's sign-in check is still running: wait for it (or run one that never
-    // ran) instead of reporting "checking" as signed out.
-    const auth = new Map<string, ProviderInfo['auth']>();
-    await Promise.all(
-      [...new Set(roles.flatMap(([, r]) => (r ? [r.provider] : [])))].map(async (id) => {
-        const p = infos.find((x) => x.spec.id === id);
-        if (p?.installed && (p.auth.state === 'checking' || (p.auth.state === 'unknown' && !p.auth.checkedAt))) auth.set(id, await this.d.registry.settledAuth(id, AUTH_WAIT_MS));
-      }),
-    );
+    // ran) instead of reporting "checking" as signed out. Each provider once (auto mode has already waited for all).
+    const providers = settled ?? (await this.settledProviders(new Set(roles.flatMap(([, r]) => (r ? [r.provider] : [])))));
     for (const [label, role] of roles) {
       if (!role) continue;
-      const p = infos.find((x) => x.spec.id === role.provider);
+      const p = providers.find((x) => x.spec.id === role.provider);
       if (!p) {
         add('error', 'provider', L(`${label}：未知的供應商 ${role.provider}`, `${label}: unknown provider ${role.provider}`));
         continue;
       }
-      const a = auth.get(p.spec.id) ?? p.auth;
+      const a = p.auth;
       if (!p.installed) add('error', 'provider', L(`${label}：${p.spec.name} 沒有安裝`, `${label}: ${p.spec.name} is not installed`));
       else if (a.state === 'logged_in') add('ok', 'provider', L(`${label}：${p.spec.name} 已就緒`, `${label}: ${p.spec.name} is ready`));
       else if (a.state === 'checking') add('warn', 'provider', L(`${label}：${p.spec.name} 的登入狀態還在檢查，無法確認是否已登入`, `${label}: ${p.spec.name}'s sign-in is still being checked, so it is not confirmed`));
@@ -2327,6 +2345,14 @@ export class Orchestrator {
         const converted = attachments.filter((a) => a.companion).map((a) => a.name);
         if (converted.length) this.log(run, L(`已將 ${converted.join('、')} 轉成 agent 可讀的格式`, `Converted ${converted.join(', ')} into agent-readable form`), 'info', true);
         for (const w of warnings) this.log(run, w, 'warn', true);
+        this.touch(run);
+      }
+      // Auto mode started while sign-in checks still ran (start() left the roles): pick them now that they settled.
+      if (run.config.assignment?.mode === 'auto' && !run.assignment) {
+        run.assignment = this.autoAssignment(run.config, await this.settledProviders());
+        run.config = this.applyAssignment(run.config, run.assignment);
+        const prev = !from && run.config.continueFrom ? this.runs.get(run.config.continueFrom) : undefined;
+        if (prev) this.carryOver(prev, run);
         this.touch(run);
       }
       run.preflight = await this.preflight(run.config);

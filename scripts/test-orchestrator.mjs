@@ -2084,6 +2084,76 @@ test('預檢：等不到登入檢查結果、或無法判斷登入狀態時只�
   assert.deepEqual(waited, ['fake']);
 });
 
+/** A registry whose providers' sign-in checks are still running ("checking") until settledAuth settles each to `to`. */
+function checkingRegistry(to = 'logged_in') {
+  const states = { fake: { state: 'checking' }, fake2: { state: 'checking' } };
+  const waited = [];
+  return {
+    states,
+    waited,
+    registry: {
+      list: () => Object.keys(states).map((id) => ({ spec: spec(id), installed: true, auth: states[id] })),
+      settledAuth: async (id) => {
+        waited.push(id);
+        await new Promise((r) => setTimeout(r, 30));
+        states[id] = { state: to, checkedAt: Date.now() };
+        return states[id];
+      },
+    },
+  };
+}
+const auto = { assignment: { mode: 'auto', auto: { priority: 'balanced', crossReview: true, failover: true } } };
+
+test('自動指派：所有供應商都還在檢查登入時，預檢先等檢查結果，不報「沒有可用的供應商」', async () => {
+  const c = checkingRegistry();
+  const { orch, cwd } = setup({ registry: c.registry });
+  const items = (await orch.preflight(config(cwd, { verify: undefined, ...auto }))).filter((i) => i.area === 'provider');
+  assert.ok(items.length >= 4 && items.every((i) => i.level === 'ok'), JSON.stringify(items));
+  assert.deepEqual([...new Set(c.waited)].sort(), ['fake', 'fake2']);
+  // The assignment preview waits too.
+  c.states.fake = { state: 'checking' };
+  c.states.fake2 = { state: 'checking' };
+  const preview = await orch.settledAssignment(auto);
+  assert.ok(['fake', 'fake2'].includes(preview.implement.author), JSON.stringify(preview));
+});
+
+test('自動指派：所有供應商都還在檢查登入時開始工作流，不會立刻失敗；檢查完才指派角色，照常跑完', async () => {
+  const c = checkingRegistry();
+  const { orch, cwd } = setup({ registry: c.registry });
+  fakeAgents(orch, {});
+  const run = orch.start(config(cwd, { verify: undefined, ...auto }));
+  // Left for when the checks have settled.
+  assert.equal(run.assignment, undefined);
+  const done = await settle(orch, run.id);
+  assert.equal(done.status, 'completed', done.error);
+  assert.ok(done.assignment, 'assigned once the checks settled');
+  for (const r of [done.config.plan.author, done.config.implement.author]) assert.ok(['fake', 'fake2'].includes(r.provider), JSON.stringify(r));
+  assert.deepEqual([...new Set(c.waited)].sort(), ['fake', 'fake2']);
+  assert.ok(!done.log.some((l) => /沒有可用的供應商|No provider is ready|尚未登入|not signed in/.test(l.text)), JSON.stringify(done.log.map((l) => l.text)));
+});
+
+test('自動指派：檢查完確定沒有任何供應商登入時，預檢與工作流照樣失敗並說明原因；平常不等就指派', async () => {
+  const none = checkingRegistry('logged_out');
+  const a = setup({ registry: none.registry });
+  await assert.rejects(a.orch.preflight(config(a.cwd, { verify: undefined, ...auto })), /沒有可用的供應商|No provider is ready/);
+  none.states.fake = { state: 'checking' };
+  none.states.fake2 = { state: 'checking' };
+  fakeAgents(a.orch, {});
+  const failed = await settle(a.orch, a.orch.start(config(a.cwd, { verify: undefined, ...auto })).id);
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.error ?? '', /沒有可用的供應商|No provider is ready/);
+  // Every check already done (the usual case): assigned in start(), nothing waited for.
+  const ready = checkingRegistry();
+  ready.states.fake = { state: 'logged_in', checkedAt: 1 };
+  ready.states.fake2 = { state: 'logged_in', checkedAt: 1 };
+  const b = setup({ registry: ready.registry });
+  fakeAgents(b.orch, {});
+  const run = b.orch.start(config(b.cwd, { verify: undefined, ...auto }));
+  assert.ok(run.assignment, 'assigned at once');
+  assert.equal((await settle(b.orch, run.id)).status, 'completed');
+  assert.deepEqual(ready.waited, []);
+});
+
 test('安全檢查只在開始前設定：執行中的設定更新即使帶了 securityReview 也不改變，審查者照開始時的設定', async () => {
   for (const startOn of [false, true]) {
     const { orch, cwd } = setup({ securityAudit: () => SKILL });

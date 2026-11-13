@@ -380,7 +380,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       store.savePresets(list);
       return list;
     },
-    'assign.preview': (p: { config: Pick<WorkflowConfig, 'assignment' | 'attachments'> }) => orchestrator.autoAssignment(p.config),
+    'assign.preview': (p: { config: Pick<WorkflowConfig, 'assignment' | 'attachments'> }) => orchestrator.settledAssignment(p.config),
     'workflows.list': () => orchestrator.summaries(),
     'workflows.get': (p: { id: string }) => orchestrator.runs.get(p.id) ?? null,
     'workflows.start': (p: { config: WorkflowConfig }) => orchestrator.start(p.config).id,
