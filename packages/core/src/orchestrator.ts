@@ -267,6 +267,21 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 
 /** Most sub-agents one conversation may start in total. */
 const MAX_SUBAGENTS = 40;
+
+/**
+ * A continuation the CLI refused because the conversation itself no longer exists or cannot be resumed (e.g. Claude
+ * Code "No conversation found with session ID", "session not found", "no rollout found for thread id"). Only these
+ * hand the work to a new conversation; any other failure is reported and handled as usual.
+ */
+export function sessionGone(error: string | undefined): boolean {
+  const t = (error ?? '').toLowerCase();
+  return (
+    /\bno (conversation|session|thread|rollout)s? (was )?found\b/.test(t) ||
+    /\b(conversation|session|thread)\b[^\n]{0,80}\b(not found|does not exist|doesn't exist|no longer exists|could not be (found|resumed|loaded)|cannot be resumed|can't be resumed|expired)\b/.test(t) ||
+    /\b(could not|couldn't|cannot|can't|unable to|failed to) (find|resume|load|restore) (the |that |this )?(conversation|session|thread)\b/.test(t) ||
+    /\b(unknown|invalid) (conversation|session|thread)( id)?\b/.test(t)
+  );
+}
 /** Characters of a sub-agent's result per wait_subagent page (the first page is what a call without a page returns). */
 const SUBAGENT_RESULT_PAGE = 20000;
 
@@ -3412,12 +3427,17 @@ export class Orchestrator {
     });
     this.subSpecs.set(child.id, { task: o.task, mode: o.mode });
     this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
+    // Started again for the same work (retry_of, or handed to another provider): it takes over that one's waits.
+    if (o.rerunOf) this.adoptWaitedJobs(run, child, o.rerunOf);
     const prompt = P.subagentPrompt(run.config.cwd, o.task, roleLabel(parent.role), this.subBlock(run, child.depth));
     const done = this.invokePausable(run, child, prompt, o.mode)
       // A sub-agent that ends its turn while a job it waits for runs is continued when the job ends, before it counts as done.
       .then((res) => this.continueAfterJobs(run, child, o.mode, res, () => false, prompt))
       .then((res) => {
-        child.status = this.aborted(run) || this.agentAborts.get(child.id)?.signal.aborted || this.stoppedByUser.has(child.id) ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';
+        // A failed turn counts as failed when it left nothing, or when it was the one handing over the results of jobs it
+        // waits for (they are still not delivered): its text is kept to read, but the parent must be able to retry it.
+        const undelivered = !!res.error && this.waitedJobs(run, child).length > 0;
+        child.status = this.aborted(run) || this.agentAborts.get(child.id)?.signal.aborted || this.stoppedByUser.has(child.id) ? 'cancelled' : res.error && (!res.finalText || undelivered) ? 'failed' : 'completed';
         child.error = res.error;
         if (child.status === 'failed') {
           const kind = classifyFailure(res.error);
@@ -4735,16 +4755,25 @@ export class Orchestrator {
    * off before it was told they ended: Aivenue restarted (its agents were saved as cancelled), the workflow was stopped
    * and resumed, or that agent failed. Its sub-agents' waits come along. A job whose agent finished normally (it handed
    * in without waiting) stays where it is.
+   * `rerunOf`: a sub-agent started again for the same work (retry_of, or handed to another provider) takes over the
+   * waits of exactly that earlier sub-agent and of its own sub-agents, once they ended (any way they ended).
    */
-  private adoptWaitedJobs(run: WorkflowRun, info: AgentRunInfo) {
+  private adoptWaitedJobs(run: WorkflowRun, info: AgentRunInfo, rerunOf?: string) {
     const rootOf = (a: AgentRunInfo | undefined) => {
       for (let i = 0; a?.parentId && run.agents[a.parentId] && i < 20; i++) a = run.agents[a.parentId];
       return a;
     };
+    const within = (a: AgentRunInfo | undefined, id: string) => {
+      for (let i = 0; a && i < 20; i++, a = a.parentId ? run.agents[a.parentId] : undefined) if (a.id === id) return true;
+      return false;
+    };
+    const active = (a: AgentRunInfo) => ['running', 'queued', 'paused'].includes(a.status);
     const jobs = (run.processes ?? []).filter((p) => {
       const owner = run.agents[p.agentId];
+      if (!p.notify || p.announced || p.agentId === info.id || !owner) return false;
+      if (rerunOf) return within(owner, rerunOf) && !active(owner) && !active(run.agents[rerunOf]);
       const root = rootOf(owner);
-      return p.notify && !p.announced && p.agentId !== info.id && !!owner && ['cancelled', 'failed'].includes(owner.status) && !!root && ['cancelled', 'failed'].includes(root.status) && root.role === info.role && root.stage === info.stage;
+      return ['cancelled', 'failed'].includes(owner.status) && !!root && ['cancelled', 'failed'].includes(root.status) && root.role === info.role && root.stage === info.stage;
     });
     if (!jobs.length) return;
     const from = [...new Set(jobs.map((p) => this.label(run.agents[p.agentId])))].join('、');
@@ -4838,8 +4867,8 @@ export class Orchestrator {
   /**
    * One turn that hands the ended jobs to the agent: in its own conversation when it can be continued, else in a new
    * one given the task. A service failure (network, rate limit, model service) is retried with the same message after
-   * the usual wait; a continuation the CLI refuses for any other reason with no output means the conversation is gone,
-   * so a new one takes over. Returns the failed turn when neither helps (the jobs then stay undelivered).
+   * the usual wait; a continuation the CLI refuses because the conversation itself is gone (sessionGone) is taken over
+   * by a new one. Any other failure goes back to the usual error handling, with the jobs still undelivered.
    */
   private async deliverJobs(run: WorkflowRun, info: AgentRunInfo, mode: 'write' | 'readonly', prev: RunAgentResult, ended: { details: ProcessDetail[]; jobs: TrackedProcess[] }, task: string): Promise<RunAgentResult> {
     const spec = this.d.registry.get(info.provider);
@@ -4859,7 +4888,7 @@ export class Orchestrator {
       seq = r.lastSeq;
       if (!r.error || this.aborted(run) || this.stoppedByUser.has(info.id)) return r;
       const kind = classifyFailure(r.error);
-      if (sid && !r.finalText.trim() && !['network', 'rate_limit', 'model_service', 'quota', 'auth'].includes(kind)) {
+      if (sid && sessionGone(r.error)) {
         takeover(L(`接續失敗：${r.error.slice(0, 120)}`, `continuing failed: ${r.error.slice(0, 120)}`), `continuing failed: ${r.error.slice(0, 120)}`);
         attempt = 0;
         continue;

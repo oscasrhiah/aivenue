@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 // 工作流狀態機的回歸測試：真正的 Orchestrator，只把 CLI 換成依角色回應的替身 agent，
 // 用來模擬各種結果、斷線、崩潰、錯誤核准與結果遺失。
 const bundled = await build({
-  stdin: { contents: `export { Orchestrator } from './packages/core/src/orchestrator'; export { RunStore } from './packages/core/src/store'; export { applyStandard } from './packages/core/src/flowMode'; export { CapabilityStore } from './packages/core/src/capabilities';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { Orchestrator, sessionGone } from './packages/core/src/orchestrator'; export { RunStore } from './packages/core/src/store'; export { applyStandard } from './packages/core/src/flowMode'; export { CapabilityStore } from './packages/core/src/capabilities';`, resolveDir: process.cwd() },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -27,7 +27,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { Orchestrator, RunStore, applyStandard, CapabilityStore } = mod.exports;
+const { Orchestrator, RunStore, applyStandard, CapabilityStore, sessionGone } = mod.exports;
 
 const spec = (id) => ({ id, name: id, command: id, run: { args: [] }, output: 'text' });
 function setup(o = {}) {
@@ -935,6 +935,113 @@ test('喚回時對話已失效：改開新對話，帶入任務與工作結果�
   assert.match(seen[1].prompt, /make the tests pass[\s\S]*AIVENUE TAKEOVER[\s\S]*result 42/);
   assert.ok(r.log.some((l) => /接續失敗|continuing failed/.test(l.text)));
   assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
+test('喚回時是一般執行錯誤（不是對話失效）：不開新對話接手，照一般錯誤處理回報，工作結果仍未送達', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  fakeAgents(orch, {
+    executor: [
+      waitTurn(cwd, 500),
+      async (o, secret, a) => {
+        seen.push({ prompt: a.prompt, resume: a.resumeSessionId });
+        return { lastSeq: 2, exitCode: 1, resumed: true, finalText: '', sessionId: 's1', error: 'Fatal: invalid configuration: model name is empty' };
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(implOnly(cwd)).id);
+  // Not a service problem: the usual handling (the user decides), no automatic takeover, and not taken as done.
+  assert.ok(r.pending || ['failed', 'incomplete'].includes(r.status), `status ${r.status}`);
+  assert.notEqual(r.stages.implement.rounds.at(-1)?.submission?.summary, 'waiting for job');
+  assert.ok(seen.length >= 1);
+  assert.ok(seen.every((s) => s.resume === 's1'), 'a new conversation took over');
+  assert.ok(!r.log.some((l) => /接續失敗|continuing failed|改開新的對話|a new conversation takes over/.test(l.text)));
+  assert.equal(r.processes[0].announced, undefined);
+  // Only a gone conversation hands over to a new one.
+  for (const gone of ['No conversation found with session ID: s1', 'Error: session not found', 'no rollout found for thread id abc', 'Session abc could not be resumed', 'Unknown session id']) assert.equal(sessionGone(gone), true, gone);
+  for (const other of ['Fatal: invalid configuration: model name is empty', 'fetch failed: ECONNRESET', 'Out of credits. Please top up.', 'Exit code 1: TypeError: x is undefined', 'Invalid model id']) assert.equal(sessionGone(other), false, other);
+});
+
+/** The JSON a tool returned, without the Aivenue notices appended after it. */
+const toolJson = (s) => JSON.parse(s.split('\n\nAIVENUE')[0]);
+
+/** A sub-agent that waits for a download; its parent waits for it, and may run it again with retry_of. */
+function subagentWithJob(cwd, { wake, retry, parentAfterFirst }) {
+  return {
+    subagent: [
+      async (o, secret) => {
+        const pid = shortJob(cwd, 'dl.log', 'downloaded 3 files', 400);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'download', cleanup: 'agent', log: 'dl.log', notify_when_done: true });
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for the download', sessionId: 'sub1' };
+      },
+      ...(retry ? [retry] : []),
+    ],
+    executor: [
+      async (o, secret, a) => {
+        if (a.resumeSessionId === 'sub1') return wake(o, secret, a);
+        if (a.resumeSessionId === 'sub2') return { lastSeq: 3, exitCode: 0, resumed: true, finalText: `used: ${/downloaded 3 files/.test(a.prompt) ? 'the 3 files' : 'nothing'}`, sessionId: 'sub2' };
+        const first = toolJson(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: 'download the data' }));
+        const waited = toolJson(await o.callTool(secret, 'wait_subagent', { subagent_id: first.subagent_id, timeout_sec: 20 }));
+        await parentAfterFirst(o, secret, first, waited);
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  };
+}
+
+test('子 agent 喚回時額度不足失敗，父 agent 用 retry_of 重跑：新子 agent 承接原本等待的工作並收到結果', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  let first;
+  let second;
+  let runId;
+  fakeAgents(
+    orch,
+    subagentWithJob(cwd, {
+      wake: async () => ({ lastSeq: 2, exitCode: 1, resumed: true, finalText: '', sessionId: 'sub1', error: 'insufficient credit balance' }),
+      retry: async () => ({ lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for existing download', sessionId: 'sub2' }),
+      parentAfterFirst: async (o, secret, sub, waited) => {
+        first = waited;
+        const again = toolJson(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: 'download the data', retry_of: sub.subagent_id }));
+        second = toolJson(await o.callTool(secret, 'wait_subagent', { subagent_id: again.subagent_id, timeout_sec: 20 }));
+        second.id = again.subagent_id;
+      },
+    }),
+  );
+  runId = orch.start(implOnly(cwd, { subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } })).id;
+  const r = await settle(orch, runId);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(first.status, 'failed');
+  assert.equal(second.status, 'completed');
+  assert.match(JSON.stringify(second), /used: the 3 files/);
+  const p = r.processes.find((x) => x.purpose === 'download');
+  assert.equal(p.agentId, second.id);
+  assert.equal(p.announced, true);
+  assert.ok(r.log.some((l) => /接手 1 個等待中的背景程序|took over 1 background job/.test(l.text)));
+});
+
+test('子 agent 喚回失敗但帶有錯誤文字：標成失敗（保留文字），父 agent 能看到失敗並重試', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  let waited;
+  let runId;
+  fakeAgents(
+    orch,
+    subagentWithJob(cwd, {
+      wake: async () => ({ lastSeq: 2, exitCode: 1, resumed: true, finalText: 'Out of credits. Please top up.', sessionId: 'sub1', error: 'Out of credits. Please top up.' }),
+      parentAfterFirst: async (o, secret, sub, w) => {
+        waited = w;
+      },
+    }),
+  );
+  runId = orch.start(implOnly(cwd, { subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } })).id;
+  const r = await settle(orch, runId);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(waited.status, 'failed');
+  assert.match(waited.next ?? '', /retry it/);
+  const child = Object.values(r.agents).find((a) => a.role === 'subagent');
+  assert.equal(child.status, 'failed');
+  assert.match(child.error, /Out of credits/);
+  // Its results were never delivered.
+  assert.equal(r.processes.find((x) => x.purpose === 'download').announced, undefined);
 });
 
 test('別的 agent 跑過、檔案也沒改過的指令又跑一次：提醒先查共享上下文', async () => {
