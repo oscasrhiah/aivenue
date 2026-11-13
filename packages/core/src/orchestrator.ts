@@ -477,8 +477,10 @@ export class Orchestrator {
       log: [],
       projectMemory: { mode: config.memory?.mode ?? 'full', picks: [], given: {}, injectedTokens: 0, queued: 0 },
     };
-    // Which CLI conversations go on depends on each role's provider: with the roles picked later, so is this.
-    if (prev && !assignLater) this.carryOver(prev, run);
+    // The follow-up's notes, the user's earlier words and the rest go in now (and are saved with the run); which CLI
+    // conversations go on depends on each role's provider, so with the roles picked later, that waits for them.
+    if (prev) this.carryState(prev, run);
+    if (prev && !assignLater) this.carrySessions(prev, run);
     this.runs.set(id, run);
     this.aborts.set(id, new AbortController());
     this.log(run, L(`工作流開始：${run.config.title}`, `Workflow started: ${run.config.title}`));
@@ -1334,10 +1336,15 @@ export class Orchestrator {
    * A follow-up message goes on from the previous one: its shared notes and shared memory, and each role's agent
    * conversation when the same CLI fills it in the same folder (not across an isolated worktree).
    */
-  private carryOver(prev: WorkflowRun, run: WorkflowRun) {
+  /** What a follow-up inherits from the message it continues that does not depend on its roles' providers. */
+  private carryState(prev: WorkflowRun, run: WorkflowRun) {
     // What the follow-up inherits (continuation.ts): the time and the file changes seen in prev's records come from here.
     const act = collectActivity(prev, (id) => this.events(prev.id, id));
     applyCarried(run, carriedState(prev, { now: now(), lastEditSeen: act.lastEdit, checksSeen: checkRecords(act, 10, { output: true }), agentLabel: (a) => `${roleLabel(a.role)} ${a.provider}` }));
+  }
+
+  /** Which of prev's CLI conversations go on in the follow-up: this depends on each role's provider. */
+  private carrySessions(prev: WorkflowRun, run: WorkflowRun) {
     // Whether its CLI conversations go on: same folder, no isolated worktree, same provider per role.
     const sameFolder = !prev.worktree && run.config.isolation !== 'worktree' && path.resolve(prev.config.cwd) === path.resolve(run.config.cwd);
     if (!sameFolder) return;
@@ -2351,8 +2358,9 @@ export class Orchestrator {
       if (run.config.assignment?.mode === 'auto' && !run.assignment) {
         run.assignment = this.autoAssignment(run.config, await this.settledProviders());
         run.config = this.applyAssignment(run.config, run.assignment);
-        const prev = !from && run.config.continueFrom ? this.runs.get(run.config.continueFrom) : undefined;
-        if (prev) this.carryOver(prev, run);
+        // Also when resumed after a restart that came while waiting: no agent has run yet, so nothing was carried.
+        const prev = run.config.continueFrom ? this.runs.get(run.config.continueFrom) : undefined;
+        if (prev) this.carrySessions(prev, run);
         this.touch(run);
       }
       run.preflight = await this.preflight(run.config);

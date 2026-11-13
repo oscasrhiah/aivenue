@@ -2132,6 +2132,46 @@ test('自動指派：所有供應商都還在檢查登入時開始工作流，�
   assert.ok(!done.log.some((l) => /沒有可用的供應商|No provider is ready|尚未登入|not signed in/.test(l.text)), JSON.stringify(done.log.map((l) => l.text)));
 });
 
+test('自動指派：續接上一則訊息時正在等登入檢查，此時重啟；續接的筆記與使用者原文已保存，恢復後指派並沿用 CLI 對話', async () => {
+  // In the first Aivenue the checks never finish (it is closed while waiting); after the restart they do.
+  const states = { fake: { state: 'logged_in', checkedAt: 1 }, fake2: { state: 'logged_in', checkedAt: 1 } };
+  const registry = (hold) => ({
+    list: () => Object.keys(states).map((id) => ({ spec: spec(id), installed: true, auth: states[id] })),
+    settledAuth: async (id) => (hold ? new Promise(() => {}) : ((states[id] = { state: 'logged_in', checkedAt: Date.now() }), states[id])),
+  });
+  const first = setup({ registry: registry(true) });
+  fakeAgents(first.orch, {});
+  const r1 = await settle(first.orch, first.orch.start(config(first.cwd, { verify: undefined, ...auto, userText: 'FIRSTWORDS keep --legacy' })).id);
+  assert.equal(r1.status, 'completed', r1.error);
+  r1.notes = [{ id: 'n1', agentId: 'gone', text: 'NOTE1 decided: keep --legacy', ts: Date.now(), kind: 'decision' }];
+  r1.stages.implement.authorSessionId = 'ses-first';
+  first.orch.d.store.saveNow(r1);
+
+  // The second message, while every check runs again (as right after a start): it waits for them.
+  states.fake = { state: 'checking' };
+  states.fake2 = { state: 'checking' };
+  const r2 = first.orch.start(config(first.cwd, { verify: undefined, ...auto, userText: 'SECONDWORDS add --json', continueFrom: r1.id }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(first.orch.runs.get(r2.id).assignment, undefined, 'still waiting for the checks');
+  // What does not depend on the providers is in the run already, so it is saved with it.
+  assert.ok(r2.earlierUserWords?.some((w) => w.text.includes('FIRSTWORDS')), JSON.stringify(r2.earlierUserWords));
+  assert.ok(r2.notes?.some((n) => n.text.includes('NOTE1') && n.carried), JSON.stringify(r2.notes));
+  first.orch.d.store.saveNow(first.orch.runs.get(r2.id));
+
+  // Aivenue restarts (same data folder) and the run is resumed.
+  const second = setup({ dir: first.dir, registry: registry(false) });
+  fakeAgents(second.orch, {});
+  second.orch.resumeInterrupted(r2.id);
+  const done = await settle(second.orch, r2.id);
+  assert.equal(done.status, 'completed', done.error);
+  assert.ok(done.assignment, 'assigned after the restart');
+  assert.ok(done.earlierUserWords?.some((w) => w.text.includes('FIRSTWORDS')), 'user words carried');
+  assert.ok(done.notes?.some((n) => n.text.includes('NOTE1') && n.carried), 'notes carried');
+  // The same provider for the implementer as the first message (same states, same choice): its conversation goes on.
+  assert.equal(done.config.implement.author.provider, r1.config.implement.author.provider);
+  assert.deepEqual(done.carriedSessions, ['ses-first']);
+});
+
 test('自動指派：檢查完確定沒有任何供應商登入時，預檢與工作流照樣失敗並說明原因；平常不等就指派', async () => {
   const none = checkingRegistry('logged_out');
   const a = setup({ registry: none.registry });
