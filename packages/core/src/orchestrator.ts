@@ -2919,6 +2919,7 @@ export class Orchestrator {
   ): Promise<{ info: AgentRunInfo; res: RunAgentResult; sub?: Submission }> {
     const def = this.d.registry.defaults(o.roleCfg.provider);
     const info = this.newAgent(run, { role: o.role, provider: o.roleCfg.provider, model: o.roleCfg.model || def.model, modelDefault: !o.roleCfg.model || undefined, effort: o.roleCfg.effort || def.effort, stage: o.stage, round: o.round, depth: 0, task: o.task });
+    this.adoptWaitedJobs(run, info);
     // Every turn of this role ends the same way: if it handed in nothing with a submit tool while a job whose result it
     // needs runs, it is waiting, not done (its reply text is not its result). Continue it when the job ends, before its
     // reply is read as a result: in the same conversation, or a new one given the task when it cannot be continued.
@@ -4729,6 +4730,31 @@ export class Orchestrator {
   /** Agents whose turn ended while a job they wait for (notify_when_done) still runs: waiting for it between turns. */
   private jobWaits = new Set<string>();
 
+  /**
+   * A new agent of a role takes over the jobs an earlier agent of the same role and stage was waiting for and was cut
+   * off before it was told they ended: Aivenue restarted (its agents were saved as cancelled), the workflow was stopped
+   * and resumed, or that agent failed. Its sub-agents' waits come along. A job whose agent finished normally (it handed
+   * in without waiting) stays where it is.
+   */
+  private adoptWaitedJobs(run: WorkflowRun, info: AgentRunInfo) {
+    const rootOf = (a: AgentRunInfo | undefined) => {
+      for (let i = 0; a?.parentId && run.agents[a.parentId] && i < 20; i++) a = run.agents[a.parentId];
+      return a;
+    };
+    const jobs = (run.processes ?? []).filter((p) => {
+      const owner = run.agents[p.agentId];
+      const root = rootOf(owner);
+      return p.notify && !p.announced && p.agentId !== info.id && !!owner && ['cancelled', 'failed'].includes(owner.status) && !!root && ['cancelled', 'failed'].includes(root.status) && root.role === info.role && root.stage === info.stage;
+    });
+    if (!jobs.length) return;
+    const from = [...new Set(jobs.map((p) => this.label(run.agents[p.agentId])))].join('、');
+    for (const p of jobs) p.agentId = info.id;
+    const list = jobs.map((p) => `PID ${p.pid} (${p.purpose})${pidAlive(p.pid) ? '' : ', already ended'}`).join('; ');
+    this.log(run, L(`${this.label(info)} 接手 ${jobs.length} 個等待中的背景程序（原本由 ${from} 等待）：${jobs.map((p) => `PID ${p.pid}（${p.purpose}）`).join('、')}`, `${this.label(info)} took over ${jobs.length} background job(s) ${from} was waiting for: ${list}`), 'info', true);
+    this.notify(info.id, `You took over the background job(s) an earlier turn on this task was waiting for: ${list}. If you need their result, end your turn without submitting once you have nothing else to do: Aivenue continues this conversation when they end, with their log tail.`);
+    this.touch(run);
+  }
+
   /** Ended jobs to tell an agent about on its next tool result (agent id → PIDs), not yet delivered. */
   private jobNotices = new Map<string, Set<number>>();
 
@@ -4749,28 +4775,28 @@ export class Orchestrator {
   }
 
   /**
-   * Between turns: waits until one of the jobs this agent waits for ends, and returns those that ended (marked as
-   * told). Undefined when the workflow or the agent was stopped first.
+   * Between turns: waits until one of the jobs this agent waits for ends, and returns those that ended. They are not
+   * marked as told here: only a turn that received them without failing does that. Undefined when the workflow or
+   * the agent was stopped first.
    */
-  private async awaitJobs(run: WorkflowRun, info: AgentRunInfo): Promise<ProcessDetail[] | undefined> {
+  private async awaitJobs(run: WorkflowRun, info: AgentRunInfo): Promise<{ jobs: TrackedProcess[]; details: ProcessDetail[] } | undefined> {
     const stopped = () => this.aborted(run) || this.stoppedByUser.has(info.id) || !!this.agentAborts.get(info.id)?.signal.aborted;
     this.jobWaits.add(info.id);
     try {
       for (;;) {
         const jobs = this.waitedJobs(run, info);
-        if (!jobs.length || stopped()) return stopped() ? undefined : [];
+        if (!jobs.length || stopped()) return stopped() ? undefined : { jobs: [], details: [] };
         const ended = jobs.filter((p) => !pidAlive(p.pid));
         if (ended.length) {
           const details = ended.map((p) => {
             p.alive = false;
             p.endedAt ??= now();
-            p.announced = true;
             return inspectProcess(p, run.config.cwd);
           });
           info.waiting = undefined;
           this.log(run, L(`${this.label(info)} 等待的背景程序已結束（${ended.map((p) => `PID ${p.pid}`).join('、')}），接續它的對話`, `Background job(s) ${this.label(info)} was waiting for ended (${ended.map((p) => `PID ${p.pid}`).join(', ')}); continuing its conversation`), 'info', true);
           this.touch(run);
-          return details;
+          return { jobs: ended, details };
         }
         const label = jobs.map((p) => `PID ${p.pid}（${p.purpose}）`).join('、');
         const waiting = L(`等待背景程序結束：${label}`, `Waiting for background job(s) to end: ${jobs.map((p) => `PID ${p.pid} (${p.purpose})`).join(', ')}`);
@@ -4795,22 +4821,57 @@ export class Orchestrator {
    * sub-agent, whose reply is its result).
    */
   private async continueAfterJobs(run: WorkflowRun, info: AgentRunInfo, mode: 'write' | 'readonly', res: RunAgentResult, done: (r: RunAgentResult) => boolean, task: string): Promise<RunAgentResult> {
-    const spec = this.d.registry.get(info.provider);
-    const resumable = !!spec?.run.resume && spec.capabilities?.resume !== false;
     while (!res.error && this.waitedJobs(run, info).length) {
       const ended = await this.awaitJobs(run, info);
-      if (!ended?.length) break;
-      const still = this.waitedJobs(run, info).map((p) => `PID ${p.pid} (${p.purpose})`);
-      if (resumable && res.sessionId) {
-        res = await this.invokePausable(run, info, P.jobsEndedPrompt(ended, still), mode, res.sessionId, res.lastSeq);
-      } else {
-        this.log(run, L(`${this.label(info)} 的對話無法接續（${resumable ? '沒有對話 ID' : '這個 CLI 不支援接續'}），改開新的對話，帶入任務與已結束的背景程序`, `${this.label(info)}'s conversation cannot be continued (${resumable ? 'no session id' : 'this CLI cannot resume'}); a new conversation takes over with the task and the ended job(s)`), 'warn', true);
-        info.sessionId = undefined;
-        res = await this.invokePausable(run, info, `${task}\n\n${P.jobsEndedTakeover(ended, still)}`, mode, undefined, res.lastSeq);
-      }
+      if (!ended?.jobs.length) break;
+      res = await this.deliverJobs(run, info, mode, res, ended, task);
+      // Told only once a turn received them without failing; after a failure they stay to be delivered again.
+      if (res.error) break;
+      for (const p of ended.jobs) p.announced = true;
+      for (const p of ended.jobs) this.jobNotices.get(info.id)?.delete(p.pid);
+      this.touch(run);
       if (done(res)) break;
     }
     return res;
+  }
+
+  /**
+   * One turn that hands the ended jobs to the agent: in its own conversation when it can be continued, else in a new
+   * one given the task. A service failure (network, rate limit, model service) is retried with the same message after
+   * the usual wait; a continuation the CLI refuses for any other reason with no output means the conversation is gone,
+   * so a new one takes over. Returns the failed turn when neither helps (the jobs then stay undelivered).
+   */
+  private async deliverJobs(run: WorkflowRun, info: AgentRunInfo, mode: 'write' | 'readonly', prev: RunAgentResult, ended: { details: ProcessDetail[]; jobs: TrackedProcess[] }, task: string): Promise<RunAgentResult> {
+    const spec = this.d.registry.get(info.provider);
+    const resumable = !!spec?.run.resume && spec.capabilities?.resume !== false;
+    const pids = new Set(ended.jobs.map((p) => p.pid));
+    const still = () => this.waitedJobs(run, info).filter((p) => !pids.has(p.pid)).map((p) => `PID ${p.pid} (${p.purpose})`);
+    let sid = resumable ? prev.sessionId : undefined;
+    let seq = prev.lastSeq;
+    const takeover = (why: string, whyEn: string) => {
+      this.log(run, L(`${this.label(info)} 的對話無法接續（${why}），改開新的對話，帶入任務與已結束的背景程序`, `${this.label(info)}'s conversation cannot be continued (${whyEn}); a new conversation takes over with the task and the ended job(s)`), 'warn', true);
+      info.sessionId = undefined;
+      sid = undefined;
+    };
+    if (!sid) takeover(resumable ? '沒有對話 ID' : '這個 CLI 不支援接續', resumable ? 'no session id' : 'this CLI cannot resume');
+    for (let attempt = 1; ; attempt++) {
+      const r = sid ? await this.invokePausable(run, info, P.jobsEndedPrompt(ended.details, still()), mode, sid, seq) : await this.invokePausable(run, info, `${task}\n\n${P.jobsEndedTakeover(ended.details, still())}`, mode, undefined, seq);
+      seq = r.lastSeq;
+      if (!r.error || this.aborted(run) || this.stoppedByUser.has(info.id)) return r;
+      const kind = classifyFailure(r.error);
+      if (sid && !r.finalText.trim() && !['network', 'rate_limit', 'model_service', 'quota', 'auth'].includes(kind)) {
+        takeover(L(`接續失敗：${r.error.slice(0, 120)}`, `continuing failed: ${r.error.slice(0, 120)}`), `continuing failed: ${r.error.slice(0, 120)}`);
+        attempt = 0;
+        continue;
+      }
+      const rec = recoveryFor(kind, attempt, L);
+      if (!rec.retry) return r;
+      this.log(run, `${this.label(info)}：${rec.action}${L('（重送背景程序的結果）', ' (sending the background job results again)')}`, 'warn', true);
+      info.waiting = rec.action;
+      await this.sleepFor(run, info, rec.delayMs);
+      info.waiting = undefined;
+      if (this.aborted(run) || this.stoppedByUser.has(info.id)) return r;
+    }
   }
 
   private aborted(run: WorkflowRun) {

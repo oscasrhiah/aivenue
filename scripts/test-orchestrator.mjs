@@ -839,6 +839,104 @@ for (const [name, opts, out] of [
   });
 }
 
+test('等待期間 Aivenue 重啟：接手的實作者承接還在等的工作，工作結束後被接續，不把「waiting」當結果', async () => {
+  const first = setup({ resumable: true });
+  let pid;
+  let cutOff;
+  const hung = new Promise((r) => (cutOff = r));
+  fakeAgents(first.orch, {
+    executor: [
+      async (o, secret) => {
+        pid = shortJob(first.cwd, 'train.log', 'result 42', 2500);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'training', cleanup: 'agent', log: 'train.log', notify_when_done: true });
+        // Aivenue closes while this turn runs: it never ends.
+        cutOff();
+        await new Promise(() => {});
+      },
+    ],
+  });
+  const id = first.orch.start(implOnly(first.cwd)).id;
+  await hung;
+  first.orch.d.store.saveNow(first.orch.runs.get(id));
+
+  const second = setup({ dir: first.dir, resumable: true });
+  const seen = [];
+  const replies = [];
+  fakeAgents(second.orch, {
+    executor: [
+      async (o, secret) => {
+        replies.push(await o.callTool(secret, 'post_note', { text: 'training still running', kind: 'fact' }));
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for existing training', sessionId: 's2' };
+      },
+      useResult(seen),
+    ],
+  });
+  assert.deepEqual(second.orch.autoResume(), [id]);
+  const r = await settle(second.orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(replies[0], /took over the background job[\s\S]*training/);
+  assert.equal(seen.length, 1, 'not continued after the restart');
+  assert.equal(seen[0].resume, 's2');
+  assert.match(seen[0].prompt, /has ended[\s\S]*\(training\)[\s\S]*result 42/);
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+  const p = r.processes.find((x) => x.pid === pid);
+  assert.equal(r.agents[p.agentId].status, 'completed');
+  assert.equal(p.announced, true);
+  assert.ok(r.log.some((l) => /接手 1 個等待中的背景程序|took over 1 background job/.test(l.text)));
+});
+
+test('喚回時網路失敗：工作結果保留，重試時重新帶入同樣的結果', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  let runId;
+  fakeAgents(orch, {
+    executor: [
+      waitTurn(cwd, 500),
+      async (o, secret, a) => {
+        seen.push({ prompt: a.prompt, resume: a.resumeSessionId });
+        // Not told yet: the turn that carried the results failed.
+        assert.equal(o.runs.get(runId).processes[0].announced, undefined);
+        return { lastSeq: 2, exitCode: 1, resumed: true, finalText: '', sessionId: 's1', error: 'fetch failed: ECONNRESET' };
+      },
+      useResult(seen),
+    ],
+  });
+  runId = orch.start(implOnly(cwd)).id;
+  const r = await settle(orch, runId, 40000);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(seen.length, 2);
+  for (const s of seen) {
+    assert.equal(s.resume, 's1');
+    assert.match(s.prompt, /has ended[\s\S]*result 42/);
+  }
+  assert.ok(r.log.some((l) => /重送背景程序的結果|sending the background job results again/.test(l.text)));
+  assert.equal(r.processes[0].announced, true);
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
+test('喚回時對話已失效：改開新對話，帶入任務與工作結果接手', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  fakeAgents(orch, {
+    executor: [
+      waitTurn(cwd, 500),
+      async (o, secret, a) => {
+        seen.push({ prompt: a.prompt, resume: a.resumeSessionId });
+        return { lastSeq: 2, exitCode: 1, resumed: false, finalText: '', error: 'No conversation found with session ID: s1' };
+      },
+      useResult(seen),
+    ],
+  });
+  const r = await settle(orch, orch.start(implOnly(cwd)).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0].resume, 's1');
+  assert.equal(seen[1].resume, undefined);
+  assert.match(seen[1].prompt, /make the tests pass[\s\S]*AIVENUE TAKEOVER[\s\S]*result 42/);
+  assert.ok(r.log.some((l) => /接續失敗|continuing failed/.test(l.text)));
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
 test('別的 agent 跑過、檔案也沒改過的指令又跑一次：提醒先查共享上下文', async () => {
   const { orch, cwd } = setup();
   let reply;
