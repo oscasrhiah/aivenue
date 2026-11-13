@@ -1459,6 +1459,10 @@ export interface TrackedProcess {
   workflowId?: string;
   /** Aivenue found it from the agent's commands (the agent did not register it). */
   detected?: boolean;
+  /** The agent waits for its result (track_process notify_when_done): Aivenue tells it when the process ends. */
+  notify?: boolean;
+  /** Aivenue already told the agent that it ended. */
+  announced?: boolean;
 }
 
 /** A background process as the detail window shows it. */

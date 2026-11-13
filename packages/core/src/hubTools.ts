@@ -317,6 +317,11 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         log: { type: 'string', description: 'The file its output goes to (path relative to the working directory or absolute).' },
         watch_file: { type: 'string', description: 'The file or folder it writes, whose size shows its progress.' },
         expected_size: { type: 'string', description: 'The final size of watch_file, e.g. "15.6GB" or a number of bytes.' },
+        notify_when_done: {
+          type: 'boolean',
+          description:
+            'true when you need its result (a training run, a long build or test run, a big download): end your turn without submitting instead of polling, and Aivenue continues this conversation as soon as it ends, with its log tail. If it ends while you are still working, you are told on your next Aivenue tool result. Leave it off for servers and jobs you do not wait for.',
+        },
       },
       required: ['pid', 'purpose', 'cleanup'],
     },

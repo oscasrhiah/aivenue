@@ -339,7 +339,35 @@ export function securityReviewRule(skillPath: string): string {
 }
 
 export function backgroundRule(): string {
-  return '\n\nBACKGROUND JOBS (REQUIRED): right after you start anything in the background (nohup, &, a new terminal, tmux, Start-Process, a script that backgrounds itself, a run_in_background command), register it with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is, its status and its progress. Aivenue also finds unregistered jobs from your commands and your GPUs, and refuses your submission until every one is registered. To wait for one, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops: it does not spend your turns, and the user sees what you are waiting for.';
+  return '\n\nBACKGROUND JOBS (REQUIRED): right after you start anything in the background (nohup, &, a new terminal, tmux, Start-Process, a script that backgrounds itself, a run_in_background command), register it with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is, its status and its progress. Aivenue also finds unregistered jobs from your commands and your GPUs, and refuses your submission until every one is registered. A notice or monitor of your own CLI does not reach you once your turn ends: only Aivenue does. When you need a job\'s result and it takes more than a few minutes (training, a long build or test run, a big download), register it with notify_when_done: true and, once you have nothing else to do, end your turn without submitting: Aivenue continues this conversation as soon as it ends, with its log tail, and you go on from there. For a short wait, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops.';
+}
+
+/** One ended background job as an agent is told about it: what, how long, how far, and its last log lines. */
+function endedJob(d: { pid: number; purpose: string; runtimeSec: number; percent?: number; endedEarly?: boolean; log?: string; logTail?: string[]; watchFile?: string; bytes?: number; expectedBytes?: number }): string {
+  const min = Math.floor(d.runtimeSec / 60);
+  const lines = [`- PID ${d.pid} (${d.purpose}): ended after ${min ? `${min} min ` : ''}${d.runtimeSec % 60} s${d.percent !== undefined ? `, last progress ${Math.round(d.percent)}%` : ''}${d.endedEarly ? ' (it stopped before 100%)' : ''}.`];
+  if (d.watchFile) lines.push(`  ${d.watchFile}: ${d.bytes ?? 'missing'}${d.bytes !== undefined ? ' bytes' : ''}${d.expectedBytes ? ` of ${d.expectedBytes} expected` : ''}.`);
+  const tail = (d.logTail ?? []).join('\n').slice(-3000);
+  if (d.log) lines.push(tail ? `  Last lines of ${d.log}:\n${tail.split('\n').map((l) => `    ${l}`).join('\n')}` : `  Its log ${d.log} is empty or missing.`);
+  return lines.join('\n');
+}
+
+/** Rides along with an agent's next tool result: a job it waits for ended while it was still working. */
+export function jobsEndedNotice(jobs: Parameters<typeof endedJob>[0][]): string {
+  return `A background job you are waiting for ENDED (Aivenue cannot see its exit code: check its output before you rely on it):\n${jobs.map(endedJob).join('\n')}`;
+}
+
+/** Continues an agent's conversation after it ended its turn to wait for a job (notify_when_done) that has now ended. */
+export function jobsEndedPrompt(jobs: Parameters<typeof endedJob>[0][], stillRunning: string[]): string {
+  return [
+    'AIVENUE: a background job you were waiting for has ended, so your conversation continues here.',
+    'Aivenue cannot see its exit code: check its output and results before you rely on them.',
+    jobs.map(endedJob).join('\n'),
+    stillRunning.length ? `Still running and waited for: ${stillRunning.join('; ')}. If you need those too, end your turn again without submitting once you have nothing else to do.` : '',
+    'Go on with your task from here: use the results, and hand in your result as your role requires when the work is done.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 /** The librarian: new shared notes merged into the knowledge document, by subject, every line with its sources. */

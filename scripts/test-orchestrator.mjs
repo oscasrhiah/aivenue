@@ -607,6 +607,150 @@ test('agent 自己在背景開的程序：沒有 track_process 也會被找到�
   }
 });
 
+/** A job that runs `ms`, then writes `line` to `log` (in cwd) and ends. */
+function shortJob(cwd, log, line, ms) {
+  const fd = fs.openSync(path.join(cwd, log), 'w');
+  const child = spawn(process.execPath, ['-e', `setTimeout(() => console.log(${JSON.stringify(line)}), ${ms})`], { detached: true, stdio: ['ignore', fd, fd] });
+  fs.closeSync(fd);
+  child.unref();
+  return child.pid;
+}
+const pidGone = async (pid) => {
+  for (let i = 0; i < 100; i++) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((res) => setTimeout(res, 100));
+  }
+};
+
+test('等待中的背景程序：agent 不交結果結束這一輪，程序結束後 Aivenue 接續同一段對話並附上 log', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  let pid;
+  let continued;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        pid = shortJob(cwd, 'train.log', 'final loss 0.12', 1500);
+        const reply = await o.callTool(secret, 'track_process', { pid, purpose: 'train', cleanup: 'agent', log: 'train.log', notify_when_done: true });
+        assert.match(reply, /end your turn without submitting/);
+        // Ends its turn without submitting, to wait for the job.
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for training', sessionId: 's1' };
+      },
+      async (o, secret, a) => {
+        continued = { prompt: a.prompt, resume: a.resumeSessionId };
+        await o.callTool(secret, 'submit_work', { summary: 'trained' });
+      },
+    ],
+  });
+  const id = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  const r = await settle(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(continued, 'the conversation was not continued');
+  assert.equal(continued.resume, 's1');
+  assert.match(continued.prompt, new RegExp(`background job you were waiting for has ended[\\s\\S]*PID ${pid} \\(train\\)[\\s\\S]*final loss 0\\.12`));
+  // Continued, not asked to hand in a result, and its reply while waiting was not taken as its result.
+  assert.ok(!r.log.some((l) => /did not submit|沒有提交結果/.test(l.text)));
+  assert.ok(r.log.some((l) => /等待的背景程序已結束|was waiting for ended/.test(l.text)));
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'trained');
+  const p = r.processes.find((x) => x.pid === pid);
+  assert.equal(p.notify, true);
+  assert.equal(p.announced, true);
+});
+
+test('等待背景程序時使用者停止工作流：不再等待，工作流結束', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  let pid;
+  let runId;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        pid = shortJob(cwd, 'long.log', 'never', 60000);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'long job', cleanup: 'agent', log: 'long.log', notify_when_done: true });
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting', sessionId: 's1' };
+      },
+    ],
+  });
+  try {
+    runId = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+    let waiting;
+    for (let i = 0; i < 100 && !waiting; i++) {
+      waiting = Object.values(orch.runs.get(runId).agents).find((a) => /等待背景程序結束|Waiting for background job/.test(a.waiting ?? ''));
+      if (!waiting) await new Promise((res) => setTimeout(res, 100));
+    }
+    assert.ok(waiting, 'the agent did not show it is waiting for the job');
+    assert.match(waiting.waiting, /long job/);
+    const t0 = Date.now();
+    orch.cancel(runId);
+    const r = await settle(orch, runId, 15000);
+    assert.equal(r.status, 'cancelled');
+    assert.ok(Date.now() - t0 < 8000, 'still waited after the stop');
+  } finally {
+    try {
+      process.kill(pid);
+    } catch {}
+  }
+});
+
+test('等待中的背景程序在 agent 還在工作時結束：下一個 Aivenue 工具結果附上通知，只通知一次', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const replies = [];
+  let runId;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        const pid = shortJob(cwd, 'build.log', 'build ok', 200);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'build', cleanup: 'agent', log: 'build.log', notify_when_done: true });
+        await pidGone(pid);
+        o.watch(o.runs.get(runId)); // the 15 s watchdog, run now
+        replies.push(await o.callTool(secret, 'post_note', { text: 'checked', kind: 'fact' }));
+        o.watch(o.runs.get(runId));
+        replies.push(await o.callTool(secret, 'post_note', { text: 'again', kind: 'fact' }));
+        await o.callTool(secret, 'submit_work', { summary: 'built' });
+      },
+    ],
+  });
+  runId = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  const r = await settle(orch, runId);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(replies[0], /AIVENUE NOTICE[\s\S]*background job you are waiting for ENDED[\s\S]*\(build\)[\s\S]*build ok/);
+  assert.doesNotMatch(replies[1], /ENDED/);
+});
+
+test('sub agent 等待背景程序結束後才算完成，上層拿到的是接續後的回覆', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  let waited;
+  let continuedPrompt;
+  fakeAgents(orch, {
+    subagent: [
+      async (o, secret) => {
+        const pid = shortJob(cwd, 'dl.log', 'downloaded 3 files', 1000);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'download', cleanup: 'agent', log: 'dl.log', notify_when_done: true });
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for the download', sessionId: 'sub1' };
+      },
+    ],
+    executor: [
+      async (o, secret, a) => {
+        if (a.resumeSessionId === 'sub1') {
+          // The sub-agent's continued turn (its prompt names no role).
+          continuedPrompt = a.prompt;
+          return { lastSeq: 2, exitCode: 0, resumed: true, finalText: 'used the 3 files', sessionId: 'sub1' };
+        }
+        const sub = JSON.parse(await o.callTool(secret, 'spawn_subagent', { provider: 'fake2', task: 'download the data' }));
+        waited = await o.callTool(secret, 'wait_subagent', { subagent_id: sub.subagent_id, timeout_sec: 20 });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, subagents: { enabled: true, allowed: ['fake2'], maxDepth: 1, maxConcurrent: 2 } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(continuedPrompt, /\(download\)[\s\S]*downloaded 3 files/);
+  assert.match(waited, /used the 3 files/);
+  assert.doesNotMatch(waited, /waiting for the download/);
+});
+
 test('別的 agent 跑過、檔案也沒改過的指令又跑一次：提醒先查共享上下文', async () => {
   const { orch, cwd } = setup();
   let reply;

@@ -28,6 +28,7 @@ import type {
   VerifyConfig,
   GpuDetail,
   ProcessDetail,
+  TrackedProcess,
   HumanDecision,
   TestResult,
   WorkflowConfig,
@@ -1922,14 +1923,16 @@ export class Orchestrator {
         const str = (k: string) => (typeof args[k] === 'string' && (args[k] as string).trim() ? (args[k] as string).trim().slice(0, 500) : undefined);
         const expected = parseSize(args.expected_size);
         if (args.expected_size !== undefined && !expected) throw new Error('expected_size must look like "15.6GB", "800MB" or a number of bytes');
-        list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now(), log: str('log'), watchFile: str('watch_file'), expectedBytes: expected });
+        const notify = args.notify_when_done === true || undefined;
+        list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now(), log: str('log'), watchFile: str('watch_file'), expectedBytes: expected, notify });
         run.processes = list;
         // It stands for one launch Aivenue saw but could not find a PID for.
         const waiting = this.launches.get(info.id);
         if (waiting?.length) this.launches.set(info.id, waiting.slice(1));
         this.touch(run);
         const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
-        return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how;
+        const wake = notify ? ' When you have nothing else to do, end your turn without submitting: Aivenue continues this conversation when it ends.' : '';
+        return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how + wake;
       }
       case 'ask_user': {
         const question = String(args.question ?? '').trim().slice(0, 3000);
@@ -2926,6 +2929,13 @@ export class Orchestrator {
       info.sessionId = undefined;
       res = await this.invokePausable(run, info, o.prompt, o.mode, undefined, res.lastSeq);
     }
+    // It ended its turn without a submit tool call while a job whose result it needs runs: that is waiting, not a reply
+    // to take as its result. Continue the conversation when the job ends (before its reply text is read as a result).
+    const handedIn = () => {
+      const s = this.submissions.get(info.id);
+      return !!s && [s.plan, s.review, s.work, s.verification, s.rulings].some((v) => v !== undefined);
+    };
+    if (!handedIn() && !res.error) res = await this.continueAfterJobs(run, info, o.mode, res, handedIn);
     let sub = this.collect(info.id, o.expect, res, run);
     const spec = this.d.registry.get(info.provider);
     if (!sub && !res.error && res.sessionId && spec?.run.resume && spec.capabilities?.resume !== false && !this.aborted(run)) {
@@ -3401,6 +3411,8 @@ export class Orchestrator {
     this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
     const prompt = P.subagentPrompt(run.config.cwd, o.task, roleLabel(parent.role), this.subBlock(run, child.depth));
     const done = this.invokePausable(run, child, prompt, o.mode)
+      // A sub-agent that ends its turn while a job it waits for runs is continued when the job ends, before it counts as done.
+      .then((res) => this.continueAfterJobs(run, child, o.mode, res, () => false))
       .then((res) => {
         child.status = this.aborted(run) || this.agentAborts.get(child.id)?.signal.aborted || this.stoppedByUser.has(child.id) ? 'cancelled' : res.error && !res.finalText ? 'failed' : 'completed';
         child.error = res.error;
@@ -4699,9 +4711,81 @@ export class Orchestrator {
       if (!d.alive) {
         p.endedAt = now();
         changed = true;
+        // A job its agent waits for, ended while that agent is still in its turn: told on its next tool result.
+        // (Between turns, the agent's own wait picks it up and continues the conversation.)
+        const a = run.agents[p.agentId];
+        if (p.notify && !p.announced && a && !this.jobWaits.has(a.id) && ['running', 'paused', 'queued'].includes(a.status)) {
+          p.announced = true;
+          this.notify(a.id, P.jobsEndedNotice([d]));
+        }
       }
     }
     if (changed) this.touch(run);
+  }
+
+  /** Agents whose turn ended while a job they wait for (notify_when_done) still runs: waiting for it between turns. */
+  private jobWaits = new Set<string>();
+
+  /** Jobs this agent waits for that it has not been told about yet (running, or ended since). */
+  private waitedJobs(run: WorkflowRun, info: AgentRunInfo): TrackedProcess[] {
+    return (run.processes ?? []).filter((p) => p.agentId === info.id && p.notify && !p.announced);
+  }
+
+  /**
+   * Between turns: waits until one of the jobs this agent waits for ends, and returns those that ended (marked as
+   * told). Undefined when the workflow or the agent was stopped first.
+   */
+  private async awaitJobs(run: WorkflowRun, info: AgentRunInfo): Promise<ProcessDetail[] | undefined> {
+    const stopped = () => this.aborted(run) || this.stoppedByUser.has(info.id) || !!this.agentAborts.get(info.id)?.signal.aborted;
+    this.jobWaits.add(info.id);
+    try {
+      for (;;) {
+        const jobs = this.waitedJobs(run, info);
+        if (!jobs.length || stopped()) return stopped() ? undefined : [];
+        const ended = jobs.filter((p) => !pidAlive(p.pid));
+        if (ended.length) {
+          const details = ended.map((p) => {
+            p.alive = false;
+            p.endedAt ??= now();
+            p.announced = true;
+            return inspectProcess(p, run.config.cwd);
+          });
+          info.waiting = undefined;
+          this.log(run, L(`${this.label(info)} 等待的背景程序已結束（${ended.map((p) => `PID ${p.pid}`).join('、')}），接續它的對話`, `Background job(s) ${this.label(info)} was waiting for ended (${ended.map((p) => `PID ${p.pid}`).join(', ')}); continuing its conversation`), 'info', true);
+          this.touch(run);
+          return details;
+        }
+        const label = jobs.map((p) => `PID ${p.pid}（${p.purpose}）`).join('、');
+        const waiting = L(`等待背景程序結束：${label}`, `Waiting for background job(s) to end: ${jobs.map((p) => `PID ${p.pid} (${p.purpose})`).join(', ')}`);
+        if (info.waiting !== waiting) {
+          info.waiting = waiting;
+          this.touch(run);
+        }
+        await this.sleepFor(run, info, 3000);
+      }
+    } finally {
+      this.jobWaits.delete(info.id);
+      if (info.waiting?.startsWith(L('等待背景程序結束', 'Waiting for background job'))) info.waiting = undefined;
+    }
+  }
+
+  /**
+   * A turn that ended without handing in a result while jobs it waits for still run: wait for one to end, then continue
+   * the same conversation with what ended (log tail, runtime). Repeats while the agent ends its turn again waiting.
+   * Called only for a turn that handed in nothing; `done` says whether a continued turn handed in what its role must
+   * (always false for a sub-agent, whose reply is its result).
+   */
+  private async continueAfterJobs(run: WorkflowRun, info: AgentRunInfo, mode: 'write' | 'readonly', res: RunAgentResult, done: (r: RunAgentResult) => boolean): Promise<RunAgentResult> {
+    const spec = this.d.registry.get(info.provider);
+    const resumable = !!spec?.run.resume && spec.capabilities?.resume !== false;
+    while (!res.error && res.sessionId && resumable && this.waitedJobs(run, info).length) {
+      const ended = await this.awaitJobs(run, info);
+      if (!ended?.length) break;
+      const still = this.waitedJobs(run, info).map((p) => `PID ${p.pid} (${p.purpose})`);
+      res = await this.invokePausable(run, info, P.jobsEndedPrompt(ended, still), mode, res.sessionId, res.lastSeq);
+      if (done(res)) break;
+    }
+    return res;
   }
 
   private aborted(run: WorkflowRun) {
