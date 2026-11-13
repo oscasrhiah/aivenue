@@ -4,11 +4,13 @@
 # The user's own Aivenue is left alone: the per-machine install in C:\Program Files\Aivenue is hashed before and after
 # and never touched; only the processes this script started are stopped (win-procs.ps1: the launched process and its
 # descendants, running from this run's folders), never others with the same name; and the installer test does not
-# run when a current-user Aivenue is already installed (a silent current-user install would replace its entry).
+# run when a current-user Aivenue is already installed or an Aivenue.lnk is already on the Desktop or in the Start
+# menu (win-guards.ps1: a silent current-user install would replace them, and its uninstall delete them).
 #   pwsh win-accept.ps1 -Kit <folder with the two .exe> -Out <results folder> -Version <expected version> -Commit <full sha>
 param([Parameter(Mandatory)][string]$Kit, [Parameter(Mandatory)][string]$Out, [Parameter(Mandatory)][string]$Version, [Parameter(Mandatory)][string]$Commit)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'win-procs.ps1')
+. (Join-Path $PSScriptRoot 'win-guards.ps1')
 $check = Join-Path $PSScriptRoot 'capabilities-check.mjs'
 $work = Join-Path $env:TEMP ('aivenue-win-accept-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Force $work, $Out | Out-Null
@@ -21,8 +23,6 @@ function MachineState {
   $h = Get-FileHash $files | ForEach-Object { $_.Hash.Substring(0, 16) }
   "$($reg -join ',') exe=$($h[0]) asar=$($h[1])"
 }
-function UserEntries { @(Get-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*Aivenue*' }) }
-function Shortcuts { @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Aivenue.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'Aivenue.lnk')) | ForEach-Object { Test-Path $_ } }
 function Launch($exe, $name, $port, [string[]]$allowed) {
   $data = Join-Path $work "home-$name"
   New-Item -ItemType Directory -Force $data | Out-Null
@@ -45,8 +45,8 @@ function Launch($exe, $name, $port, [string[]]$allowed) {
 
 $before = MachineState
 Say "Per-machine install before: $before"
-$userBefore = (UserEntries).Count
-Say "Current-user Aivenue entries before: $userBefore"
+Say "Current-user Aivenue entries before: $((Get-UserEntries).Count)"
+$blockers = Get-InstallBlockers
 $fails = 0
 
 Say '=== Portable'
@@ -54,16 +54,15 @@ Say '=== Portable'
 if ((Launch (Join-Path $Kit "Aivenue-$Version-portable.exe") 'portable' 9333 @($Kit, $env:TEMP)) -ne 0) { $fails++ }
 
 Say '=== Installer (current user, silent)'
-if ($userBefore -gt 0) {
-  # A current-user install of the user's own would have its entry and shortcuts replaced, then removed by the uninstall.
+if ($blockers.Count) {
+  # The user's own entry or shortcuts would be replaced by the install, then removed by the uninstall: not tested.
   $fails++
-  Say "  FAIL  installer not tested: a current-user Aivenue is already installed here; this script does not install over it"
+  Say "  FAIL  installer not tested, so nothing of the user's is replaced or deleted: $($blockers -join '; ')"
 } else {
-  $shortcutsBefore = Shortcuts
   $inst = Join-Path $work 'installed-app'
   $p = Start-Process -FilePath (Join-Path $Kit "Aivenue-Setup-$Version.exe") -ArgumentList '/S', '/currentuser', "/D=$inst" -Wait -PassThru
   Say "  $(if ($p.ExitCode -eq 0 -and (Test-Path (Join-Path $inst 'Aivenue.exe'))) { 'PASS' } else { $fails++; 'FAIL' })  install exit $($p.ExitCode), Aivenue.exe in $inst"
-  $entries = UserEntries
+  $entries = Get-UserEntries
   Say "        current-user entries: $($entries.Count) ($(($entries | ForEach-Object { "$($_.DisplayName) at $($_.InstallLocation)" }) -join '; '))"
   Say "        per-machine after install: $(MachineState)"
   if (Test-Path (Join-Path $inst 'Aivenue.exe')) {
@@ -72,12 +71,11 @@ if ($userBefore -gt 0) {
     $q = Start-Process -FilePath $un.FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
     for ($i = 0; $i -lt 60 -and (Test-Path (Join-Path $inst 'Aivenue.exe')); $i++) { Start-Sleep -Milliseconds 500 }
     Start-Sleep -Seconds 2
-    $desk, $menu = Shortcuts
+    # None of them was there before (else the test would not have run): the uninstall must leave none.
+    $desk, $menu = Get-ShortcutPaths | ForEach-Object { Test-Path -LiteralPath $_ }
     $gone = -not (Test-Path (Join-Path $inst 'Aivenue.exe'))
-    $ue = (UserEntries).Count
-    # Shortcuts that were there before the install (not made by it) are not counted against the uninstall.
-    $leftShortcut = ($desk -and -not $shortcutsBefore[0]) -or ($menu -and -not $shortcutsBefore[1])
-    Say "  $(if ($q.ExitCode -eq 0 -and $gone -and $ue -eq 0 -and -not $leftShortcut) { 'PASS' } else { $fails++; 'FAIL' })  uninstall exit $($q.ExitCode); program removed $gone; current-user entries $ue; desktop shortcut $desk (before $($shortcutsBefore[0])); Start menu shortcut $menu (before $($shortcutsBefore[1]))"
+    $ue = (Get-UserEntries).Count
+    Say "  $(if ($q.ExitCode -eq 0 -and $gone -and $ue -eq 0 -and -not $desk -and -not $menu) { 'PASS' } else { $fails++; 'FAIL' })  uninstall exit $($q.ExitCode); program removed $gone; current-user entries $ue; desktop shortcut $desk; Start menu shortcut $menu"
   }
 }
 $after = MachineState

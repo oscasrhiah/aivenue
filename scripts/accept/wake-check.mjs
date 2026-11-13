@@ -36,7 +36,7 @@ if (process.argv[2] === '--judge') {
     }
     if (tlDir) {
       fs.mkdirSync(tlDir, { recursive: true });
-      fs.writeFileSync(path.join(tlDir, `wake-timeline-${n}.md`), timeline(run, j.ex, j.events, j.job, j.wakes));
+      fs.writeFileSync(path.join(tlDir, `wake-timeline-${n}.md`), timeline(run, j.ex, j.events, j.jobs, j.wakes));
     }
   }
   process.exit(failed ? 1 : 0);
@@ -122,7 +122,7 @@ const GOAL = [
   '   - Windows PowerShell: `(Start-Process node -ArgumentList job.js -RedirectStandardOutput job.log -WindowStyle Hidden -PassThru).Id`',
   '2. Right after it started, register it with the Aivenue tool `track_process` {pid: <that PID>, purpose: "result job", cleanup: "agent", log: "job.log", notify_when_done: true}.',
   `3. Then END YOUR TURN IMMEDIATELY, without submitting. Do not wait for the job in any way: no sleep, no polling, no wait_for, no reading result.txt yet (the job takes about ${JOB_SEC} seconds). Aivenue continues this conversation by itself when the job ends.`,
-  '4. When Aivenue tells you the job ended, read result.txt and submit your work (submit_work) with a summary that contains the line from result.txt exactly (it starts with RESULT-).',
+  '4. When Aivenue tells you the job ended, read result.txt on its own: with your file-read tool, or with the single command `cat result.txt` and nothing else in that command. Then submit your work (submit_work) with a summary that contains the line from result.txt exactly (it starts with RESULT-).',
 ].join('\n');
 
 function config(dir) {
@@ -144,27 +144,49 @@ function config(dir) {
   };
 }
 
-/**
- * Whether a finished tool call read result.txt and succeeded: a file read (category "read") of that file, or a terminal
- * command that prints it (cat, type, Get-Content, …). A submission, an edit or a search that merely names the file is no
- * evidence of reading it, nor is a call that failed. (A read done inside OpenCode's code mode is not recognised: the
- * check then fails rather than pass without evidence.)
- */
-function readOfResult(tool) {
-  if (tool?.status !== 'ok') return false;
-  let input = {};
+// Function declarations, not consts: --judge (at the top) uses them before this point.
+function inputOf(tool) {
   try {
-    input = typeof tool.input === 'string' ? JSON.parse(tool.input) : (tool.input ?? {});
+    const i = typeof tool.input === 'string' ? JSON.parse(tool.input) : tool.input;
+    return i && typeof i === 'object' ? i : {};
   } catch {
-    // not JSON: only the title is used
+    return {};
   }
-  const isResult = (f) => /(^|[\\/])result\.txt$/i.test(String(f ?? '').trim().replace(/^["']|["']$/g, ''));
-  if (tool.category === 'read') return [input.path, input.file_path, input.filePath, input.absolute_path, input.AbsolutePath, tool.title].some(isResult);
+}
+
+/**
+ * Whether a finished tool call is a confirmed read of <cwd>/result.txt. All of:
+ * - it succeeded, and its output holds `expected` (the result code, new each attempt): it ran, and what it read is
+ *   that file's content;
+ * - a file read (category "read") whose path is that very file, or a terminal command that is one plain read of it:
+ *   cat / type / Get-Content / gc, optional switches, the path, and nothing else (no ; && || | > < ` $( or new line:
+ *   what ran cannot be told apart then). Relative paths count from the command's own workdir, else from <cwd>.
+ * Anything else, a submission, an edit, a search, a command that only names the file or reads another one, is no
+ * evidence; nor is a read inside OpenCode's code mode, which is not recognised: the check then fails rather than pass
+ * on what it cannot confirm.
+ */
+function readOfResult(tool, cwd, expected) {
+  if (tool?.status !== 'ok' || !cwd || !expected || !String(tool.output ?? '').includes(expected)) return false;
+  const input = inputOf(tool);
+  const win = /^[A-Za-z]:[\\/]/.test(cwd) || cwd.includes('\\');
+  const P = win ? path.win32 : path.posix;
+  const key = (p) => (win ? P.normalize(p).toLowerCase() : P.normalize(p));
+  const target = key(P.join(cwd, 'result.txt'));
+  const base = typeof input.workdir === 'string' && input.workdir ? P.resolve(cwd, input.workdir) : cwd;
+  const isTarget = (p) => typeof p === 'string' && p.trim() !== '' && key(P.resolve(base, p.trim())) === target;
+  if (tool.category === 'read') return [input.path, input.file_path, input.filePath, input.absolute_path, input.AbsolutePath].some(isTarget);
   if (tool.category === 'command') {
-    const cmd = String(input.command ?? input.cmd ?? input.CommandLine ?? tool.title ?? '');
-    return /(^|[\s;&|(])(cat|type|more|head|tail|less|nl|Get-Content|gc)(\.exe)?\s+(-\S+\s+)*["']?(\.[\\/])?([^\s"';&|]*[\\/])?result\.txt\b/i.test(cmd);
+    const cmd = String(input.command ?? input.cmd ?? input.CommandLine ?? '').trim();
+    if (/[;&|<>`\r\n]|\$\(/.test(cmd)) return false;
+    const m = /^(?:cat|type|Get-Content|gc)(?:\.exe)?(?:\s+-[A-Za-z]+)*\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))(?:\s+-[A-Za-z]+)*$/i.exec(cmd);
+    return !!m && isTarget(m[1] ?? m[2] ?? m[3]);
   }
   return false;
+}
+
+/** Whether a call other than Aivenue's own tools names result.txt at all (a peek before the wake-up, of any kind). */
+function namesResult(tool) {
+  return tool?.category !== 'hub' && /result\.txt/i.test(`${tool?.title ?? ''} ${typeof tool?.input === 'string' ? tool.input : JSON.stringify(tool?.input ?? '')}`);
 }
 
 /**
@@ -174,38 +196,46 @@ function readOfResult(tool) {
  */
 function judge({ run, home, dir, expected, sawWaiting }) {
   const texts = (run.log ?? []).map((l) => l.text);
-  const job = (run.processes ?? []).find((x) => x.notify);
+  // Every job registered to be waited for (an agent may register a wrong PID first, then the real one: each is its own
+  // job and wakes it once).
+  const jobs = (run.processes ?? []).filter((x) => x.notify);
+  const job = jobs[0];
   const summary = run.stages?.implement?.rounds?.at(-1)?.submission?.summary ?? '';
   const result = fs.existsSync(path.join(dir, 'result.txt')) ? fs.readFileSync(path.join(dir, 'result.txt'), 'utf8').trim() : '';
   const ex = Object.values(run.agents ?? {}).find((a) => a.role === 'executor');
   const evFile = ex ? path.join(home, 'runs', run.id, 'events', `${ex.id}.jsonl`) : '';
   const events = evFile && fs.existsSync(evFile) ? fs.readFileSync(evFile, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   const tools = events.filter((e) => e.kind === 'tool' && e.tool?.status !== 'running');
-  const wakes = (run.log ?? []).filter((l) => /等待的背景程序已結束|was waiting for ended/.test(l.text) && (!job || l.text.includes(`PID ${job.pid}`)));
+  // One line per wake-up; it names every job that ended for it.
+  const wakes = (run.log ?? []).filter((l) => /等待的背景程序已結束|was waiting for ended/.test(l.text));
+  const wakesOf = (j) => wakes.filter((l) => new RegExp(`PID ${j.pid}(?!\\d)`).test(l.text)).length;
+  const resumed = (ex?.promptTurns ?? []).filter((t) => t.resumed).length;
   const wakeAt = wakes[0]?.ts ?? Infinity;
   const sessions = events.filter((e) => e.kind === 'session' && e.sessionId).map((e) => e.sessionId);
-  const readsResult = (e) => readOfResult(e.tool);
+  const cwd = run.config?.cwd ?? dir;
+  const readsResult = (e) => readOfResult(e.tool, cwd, expected);
   const submits = tools.filter((e) => e.tool.category === 'hub' && /^submit_/.test(e.tool.name));
   const checks = {
     'workflow completed': run.status === 'completed',
-    'a background job registered with notify_when_done': !!job,
+    'a background job registered with notify_when_done': jobs.length > 0,
     'the agent ended its turn and Aivenue showed it waiting for the job': !!sawWaiting,
     'the job ended and Aivenue continued the conversation': wakes.length > 0,
-    'woken once for the job (one wake-up, one resumed turn)': wakes.length === 1 && (ex?.promptTurns ?? []).filter((t) => t.resumed).length === 1,
+    'woken once for each waited job (one wake-up each, one resumed turn per wake-up)': jobs.length > 0 && jobs.every((j) => wakesOf(j) === 1) && resumed === wakes.length,
     'the wake-up continued the same CLI session': sessions.length >= 2 && new Set(sessions).size === 1,
-    'Aivenue delivered the ended job to the agent (marked as told)': job?.announced === true,
+    'Aivenue delivered each ended job to the agent (marked as told)': jobs.length > 0 && jobs.every((j) => j.announced === true),
     'not asked to hand in a result (no "did not submit" nudge)': !texts.some((t) => /沒有提交結果，要求補交|did not submit; asking again/.test(t)),
     'nothing submitted before the wake-up': submits.length > 0 && submits.every((e) => e.ts > wakeAt),
-    'result.txt read only after the wake-up': tools.some((e) => readsResult(e) && e.ts > wakeAt) && !tools.some((e) => readsResult(e) && e.ts < wakeAt),
+    // After the wake-up, a read that is confirmed; before it, nothing that even names the file.
+    'result.txt read only after the wake-up': tools.some((e) => readsResult(e) && e.ts > wakeAt) && !tools.some((e) => namesResult(e.tool) && e.ts < wakeAt),
     'preflight did not report the CLI as not signed in': !texts.some((t) => /^(預檢|Preflight)：.*(尚未登入|not signed in)/.test(t)),
     'the job wrote its result': result === expected,
     'the submitted summary contains the job result': !!expected && summary.includes(expected),
   };
-  return { checks, job, summary, result, ex, events, wakes, sessions };
+  return { checks, job, jobs, summary, result, ex, events, wakes, sessions };
 }
 
 /** The attempt's timeline (local time), from the run's log, the executor's events and the job: for the report. */
-function timeline(run, ex, events, job, wakes) {
+function timeline(run, ex, events, jobs, wakes) {
   const rows = [];
   const short = (s) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, 120).replace(/\|/g, '\\|');
   const add = (ts, what, detail = '') => ts && rows.push({ ts, what, detail: short(detail) });
@@ -218,7 +248,7 @@ function timeline(run, ex, events, job, wakes) {
     else if (e.kind === 'tool' && e.tool?.status !== 'running') add(e.ts, `tool ${e.tool.name}`, e.tool.title);
   }
   // endedAt is when Aivenue saw the job gone: it checks every 3 s while the agent waits.
-  if (job?.endedAt) add(job.endedAt, 'job end seen by Aivenue', `PID ${job.pid}`);
+  for (const j of jobs) if (j.endedAt) add(j.endedAt, 'job end seen by Aivenue', `PID ${j.pid}`);
   for (const w of wakes) add(w.ts, 'wake-up', w.text);
   add(run.endedAt, `workflow ${run.status}`);
   rows.sort((a, b) => a.ts - b.ts);
@@ -234,7 +264,7 @@ function timeline(run, ex, events, job, wakes) {
     `# Wake-up timeline: workflow ${run.id}`,
     '',
     `- Date ${new Date(t0).toISOString().slice(0, 10)}, times in ${zone}; executor ${ex?.provider ?? '?'} ${ex?.model ?? ''}`,
-    `- Wake-ups for the job: ${wakes.length}; resumed turns: ${(ex?.promptTurns ?? []).filter((t) => t.resumed).length}`,
+    `- Waited jobs: ${jobs.map((j) => `PID ${j.pid}`).join(', ') || 'none'}; wake-ups: ${wakes.length}; resumed turns: ${(ex?.promptTurns ?? []).filter((t) => t.resumed).length}`,
     '- "job end seen by Aivenue" is when Aivenue saw the process gone (it checks every 3 s while waiting), not when it exited.',
     '',
     '| time | +s | event | detail |',
@@ -292,11 +322,11 @@ for (let attempt = 1; attempt <= TRIES && !verdict?.passed; attempt++) {
     }
   }
   fs.writeFileSync(path.join(OUT, `wake-run-${attempt}.json`), JSON.stringify(run, null, 1));
-  const { checks, job, summary, result, ex, events, wakes, sessions } = judge({ run, home, dir, expected, sawWaiting });
+  const { checks, jobs, summary, result, ex, events, wakes, sessions } = judge({ run, home, dir, expected, sawWaiting });
   const passed = Object.values(checks).every(Boolean);
-  verdict = { attempt, workflow: id, minutes: ((Date.now() - t0) / 60000).toFixed(1), status: run.status, expected, result, summary: summary.slice(0, 500), job: job ? { pid: job.pid, notify: job.notify, announced: job.announced, endedAt: job.endedAt } : null, sessions: [...new Set(sessions)], checks, passed };
+  verdict = { attempt, workflow: id, minutes: ((Date.now() - t0) / 60000).toFixed(1), status: run.status, expected, result, summary: summary.slice(0, 500), jobs: jobs.map((j) => ({ pid: j.pid, notify: j.notify, announced: j.announced, endedAt: j.endedAt })), sessions: [...new Set(sessions)], checks, passed };
   fs.writeFileSync(path.join(OUT, `wake-attempt-${attempt}.json`), JSON.stringify(verdict, null, 1));
-  fs.writeFileSync(path.join(OUT, `wake-timeline-${attempt}.md`), timeline(run, ex, events, job, wakes));
+  fs.writeFileSync(path.join(OUT, `wake-timeline-${attempt}.md`), timeline(run, ex, events, jobs, wakes));
   log(`attempt ${attempt}: ${passed ? 'passed' : 'not passed'} in ${verdict.minutes} min`);
   for (const [k, v] of Object.entries(checks)) console.log(`      ${v ? 'yes' : 'NO '}  ${k}`);
 }

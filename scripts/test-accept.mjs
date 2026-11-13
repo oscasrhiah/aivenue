@@ -23,23 +23,25 @@ const SESSION = 'ses_one';
  */
 function wakeResult(edit = () => undefined) {
   const out = tmp('wake');
+  const cwd = path.join(out, 'wake-work-1');
   const t = (s) => 1_000_000 + s * 1000;
-  const tool = (s, name, category, input, title = name, status = 'ok') => ({ kind: 'tool', ts: t(s), tool: { id: `c${s}`, name, category, title, input: JSON.stringify(input), status } });
+  const tool = (s, name, category, input, title = name, output = '', status = 'ok') => ({ kind: 'tool', ts: t(s), tool: { id: `c${s}`, name, category, title, input: JSON.stringify(input), output, status } });
   const events = [
     { kind: 'prompt', ts: t(1), text: 'You are the IMPLEMENTER' },
     { kind: 'session', ts: t(2), sessionId: SESSION },
-    tool(3, 'read', 'read', { filePath: path.join(out, 'wake-work-1', 'job.js') }, 'job.js'),
-    tool(4, 'shell', 'command', { command: 'nohup node job.js > job.log 2>&1 & echo $!' }, 'nohup node job.js > job.log 2>&1 & echo $!'),
+    tool(3, 'read', 'read', { filePath: path.join(cwd, 'job.js') }, 'job.js', '1: // A small background job'),
+    tool(4, 'shell', 'command', { command: 'nohup node job.js > job.log 2>&1 & echo $!', workdir: cwd }, 'nohup node job.js > job.log 2>&1 & echo $!', `${PID}\n`),
     tool(5, 'track_process', 'hub', { code: `return await tools.aivenue.track_process({ pid: ${PID}, notify_when_done: true });` }),
     { kind: 'result', ts: t(6), text: 'Started the job; ending my turn.' },
     { kind: 'prompt', ts: t(51), text: 'AIVENUE: a background job you were waiting for has ended' },
     { kind: 'session', ts: t(52), sessionId: SESSION },
-    tool(53, 'read', 'read', { filePath: path.join(out, 'wake-work-1', 'result.txt') }, 'result.txt'),
-    tool(54, 'submit_work', 'hub', { code: `return await tools.aivenue.submit_work({ summary: "read result.txt: ${EXPECTED}" });` }, '提交實作結果'),
+    tool(53, 'read', 'read', { filePath: path.join(cwd, 'result.txt') }, 'result.txt', `1: ${EXPECTED}\n`),
+    tool(54, 'submit_work', 'hub', { code: `return await tools.aivenue.submit_work({ summary: "read result.txt: ${EXPECTED}" });` }, '提交實作結果', 'Work received'),
     { kind: 'result', ts: t(55), text: 'Done.' },
   ];
   const run = {
     id: 'wf-1',
+    config: { cwd },
     status: 'completed',
     createdAt: t(0),
     endedAt: t(56),
@@ -69,6 +71,8 @@ function judge(dir) {
 }
 const READ_AFTER = 'result.txt read only after the wake-up';
 const isRead = (e) => e.kind === 'tool' && e.tool.category === 'read' && /result\.txt/.test(e.tool.input);
+/** The read of result.txt turned into a terminal command (with its output, the result code by default). */
+const asCommand = (command, output = `${EXPECTED}\n`, more = {}) => (events) => Object.assign(events.find(isRead).tool, { name: 'shell', category: 'command', input: JSON.stringify({ command, ...more }), title: command, output });
 
 test('喚回驗收 --judge：讀檔、喚回、提交都齊全的結果通過', () => {
   const r = judge(wakeResult());
@@ -98,20 +102,95 @@ test('喚回驗收 --judge：只有寫入、搜尋、失敗的讀取或提交提
   }
 });
 
-test('喚回驗收 --judge：用終端指令讀取 result.txt 也算；喚回前就讀過則失敗', () => {
-  for (const cmd of ['cat result.txt', 'type .\\result.txt', 'Get-Content -Raw "C:\\w\\result.txt"']) {
-    const r = judge(wakeResult((events) => Object.assign(events.find(isRead).tool, { name: 'shell', category: 'command', input: JSON.stringify({ command: cmd }), title: cmd })));
+test('喚回驗收 --judge：單一個讀檔指令讀這個 result.txt、輸出有結果碼，才算；喚回前提到它就失敗', () => {
+  const plain = ['cat result.txt', 'cat ./result.txt', 'cat "result.txt"', 'Get-Content -Raw result.txt', 'gc result.txt'];
+  if (process.platform === 'win32') plain.push('type .\\result.txt');
+  for (const cmd of plain) {
+    const r = judge(wakeResult(asCommand(cmd)));
     assert.equal(r.code, 0, `${cmd}: ${r.out}`);
   }
-  // Also read before the wake-up (it waited or peeked instead of ending its turn).
-  const early = judge(wakeResult((events) => events.splice(3, 0, { ...events.find(isRead), ts: 1_000_000 + 3500 })));
+  // The full path, and a relative one from the command's own workdir.
+  const abs = judge(wakeResult((events, run) => asCommand(`cat "${path.join(run.config.cwd, 'result.txt')}"`)(events)));
+  assert.equal(abs.code, 0, abs.out);
+  const fromWorkdir = judge(wakeResult((events, run) => asCommand('cat wake-work-1/result.txt', `${EXPECTED}\n`, { workdir: path.dirname(run.config.cwd) })(events)));
+  assert.equal(fromWorkdir.code, 0, fromWorkdir.out);
+  // Named before the wake-up, in any way (here only listed): it peeked instead of ending its turn.
+  const early = judge(wakeResult((events) => events.splice(3, 0, { kind: 'tool', ts: 1_000_000 + 3500, tool: { id: 'peek', name: 'shell', category: 'command', title: 'ls -l result.txt', input: JSON.stringify({ command: 'ls -l result.txt' }), output: 'No such file', status: 'ok' } })));
   assert.equal(early.code, 1, early.out);
   assert.deepEqual(early.failed, [READ_AFTER]);
 });
 
+test('喚回驗收 --judge：無法確認讀的是這個 result.txt 的終端指令或讀檔，都不算讀過', () => {
+  const unconfirmed = {
+    // The review's four.
+    'only says it': asCommand('echo "please cat result.txt next"', 'please cat result.txt next\n'),
+    'a read that may not run': asCommand('false && cat result.txt; true'),
+    'another file (.bak)': asCommand('cat result.txt.bak'),
+    'another folder': asCommand('cat other/result.txt'),
+    // More of the kind.
+    'chained after another read': asCommand('cat job.log; cat result.txt'),
+    'piped': asCommand('cat result.txt | head -n 1'),
+    'substituted': asCommand('cat $(echo result.txt)'),
+    'output without the result code': asCommand('cat result.txt', 'cat: result.txt: No such file or directory\n'),
+    'relative to another workdir': asCommand('cat result.txt', `${EXPECTED}\n`, { workdir: '/somewhere/else' }),
+    'not a read command': asCommand(`node -e "console.log('${EXPECTED}')" result.txt`),
+    'a file read of another folder': (events) => Object.assign(events.find(isRead).tool, { input: JSON.stringify({ filePath: path.join('other', 'result.txt') }) }),
+    'a file read without the code in its output': (events) => Object.assign(events.find(isRead).tool, { output: '' }),
+  };
+  for (const [name, change] of Object.entries(unconfirmed)) {
+    const r = judge(wakeResult(change));
+    assert.equal(r.code, 1, `${name}: ${r.out}`);
+    assert.deepEqual(r.failed, [READ_AFTER], name);
+  }
+});
+
+const ONCE = 'woken once for each waited job (one wake-up each, one resumed turn per wake-up)';
+const TOLD = 'Aivenue delivered each ended job to the agent (marked as told)';
+const wake = (s, pids) => ({ ts: 1_000_000 + s * 1000, text: `實作 (OpenCode) 等待的背景程序已結束（${pids.map((p) => `PID ${p}`).join('、')}），接續它的對話` });
+
+test('喚回驗收 --judge：先登記錯的 PID（外殼程序）再登記真正的工作，兩個工作各喚回一次，算通過', () => {
+  // As seen with Git Bash on Windows: `$!` was the shell's PID, which ended at once; the agent then registered node's.
+  const ok = judge(
+    wakeResult((events, run) => {
+      run.processes = [
+        { pid: 1490, notify: true, announced: true, endedAt: 1_000_000 + 30_000 },
+        { pid: PID, notify: true, announced: true, endedAt: 1_000_000 + 50_000 },
+      ];
+      run.log.splice(1, 0, wake(30, [1490]));
+      run.agents.a1.promptTurns = [{ resumed: false }, { resumed: true }, { resumed: true }];
+    }),
+  );
+  assert.equal(ok.code, 0, ok.out);
+  // Two jobs that ended together: one wake-up names both, one resumed turn.
+  const together = judge(
+    wakeResult((events, run) => {
+      run.processes.push({ pid: 1490, notify: true, announced: true, endedAt: 1_000_000 + 50_000 });
+      run.log[1] = wake(50, [1490, PID]);
+    }),
+  );
+  assert.equal(together.code, 0, together.out);
+  // A PID that only starts like another one is not its wake-up.
+  const prefix = judge(wakeResult((events, run) => run.processes.push({ pid: 424, notify: true, announced: true })));
+  assert.equal(prefix.code, 1, prefix.out);
+  assert.ok(prefix.failed.includes(ONCE), JSON.stringify(prefix.failed));
+});
+
+test('喚回驗收 --judge：有工作沒被喚回或沒標成已通知、接續回合比喚回多，都失敗', () => {
+  const cases = [
+    ['a waited job never woken', [ONCE], (events, run) => run.processes.push({ pid: 999, notify: true, announced: false })],
+    ['a resumed turn with no wake-up', [ONCE], (events, run) => run.agents.a1.promptTurns.push({ resumed: true })],
+    ['a job not marked as told', [TOLD], (events, run) => (run.processes[0].announced = false)],
+  ];
+  for (const [name, want, change] of cases) {
+    const r = judge(wakeResult(change));
+    assert.equal(r.code, 1, `${name}: ${r.out}`);
+    for (const w of want) assert.ok(r.failed.includes(w), `${name}: ${JSON.stringify(r.failed)}`);
+  }
+});
+
 test('喚回驗收 --judge：喚回兩次、換了 session、喚回前就提交、預檢說尚未登入，各自失敗', () => {
   const cases = [
-    ['woken once for the job (one wake-up, one resumed turn)', (events, run) => run.log.push({ ts: 1_000_000 + 60_000, text: `實作 (OpenCode) 等待的背景程序已結束（PID ${PID}），接續它的對話` })],
+    ['woken once for each waited job (one wake-up each, one resumed turn per wake-up)', (events, run) => run.log.push({ ts: 1_000_000 + 60_000, text: `實作 (OpenCode) 等待的背景程序已結束（PID ${PID}），接續它的對話` })],
     ['the wake-up continued the same CLI session', (events) => (events.find((e) => e.kind === 'session' && e.ts > 1_000_000 + 50_000).sessionId = 'ses_other')],
     ['nothing submitted before the wake-up', (events) => (events.find((e) => e.tool?.name === 'submit_work').ts = 1_000_000 + 5500)],
     ['preflight did not report the CLI as not signed in', (events, run) => run.log.push({ ts: 1_000_000 + 100, text: '預檢：實作：OpenCode 尚未登入' })],
@@ -215,5 +294,36 @@ $left = Stop-Ours $root.Id $since @($Ours) | Select-Object -Last 1
         }
       }
     }
+  },
+);
+
+// ---------- win-guards.ps1 (when the installer test must not run) ----------
+
+test(
+  'Windows 安裝驗收：使用者已有目前使用者安裝、或桌面／開始功能表已有 Aivenue.lnk 時不安裝；都沒有才安裝',
+  { skip: (process.platform !== 'win32' && 'Windows only') || (!pwsh && 'no PowerShell') },
+  () => {
+    // Made-up Desktop and Programs folders: the user's real ones are never touched.
+    const dir = tmp('guards');
+    const desktop = path.join(dir, 'Desktop');
+    const programs = path.join(dir, 'Programs');
+    fs.mkdirSync(desktop);
+    fs.mkdirSync(programs);
+    const blockers = (entries) => {
+      const r = spawnSync(pwsh, ['-NoProfile', '-Command', `. '${path.join(ACCEPT, 'win-guards.ps1')}'; $b = Get-InstallBlockers -Entries ${entries} -Shortcuts (Get-ShortcutPaths '${desktop}' '${programs}'); ConvertTo-Json -InputObject ([string[]]$b) -Compress`], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      return JSON.parse(r.stdout.trim() || '[]');
+    };
+    assert.deepEqual(blockers(0), []);
+    assert.equal(blockers(1).length, 1);
+    assert.match(blockers(1)[0], /current-user Aivenue is already installed/);
+    // A shortcut of the user's own, on the Desktop, then also in the Start menu.
+    fs.writeFileSync(path.join(desktop, 'Aivenue.lnk'), 'the user\'s own shortcut');
+    assert.deepEqual(blockers(0).length, 1);
+    assert.match(blockers(0)[0], /Desktop[\\/]Aivenue\.lnk already exists/);
+    fs.writeFileSync(path.join(programs, 'Aivenue.lnk'), 'the user\'s own shortcut');
+    assert.equal(blockers(1).length, 3);
+    // Nothing was changed.
+    assert.equal(fs.readFileSync(path.join(desktop, 'Aivenue.lnk'), 'utf8'), 'the user\'s own shortcut');
   },
 );
