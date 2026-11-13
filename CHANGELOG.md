@@ -2,6 +2,22 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 0.4.1 - 未發布（候選）
+
+> ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
+
+- **背景工作結束後，等待它的 agent 會被叫回來**：
+  - **原本的問題**：agent 開了長時間的背景工作（訓練、長時間的建置或測試、大檔下載），結束這一輪之後，工作跑完了也沒有人接手結果。
+    - Claude Code、Antigravity 雖然在回合之間保持開著，但 Aivenue 只在回合進行中讀它們的輸出，回合結束後也不接受它們呼叫 Aivenue 的工具，所以 CLI 自己的背景通知或監控不會讓它們回來。
+    - Codex、OpenCode 等其他 CLI 每一輪結束就退出。
+  - **現在**：agent 用 `track_process` 登記背景工作時，可以加上 `notify_when_done: true`，表示要等它的結果。
+    - agent 沒交結果就結束這一輪時，Aivenue 會等工作結束，再接續同一段對話，附上工作的執行時間、進度和 log 最後幾行。
+    - 工作在 agent 還在工作時就結束，下一次 Aivenue 工具的結果會附上通知，只通知一次。
+    - sub agent 也一樣：等到工作結束、接續處理完，才算完成，上層拿到的是處理完的回覆。
+    - 等待期間，agent 卡片顯示「等待背景程序結束：PID …（用途）」。使用者停止工作流或那個 agent 時，等待立刻結束。
+    - 伺服器這類不需要等結果的程序不用加 `notify_when_done`，行為和以前一樣。
+  - Aivenue 看不到背景工作的結束代碼，所以會提醒 agent 先檢查輸出再使用結果。
+
 ## 0.4.0 - 2026-11-08
 
 > ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
