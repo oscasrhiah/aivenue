@@ -106,3 +106,32 @@ test('V1 用 console login 登入後，Aivenue 認得已登入', async () => {
   r.upsert(v1Spec('Error: network unreachable', 1));
   assert.equal((await r.checkAuth('fake-oc')).signedIn, false);
 });
+
+// 預檢用的登入狀態：剛啟動時檢查還在跑，要等它的結果，不能把「檢查中」當成沒登入。
+test('settledAuth：等還在跑的登入檢查；沒檢查過就檢查一次；等太久仍回「檢查中」，不重複執行', async () => {
+  const runs = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-auth-')), 'runs.txt');
+  const slow = (ms) => ({ id: 'fake-oc', name: 'Fake', command: node, run: { common: [], prompt: 'stdin' }, output: 'text', status: { args: ['-e', `require('fs').appendFileSync(${JSON.stringify(runs)}, 'x'); setTimeout(() => console.log('Signed in'), ${ms})`] } });
+  const count = () => (fs.existsSync(runs) ? fs.readFileSync(runs, 'utf8').length : 0);
+  const r = registry();
+  r.upsert(slow(600));
+  // Never checked: one check runs and its result comes back.
+  assert.equal(r.list().find((p) => p.spec.id === 'fake-oc').auth.state, 'unknown');
+  assert.equal((await r.settledAuth('fake-oc', 10000)).state, 'logged_in');
+  assert.equal(count(), 1);
+  // A check still running (as right after Aivenue starts): waited for, not run again.
+  const running = r.checkAuth('fake-oc');
+  assert.equal(r.list().find((p) => p.spec.id === 'fake-oc').auth.state, 'checking');
+  assert.equal((await r.settledAuth('fake-oc', 10000)).state, 'logged_in');
+  await running;
+  assert.equal(count(), 2);
+  // Already checked: no new check.
+  assert.equal((await r.settledAuth('fake-oc', 10000)).state, 'logged_in');
+  assert.equal(count(), 2);
+  // A check longer than the wait: still "checking" (the caller says so), and it goes on to its result.
+  r.upsert(slow(3000));
+  const long = r.checkAuth('fake-oc');
+  const t0 = Date.now();
+  assert.equal((await r.settledAuth('fake-oc', 300)).state, 'checking');
+  assert.ok(Date.now() - t0 < 2500, `waited ${Date.now() - t0} ms`);
+  assert.equal((await long).state, 'logged_in');
+});

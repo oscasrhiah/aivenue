@@ -105,7 +105,22 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
   if (WEB.has(lower)) return { category: 'web', title: pick('url', 'Url', 'query', 'prompt') ?? name, name };
   if (AGENT.has(lower)) return { category: 'agent', title: pick('description', 'prompt') ?? name, name };
   if (TODO.has(lower)) return { category: 'todo', title: L('更新待辦清單', 'Update todo list'), name };
+  if (lower === 'execute' && typeof inp.code === 'string') return { category: 'other', title: codeTitle(inp.code), name };
   return { category: 'other', title: mcp ? `${mcp[1]} · ${name}` : name, name };
+}
+
+/**
+ * What an OpenCode code-mode call does, for the activity list (its tool is always "execute"): the tool searches it
+ * runs (`search({ query: … })`), or else its first line of code.
+ */
+export function codeTitle(code: string): string {
+  const queries = [...code.matchAll(/\bsearch\s*\(\s*\{[^}]*?\bquery\s*:\s*(["'`])((?:(?!\1)[^\\]|\\.)*)\1/g)].map((m) => m[2]);
+  if (queries.length && !/\btools\.[\w-]+\.[\w-]+\s*\(/.test(code)) return L(`搜尋工具：${queries.join('、')}`, `Search tools: ${queries.join(', ')}`).slice(0, 120);
+  const line = code
+    .split('\n')
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('//'));
+  return line ? (line.length > 80 ? `${line.slice(0, 79)}…` : line) : 'execute';
 }
 
 function filesOf(category: ToolCategory, input: unknown): string[] | undefined {

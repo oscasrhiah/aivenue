@@ -51,6 +51,8 @@ function setup(o = {}) {
     runAuth: async () => undefined,
     listModels: async () => [],
     noteContext: () => undefined,
+    // `registry`: replaces some of these (e.g. a sign-in state still being checked).
+    ...o.registry,
   };
   const orch = new Orchestrator({
     registry,
@@ -2029,6 +2031,57 @@ test('安全檢查開啟但沒有程式審查者：不會執行，送出前的�
   // With a reviewer: no such warning.
   const fine = await orch.preflight(config(cwd, { verify: undefined, securityReview: true }));
   assert.ok(!fine.some((i) => /安全檢查已開啟|security check is on/.test(i.message ?? i.text ?? '')));
+});
+
+test('預檢：登入狀態還在檢查（剛啟動）或從沒檢查過時，先等檢查結果，不報成「尚未登入」', async () => {
+  const states = { fake: { state: 'checking' }, fake2: { state: 'unknown' } };
+  const waited = [];
+  const { orch, cwd } = setup({
+    registry: {
+      list: () => ['fake', 'fake2'].map((id) => ({ spec: spec(id), installed: true, auth: states[id] })),
+      settledAuth: async (id, ms) => (waited.push([id, ms]), { state: 'logged_in', checkedAt: Date.now() }),
+    },
+  });
+  const items = (await orch.preflight(config(cwd, { verify: undefined }))).filter((i) => i.area === 'provider');
+  assert.ok(items.length >= 4 && items.every((i) => i.level === 'ok'), JSON.stringify(items));
+  // Once per provider, though each one has two roles here; long enough for a CLI's status command.
+  assert.deepEqual(waited.map(([id]) => id).sort(), ['fake', 'fake2']);
+  assert.ok(waited.every(([, ms]) => ms >= 10000), JSON.stringify(waited));
+});
+
+test('預檢：等不到登入檢查結果、或無法判斷登入狀態時只提醒；確定沒登入才是錯誤；已就緒的不等', async () => {
+  const states = {
+    fake: { state: 'checking' },
+    fake2: { state: 'unknown', checkedAt: 1, detail: 'No login status check configured' },
+    fake3: { state: 'logged_out', checkedAt: 1 },
+    fake4: { state: 'logged_in', checkedAt: 1 },
+  };
+  const waited = [];
+  const { orch, cwd } = setup({
+    ids: Object.keys(states),
+    registry: {
+      list: () => Object.keys(states).map((id) => ({ spec: spec(id), installed: true, auth: states[id] })),
+      // The check outlasted the wait.
+      settledAuth: async (id) => (waited.push(id), { state: 'checking' }),
+    },
+  });
+  const at = (provider) => ({ enabled: true, author: { provider }, reviewer: null, maxRounds: 1, humanGate: false });
+  const items = async (provider) => (await orch.preflight(config(cwd, { verify: undefined, plan: { ...at(provider), enabled: false }, implement: at(provider) }))).filter((i) => i.area === 'provider');
+  const [checking] = await items('fake');
+  assert.equal(checking.level, 'warn');
+  assert.match(checking.message, /還在檢查|still being checked/);
+  assert.doesNotMatch(checking.message, /尚未登入|not signed in/);
+  const [unknown] = await items('fake2');
+  assert.equal(unknown.level, 'warn');
+  assert.match(unknown.message, /無法確認|could not confirm/);
+  assert.match(unknown.message, /No login status check configured/);
+  const [out] = await items('fake3');
+  assert.equal(out.level, 'error');
+  assert.match(out.message, /尚未登入|not signed in/);
+  const [ready] = await items('fake4');
+  assert.equal(ready.level, 'ok');
+  // Only the one still checking was waited for: a finished check (even "unknown") is not run again.
+  assert.deepEqual(waited, ['fake']);
 });
 
 test('安全檢查只在開始前設定：執行中的設定更新即使帶了 securityReview 也不改變，審查者照開始時的設定', async () => {

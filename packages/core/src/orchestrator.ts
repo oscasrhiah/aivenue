@@ -9,6 +9,7 @@ import type {
   Attachment,
   AssignmentResult,
   PermissionLevel,
+  ProviderInfo,
   ProviderSpec,
   AgentRunInfo,
   IssueResponse,
@@ -154,6 +155,8 @@ type ResumeFrom = { stage: StageKey | 'verify'; entry?: Entry };
 
 /** A sub-agent with no sign of life this long is reported to its parent as stalled. */
 const STALL_MS = 10 * 60000;
+/** How long the preflight waits for a provider's sign-in check that is still running. */
+const AUTH_WAIT_MS = 30000;
 
 interface Session {
   workflowId: string;
@@ -1617,6 +1620,15 @@ export class Orchestrator {
     if (config.implement.enabled) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
     if (config.verify?.enabled) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
     if (config.advisor?.mode === 'cross' && config.advisor.provider) roles.push([L('顧問', 'Advisor'), { provider: config.advisor.provider, model: config.advisor.model }]);
+    // Right after Aivenue starts, every provider's sign-in check is still running: wait for it (or run one that never
+    // ran) instead of reporting "checking" as signed out.
+    const auth = new Map<string, ProviderInfo['auth']>();
+    await Promise.all(
+      [...new Set(roles.flatMap(([, r]) => (r ? [r.provider] : [])))].map(async (id) => {
+        const p = infos.find((x) => x.spec.id === id);
+        if (p?.installed && (p.auth.state === 'checking' || (p.auth.state === 'unknown' && !p.auth.checkedAt))) auth.set(id, await this.d.registry.settledAuth(id, AUTH_WAIT_MS));
+      }),
+    );
     for (const [label, role] of roles) {
       if (!role) continue;
       const p = infos.find((x) => x.spec.id === role.provider);
@@ -1624,9 +1636,12 @@ export class Orchestrator {
         add('error', 'provider', L(`${label}：未知的供應商 ${role.provider}`, `${label}: unknown provider ${role.provider}`));
         continue;
       }
+      const a = auth.get(p.spec.id) ?? p.auth;
       if (!p.installed) add('error', 'provider', L(`${label}：${p.spec.name} 沒有安裝`, `${label}: ${p.spec.name} is not installed`));
-      else if (p.auth.state !== 'logged_in') add('error', 'provider', L(`${label}：${p.spec.name} 尚未登入`, `${label}: ${p.spec.name} is not signed in`));
-      else add('ok', 'provider', L(`${label}：${p.spec.name} 已就緒`, `${label}: ${p.spec.name} is ready`));
+      else if (a.state === 'logged_in') add('ok', 'provider', L(`${label}：${p.spec.name} 已就緒`, `${label}: ${p.spec.name} is ready`));
+      else if (a.state === 'checking') add('warn', 'provider', L(`${label}：${p.spec.name} 的登入狀態還在檢查，無法確認是否已登入`, `${label}: ${p.spec.name}'s sign-in is still being checked, so it is not confirmed`));
+      else if (a.state === 'unknown') add('warn', 'provider', L(`${label}：無法確認 ${p.spec.name} 的登入狀態${a.detail ? `（${a.detail}）` : ''}`, `${label}: could not confirm ${p.spec.name}'s sign-in${a.detail ? ` (${a.detail})` : ''}`));
+      else add('error', 'provider', L(`${label}：${p.spec.name} 尚未登入`, `${label}: ${p.spec.name} is not signed in`));
       const model = role.model || this.d.registry.defaults(role.provider).model;
       const effort = role.effort || this.d.registry.defaults(role.provider).effort;
       if (!model || !p.installed) continue;

@@ -180,6 +180,8 @@ export class ProviderRegistry {
   /** Each extra account's config folder lives here: <dataDir>/accounts/<provider>/<slug>. */
   private accountsDir: string;
   private auth = new Map<string, ProviderInfo['auth']>();
+  /** The sign-in check running for a provider, if any. */
+  private checking = new Map<string, Promise<ProviderInfo['auth']>>();
   private keyed = new Set<string>();
   private onChange: () => void;
   readonly ready: Promise<void>;
@@ -656,12 +658,35 @@ export class ProviderRegistry {
     const before = this.auth.get(id);
     this.auth.set(id, { state: 'checking' });
     this.onChange();
-    const result = await this.evaluateAuth(spec);
-    // Another account or plan signed in (or out): its models differ.
-    if (before?.detail !== undefined && before.detail !== result.detail && spec.status?.accounts) this.forgetModels(id);
-    this.auth.set(id, { ...result, checkedAt: Date.now() });
-    this.onChange();
-    return this.auth.get(id)!;
+    const check = (async () => {
+      const result = await this.evaluateAuth(spec);
+      // Another account or plan signed in (or out): its models differ.
+      if (before?.detail !== undefined && before.detail !== result.detail && spec.status?.accounts) this.forgetModels(id);
+      this.auth.set(id, { ...result, checkedAt: Date.now() });
+      this.onChange();
+      return this.auth.get(id)!;
+    })();
+    this.checking.set(id, check);
+    try {
+      return await check;
+    } finally {
+      if (this.checking.get(id) === check) this.checking.delete(id);
+    }
+  }
+
+  /**
+   * The sign-in state to decide on: waits (at most `ms`) for a check that is still running, or runs one when the
+   * provider was never checked. Still "checking" when the check takes longer than that.
+   */
+  async settledAuth(id: string, ms: number): Promise<ProviderInfo['auth']> {
+    const now = this.auth.get(id);
+    const check = this.checking.get(id) ?? (!now ? this.checkAuth(id) : undefined);
+    if (check) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([check.catch(() => undefined), new Promise<void>((r) => (timer = setTimeout(r, ms)))]);
+      clearTimeout(timer);
+    }
+    return this.auth.get(id) ?? { state: 'unknown' };
   }
 
   async checkAll(): Promise<void> {

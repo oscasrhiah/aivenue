@@ -29,7 +29,8 @@ function toolVerb(t: T, e: AgentEvent): string {
     case 'todo':
       return t('待辦', 'Todo');
     default:
-      return tool.name;
+      // OpenCode's code mode runs every call as "execute"; its title says what the code does.
+      return tool.name === 'execute' ? t('程式碼', 'Code') : tool.name;
   }
 }
 

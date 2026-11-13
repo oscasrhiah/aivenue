@@ -707,6 +707,39 @@ test('A2：各家用量保留原始欄位，換算成同一口徑；既有欄位
   assert.deepEqual(gem.observed, { reportedInput: 800, reportedCached: 300, output: 40, splitKnown: false });
 });
 
+/** The tool calls an OpenCode stream reports: each `{tool, code}` as one completed code-mode (or plain) call. */
+function opencodeTools(calls) {
+  const out = [];
+  const p = W.createParser('opencode-json', { emit: (e) => (out.push(e), out.length), updateTool: () => undefined }, '/w');
+  calls.forEach((c, i) => p.line(JSON.stringify({ type: 'tool_use', part: { tool: c.tool ?? 'execute', callID: `call_${i}`, state: { status: 'completed', input: c.input ?? { code: c.code }, output: '{}' } } })));
+  p.end?.();
+  return out.filter((e) => e.kind === 'tool').map((e) => e.tool);
+}
+
+test('OpenCode 程式碼模式：搜尋工具的 execute 在活動紀錄顯示查詢內容，不再只寫 execute', () => {
+  const [one, two, hub, other, plain] = opencodeTools([
+    { code: 'return await search({ query: "track_process" });' },
+    { code: 'const r1 = await search({ query: "submit", namespace: "aivenue" });\nconst r2 = await search({ query: \'work summary\', namespace: "aivenue" });\nreturn { r1, r2 };' },
+    { code: 'return await tools.aivenue.track_process({\n  pid: 2280577,\n  purpose: "result job",\n  notify_when_done: true,\n});' },
+    { code: '// look around\nconst files = await tools.opencode.worktree_list();\nreturn files;' },
+    { tool: 'read', input: { path: '/w/job.js' } },
+  ]);
+  assert.equal(one.name, 'execute');
+  assert.equal(one.category, 'other');
+  assert.match(one.title, /^(搜尋工具：track_process|Search tools: track_process)$/);
+  assert.match(two.title, /^(搜尋工具：submit、work summary|Search tools: submit, work summary)$/);
+  // A call of an Aivenue tool from code is still that tool (shown under Aivenue's own records).
+  assert.deepEqual([hub.name, hub.category], ['track_process', 'hub']);
+  // Other code: its first line of code, not the comment above it.
+  assert.equal(other.title, 'const files = await tools.opencode.worktree_list();');
+  assert.notEqual(other.title, 'execute');
+  // Plain tools are unchanged.
+  assert.deepEqual([plain.name, plain.category, plain.title], ['read', 'read', 'job.js']);
+  // A long first line is cut.
+  const [long] = opencodeTools([{ code: `const x = ${'1 + '.repeat(40)}1;` }]);
+  assert.ok(long.title.length <= 80 && long.title.endsWith('…'), long.title);
+});
+
 test('A2：拆分不明的輸入不放進「未快取／快取」兩欄，另列；價格不明不當成 0', () => {
   let t = W.addObserved(undefined, { input: 10, output: 5, cached: 0, costUsd: 0.01, observed: { uncachedInput: 10, cachedInput: 0, output: 5, splitKnown: true } });
   assert.equal(t.costUsd, 0.01);
