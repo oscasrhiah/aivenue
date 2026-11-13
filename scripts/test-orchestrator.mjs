@@ -751,6 +751,94 @@ test('sub agent 等待背景程序結束後才算完成，上層拿到的是接�
   assert.doesNotMatch(waited, /waiting for the download/);
 });
 
+const implOnly = (cwd, over = {}) => config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false }, ...over });
+const waitTurn = (cwd, ms, out = { finalText: 'waiting for job', sessionId: 's1' }) => async (o, secret) => {
+  const pid = shortJob(cwd, 'job.log', 'result 42', ms);
+  await o.callTool(secret, 'track_process', { pid, purpose: 'job', cleanup: 'agent', log: 'job.log', notify_when_done: true });
+  return { lastSeq: 1, exitCode: 0, resumed: false, ...out };
+};
+const useResult = (seen) => async (o, secret, a) => {
+  seen.push({ prompt: a.prompt, resume: a.resumeSessionId });
+  await o.callTool(secret, 'submit_work', { summary: 'used result 42' });
+};
+
+test('回合中結束的工作：通知還在佇列、agent 就直接結束這一輪，仍會被接續（不算已通知）', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  let runId;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        const pid = shortJob(cwd, 'job.log', 'result 42', 200);
+        await o.callTool(secret, 'track_process', { pid, purpose: 'job', cleanup: 'agent', log: 'job.log', notify_when_done: true });
+        await pidGone(pid);
+        o.watch(o.runs.get(runId)); // queued for its next tool result, which never comes: it ends its turn
+        assert.equal(o.runs.get(runId).processes.find((p) => p.pid === pid).announced, undefined);
+        return { lastSeq: 1, exitCode: 0, resumed: false, finalText: 'waiting for job', sessionId: 's1' };
+      },
+      useResult(seen),
+    ],
+  });
+  runId = orch.start(implOnly(cwd)).id;
+  const r = await settle(orch, runId);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(seen.length, 1, 'not continued');
+  assert.equal(seen[0].resume, 's1');
+  assert.match(seen[0].prompt, /background job you were waiting for has ended[\s\S]*result 42/);
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
+test('補交回合才登記等待的工作：同樣等它結束再接續，不把「waiting」當結果', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  fakeAgents(orch, {
+    executor: [
+      async () => ({ lastSeq: 1, exitCode: 0, resumed: false, finalText: '', sessionId: 's1' }), // nothing: asked again
+      waitTurn(cwd, 800),
+      useResult(seen),
+    ],
+  });
+  const r = await settle(orch, orch.start(implOnly(cwd)).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(r.log.some((l) => /沒有提交結果，要求補交|did not submit/.test(l.text)), 'the nudge did not happen');
+  assert.equal(seen.length, 1, 'not continued after the nudged turn');
+  assert.match(seen[0].prompt, /has ended[\s\S]*result 42/);
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
+test('網路錯誤恢復的回合才登記等待的工作：同樣等它結束再接續', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  fakeAgents(orch, {
+    executor: [{ error: 'fetch failed: ECONNRESET' }, waitTurn(cwd, 800), useResult(seen)],
+  });
+  const r = await settle(orch, orch.start(implOnly(cwd)).id, 40000);
+  assert.equal(r.status, 'completed', r.error);
+  assert.ok(r.log.some((l) => /網路中斷|Network error/.test(l.text)), 'no network recovery');
+  assert.equal(seen.length, 1, 'not continued after the recovered turn');
+  assert.match(seen[0].prompt, /has ended[\s\S]*result 42/);
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+});
+
+for (const [name, opts, out] of [
+  ['沒有對話 ID', { resumable: true }, { finalText: 'waiting for job' }],
+  ['CLI 不支援接續', {}, { finalText: 'waiting for job', sessionId: 's1' }],
+]) {
+  test(`等待的工作結束、對話無法接續（${name}）：開新對話帶入任務與工作結果接手`, async () => {
+    const { orch, cwd } = setup(opts);
+    const seen = [];
+    fakeAgents(orch, { executor: [waitTurn(cwd, 800, out), useResult(seen)] });
+    const r = await settle(orch, orch.start(implOnly(cwd)).id);
+    assert.equal(r.status, 'completed', r.error);
+    assert.equal(seen.length, 1, 'no takeover');
+    assert.equal(seen[0].resume, undefined);
+    // The new conversation gets the role's own task prompt, then the takeover with what ended.
+    assert.match(seen[0].prompt, /make the tests pass[\s\S]*AIVENUE TAKEOVER[\s\S]*PID \d+ \(job\)[\s\S]*result 42/);
+    assert.ok(r.log.some((l) => /無法接續|cannot be continued/.test(l.text)));
+    assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
+  });
+}
+
 test('別的 agent 跑過、檔案也沒改過的指令又跑一次：提醒先查共享上下文', async () => {
   const { orch, cwd } = setup();
   let reply;

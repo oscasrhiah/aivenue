@@ -370,6 +370,22 @@ export function jobsEndedPrompt(jobs: Parameters<typeof endedJob>[0][], stillRun
     .join('\n\n');
 }
 
+/**
+ * After the task prompt, for a new conversation that takes over: the previous one ended its turn to wait for a job and
+ * could not be continued (no session id, or a CLI without resume).
+ */
+export function jobsEndedTakeover(jobs: Parameters<typeof endedJob>[0][], stillRunning: string[]): string {
+  return [
+    'AIVENUE TAKEOVER: an earlier conversation on this task started background job(s), ended its turn to wait for them, and could not be continued, so you take over here. Its work so far is in the working folder and in the shared context (read_context).',
+    'This job ended (Aivenue cannot see its exit code: check its output before you rely on it):',
+    jobs.map(endedJob).join('\n'),
+    stillRunning.length ? `Still running and waited for: ${stillRunning.join('; ')}.` : '',
+    'Do not start the job again unless its output shows it failed. Go on with the task from here and hand in your result as your role requires.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 /** The librarian: new shared notes merged into the knowledge document, by subject, every line with its sources. */
 export function librarianPrompt(goal: string, previous: string | undefined, notes: string): string {
   return [
