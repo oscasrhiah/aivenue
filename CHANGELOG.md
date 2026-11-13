@@ -2,9 +2,11 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## 0.4.1 - 未發布（候選）
+## 0.4.1 - 2026-11-13
 
 > ⚠️ **Antigravity（agy）使用風險**：Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取。在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖；功能保留，是否使用請自行評估。
+
+- **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都從提交 `383f95b`（標籤 `v0.4.1`）建置。這段發布日期是發布之後才補上的，所以標籤所在的提交裡，這個標題仍寫「未發布（候選）」。檔案的 SHA-256 與驗收結果寫在 v0.4.1 的 Release 說明。
 
 - **背景工作結束後，等待它的 agent 會被叫回來**：
   - **原本的問題**：agent 開了長時間的背景工作（訓練、長時間的建置或測試、大檔下載），結束這一輪之後，工作跑完了也沒有人接手結果。
