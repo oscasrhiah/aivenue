@@ -145,6 +145,29 @@ function config(dir) {
 }
 
 /**
+ * Whether a finished tool call read result.txt and succeeded: a file read (category "read") of that file, or a terminal
+ * command that prints it (cat, type, Get-Content, …). A submission, an edit or a search that merely names the file is no
+ * evidence of reading it, nor is a call that failed. (A read done inside OpenCode's code mode is not recognised: the
+ * check then fails rather than pass without evidence.)
+ */
+function readOfResult(tool) {
+  if (tool?.status !== 'ok') return false;
+  let input = {};
+  try {
+    input = typeof tool.input === 'string' ? JSON.parse(tool.input) : (tool.input ?? {});
+  } catch {
+    // not JSON: only the title is used
+  }
+  const isResult = (f) => /(^|[\\/])result\.txt$/i.test(String(f ?? '').trim().replace(/^["']|["']$/g, ''));
+  if (tool.category === 'read') return [input.path, input.file_path, input.filePath, input.absolute_path, input.AbsolutePath, tool.title].some(isResult);
+  if (tool.category === 'command') {
+    const cmd = String(input.command ?? input.cmd ?? input.CommandLine ?? tool.title ?? '');
+    return /(^|[\s;&|(])(cat|type|more|head|tail|less|nl|Get-Content|gc)(\.exe)?\s+(-\S+\s+)*["']?(\.[\\/])?([^\s"';&|]*[\\/])?result\.txt\b/i.test(cmd);
+  }
+  return false;
+}
+
+/**
  * What one attempt shows, from the run, the executor's events as Aivenue stored them (under the run's AIVENUE_HOME)
  * and the working folder. `sawWaiting`: whether the executor was seen waiting for the job while the run went on (only
  * visible live: the run keeps no record of it).
@@ -161,7 +184,7 @@ function judge({ run, home, dir, expected, sawWaiting }) {
   const wakes = (run.log ?? []).filter((l) => /等待的背景程序已結束|was waiting for ended/.test(l.text) && (!job || l.text.includes(`PID ${job.pid}`)));
   const wakeAt = wakes[0]?.ts ?? Infinity;
   const sessions = events.filter((e) => e.kind === 'session' && e.sessionId).map((e) => e.sessionId);
-  const touchesResult = (e) => /result\.txt/.test(`${e.tool.title ?? ''} ${e.tool.input ?? ''}`);
+  const readsResult = (e) => readOfResult(e.tool);
   const submits = tools.filter((e) => e.tool.category === 'hub' && /^submit_/.test(e.tool.name));
   const checks = {
     'workflow completed': run.status === 'completed',
@@ -173,7 +196,7 @@ function judge({ run, home, dir, expected, sawWaiting }) {
     'Aivenue delivered the ended job to the agent (marked as told)': job?.announced === true,
     'not asked to hand in a result (no "did not submit" nudge)': !texts.some((t) => /沒有提交結果，要求補交|did not submit; asking again/.test(t)),
     'nothing submitted before the wake-up': submits.length > 0 && submits.every((e) => e.ts > wakeAt),
-    'result.txt read only after the wake-up': tools.some((e) => touchesResult(e) && e.ts > wakeAt) && !tools.some((e) => touchesResult(e) && e.ts < wakeAt),
+    'result.txt read only after the wake-up': tools.some((e) => readsResult(e) && e.ts > wakeAt) && !tools.some((e) => readsResult(e) && e.ts < wakeAt),
     'preflight did not report the CLI as not signed in': !texts.some((t) => /^(預檢|Preflight)：.*(尚未登入|not signed in)/.test(t)),
     'the job wrote its result': result === expected,
     'the submitted summary contains the job result': !!expected && summary.includes(expected),
