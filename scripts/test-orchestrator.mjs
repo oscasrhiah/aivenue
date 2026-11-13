@@ -957,9 +957,65 @@ test('喚回時是一般執行錯誤（不是對話失效）：不開新對話�
   assert.ok(seen.every((s) => s.resume === 's1'), 'a new conversation took over');
   assert.ok(!r.log.some((l) => /接續失敗|continuing failed|改開新的對話|a new conversation takes over/.test(l.text)));
   assert.equal(r.processes[0].announced, undefined);
-  // Only a gone conversation hands over to a new one.
-  for (const gone of ['No conversation found with session ID: s1', 'Error: session not found', 'no rollout found for thread id abc', 'Session abc could not be resumed', 'Unknown session id']) assert.equal(sessionGone(gone), true, gone);
-  for (const other of ['Fatal: invalid configuration: model name is empty', 'fetch failed: ECONNRESET', 'Out of credits. Please top up.', 'Exit code 1: TypeError: x is undefined', 'Invalid model id']) assert.equal(sessionGone(other), false, other);
+});
+
+test('對話失效的判定：只有明確說對話不存在或已失效才算；「無法續接」同時說出別的原因時，交給那個原因的恢復流程', () => {
+  const gone = [
+    'No conversation found with session ID: s1',
+    'Error: session not found',
+    'no rollout found for thread id abc',
+    'Session abc not found',
+    'thread 1234 does not exist',
+    'Unknown session id',
+    'Invalid session ID: x',
+    'conversation has expired',
+  ];
+  const other = [
+    // "could not resume / load the session" with another cause named: that cause's recovery comes first.
+    'Unable to resume session: fetch failed: ECONNRESET',
+    'Failed to load session: HTTP 429 Too Many Requests',
+    'Cannot resume session: authentication token expired',
+    'Failed to load session: EACCES permission denied',
+    'Failed to load session: ENOENT: no such file or directory',
+    'Failed to load session: model overloaded (529)',
+    'Cannot resume session: invalid settings file',
+    // Not saying it does not exist.
+    'Failed to resume session',
+    'Session abc could not be resumed',
+    // Not about the session at all.
+    'Fatal: invalid configuration: model name is empty',
+    'fetch failed: ECONNRESET',
+    'Out of credits. Please top up.',
+    'Exit code 1: TypeError: x is undefined',
+    'Invalid model id',
+  ];
+  for (const m of gone) assert.equal(sessionGone(m), true, m);
+  for (const m of other) assert.equal(sessionGone(m), false, m);
+});
+
+test('喚回時「無法續接 session」但原因是網路錯誤：在原對話重試同樣的結果，不開新對話接手', async () => {
+  const { orch, cwd } = setup({ resumable: true });
+  const seen = [];
+  fakeAgents(orch, {
+    executor: [
+      waitTurn(cwd, 500),
+      async (o, secret, a) => {
+        seen.push({ prompt: a.prompt, resume: a.resumeSessionId });
+        return { lastSeq: 2, exitCode: 1, resumed: false, finalText: '', sessionId: 's1', error: 'Unable to resume session: fetch failed: ECONNRESET' };
+      },
+      useResult(seen),
+    ],
+  });
+  const r = await settle(orch, orch.start(implOnly(cwd)).id, 40000);
+  assert.equal(r.status, 'completed', r.error);
+  assert.equal(seen.length, 2);
+  for (const s of seen) {
+    assert.equal(s.resume, 's1', 'a new conversation took over');
+    assert.match(s.prompt, /has ended[\s\S]*result 42/);
+  }
+  assert.ok(r.log.some((l) => /重送背景程序的結果|sending the background job results again/.test(l.text)));
+  assert.ok(!r.log.some((l) => /接續失敗|continuing failed|改開新的對話|a new conversation takes over/.test(l.text)));
+  assert.equal(r.stages.implement.rounds.at(-1).submission?.summary, 'used result 42');
 });
 
 /** The JSON a tool returned, without the Aivenue notices appended after it. */

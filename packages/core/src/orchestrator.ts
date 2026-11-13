@@ -269,17 +269,25 @@ const SAFE_ARG = /^[A-Za-z0-9][\w.:/@+-]{0,99}$/;
 const MAX_SUBAGENTS = 40;
 
 /**
- * A continuation the CLI refused because the conversation itself no longer exists or cannot be resumed (e.g. Claude
- * Code "No conversation found with session ID", "session not found", "no rollout found for thread id"). Only these
- * hand the work to a new conversation; any other failure is reported and handled as usual.
+ * A continuation the CLI refused because the conversation itself does not exist (any more): e.g. Claude Code "No
+ * conversation found with session ID", "session not found", "no rollout found for thread id", "unknown session id".
+ * Only these hand the work to a new conversation. "Could not resume / load the session" alone is not enough: a cause
+ * named with it (network, rate limit, quota, sign-in, model service, permissions, a file it could not read, its
+ * configuration) goes to its own recovery first, and any other failure is reported and handled as usual.
  */
 export function sessionGone(error: string | undefined): boolean {
   const t = (error ?? '').toLowerCase();
+  if (!t.trim()) return false;
+  // A named cause wins: those have their own recovery (wait and retry, switch provider, sign in, ask the user).
+  if (['network', 'rate_limit', 'quota', 'auth', 'model_service'].includes(classifyFailure(t))) return false;
+  if (/\b(eacces|eperm|enoent|eisdir|emfile|erofs|permission|access (is )?denied|read-only|no space|disk full|config(uration)?|settings|invalid (argument|option|flag|model|json))\b/.test(t)) return false;
+  const what = '(conversation|session|thread|rollout)';
+  // The session's id (or a short name) may sit between the noun and the verdict: "session 3f2a… not found".
   return (
-    /\bno (conversation|session|thread|rollout)s? (was )?found\b/.test(t) ||
-    /\b(conversation|session|thread)\b[^\n]{0,80}\b(not found|does not exist|doesn't exist|no longer exists|could not be (found|resumed|loaded)|cannot be resumed|can't be resumed|expired)\b/.test(t) ||
-    /\b(could not|couldn't|cannot|can't|unable to|failed to) (find|resume|load|restore) (the |that |this )?(conversation|session|thread)\b/.test(t) ||
-    /\b(unknown|invalid) (conversation|session|thread)( id)?\b/.test(t)
+    new RegExp(`\\bno ${what}s? (was |were )?found\\b`).test(t) ||
+    new RegExp(`\\b${what}( id)?( ["'\`]?[\\w.:-]{1,80}["'\`]?)?:? (was |is |has )?(not found|does not exist|doesn't exist|no longer exists|been deleted|expired)\\b`).test(t) ||
+    new RegExp(`\\b(could not|couldn't|cannot|can't|unable to|failed to) find (the |that |this |a )?${what}\\b`).test(t) ||
+    new RegExp(`\\b(unknown|invalid|expired) ${what}( id)?\\b`).test(t)
   );
 }
 /** Characters of a sub-agent's result per wait_subagent page (the first page is what a call without a page returns). */
