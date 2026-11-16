@@ -50,6 +50,8 @@ await build({ ...common, entryPoints: [path.join(pkg('desktop'), 'src/standalone
 
 console.log('• vscode extension');
 await build({ ...common, entryPoints: [path.join(pkg('vscode'), 'src/extension.ts')], outfile: path.join(pkg('vscode'), 'dist/extension.js'), external: [...common.external, 'vscode'] });
+// The hub every VS Code window shares (started by the extension as its own process).
+await build({ ...common, entryPoints: [path.join(pkg('vscode'), 'src/daemon.ts')], outfile: path.join(pkg('vscode'), 'dist/hub.cjs') });
 
 // Copy shared artifacts next to each shell.
 const copy = (from, to) => {

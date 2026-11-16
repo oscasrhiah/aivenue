@@ -452,6 +452,14 @@ export class Orchestrator {
     const assignLater = config.assignment?.mode === 'auto' && this.d.registry.list().some((p) => this.unsettled(p));
     const assignment = config.assignment?.mode === 'auto' && !assignLater ? this.autoAssignment(config) : undefined;
     if (assignment) config = this.applyAssignment(config, assignment);
+    // One workflow at a time per conversation: two windows sending a follow-up together (or one sent again) must not
+    // start two on the same conversation and folder. The first is running by the time the second arrives.
+    const from = config.continueFrom ? this.runs.get(config.continueFrom) : undefined;
+    if (from) {
+      const thread = from.config.threadId ?? from.id;
+      const busy = [...this.runs.values()].find((r) => r.id !== config.replaces && (r.config.threadId ?? r.id) === thread && (r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human'));
+      if (busy) throw new Error(L('這段對話已經有一則訊息在處理中，請等它結束或先停止它', 'This chat already has a message being handled: wait for it or stop it first'));
+    }
     const id = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14) + '-' + randomUUID().slice(0, 6);
     const attachments = this.d.attachments.adopt(id, config.attachments);
     // A follow-up stays in its conversation (one sidebar entry) and goes on from the message it continues.
@@ -1506,6 +1514,8 @@ export class Orchestrator {
   }
 
   events(workflowId: string, agentId: string): AgentEvent[] {
+    // Only this hub's workflows: the app does not read the VS Code extension's records, nor the other way round.
+    if (!this.runs.has(workflowId)) throw new Error(L('找不到工作流', 'Workflow not found'));
     return this.d.store.getEvents(workflowId, agentId);
   }
 

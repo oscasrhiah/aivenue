@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, safeStorage, shell } from 'electron';
 import * as path from 'node:path';
-import { defaultDataDir, FileSecretStore, startHub, type Hub } from '@aivenue/core';
+import { defaultDataDir, FileSecretStore, HubBusyError, startHub, type Hub } from '@aivenue/core';
 
 let hub: Hub | undefined;
 let win: BrowserWindow | undefined;
@@ -51,7 +51,9 @@ if (!app.requestSingleInstanceLock()) {
         },
       });
     } catch (e) {
-      dialog.showErrorBox('Aivenue 無法啟動', String((e as Error)?.stack ?? e));
+      // Another Aivenue app (another install, or a portable copy) already runs these chats: say so, without a stack.
+      if (e instanceof HubBusyError) dialog.showErrorBox('Aivenue 無法啟動', `${e.message}。請先關閉另一個 Aivenue，再開啟這一個。`);
+      else dialog.showErrorBox('Aivenue 無法啟動', String((e as Error)?.stack ?? e));
       app.quit();
       return;
     }

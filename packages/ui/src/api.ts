@@ -23,12 +23,17 @@ function socketUrl(): string {
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${token ?? ''}`;
 }
 
+/** How long a call waits for the hub (across reconnects) before it fails. */
+const CALL_TIMEOUT_MS = 120_000;
+
 class HubClient {
   private ws?: WebSocket;
   private seq = 0;
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+  /** This page's id: with a call's number, the operation id the hub runs once (OpLog). */
+  private clientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  /** Calls not answered yet, in the order made: sent again after a reconnect (the hub still runs each once). */
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; msg: string; timer: ReturnType<typeof setTimeout> }>();
   private listeners = new Map<string, Set<Listener>>();
-  private queue: string[] = [];
   private statusListeners = new Set<() => void>();
   private retry = 0;
   status: 'connecting' | 'open' | 'closed' = 'connecting';
@@ -49,7 +54,8 @@ class HubClient {
     ws.onopen = () => {
       this.retry = 0;
       this.setStatus('open');
-      for (const m of this.queue.splice(0)) ws.send(m);
+      // Unanswered calls go again with the same operation id: one that already ran answers without running twice.
+      for (const p of this.pending.values()) ws.send(p.msg);
       this.emit('reconnect', null);
     };
     ws.onmessage = (ev) => {
@@ -62,13 +68,12 @@ class HubClient {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
+      clearTimeout(p.timer);
       if (msg.error) p.reject(new Error(msg.error));
       else p.resolve(msg.result);
     };
     ws.onclose = () => {
       this.setStatus('closed');
-      for (const p of this.pending.values()) p.reject(new Error('與 Aivenue 的連線中斷'));
-      this.pending.clear();
       setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** this.retry++));
     };
   }
@@ -79,11 +84,15 @@ class HubClient {
 
   call<T = any>(method: string, params?: unknown): Promise<T> {
     const id = ++this.seq;
-    const msg = JSON.stringify({ id, method, params });
+    const msg = JSON.stringify({ id, method, params, op: `${this.clientId}-${id}` });
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error('與 Aivenue 的連線中斷，這個操作沒有得到回應'));
+      }, CALL_TIMEOUT_MS);
+      this.pending.set(id, { resolve, reject, msg, timer });
+      // Not connected now: sent when the connection opens.
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(msg);
-      else this.queue.push(msg);
     });
   }
 
@@ -256,6 +265,15 @@ export function mergeEvent(list: AgentEvent[], e: AgentEvent): AgentEvent[] {
   return [...list, e].sort((a, b) => a.seq - b.seq);
 }
 
+/** Every event once, by seq (a later copy of the same seq wins: a tool call that has finished since). */
+export function mergeEvents(cur: AgentEvent[], more: AgentEvent[]): AgentEvent[] {
+  if (!more.length) return cur;
+  const bySeq = new Map<number, AgentEvent>();
+  for (const e of cur) bySeq.set(e.seq, e);
+  for (const e of more) bySeq.set(e.seq, e);
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
 export function useAgentEvents(workflowId: string | undefined, agentId: string | undefined): AgentEvent[] {
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const buffer = useRef<AgentEvent[]>([]);
@@ -263,26 +281,33 @@ export function useAgentEvents(workflowId: string | undefined, agentId: string |
     setEvents([]);
     buffer.current = [];
     if (!workflowId || !agentId) return;
-    let loaded = false;
+    let loading = true;
     let alive = true;
     const off = hub.on('agentEvent', (d: { workflowId: string; agentId: string; event: AgentEvent }) => {
       if (d.workflowId !== workflowId || d.agentId !== agentId) return;
-      if (!loaded) buffer.current.push(d.event);
+      if (loading) buffer.current.push(d.event);
       else setEvents((cur) => mergeEvent(cur, d.event));
     });
-    hub
-      .call<AgentEvent[]>('agents.events', { workflowId, agentId })
-      .then((list) => {
-        if (!alive) return;
-        let merged = list ?? [];
-        for (const e of buffer.current) merged = mergeEvent(merged, e);
-        loaded = true;
-        setEvents(merged);
-      })
-      .catch(() => (loaded = true));
+    // The record first, then what arrived meanwhile; after a reconnect again (what was sent while away is in it).
+    const load = () => {
+      loading = true;
+      hub
+        .call<AgentEvent[]>('agents.events', { workflowId, agentId })
+        .then((list) => {
+          if (!alive) return;
+          const arrived = buffer.current;
+          buffer.current = [];
+          loading = false;
+          setEvents((cur) => mergeEvents(mergeEvents(cur, list ?? []), arrived));
+        })
+        .catch(() => (loading = false));
+    };
+    load();
+    const offRe = hub.on('reconnect', load);
     return () => {
       alive = false;
       off();
+      offRe();
     };
   }, [workflowId, agentId]);
   return events;

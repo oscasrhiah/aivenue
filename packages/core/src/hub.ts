@@ -24,6 +24,10 @@ import { BUILTIN_PROVIDERS, PROVIDER_TEMPLATES } from './providers/builtin';
 import { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { FileSecretStore, type SecretStore } from './secrets';
+import { holdOsLock, lockName } from './osLock';
+import { OpLog } from './opLog';
+import { requestContext, type WindowRegistry } from './windows';
+import { L } from './i18n';
 
 /** Set by scripts/build.mjs (esbuild define). */
 declare const __AIVENUE_BUILD__: string | undefined;
@@ -53,6 +57,20 @@ export interface HubOptions {
   version?: string;
   /** OS-backed secret storage for API keys; defaults to a plain file store. */
   secrets?: SecretStore;
+  /**
+   * One hub per data folder and side (the app; the VS Code extension): it alone runs, resumes and writes that side's
+   * workflows. Default true: a second hub for the same side refuses to start (HubBusyError).
+   */
+  exclusive?: boolean;
+  /** The VS Code windows this hub serves (the shared VS Code hub): their control channels, and hooks that run in them. */
+  windows?: WindowRegistry;
+}
+
+/** Another hub already serves this data folder and side. */
+export class HubBusyError extends Error {
+  constructor(readonly side: string) {
+    super(L(`另一個 Aivenue（${side === 'vscode' ? 'VS Code' : 'App'}）已經在使用這份資料`, `Another Aivenue (${side === 'vscode' ? 'VS Code' : 'app'}) already serves this data folder`));
+  }
 }
 
 export interface Hub {
@@ -62,6 +80,8 @@ export interface Hub {
   token: string;
   port: number;
   orchestrator: Orchestrator;
+  /** Windows connected (the shared VS Code hub) and workflows still going. */
+  status(): { windows: number; active: number };
   close(): Promise<void>;
 }
 
@@ -88,6 +108,15 @@ const isDir = (p: unknown) => {
 /** Files the OS would execute when "opened". */
 const RUNNABLE = /\.(exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|msi|msp|scr|lnk|url|reg|jar|cpl|pif|application|appref-ms|sh|command|app)$/i;
 
+/** Calls that change nothing: a repeat simply runs again. Every other call runs once per client operation id. */
+const READ_ONLY = new Set([
+  'host.info', 'settings.get', 'usage.get', 'quota.antigravity.status', 'files.read', 'capabilities.get', 'capabilities.presets',
+  'extensions.list', 'extensions.packSkills', 'github.status', 'skills.read', 'providers.list', 'providers.templates', 'providers.models',
+  'catalog.list', 'presets.list', 'assign.preview', 'workflows.list', 'workflows.get', 'agents.events', 'workflows.search',
+  'workflows.preflight', 'workflows.memory', 'workflows.cost', 'workflows.sharedContext', 'memory.projects', 'memory.list',
+  'resources.gpus', 'resources.gpuDetail', 'processes.inspect',
+]);
+
 /** Constant-time token check. */
 const tokenOk = (given: string | null, token: string) => {
   const a = Buffer.from(given ?? '');
@@ -113,6 +142,19 @@ export function defaultDataDir(): string {
 export async function startHub(opts: HubOptions): Promise<Hub> {
   const dataDir = opts.dataDir ?? defaultDataDir();
   fs.mkdirSync(dataDir, { recursive: true });
+  // Whose chats these are: the VS Code extension's, or the app's (with its browser preview).
+  const side = opts.hooks.host === 'vscode' ? 'vscode' : 'app';
+  // One runner per side: two hubs on the same workflows would each resume and run them.
+  let lease: { release: () => Promise<void> } | undefined;
+  if (opts.exclusive !== false) {
+    try {
+      lease = await holdOsLock(lockName(dataDir, `hub-${side}`));
+    } catch {
+      // a platform without these locks (not one Aivenue ships for): one hub per side is not enforced there
+      lease = { release: async () => undefined };
+    }
+    if (!lease) throw new HubBusyError(side);
+  }
   const token = randomBytes(24).toString('hex');
   const clients = new Set<WebSocket>();
   const push = (m: PushMessage) => {
@@ -153,8 +195,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   void github.check().catch(() => undefined);
   const githubMcpOn = () => capabilities.get().mcpServers.some((s) => s.id === GITHUB_MCP_ID && s.enabled);
   // The VS Code extension's chats are its own; the app (and its browser preview) keeps its own.
-  const store = new RunStore(dataDir, opts.hooks.host === 'vscode' ? 'vscode' : 'app');
-  const attachments = new AttachmentStore(dataDir);
+  const store = new RunStore(dataDir, side);
+  const attachments = new AttachmentStore(dataDir, side);
   // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
   const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }) });
   void extensions.init().catch(() => undefined);
@@ -175,6 +217,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     ghAddressComments: () => extensions.ghAddressCommentsSkill(),
     servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
   });
+  attachments.owns = (runId) => orchestrator.runs.has(runId);
   // Settings → General: how long kept CLIs stay idle after their workflow ended.
   orchestrator.setCliIdleMinutes(settings.get().cliIdleMinutes ?? 5);
   // Workflows an update or a restart cut off go on by themselves (Settings → General can turn it off).
@@ -522,6 +565,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   });
 
   const wss = new WebSocketServer({ noServer: true });
+  const ops = new OpLog(path.join(dataDir, `hub-ops-${side}.json`));
   server.on('upgrade', (req, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (url.pathname !== '/ws' || !tokenOk(url.searchParams.get('token'), token)) {
@@ -529,10 +573,21 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    const win = url.searchParams.get('window') ?? undefined;
+    // A VS Code window's control channel: the hub's way to ask that window to do things (not a UI client).
+    if (url.searchParams.get('role') === 'window') {
+      if (!opts.windows || !win) {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => opts.windows!.attach(win, ws));
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req, win));
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws: WebSocket, _req: http.IncomingMessage, win?: string) => {
     clients.add(ws);
     ws.on('close', () => clients.delete(ws));
     ws.on('message', async (raw) => {
@@ -546,7 +601,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       const fn = methods[req.method];
       if (!fn) return reply({ id: req.id, error: `unknown method: ${req.method}` });
       try {
-        const result = await fn(req.params ?? {});
+        // Runs as the window whose webview called (its folder dialog, its project); a change runs once per `op`.
+        const run = () => requestContext.run({ window: win }, () => fn(req.params ?? {}));
+        const result = await (req.op && !READ_ONLY.has(req.method) ? ops.once(req.op, run) : run());
         reply({ id: req.id, result: result ?? null });
       } catch (e) {
         reply({ id: req.id, error: (e as Error).message });
@@ -567,6 +624,10 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     token,
     port,
     orchestrator,
+    status: () => ({
+      windows: opts.windows?.count ?? 0,
+      active: [...orchestrator.runs.values()].filter((r) => r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human').length,
+    }),
     close: () =>
       new Promise((resolve) => {
         // Stop agent processes so no CLI keeps running after the app exits; the workflows stay resumable.
@@ -575,8 +636,11 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         orchestrator.shutdown();
         extensions.shutdown();
         for (const c of clients) c.close();
+        // Every connection ends with the hub, VS Code windows' control channels too: else the server waits on them.
+        for (const c of wss.clients) c.terminate();
         wss.close();
-        server.close(() => resolve());
+        server.close(() => void (lease?.release() ?? Promise.resolve()).then(() => resolve()));
+        server.closeAllConnections();
       }),
   };
 }

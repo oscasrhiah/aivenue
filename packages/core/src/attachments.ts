@@ -42,9 +42,12 @@ function safeName(name: string): string {
  */
 export class AttachmentStore {
   readonly uploadsDir: string;
+  /** Whether a workflow is this hub's (set by the hub): another side's attachments are not served. */
+  owns?: (runId: string) => boolean;
 
-  constructor(private dataDir: string) {
-    this.uploadsDir = path.join(dataDir, 'uploads');
+  /** `side`: the VS Code extension keeps its uploads apart from the app's. */
+  constructor(private dataDir: string, side: 'app' | 'vscode' = 'app') {
+    this.uploadsDir = path.join(dataDir, side === 'vscode' ? 'uploads-vscode' : 'uploads');
     fs.mkdirSync(this.uploadsDir, { recursive: true });
     this.cleanup();
   }
@@ -151,7 +154,7 @@ export class AttachmentStore {
     // On Windows a file on another drive gives an absolute "relative" path.
     if (!relRaw || path.isAbsolute(relRaw)) return false;
     const rel = relRaw.split(path.sep);
-    return rel.length >= 3 && !rel.includes('..') && rel[0] !== '' && rel[1] === 'attachments';
+    return rel.length >= 3 && !rel.includes('..') && rel[0] !== '' && rel[1] === 'attachments' && (!this.owns || this.owns(rel[0]));
   }
 }
 

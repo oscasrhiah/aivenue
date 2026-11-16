@@ -1535,6 +1535,8 @@ export interface RpcRequest {
   id: number;
   method: string;
   params?: unknown;
+  /** The client's id for this operation: sent again (after a reconnect), a change still runs once (hub OpLog). */
+  op?: string;
 }
 
 export interface RpcResponse {
