@@ -31,7 +31,7 @@ const bundled = await build({
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
-      export { resolveTarget as shotTarget } from './packages/core/src/screenshot';
+      export { resolveTarget as shotTarget, readPort } from './packages/core/src/screenshot';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
@@ -3792,6 +3792,25 @@ test('活動紀錄的 Aivenue 工具標題：每一個工具都有標題（和�
   // A bare generic name is not taken for Aivenue's (a CLI may have its own ask_user); a distinctive one is.
   assert.notEqual(t('ask_user', {}).category, 'hub');
   assert.equal(t('rename_chat', { title: 'x' }).category, 'hub');
+});
+
+test('截圖的瀏覽器連接埠：檔案還沒寫、空的或只寫了一半都當成還沒好，繼續等；寫好才讀出連接埠', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-port-'));
+  const f = path.join(dir, 'DevToolsActivePort');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '\n');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '0\n');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '91234\n');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '5317');
+  assert.equal(W.readPort(f), 5317);
+  fs.writeFileSync(f, '53172\n/devtools/browser/abc\n');
+  assert.equal(W.readPort(f), 53172);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('活動紀錄的 Aivenue 工具標題：參數在 agent 程式碼裡時（OpenCode 程式碼模式），標題不會多一個空的冒號', () => {

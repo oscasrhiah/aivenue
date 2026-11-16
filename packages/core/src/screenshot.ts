@@ -120,6 +120,11 @@ class Cdp {
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private waiters = new Map<string, (() => void)[]>();
   private constructor(private ws: WebSocket) {
+    // The browser gone (crashed, closed): every call still waiting fails now instead of never.
+    ws.on('close', () => {
+      for (const p of this.pending.values()) p.reject(new Error(L('瀏覽器連線中斷', 'The browser connection closed')));
+      this.pending.clear();
+    });
     ws.on('message', (raw) => {
       const msg = JSON.parse(String(raw));
       if (msg.id && this.pending.has(msg.id)) {
@@ -133,19 +138,29 @@ class Cdp {
     });
   }
 
-  static async connect(url: string): Promise<Cdp> {
+  /** Connected within `timeoutMs`, or an error (a browser that hangs does not hold the screenshot up). */
+  static async connect(url: string, timeoutMs = 10_000): Promise<Cdp> {
     const ws = new WebSocket(url, { perMessageDeflate: false });
     await new Promise<void>((resolve, reject) => {
-      ws.once('open', () => resolve());
-      ws.once('error', reject);
+      const t = setTimeout(() => {
+        ws.terminate();
+        reject(new Error(L('連不上瀏覽器', 'Could not connect to the browser')));
+      }, timeoutMs);
+      ws.once('open', () => (clearTimeout(t), resolve()));
+      ws.once('error', (e) => (clearTimeout(t), reject(e)));
     });
     return new Cdp(ws);
   }
 
-  send<T = any>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  /** The answer to one command, or an error after `timeoutMs`. */
+  send<T = any>(method: string, params: Record<string, unknown> = {}, timeoutMs = 60_000): Promise<T> {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const t = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(L(`瀏覽器沒有回應（${method}）`, `The browser did not answer (${method})`)));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: (v) => (clearTimeout(t), resolve(v)), reject: (e) => (clearTimeout(t), reject(e)) });
       this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
@@ -191,22 +206,21 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
     // The browser writes its debugging port into the profile once it is ready. The process started here may end
     // first, when the browser relaunched itself: the relaunched one writes the same file, so only no port in time (or
     // no browser at all, 3 s after the one started here ended) is a failure.
+    // A file not written yet, or still empty or half written, is waited on like a missing one (about 15 s in all).
     const portFile = path.join(profile, 'DevToolsActivePort');
     let endedAt = 0;
     for (let i = 0; i < 150 && !port; i++) {
       if (r.signal?.aborted) throw new Error(L('已取消', 'Cancelled'));
-      try {
-        port = Number(fs.readFileSync(portFile, 'utf8').split('\n')[0]);
-      } catch {
-        if (child.exitCode !== null) {
-          endedAt ||= Date.now();
-          if (Date.now() - endedAt > 3000) throw new Error(L(`瀏覽器啟動失敗（結束代碼 ${child.exitCode}）`, `The browser failed to start (exit code ${child.exitCode})`));
-        }
-        await sleep(100);
+      port = readPort(portFile) ?? 0;
+      if (port) break;
+      if (child.exitCode !== null) {
+        endedAt ||= Date.now();
+        if (Date.now() - endedAt > 3000) throw new Error(L(`瀏覽器啟動失敗（結束代碼 ${child.exitCode}）`, `The browser failed to start (exit code ${child.exitCode})`));
       }
+      await sleep(100);
     }
     if (!port) throw new Error(L('瀏覽器啟動逾時', 'Timed out starting the browser'));
-    const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()) as { type: string; webSocketDebuggerUrl: string }[];
+    const targets = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json()) as { type: string; webSocketDebuggerUrl: string }[];
     const page = targets.find((t) => t.type === 'page');
     if (!page) throw new Error(L('瀏覽器沒有可用的分頁', 'No page target in the browser'));
     cdp = await Cdp.connect(page.webSocketDebuggerUrl);
@@ -236,6 +250,18 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
   }
 }
 
+/** The debugging port a Chromium browser wrote into its profile: undefined while the file is missing, empty or partial. */
+export function readPort(file: string): number | undefined {
+  let first: string;
+  try {
+    first = fs.readFileSync(file, 'utf8').split('\n')[0].trim();
+  } catch {
+    return undefined;
+  }
+  const port = /^\d{1,5}$/.test(first) ? Number(first) : 0;
+  return port > 0 && port < 65536 ? port : undefined;
+}
+
 /**
  * End the screenshot browser and remove its throwaway profile, leaving no browser process behind: ask the browser to
  * close (whichever process it is, a relaunched one too), then wait until the profile can be removed (its files are
@@ -244,8 +270,9 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
 async function closeBrowser(port: number, profile: string, child: ChildProcess): Promise<void> {
   if (port) {
     try {
-      const v = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
-      const b = await Cdp.connect(v.webSocketDebuggerUrl);
+      // Every step with a time limit: a browser that hangs is ended below instead of holding the agent up.
+      const v = (await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })).json()) as { webSocketDebuggerUrl: string };
+      const b = await Cdp.connect(v.webSocketDebuggerUrl, 2000);
       await Promise.race([b.send('Browser.close').catch(() => undefined), sleep(2000)]);
       b.close();
     } catch {
