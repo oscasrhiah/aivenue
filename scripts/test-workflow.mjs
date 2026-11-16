@@ -31,6 +31,7 @@ const bundled = await build({
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
+      export { resolveTarget as shotTarget } from './packages/core/src/screenshot';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
@@ -3742,4 +3743,27 @@ test('Markdown：agent 回覆的表格、清單內的程式碼、巢狀清單、
   assert.deepEqual(kinds(q[0].c), ['p', 'list']);
   assert.equal(q[1].level, 2);
   assert.equal(W.mdPlain(q[2].c), '第一行\n第二行');
+});
+
+test('截圖：工作資料夾外的檔案只在完整電腦存取時可以截取；其他權限拒絕並說明怎麼開放（實機重現：Downloads 裡的對照 HTML）', () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-shot-'));
+  const cwd = path.join(base, 'proj');
+  const extra = path.join(base, 'extra');
+  const elsewhere = path.join(base, 'Downloads', '驗收檔案');
+  for (const d of [cwd, extra, elsewhere]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(cwd, 'index.html'), '<p>in</p>');
+  fs.writeFileSync(path.join(extra, 'a.html'), '<p>extra</p>');
+  const outside = path.join(elsewhere, '對照.html');
+  fs.writeFileSync(outside, '<p>out</p>');
+  // Inside the working folder or an extra folder: always.
+  assert.match(W.shotTarget('index.html', cwd), /^file:\/\/.*index\.html$/);
+  assert.match(W.shotTarget(path.join(extra, 'a.html'), cwd, [extra]), /a\.html$/);
+  // Outside them: refused (with where it is and how to allow it), unless the conversation has whole-computer access.
+  assert.throws(() => W.shotTarget(outside, cwd, [extra]), (e) => /extra folder|額外資料夾/.test(e.message) && /whole-computer access|完整電腦存取/.test(e.message));
+  assert.match(W.shotTarget(outside, cwd, [extra], true), /^file:\/\/.*\.html$/);
+  // Whole-computer access still wants a file (not a folder) that exists, and web addresses pass as before.
+  assert.throws(() => W.shotTarget(elsewhere, cwd, [], true), /folder|資料夾/);
+  assert.throws(() => W.shotTarget(path.join(elsewhere, 'missing.html'), cwd, [], true), /not found|找不到/);
+  assert.equal(W.shotTarget('https://example.com', cwd), 'https://example.com');
+  fs.rmSync(base, { recursive: true, force: true });
 });

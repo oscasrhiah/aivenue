@@ -2286,8 +2286,11 @@ export class Orchestrator {
     const target = String(args.target ?? '').trim();
     if (!target) throw new Error('target is required');
     const cwd = run.config.cwd;
+    // Whole-computer access: its agents may read every file, so any local file may be captured too (the setting as it
+    // is now: the user may change it while the workflow runs).
+    const anywhere = run.config.permission === 'full';
     // Other hosts than this machine: not from a read-only plan, and only with the user's OK in manual approval.
-    if (!isLoopbackUrl(resolveTarget(target, cwd, run.config.extraDirs))) {
+    if (!isLoopbackUrl(resolveTarget(target, cwd, run.config.extraDirs, anywhere))) {
       const level = run.config.permission ?? 'auto';
       if (level === 'plan') throw new Error('In plan (read-only) mode only local pages and files in the working folder can be captured.');
       if (level === 'ask') {
@@ -2307,6 +2310,7 @@ export class Orchestrator {
     const shot = await captureScreenshot({
       target,
       extraRoots: run.config.extraDirs,
+      anywhere,
       cwd,
       out: path.join(dir, `${base}-${stamp}.png`),
       width: Number(args.width) || undefined,

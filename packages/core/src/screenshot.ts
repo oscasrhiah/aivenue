@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -49,6 +49,8 @@ export interface ScreenshotRequest {
   cwd: string;
   /** Extra folders the user added; local files may come from them too. */
   extraRoots?: string[];
+  /** Any local file (the conversation has whole-computer access: its agents may read every file anyway). */
+  anywhere?: boolean;
   /** Where the PNG goes (folder is created). */
   out: string;
   width?: number;
@@ -61,10 +63,11 @@ export interface ScreenshotRequest {
 }
 
 /**
- * The URL to load. Local files must be inside the working folder (after resolving links) and not folders:
- * otherwise a screenshot could show the user's credentials or other private files to the agent.
+ * The URL to load. Local files must be inside the working folder or an extra folder (after resolving links) and not
+ * folders: otherwise a screenshot could show the agent the user's credentials or other private files it may not read.
+ * `anywhere` (whole-computer access, where agents may read every file anyway): any local file.
  */
-export function resolveTarget(target: string, cwd: string, extraRoots: string[] = []): string {
+export function resolveTarget(target: string, cwd: string, extraRoots: string[] = [], anywhere = false): string {
   const t = target.trim();
   if (/^https?:\/\//i.test(t)) return t;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(t) && !/^file:\/\//i.test(t)) throw new Error(L(`不支援的網址：${t}`, `Unsupported URL: ${t}`));
@@ -85,7 +88,13 @@ export function resolveTarget(target: string, cwd: string, extraRoots: string[] 
       return false;
     }
   };
-  if (![cwd, ...extraRoots].some(inside)) throw new Error(L('只能截取工作資料夾（或你加入的額外資料夾）內的檔案', 'Only files inside the working folder (or the extra folders you added) can be captured'));
+  if (!anywhere && ![cwd, ...extraRoots].some(inside))
+    throw new Error(
+      L(
+        `只能截取工作資料夾（或你加入的額外資料夾）內的檔案：${real} 不在其中。把它的資料夾加入額外資料夾，或讓這段對話使用完整電腦存取，就可以截取。`,
+        `Only files inside the working folder (or the extra folders you added) can be captured: ${real} is not. Add its folder as an extra folder, or give this conversation whole-computer access, to capture it.`,
+      ),
+    );
   if (fs.statSync(real).isDirectory()) throw new Error(L('請指定 HTML 或圖片檔，不能是資料夾', 'Give an HTML or image file, not a folder'));
   return pathToFileURL(real).href;
 }
@@ -161,30 +170,38 @@ class Cdp {
 export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: string; url: string; width: number; height: number }> {
   const browser = findBrowser();
   if (!browser) throw new Error(L('找不到可用的瀏覽器（Edge / Chrome / Chromium）。可設定環境變數 AIVENUE_BROWSER 指定路徑。', 'No Chromium-based browser found (Edge / Chrome / Chromium). Set AIVENUE_BROWSER to its path.'));
-  const url = resolveTarget(r.target, r.cwd, r.extraRoots);
+  const url = resolveTarget(r.target, r.cwd, r.extraRoots, r.anywhere);
   const width = clamp(r.width, 1280, 240, 3840);
   const height = clamp(r.height, 800, 240, 8000);
   const waitMs = clamp(r.waitMs, 1000, 0, 20000);
   fs.mkdirSync(path.dirname(r.out), { recursive: true });
   // A throwaway profile: never touches the user's browser data and never collides with a running browser.
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-shot-'));
+  // Edge on Windows starts again as a new process ("compat layer relaunch") unless told not to; Chrome ignores the flag.
   const child = spawn(
     browser,
-    ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--mute-audio', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
+    ['--headless=new', '--disable-gpu', '--hide-scrollbars', '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-sync', '--mute-audio', '--edge-skip-compat-layer-relaunch', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'],
     { env: childEnv(), stdio: 'ignore', windowsHide: true },
   );
   const kill = () => child.kill();
   r.signal?.addEventListener('abort', kill);
   let cdp: Cdp | undefined;
+  let port = 0;
   try {
-    // The browser writes its debugging port into the profile once it is ready.
+    // The browser writes its debugging port into the profile once it is ready. The process started here may end
+    // first, when the browser relaunched itself: the relaunched one writes the same file, so only no port in time (or
+    // no browser at all, 3 s after the one started here ended) is a failure.
     const portFile = path.join(profile, 'DevToolsActivePort');
-    let port = 0;
+    let endedAt = 0;
     for (let i = 0; i < 150 && !port; i++) {
-      if (child.exitCode !== null) throw new Error(L('瀏覽器啟動失敗', 'The browser failed to start'));
+      if (r.signal?.aborted) throw new Error(L('已取消', 'Cancelled'));
       try {
         port = Number(fs.readFileSync(portFile, 'utf8').split('\n')[0]);
       } catch {
+        if (child.exitCode !== null) {
+          endedAt ||= Date.now();
+          if (Date.now() - endedAt > 3000) throw new Error(L(`瀏覽器啟動失敗（結束代碼 ${child.exitCode}）`, `The browser failed to start (exit code ${child.exitCode})`));
+        }
         await sleep(100);
       }
     }
@@ -215,8 +232,48 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
   } finally {
     cdp?.close();
     r.signal?.removeEventListener('abort', kill);
-    child.kill();
-    // Give the browser a moment to release the profile before removing it.
-    setTimeout(() => fs.rm(profile, { recursive: true, force: true }, () => undefined), 1500);
+    await closeBrowser(port, profile, child);
   }
+}
+
+/**
+ * End the screenshot browser and remove its throwaway profile, leaving no browser process behind: ask the browser to
+ * close (whichever process it is, a relaunched one too), then wait until the profile can be removed (its files are
+ * held while the browser runs, on Windows). Still held after 5 s: whatever process still uses this profile is ended.
+ */
+async function closeBrowser(port: number, profile: string, child: ChildProcess): Promise<void> {
+  if (port) {
+    try {
+      const v = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
+      const b = await Cdp.connect(v.webSocketDebuggerUrl);
+      await Promise.race([b.send('Browser.close').catch(() => undefined), sleep(2000)]);
+      b.close();
+    } catch {
+      // already gone, or not answering: the steps below still end it
+    }
+  }
+  child.kill();
+  const removed = () => {
+    try {
+      fs.rmSync(profile, { recursive: true, force: true });
+    } catch {
+      // held by a browser process still running
+    }
+    return !fs.existsSync(profile);
+  };
+  for (let i = 0; i < 25; i++) {
+    if (removed()) return;
+    await sleep(200);
+  }
+  endProcessesUsing(path.basename(profile));
+  await sleep(500);
+  removed();
+}
+
+/** End every process whose command line names `mark` (a throwaway profile's own folder name, so only ours). */
+function endProcessesUsing(mark: string): void {
+  if (!/^aivenue-shot-[\w-]+$/.test(mark)) return;
+  if (process.platform === 'win32')
+    spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*${mark}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { stdio: 'ignore', windowsHide: true, timeout: 15_000 });
+  else spawnSync('pkill', ['-f', mark], { stdio: 'ignore', timeout: 5000 });
 }

@@ -482,7 +482,10 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     inputSchema: {
       type: 'object',
       properties: {
-        target: { type: 'string', description: 'http(s) URL (e.g. a dev server like http://localhost:5173) or an HTML file path relative to the working directory.' },
+        target: {
+          type: 'string',
+          description: 'http(s) URL (e.g. a dev server like http://localhost:5173), or an HTML or image file: a path relative to the working directory, in an extra folder the user added, or (when the conversation has whole-computer access) anywhere on this computer.',
+        },
         width: { type: 'number', description: 'Viewport width in px (default 1280). Widths up to 600 emulate a phone, e.g. 390.' },
         height: { type: 'number', description: 'Viewport height in px (default 800).' },
         full_page: { type: 'boolean', description: 'Capture the whole scrollable page instead of only the viewport.' },
