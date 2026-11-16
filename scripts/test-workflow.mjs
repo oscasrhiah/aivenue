@@ -30,6 +30,7 @@ const bundled = await build({
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
+      export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
@@ -3680,4 +3681,65 @@ test('檢查列不從自由文字推斷範圍：使用者怎麼說都只顯示�
   assert.deepEqual(W.deliverableRows(run([agent('x', ['./src/../src/slug.js'])]))[0].editedBy, ['x']);
   assert.deepEqual(W.deliverableRows(run([agent('x', ['lib/src/slug.js'])]))[0].editedBy, []);
   assert.equal(W.fullPath('src/a.js', undefined), undefined);
+});
+
+test('Markdown：agent 回覆的表格、清單內的程式碼、巢狀清單、任務清單、分隔線與刪除線都正確解析，HTML 不被解讀', () => {
+  const P = W.parseMarkdown;
+  const kinds = (bs) => bs.map((b) => b.t);
+  // A table right after a paragraph line, as agents write it: alignment, inline code (a pipe inside it stays), an
+  // escaped pipe, <br> in a cell.
+  const tab = P('結果如下：\n| 步驟 | 動作 | 結果 |\n|:---|:---:|---:|\n| 1 | 建立 `slug.js`，用 `a|b` | 已建立<br>OK |\n| 2 | 跑 \\| 測試 | 失敗 |\n');
+  assert.deepEqual(kinds(tab), ['p', 'table']);
+  assert.deepEqual(tab[1].align, ['left', 'center', 'right']);
+  assert.deepEqual(tab[1].head.map(W.mdPlain), ['步驟', '動作', '結果']);
+  assert.deepEqual(tab[1].rows.map((r) => r.map(W.mdPlain)), [
+    ['1', '建立 slug.js，用 a|b', '已建立\nOK'],
+    ['2', '跑 | 測試', '失敗'],
+  ]);
+  assert.equal(tab[1].rows[0][1].filter((n) => n.t === 'code').length, 2);
+  // Without outer pipes; the table ends at a line without a pipe.
+  const bare = P('a | b\n--- | ---\nx | y\nz\n');
+  assert.deepEqual(kinds(bare), ['table', 'p']);
+  assert.deepEqual(bare[0].rows.map((r) => r.map(W.mdPlain)), [['x', 'y']]);
+  // A code fence inside a list item keeps the list (and its numbering) going.
+  const list = P('1. 建立 slug.js\n2. 執行測試：\n   ```\n   AssertionError: x\n   ```\n3. 修正後通過\n');
+  assert.deepEqual(kinds(list), ['list']);
+  assert.equal(list[0].items.length, 3);
+  assert.deepEqual(kinds(list[0].items[1].c), ['p', 'code']);
+  assert.equal(list[0].items[1].c[1].v, 'AssertionError: x');
+  // A list that starts at 4 says so.
+  assert.equal(P('4. 第四步\n5. 第五步')[0].start, 4);
+  // Nested lists, task lists.
+  const nested = P('- 外層\n  - 內層一\n  - 內層二\n- 第二項');
+  assert.equal(nested[0].items.length, 2);
+  assert.deepEqual(kinds(nested[0].items[0].c), ['p', 'list']);
+  assert.equal(nested[0].items[0].c[1].items.length, 2);
+  const tasks = P('- [x] 完成\n- [ ] 還沒');
+  assert.deepEqual(tasks[0].items.map((i) => [i.task, i.checked, W.mdPlain(i.c[0].c)]), [
+    [true, true, '完成'],
+    [true, false, '還沒'],
+  ]);
+  // A rule, strikethrough, emphasis; snake_case stays one word; a bare web address links without the sentence's period.
+  const misc = P('上面\n\n---\n\n~~舊~~ **粗 `code`** *斜* my_var_name 見 https://example.com/a。');
+  assert.deepEqual(kinds(misc), ['p', 'hr', 'p']);
+  const inl = misc[2].c;
+  assert.deepEqual(inl.filter((n) => n.t !== 'text').map((n) => n.t), ['del', 'strong', 'em', 'link']);
+  assert.ok(W.mdPlain(inl).includes('my_var_name'));
+  assert.equal(inl.find((n) => n.t === 'link').href, 'https://example.com/a');
+  // A link to a local file is a reference, not a link the page follows.
+  const refs = P('[報告](C:\\work\\report.md) 和 [網站](https://example.com)')[0].c.filter((n) => n.t === 'link');
+  assert.deepEqual(refs.map((n) => [n.href, n.local]), [
+    ['C:\\work\\report.md', true],
+    ['https://example.com', false],
+  ]);
+  // HTML stays text (only <br> is a line break); a fence without its closing fence runs to the end.
+  const html = P('<script>alert(1)</script>\n\n```js\nconst a = 1;');
+  assert.equal(W.mdPlain(html[0].c), '<script>alert(1)</script>');
+  assert.deepEqual([html[1].t, html[1].lang, html[1].v], ['code', 'js', 'const a = 1;']);
+  // A quote holding a list; a heading; every line break of a paragraph kept.
+  const q = P('> 注意：\n> - 一\n> - 二\n\n## 標題\n第一行\n第二行');
+  assert.deepEqual(kinds(q), ['quote', 'h', 'p']);
+  assert.deepEqual(kinds(q[0].c), ['p', 'list']);
+  assert.equal(q[1].level, 2);
+  assert.equal(W.mdPlain(q[2].c), '第一行\n第二行');
 });

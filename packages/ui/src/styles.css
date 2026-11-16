@@ -719,12 +719,109 @@ p {
   padding-left: 12px;
   border-left: 3px solid var(--line-strong);
   color: var(--muted);
-  white-space: pre-wrap;
+}
+
+.md blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .md a {
   color: var(--accent);
   text-decoration: underline;
+}
+
+.md pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+
+.md li > pre,
+.md li > p,
+.md li > ul,
+.md li > ol,
+.md li > .md-table {
+  margin-top: 4px;
+}
+
+.md hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 10px 0;
+}
+
+.md del {
+  color: var(--muted);
+}
+
+.md .md-h2 {
+  font-size: 1.08em;
+}
+
+/* Task lists: the box instead of the bullet. */
+.md ul.md-tasks {
+  list-style: none;
+  padding-left: 4px;
+}
+
+.md li.md-task > input {
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+}
+
+/* Tables: in their own box that scrolls sideways when wider than the text column. */
+.md .md-table {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 6px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.md .md-table:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * The table fits its column, wrapping cells between words (never inside one: the text around it may allow that, a
+ * cell does not), and no cell gets narrower than about four characters. When that is still too wide (a narrow side
+ * bar), the table scrolls sideways in its box instead of squeezing cells to a letter a line.
+ */
+.md table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 0.95em;
+}
+
+.md th,
+.md td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md .md-cell {
+  min-width: 4em;
+  max-width: 32em;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.md th + th,
+.md td + td {
+  border-left: 1px solid var(--line);
+}
+
+.md th {
+  background: var(--sunken);
+  font-weight: 600;
+}
+
+.md tbody tr:last-child td {
+  border-bottom: none;
 }
 
 /* ---- outcome blocks ---- */
@@ -6098,6 +6195,42 @@ textarea.code {
   color: var(--text-2);
 }
 
+/* The path is a button: a cut path opens to the whole one (click, Enter, Space, tap). */
+.run-cwd-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-cwd-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.run-cwd-btn .ico {
+  color: var(--muted);
+}
+
+.run-cwd.whole {
+  align-items: flex-start;
+}
+
+.run-cwd.whole .run-cwd-path {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  direction: ltr;
+  overflow: visible;
+}
+
 /* ============ icons (Lucide), round 1: the chat page ============ */
 /*
  * One set of line icons in the colour of their text; colour itself says a state only (ok, warn, bad). Buttons centre
@@ -6304,16 +6437,36 @@ textarea.code {
  * The folder keeps its name while the role summary can give room (that one is in the tooltip anyway): it does not
  * shrink at all (a share of a pixel already cuts it to "…"), and is at most 40% of the row. With the widest permission
  * (about 120px), the advisor and the role summary at their 38px and the gaps, that row fits from 360px; below that the
- * folder is cut too.
+ * buttons wrap onto another line (see below).
  */
 .wf-bar .wf-folder {
   flex-shrink: 0;
   max-width: min(160px, 40%) !important;
 }
 
+/* A button's wrapper (permission, advisor) is never narrower than its button: else the next one is drawn over it. */
+.wf-bar > .perm-wrap {
+  min-width: min-content;
+}
+
+/*
+ * A very narrow composer (VS Code's side bar is about 290px): the buttons wrap onto another line instead of being
+ * squeezed; the folder keeps its name (up to 40% of the row), the role summary takes what is left of its line.
+ */
 @container (max-width: 360px) {
+  .composer-bar .wf-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .wf-bar > .perm-wrap,
   .wf-bar .wf-folder {
-    flex-shrink: 1;
+    flex-shrink: 0;
+  }
+
+  /* The row wraps, so the folder can have the whole line before it is cut. */
+  .wf-bar .wf-folder {
+    max-width: 100% !important;
   }
 }
 

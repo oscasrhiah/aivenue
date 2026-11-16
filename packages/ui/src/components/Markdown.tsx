@@ -1,128 +1,119 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useMemo, type ReactNode } from 'react';
+import { parseMarkdown, type Block, type Inline } from '../markdown';
 
-/** Inline: `code`, **bold**, *italic*, [text](url) — rendered as React elements (never innerHTML). */
-function inline(text: string, key = 0): ReactNode[] {
-  const out: ReactNode[] = [];
-  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\s][^*\n]*\*)|(\[[^\]\n]+\]\(([^)\s]+)\))/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let i = 0;
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    const k = `${key}-${i++}`;
-    if (m[1]) out.push(<code key={k}>{m[1].slice(1, -1)}</code>);
-    else if (m[2]) out.push(<strong key={k}>{m[2].slice(2, -2)}</strong>);
-    else if (m[3]) out.push(<em key={k}>{m[3].slice(1, -1)}</em>);
-    else if (m[4])
-      out.push(
-        /^https?:\/\//.test(m[5]) ? (
-          <a key={k} href={m[5]} target="_blank" rel="noreferrer">
-            {m[4].slice(1, m[4].indexOf(']'))}
-          </a>
-        ) : (
+/** Inline content as React elements (never innerHTML: an agent's text cannot inject markup). */
+function renderInline(c: Inline[], key: string): ReactNode[] {
+  return c.map((n, i) => {
+    const k = `${key}.${i}`;
+    switch (n.t) {
+      case 'text':
+        return <Fragment key={k}>{n.v}</Fragment>;
+      case 'code':
+        return <code key={k}>{n.v}</code>;
+      case 'strong':
+        return <strong key={k}>{renderInline(n.c, k)}</strong>;
+      case 'em':
+        return <em key={k}>{renderInline(n.c, k)}</em>;
+      case 'del':
+        return <del key={k}>{renderInline(n.c, k)}</del>;
+      case 'br':
+        return <br key={k} />;
+      case 'link':
+        return n.local ? (
           // A file or other local target: its text, the target on hover (not a link the page could follow).
-          <span key={k} className="md-ref" title={m[5]}>
-            {m[4].slice(1, m[4].indexOf(']'))}
+          <span key={k} className="md-ref" title={n.href}>
+            {renderInline(n.c, k)}
           </span>
-        ),
-      );
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+        ) : (
+          <a key={k} href={n.href} target="_blank" rel="noreferrer">
+            {renderInline(n.c, k)}
+          </a>
+        );
+    }
+  });
 }
 
-type Block = { kind: 'p' | 'h' | 'ul' | 'ol' | 'code' | 'quote'; lines: string[]; level?: number };
-
-function blocks(src: string): Block[] {
-  const out: Block[] = [];
-  const lines = src.replace(/\r/g, '').split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^```/.test(line)) {
-      const body: string[] = [];
-      for (i++; i < lines.length && !/^```/.test(lines[i]); i++) body.push(lines[i]);
-      out.push({ kind: 'code', lines: body });
-      continue;
+function renderBlocks(blocks: Block[], key: string, tight = false): ReactNode[] {
+  return blocks.map((b, i) => {
+    const k = `${key}-${i}`;
+    switch (b.t) {
+      case 'p':
+        // A list item's single paragraph is its text, without a paragraph's spacing.
+        return tight ? <Fragment key={k}>{renderInline(b.c, k)}</Fragment> : <p key={k}>{renderInline(b.c, k)}</p>;
+      case 'h':
+        return (
+          <div key={k} className={`md-h md-h${Math.min(b.level, 4)}`} role="heading" aria-level={b.level}>
+            {renderInline(b.c, k)}
+          </div>
+        );
+      case 'code':
+        return (
+          <pre key={k} data-lang={b.lang}>
+            <code>{b.v}</code>
+          </pre>
+        );
+      case 'hr':
+        return <hr key={k} />;
+      case 'quote':
+        return <blockquote key={k}>{renderBlocks(b.c, k)}</blockquote>;
+      case 'list': {
+        const items = b.items.map((it, j) => {
+          const only = it.c.length === 1 && it.c[0].t === 'p';
+          return (
+            <li key={`${k}.${j}`} className={it.task ? 'md-task' : undefined}>
+              {it.task && <input type="checkbox" checked={!!it.checked} disabled readOnly aria-label={it.checked ? 'done' : 'not done'} />}
+              {renderBlocks(it.c, `${k}.${j}`, only)}
+            </li>
+          );
+        });
+        return b.ordered ? (
+          <ol key={k} start={b.start}>
+            {items}
+          </ol>
+        ) : (
+          <ul key={k} className={b.items.some((it) => it.task) ? 'md-tasks' : undefined}>
+            {items}
+          </ul>
+        );
+      }
+      case 'table':
+        // Wider than its place: it scrolls sideways inside its own box, the page does not.
+        return (
+          <div key={k} className="md-table" role="region" tabIndex={0} aria-label="table">
+            <table>
+              <thead>
+                <tr>
+                  {b.head.map((c, j) => (
+                    <th key={j} style={b.align[j] ? { textAlign: b.align[j] } : undefined}>
+                      <div className="md-cell">{renderInline(c, `${k}.h${j}`)}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {b.rows.map((r, ri) => (
+                  <tr key={ri}>
+                    {r.map((c, j) => (
+                      <td key={j} style={b.align[j] ? { textAlign: b.align[j] } : undefined}>
+                        <div className="md-cell">{renderInline(c, `${k}.${ri}.${j}`)}</div>
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
     }
-    const h = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (h) {
-      out.push({ kind: 'h', level: Math.min(h[1].length, 4), lines: [h[2]] });
-      continue;
-    }
-    const prev = out[out.length - 1];
-    if (/^\s*[-*•]\s+/.test(line)) {
-      const item = line.replace(/^\s*[-*•]\s+/, '');
-      if (prev?.kind === 'ul') prev.lines.push(item);
-      else out.push({ kind: 'ul', lines: [item] });
-      continue;
-    }
-    if (/^\s*\d+[.)]\s+/.test(line)) {
-      const item = line.replace(/^\s*\d+[.)]\s+/, '');
-      if (prev?.kind === 'ol') prev.lines.push(item);
-      else out.push({ kind: 'ol', lines: [item] });
-      continue;
-    }
-    if (/^>\s?/.test(line)) {
-      if (prev?.kind === 'quote') prev.lines.push(line.replace(/^>\s?/, ''));
-      else out.push({ kind: 'quote', lines: [line.replace(/^>\s?/, '')] });
-      continue;
-    }
-    if (!line.trim()) {
-      out.push({ kind: 'p', lines: [] });
-      continue;
-    }
-    if (prev?.kind === 'p' && prev.lines.length) prev.lines.push(line);
-    else out.push({ kind: 'p', lines: [line] });
-  }
-  return out.filter((b) => b.kind !== 'p' || b.lines.length);
+  });
 }
 
-/** Small, safe Markdown renderer for agent messages and plans. */
+/**
+ * Markdown as agents write it: paragraphs (every line break kept), headings, lists (nested, numbered from where they
+ * start, task lists), code blocks (also inside list items), quotes, rules, tables, emphasis, strikethrough, links.
+ * Parsed by ../markdown.ts; drawn as React elements only.
+ */
 export function Markdown({ text, className }: { text: string; className?: string }) {
-  return (
-    <div className={`md ${className ?? ''}`}>
-      {blocks(text).map((b, i) => {
-        switch (b.kind) {
-          case 'code':
-            return <pre key={i}>{b.lines.join('\n')}</pre>;
-          case 'h':
-            return (
-              <div key={i} className={`md-h md-h${b.level}`}>
-                {inline(b.lines[0], i)}
-              </div>
-            );
-          case 'ul':
-            return (
-              <ul key={i}>
-                {b.lines.map((l, j) => (
-                  <li key={j}>{inline(l, i * 100 + j)}</li>
-                ))}
-              </ul>
-            );
-          case 'ol':
-            return (
-              <ol key={i}>
-                {b.lines.map((l, j) => (
-                  <li key={j}>{inline(l, i * 100 + j)}</li>
-                ))}
-              </ol>
-            );
-          case 'quote':
-            return <blockquote key={i}>{inline(b.lines.join('\n'), i)}</blockquote>;
-          default:
-            return (
-              <p key={i}>
-                {b.lines.map((l, j) => (
-                  <Fragment key={j}>
-                    {j > 0 && <br />}
-                    {inline(l, i * 100 + j)}
-                  </Fragment>
-                ))}
-              </p>
-            );
-        }
-      })}
-    </div>
-  );
+  const blocks = useMemo(() => parseMarkdown(text), [text]);
+  return <div className={`md ${className ?? ''}`}>{renderBlocks(blocks, 'b')}</div>;
 }

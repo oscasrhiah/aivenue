@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleX, RefreshCw, Target, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, CircleCheck, CircleDashed, CircleHelp, CircleX, RefreshCw, Target, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
@@ -42,6 +42,46 @@ function timeline(run: WorkflowRun): Item[] {
   });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
+}
+
+/**
+ * The chat's working folder under its header. A long path keeps its end in one line; then a click, Enter, Space or a
+ * tap shows it whole (wrapped), for keyboard and touch too, not only in the mouse's tooltip. The whole path is the
+ * button's text either way, so a screen reader reads it all.
+ */
+function CwdBar({ run }: { run: WorkflowRun }) {
+  const t = useT();
+  const dir = run.worktree?.origCwd ?? run.config.cwd;
+  const [whole, setWhole] = useState(false);
+  const [cut, setCut] = useState(false);
+  const path = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const el = path.current;
+    if (!el) return;
+    const measure = () => setCut(el.scrollWidth > el.clientWidth + 1);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [dir, whole]);
+  return (
+    <div className={cx('run-cwd', whole && 'whole')}>
+      <span className="run-cwd-label">{t('工作資料夾', 'Folder')}</span>
+      <button
+        type="button"
+        className="run-cwd-btn"
+        title={dir}
+        aria-expanded={cut || whole ? whole : undefined}
+        onClick={() => (cut || whole) && setWhole(!whole)}
+      >
+        <span className="run-cwd-path" ref={path}>
+          <bdi dir="ltr">{dir}</bdi>
+        </span>
+        {(cut || whole) && <Ico i={whole ? ChevronUp : ChevronDown} size={13} label={whole ? t('收起路徑', 'Shorten the path') : t('顯示完整路徑', 'Show the whole path')} />}
+      </button>
+      {run.worktree?.state === 'active' && <span className="run-cwd-label">{t('（在隔離副本中工作）', '(works in an isolated copy)')}</span>}
+    </div>
+  );
 }
 
 /** A log line as shown: the records' ✅ (in old chats too) drawn as the same check icon as everywhere else. */
@@ -1102,13 +1142,7 @@ export function Chat({ id }: { id?: string }) {
           </div>
         </header>
         {/* The folder this chat works in, whole: it never follows the window it is viewed from. */}
-        <div className="run-cwd" title={run.worktree?.origCwd ?? run.config.cwd}>
-          <span className="run-cwd-label">{t('工作資料夾', 'Folder')}</span>
-          <span className="run-cwd-path">
-            <bdi dir="ltr">{run.worktree?.origCwd ?? run.config.cwd}</bdi>
-          </span>
-          {run.worktree?.state === 'active' && <span className="run-cwd-label">{t('（在隔離副本中工作）', '(works in an isolated copy)')}</span>}
-        </div>
+        <CwdBar run={run} />
         </>
       )}
 
