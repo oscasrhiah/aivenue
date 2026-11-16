@@ -1,4 +1,6 @@
-// The chat page inside a real VS Code webview, with OpenCode only (a free model; no other agent's quota):
+// The chat page inside a real VS Code webview, with OpenCode's free model by default (no other agent's quota). With
+// ACC_PROVIDER=codex and CODEX_HOME set to a secondary Codex account's folder, Codex runs under that account instead
+// (VS Code, its hub and the CLI inherit the environment); never point it at the user's main account unless told to:
 //   node vscode-ui-check.mjs <aivenue.vsix> <out dir> [<VS Code folder>]
 // A throwaway VS Code profile (user data and extensions folders) and an isolated AIVENUE_HOME: the user's own VS Code
 // and ~/.aivenue are never touched. One window, project folder "proj"; Aivenue in an editor tab (wide) and in the
@@ -28,7 +30,9 @@ const codeDir = codeDirArg ?? path.join(process.env.LOCALAPPDATA ?? '', 'Program
 const codeExe = path.join(codeDir, 'Code.exe');
 const codeCli = path.join(codeDir, 'bin', 'code.cmd');
 const PORT = Number(process.env.ACC_PORT || 9341);
-const MODEL = process.env.WAKE_MODEL || 'opencode/deepseek-v4.1-flash-free';
+const PROVIDER = process.env.ACC_PROVIDER || 'opencode';
+const MODEL = process.env.ACC_MODEL ?? process.env.WAKE_MODEL ?? (PROVIDER === 'opencode' ? 'opencode/deepseek-v4.1-flash-free' : undefined);
+const author = { provider: PROVIDER, ...(MODEL ? { model: MODEL } : {}) };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(0).padStart(4)}s]`, ...a);
@@ -162,8 +166,8 @@ const cfg = (cwd, goal, title) => ({
   goal,
   userText: goal,
   cwd,
-  plan: { enabled: false, author: { provider: 'opencode', model: MODEL }, reviewer: null, maxRounds: 1, humanGate: false },
-  implement: { enabled: true, author: { provider: 'opencode', model: MODEL }, reviewer: null, maxRounds: 1, humanGate: false },
+  plan: { enabled: false, author, reviewer: null, maxRounds: 1, humanGate: false },
+  implement: { enabled: true, author, reviewer: null, maxRounds: 1, humanGate: false },
   verify: { enabled: false, by: 'planner', repeatLimit: 1 },
   subagents: { enabled: false, allowed: [], maxDepth: 1, maxConcurrent: 1 },
   assignment: { mode: 'manual' },
@@ -312,9 +316,9 @@ try {
   }, 'the Aivenue editor tab', 120_000, 3000);
   const info = (await E.call('host.info')).result;
   check('opened in an editor tab, in this window\'s project', info?.host === 'vscode' && same(info.defaultCwd, proj), { host: info?.host, defaultCwd: info?.defaultCwd });
-  await until(async () => (await E.call('providers.list')).result?.find((p) => p.spec.id === 'opencode' && p.installed), 'OpenCode installed', 30_000);
+  await until(async () => (await E.call('providers.list')).result?.find((p) => p.spec.id === PROVIDER && p.installed), `${PROVIDER} installed`, 30_000);
 
-  log('two real OpenCode chats');
+  log(`two real chats (${PROVIDER}${MODEL ? ` ${MODEL}` : ''})`);
   const slugDir = path.join(proj, 'slug');
   const askDir = path.join(proj, 'naming');
   fs.mkdirSync(slugDir, { recursive: true });
@@ -407,7 +411,7 @@ try {
 } finally {
   for (const pid of ourCode()) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F']);
   for (const pid of hubProcesses()) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F']);
-  fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify({ model: MODEL, minutes: ((Date.now() - t0) / 60000).toFixed(1), results, shots, missingShots: missing }, null, 1));
+  fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify({ provider: PROVIDER, model: MODEL ?? '(provider default)', codexHome: process.env.CODEX_HOME ?? null, minutes: ((Date.now() - t0) / 60000).toFixed(1), results, shots, missingShots: missing }, null, 1));
   log(`${fails} failed`);
   process.exit(fails ? 1 : 0);
 }
