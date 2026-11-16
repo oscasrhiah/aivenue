@@ -40,24 +40,43 @@ const EDIT = new Set(['edit', 'write', 'multiedit', 'write_file', 'replace', 'ed
 const COMMAND = new Set(['bash', 'powershell', 'run_shell_command', 'shell', 'exec_command', 'local_shell', 'run_command', 'terminal', 'command_status', 'send_command_input']);
 const SEARCH = new Set(['grep', 'rg', 'glob', 'ls', 'list_directory', 'search_file_content', 'find', 'codebase_search', 'list_files', 'grep_search', 'file_search', 'list_dir', 'find_by_name']);
 const WEB = new Set(['webfetch', 'websearch', 'web_fetch', 'google_web_search', 'web_search', 'search_web', 'read_url_content']);
-const HUB_SUFFIX = /(?:^|[_:./-])(submit_plan|submit_review|submit_work|report_progress|spawn_subagent|wait_subagent|list_providers|capture_screenshot|read_context|post_note|ask_advisor|confirm_external_action)$/;
 const AGENT = new Set(['task', 'agent']);
 const TODO = new Set(['todowrite', 'todo_write', 'write_todos', 'update_plan', 'todo_list']);
 
-const HUB_TITLES: Record<string, [string, string]> = {
+/** Every Aivenue tool's title in the activity list (hubTools.ts TOOL_DEFS; a test keeps the two lists the same). */
+export const HUB_TITLES: Record<string, [string, string]> = {
   submit_plan: ['提交計畫', 'Submit plan'],
   submit_review: ['提交審查結果', 'Submit review'],
   submit_work: ['提交實作結果', 'Submit work'],
+  submit_verification: ['提交驗收結果', 'Submit verification'],
+  submit_ruling: ['提交裁決', 'Submit ruling'],
   report_progress: ['回報進度', 'Report progress'],
   spawn_subagent: ['派出 sub agent', 'Spawn sub-agent'],
   wait_subagent: ['等待 sub agent', 'Wait for sub-agent'],
+  stop_subagent: ['停止 sub agent', 'Stop sub-agent'],
   list_providers: ['查詢可用供應商', 'List providers'],
   capture_screenshot: ['拍截圖', 'Take screenshot'],
   read_context: ['查閱其他 agent 的紀錄', 'Read shared context'],
+  search_records: ['搜尋紀錄', 'Search records'],
   post_note: ['留下共用筆記', 'Post a shared note'],
   ask_advisor: ['請教顧問', 'Ask the advisor'],
+  ask_user: ['問你', 'Ask you'],
+  reply_user: ['回覆你', 'Reply to you'],
+  rename_chat: ['改對話名稱', 'Rename the conversation'],
+  report_skill_use: ['回報使用的技能', 'Report a skill used'],
+  track_process: ['追蹤背景程序', 'Track a background process'],
+  update_process: ['更新背景程序', 'Update a background process'],
+  wait_for: ['等待條件', 'Wait for a condition'],
+  gpu_status: ['查詢 GPU', 'GPU status'],
+  gpu_acquire: ['鎖定 GPU', 'Lock GPUs'],
+  gpu_release: ['釋放 GPU', 'Release GPUs'],
   confirm_external_action: ['請你核准對外動作', 'Ask to approve an external action'],
+  approval_prompt: ['請你核准', 'Ask for approval'],
 };
+/** Other CLIs prefix MCP tools differently ("aivenue_rename_chat", "mcp_aivenue_ask_user"): every Aivenue tool. */
+const HUB_SUFFIX = new RegExp(`(?:^|[_:./-])(${Object.keys(HUB_TITLES).join('|')})$`);
+/** Names general enough that a CLI may have a tool of its own by them: Aivenue's only with the "aivenue" prefix. */
+const GENERIC = new Set(['ask_user', 'reply_user', 'wait_for']);
 
 export function classifyTool(rawName: string, input: unknown, cwd: string): { category: ToolCategory; title: string; name: string } {
   let name = rawName;
@@ -85,17 +104,31 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     const r = path.relative(cwd, p);
     return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p;
   };
-  if (hub || HUB_TITLES[lower]) {
+  if (hub || (HUB_TITLES[lower] && !GENERIC.has(lower))) {
     const t = HUB_TITLES[lower];
     let title = t ? L(t[0], t[1]) : name;
-    if (lower === 'spawn_subagent') title += `: ${pick('provider') ?? ''} — ${(pick('task') ?? '').slice(0, 80)}`;
-    if (lower === 'report_progress') title += `: ${pick('step_id') ?? '?'} → ${pick('status') ?? ''}`;
-    if (lower === 'submit_review') title += `: ${pick('verdict') ?? ''}`;
-    if (lower === 'capture_screenshot') title += `: ${pick('target') ?? ''}`;
+    // What the call is about, when its arguments say: in OpenCode's code mode they are inside the agent's code, and the
+    // title is then the tool's name alone (not "Take screenshot: " or "Report progress: ? → ").
+    const about = (s: string | undefined, max = 80) => {
+      if (s?.trim()) title += `: ${s.trim().slice(0, max)}`;
+    };
+    const step = pick('step_id');
+    const status = pick('status');
+    if (lower === 'spawn_subagent') about([pick('provider') ?? '', (pick('task') ?? '').slice(0, 80)].filter(Boolean).join(' — '), Infinity);
+    if (lower === 'report_progress') about(step || status ? `${step ?? '?'} → ${status ?? ''}` : undefined);
+    if (lower === 'submit_review') about(pick('verdict'));
+    if (lower === 'capture_screenshot') about(pick('target'), Infinity);
     if (lower === 'read_context') title += pick('agent_id') ? `: ${pick('agent_id')}` : L('：總覽', ': overview');
-    if (lower === 'post_note') title += `: ${(pick('text') ?? '').slice(0, 80)}`;
-    if (lower === 'ask_advisor') title += `: ${(pick('question') ?? '').slice(0, 80)}`;
-    if (lower === 'confirm_external_action') title += `: ${pick('kind') ?? ''} → ${(pick('target') ?? '').slice(0, 80)}`;
+    if (lower === 'post_note') about(pick('text'));
+    if (lower === 'ask_advisor') about(pick('question'));
+    if (lower === 'confirm_external_action') about(pick('kind') || pick('target') ? `${pick('kind') ?? ''} → ${(pick('target') ?? '').slice(0, 80)}` : undefined, Infinity);
+    if (lower === 'rename_chat') about(pick('title'));
+    if (lower === 'ask_user') about(pick('question'));
+    if (lower === 'reply_user') about(pick('text'));
+    if (lower === 'search_records') about(pick('q'));
+    if (lower === 'report_skill_use') about(pick('name'));
+    if (lower === 'track_process' || lower === 'update_process') about([inp.pid === undefined ? '' : String(inp.pid), pick('purpose') ?? ''].filter(Boolean).join(' — '));
+    if (lower === 'stop_subagent') about(pick('subagent_id'));
     return { category: 'hub', title, name };
   }
   if (READ.has(lower)) return { category: 'read', title: rel(pick('file_path', 'path', 'absolute_path', 'filePath', 'AbsolutePath', 'TargetFile')) ?? name, name };

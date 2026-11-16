@@ -24,7 +24,7 @@ const bundled = await build({
       export { codexContext } from './packages/core/src/agentContext';
       export { buildTopics, topicDetail, topicIndexBlock, topicList } from './packages/core/src/topics';
       export { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './packages/core/src/promptStats';
-      export { createParser } from './packages/core/src/providers/parsers';
+      export { createParser, classifyTool, HUB_TITLES } from './packages/core/src/providers/parsers';
       export { capture, cliEnv, consoleCodePage, decodeShellOutput } from './packages/core/src/proc';
       export { runAgent } from './packages/core/src/agentRunner';
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
@@ -3769,4 +3769,45 @@ test('截圖：工作資料夾外的檔案只在完整電腦存取時可以截�
   assert.throws(() => W.shotTarget(path.join(elsewhere, 'missing.html'), cwd, [], true), /not found|找不到/);
   assert.equal(W.shotTarget('https://example.com', cwd), 'https://example.com');
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('活動紀錄的 Aivenue 工具標題：每一個工具都有標題（和工具清單一致）；各家 CLI 的命名方式都認得，含 OpenCode 的改對話名稱', () => {
+  // The title table and the tools Aivenue offers are the same list (a new tool without a title fails here).
+  assert.deepEqual(Object.keys(W.HUB_TITLES).sort(), Object.keys(W.TOOL_DEFS).sort());
+  const zhOrEn = (t, zh, enTitle) => t.startsWith(zh) || t.startsWith(enTitle);
+  // Claude's MCP name, another CLI's prefixed name, OpenCode's code mode: all an Aivenue tool, with its title.
+  for (const raw of ['mcp__aivenue__rename_chat', 'aivenue_rename_chat', 'mcp_aivenue_rename_chat']) {
+    const c = W.classifyTool(raw, { title: '論文第四章 圖表重製' }, '/w');
+    assert.equal(c.category, 'hub', raw);
+    assert.ok(zhOrEn(c.title, '改對話名稱: 論文第四章 圖表重製', 'Rename the conversation: 論文第四章 圖表重製'), `${raw}: ${c.title}`);
+  }
+  const [code] = opencodeTools([{ code: 'return await tools.aivenue.rename_chat({ title: "論文第四章" });' }]);
+  assert.equal(code.category, 'hub');
+  assert.ok(zhOrEn(code.title, '改對話名稱', 'Rename the conversation'), code.title);
+  // The other newer tools have titles too, with what they are about.
+  const t = (raw, input) => W.classifyTool(raw, input, '/w');
+  assert.ok(zhOrEn(t('aivenue_ask_user', { question: 'Which name?' }).title, '問你: Which name?', 'Ask you: Which name?'));
+  assert.ok(zhOrEn(t('aivenue_track_process', { pid: 4242, purpose: 'train' }).title, '追蹤背景程序: 4242 — train', 'Track a background process: 4242 — train'));
+  assert.ok(zhOrEn(t('mcp__aivenue__submit_verification', {}).title, '提交驗收結果', 'Submit verification'));
+  // A bare generic name is not taken for Aivenue's (a CLI may have its own ask_user); a distinctive one is.
+  assert.notEqual(t('ask_user', {}).category, 'hub');
+  assert.equal(t('rename_chat', { title: 'x' }).category, 'hub');
+});
+
+test('活動紀錄的 Aivenue 工具標題：參數在 agent 程式碼裡時（OpenCode 程式碼模式），標題不會多一個空的冒號', () => {
+  const [code] = opencodeTools([{ code: 'return await tools.aivenue.rename_chat({ title: "論文第四章" });' }]);
+  assert.ok(/^(改對話名稱|Rename the conversation)$/.test(code.title), code.title);
+  const t = W.classifyTool('aivenue_track_process', { pid: 7 }, '/w').title;
+  assert.ok(/^(追蹤背景程序|Track a background process): 7$/.test(t), t);
+});
+
+test('活動紀錄的 Aivenue 工具標題：舊工具在程式碼模式也不留空的部分；有參數時格式不變', () => {
+  const t = (raw, input) => W.classifyTool(raw, input, '/w').title;
+  // OpenCode's code mode (no arguments of the tool's own): the name alone.
+  assert.ok(/^(拍截圖|Take screenshot)$/.test(t('mcp__aivenue__capture_screenshot', { code: 'x' })));
+  assert.ok(/^(回報進度|Report progress)$/.test(t('mcp__aivenue__report_progress', { code: 'x' })));
+  // With arguments: as before.
+  assert.ok(/: http:\/\/localhost:5173\/a-very-long-path$/.test(t('mcp__aivenue__capture_screenshot', { target: 'http://localhost:5173/a-very-long-path' })));
+  assert.ok(/: S1 → done$/.test(t('mcp__aivenue__report_progress', { step_id: 'S1', status: 'done' })));
+  assert.ok(/: codex — fix the tests$/.test(t('mcp__aivenue__spawn_subagent', { provider: 'codex', task: 'fix the tests' })));
 });
