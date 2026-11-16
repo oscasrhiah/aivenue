@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { Ico } from '../icons';
 import type { OutputFile, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub } from '../api';
 import { useT } from '../i18n';
@@ -78,7 +80,7 @@ export function Outputs({ run, onImage }: { run: WorkflowRun; onImage: (src: str
     <div className="outputs">
       <div className="outputs-head fold-head" onClick={() => setOpen(!open)}>
         <span>
-          <span className="chev">{open ? '▾' : '▸'}</span> 📁 {t('這次產生或修改的檔案', 'Files created or changed in this run')}
+          <Ico i={open ? ChevronDown : ChevronRight} size={14} className="chev" /> <Ico i={Folder} /> {t('這次產生或修改的檔案', 'Files created or changed in this run')}
         </span>
         <span className="muted small">
           {[counts.added && t(`新增 ${counts.added}`, `${counts.added} added`), counts.modified && t(`修改 ${counts.modified}`, `${counts.modified} modified`), counts.deleted && t(`刪除 ${counts.deleted}`, `${counts.deleted} deleted`)].filter(Boolean).join(' · ')}

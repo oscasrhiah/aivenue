@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleX } from 'lucide-react';
+import { Ico } from '../icons';
 import type { ObservedCheck } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { clock, cx } from '../util';
@@ -18,13 +20,13 @@ export function CheckRows({ checks }: { checks: ObservedCheck[] }) {
         const key = `${c.agentId}|${c.command}|${c.ts}`;
         const r = checkRow(t, c);
         const shown = open.has(key);
-        const icon = r.cls === 'ok' ? '✓' : r.cls === 'bad' ? '✗' : '◦';
+        const icon = r.cls === 'ok' ? CircleCheck : r.cls === 'bad' ? CircleX : CircleDashed;
         return (
           <div key={key} className={cx('check-row', r.cls, shown && 'open')}>
             <div className="check-head" onClick={() => setOpen((s) => new Set(s.has(key) ? [...s].filter((x) => x !== key) : [...s, key]))} title={t('點一下看每次執行的輸出', 'Click for the output of each run')}>
-              <span className="check-caret">{shown ? '▾' : '▸'}</span>
+              <Ico i={shown ? ChevronDown : ChevronRight} size={14} className="check-caret" />
               <span className={cx('ext-chip', r.cls)}>
-                {icon} {r.status}
+                <Ico i={icon} size={13} /> {r.status}
               </span>
               <code className="check-cmd">{c.command}</code>
               {r.notes.map((n) => (

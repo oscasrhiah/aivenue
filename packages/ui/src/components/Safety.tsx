@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronRight, ClipboardList, FolderOpen, GitBranch, Hand, Pencil, ShieldAlert, Zap, type LucideIcon } from 'lucide-react';
+import { Ico } from '../icons';
 import type { PermissionLevel, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
@@ -6,7 +8,7 @@ import { cx, providerName } from '../util';
 import { ask } from './Ask';
 import { byFolder } from '../timeline';
 
-export const PERMISSION_ICON: Record<PermissionLevel, string> = { plan: '📋', ask: '✋', edit: '✏️', auto: '⚡', full: '🛑' };
+export const PERMISSION_ICON: Record<PermissionLevel, LucideIcon> = { plan: ClipboardList, ask: Hand, edit: Pencil, auto: Zap, full: ShieldAlert };
 
 const LEVELS: PermissionLevel[] = ['plan', 'ask', 'edit', 'auto', 'full'];
 
@@ -56,7 +58,7 @@ export function FullAccessConfirm({ onConfirm, onCancel }: { onConfirm: () => vo
   return (
     <div className="modal-back" onMouseDown={onCancel}>
       <div className="modal full-confirm" role="alertdialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-        <h3>🛑 {t('開啟完整電腦存取？', 'Allow whole-computer access?')}</h3>
+        <h3><Ico i={ShieldAlert} size={18} /> {t('開啟完整電腦存取？', 'Allow whole-computer access?')}</h3>
         <p>{t('這段對話中的 AI 將可以：', 'In this conversation the AI will be able to:')}</p>
         <ul>
           <li>{t('讀取、修改、刪除電腦上任何檔案，不只工作資料夾', 'read, change and delete any file on this computer, not just the working folder')}</li>
@@ -77,7 +79,7 @@ export function FullAccessConfirm({ onConfirm, onCancel }: { onConfirm: () => vo
             {t('取消', 'Cancel')}
           </button>
           <button className="btn danger" disabled={!ok} onClick={onConfirm}>
-            🛑 {t('開啟', 'Allow')}
+            <Ico i={ShieldAlert} /> {t('開啟', 'Allow')}
           </button>
         </div>
       </div>
@@ -91,7 +93,7 @@ export function FullAccessBanner({ run }: { run: WorkflowRun }) {
   if (run.config.permission !== 'full') return null;
   return (
     <div className="full-banner">
-      🛑 {t('完整電腦存取：這段對話的 AI 可以讀寫整台電腦的檔案、執行任何指令。', 'Whole-computer access: the AI in this conversation may change files anywhere on this computer and run any command.')}
+      <Ico i={ShieldAlert} /> {t('完整電腦存取：這段對話的 AI 可以讀寫整台電腦的檔案、執行任何指令。', 'Whole-computer access: the AI in this conversation may change files anywhere on this computer and run any command.')}
     </div>
   );
 }
@@ -109,14 +111,14 @@ export function OutsideChanges({ run }: { run: WorkflowRun }) {
   return (
     <div className="decision outside-changes">
       <div className="decision-q">
-        📂 {t(`工作資料夾外有 ${files.length} 筆寫檔工具紀錄`, `${files.length} file-tool write(s) outside the working folder`)}
+        <Ico i={FolderOpen} /> {t(`工作資料夾外有 ${files.length} 筆寫檔工具紀錄`, `${files.length} file-tool write(s) outside the working folder`)}
         {groups.length > 1 && <span className="muted small">{t(`（${groups.length} 個資料夾）`, ` (${groups.length} folders)`)}</span>}
       </div>
       <div className="outside-groups">
         {groups.map((g) => (
           <div key={g.dir} className="outside-group">
             <button className="link mono small" title={g.dir} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
-              {open.has(g.dir) ? '▾' : '▸'} {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
+              <Ico i={open.has(g.dir) ? ChevronDown : ChevronRight} size={14} /> {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
             </button>
             {/* Only a hint: the request's own text names this folder (Aivenue does not know it was meant as the output). */}
             {g.dir && goal.includes(norm(g.dir)) && <span className="badge muted">{t('任務文字提到這個資料夾', 'named in the request')}</span>}
@@ -159,8 +161,8 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
   return (
     <span className="perm-wrap" ref={ref}>
       <button className={cx('pill-btn perm-btn', permission === 'full' && 'danger-on')} title={`${t('權限', 'Permissions')}：${permissionLabel(t, permission)}`} onClick={() => (onChange ? setOpen(!open) : onOpen())}>
-        {PERMISSION_ICON[permission]} <span className="perm-label">{permissionLabel(t, permission)}</span>
-        {isolation && ' 🧪'}
+        <Ico i={PERMISSION_ICON[permission]} size={15} /> <span className="perm-label">{permissionLabel(t, permission)}</span>
+        {isolation && <Ico i={GitBranch} size={14} label={t('隔離模式', 'Isolation')} />}
       </button>
       {open && onChange && (
         <div className="perm-menu" role="menu">
@@ -175,7 +177,7 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
                 setOpen(false);
               }}
             >
-              <span className="perm-item-icon">{PERMISSION_ICON[p]}</span>
+              <Ico i={PERMISSION_ICON[p]} size={16} className="perm-item-icon" />
               <span>
                 <span className="perm-item-title">{permissionLabel(t, p)}</span>
                 <span className="perm-item-hint">{permissionHint(t, p)}</span>
@@ -213,7 +215,7 @@ export function SafetySection({ permission, isolation, providers, roleProviders,
       <div className="seg wide">
         {LEVELS.map((p) => (
           <button key={p} disabled={disabled} className={cx(permission === p && 'on', p === 'full' && 'danger')} onClick={() => pick(p)}>
-            {PERMISSION_ICON[p]} {permissionLabel(t, p)}
+            <Ico i={PERMISSION_ICON[p]} size={15} /> {permissionLabel(t, p)}
           </button>
         ))}
       </div>
@@ -248,7 +250,7 @@ export function Approvals({ run, providers, agentId, unclaimed }: { run: Workflo
       {list.map((a) => (
         <div key={a.id} className="approval">
           <div className="approval-q">
-            ✋ {t(`${providerName(providers, a.provider)} 想要執行`, `${providerName(providers, a.provider)} wants to run`)} <b>{a.tool}</b>
+            <Ico i={Hand} /> {t(`${providerName(providers, a.provider)} 想要執行`, `${providerName(providers, a.provider)} wants to run`)} <b>{a.tool}</b>
           </div>
           <div className="approval-summary mono">{a.summary}</div>
           {a.input && (
@@ -282,7 +284,7 @@ export function WorktreeCard({ run }: { run: WorkflowRun }) {
   const wt = run.worktree;
   if (!wt) return null;
   const finished = run.status !== 'running' && run.status !== 'waiting_human';
-  if (wt.state !== 'active') return <div className="note">🧪 {wt.note}</div>;
+  if (wt.state !== 'active') return <div className="note"><Ico i={GitBranch} /> {wt.note}</div>;
   if (!finished) return null;
   const act = async (action: 'apply' | 'keep' | 'discard') => {
     if (action === 'discard' && !(await ask(t('捨棄隔離副本中的所有變更？', 'Discard all changes in the isolated copy?'), { danger: true }))) return;
@@ -298,7 +300,7 @@ export function WorktreeCard({ run }: { run: WorkflowRun }) {
   };
   return (
     <div className="decision">
-      <div className="decision-q">🧪 {t('這次的變更在隔離副本中，要怎麼處理？', 'The changes are in an isolated copy. What should happen to them?')}</div>
+      <div className="decision-q"><Ico i={GitBranch} /> {t('這次的變更在隔離副本中，要怎麼處理？', 'The changes are in an isolated copy. What should happen to them?')}</div>
       <div className="muted small mono">{wt.branch}</div>
       <div className="row gap wrap">
         <button className="btn primary" disabled={busy} onClick={() => act('apply')}>

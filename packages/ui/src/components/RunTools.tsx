@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Search, TriangleAlert, X } from 'lucide-react';
+import { Ico } from '../icons';
 import type { PreflightItem, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT } from '../i18n';
@@ -52,17 +54,17 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
   };
   return (
     <div className="run-menu" ref={ref}>
-      <button className="icon-btn" title={t('更多', 'More')} onClick={() => setOpen(!open)}>
-        ⋯
+      <button className="icon-btn" title={t('更多', 'More')} aria-label={t('更多', 'More')} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Ico i={Ellipsis} size={18} />
       </button>
       {open && (
         <div className="menu">
-          <button onClick={() => (setOpen(false), void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)))}>🧠 {t('檢視共享上下文（agent 看到的內容）', 'View the shared context (what agents see)')}</button>
-          <button onClick={() => (setOpen(false), setCost(true))}>📊 {t('成本分解（token、時間、prompt 組成）', 'Cost breakdown (tokens, time, prompt makeup)')}</button>
-          <button onClick={() => (setOpen(false), setMemory(true))}>🧩 {t('專案記憶（這次帶入了什麼、記憶模式）', 'Project memory (what this run was given, memory mode)')}</button>
-          <button onClick={() => (setOpen(false), setSearch(true))}>🔎 {t('搜尋紀錄', 'Search records')}</button>
-          <button onClick={exportRun}>📦 {t('匯出完整紀錄（遮罩金鑰）', 'Export full records (keys masked)')}</button>
-          <button onClick={distil}>📐 {t('把驗證過的規則存成專案 Skill', 'Save verified rules as a project Skill')}</button>
+          <button onClick={() => (setOpen(false), void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)))}><Ico i={Layers} /> {t('檢視共享上下文（agent 看到的內容）', 'View the shared context (what agents see)')}</button>
+          <button onClick={() => (setOpen(false), setCost(true))}><Ico i={ChartColumn} /> {t('成本分解（token、時間、prompt 組成）', 'Cost breakdown (tokens, time, prompt makeup)')}</button>
+          <button onClick={() => (setOpen(false), setMemory(true))}><Ico i={Library} /> {t('專案記憶（這次帶入了什麼、記憶模式）', 'Project memory (what this run was given, memory mode)')}</button>
+          <button onClick={() => (setOpen(false), setSearch(true))}><Ico i={Search} /> {t('搜尋紀錄', 'Search records')}</button>
+          <button onClick={exportRun}><Ico i={Download} /> {t('匯出完整紀錄（遮罩金鑰）', 'Export full records (keys masked)')}</button>
+          <button onClick={distil}><Ico i={BookCheck} /> {t('把驗證過的規則存成專案 Skill', 'Save verified rules as a project Skill')}</button>
         </div>
       )}
       {memory && <RunMemoryWindow run={run} onClose={() => setMemory(false)} />}
@@ -85,7 +87,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
             <div className="drawer-head wf-modal-head">
               <h3>{t('共享上下文', 'Shared context')}</h3>
               <button className="icon-btn" onClick={() => setShared(undefined)} aria-label="close">
-                ✕
+                <Ico i={X} size={18} />
               </button>
             </div>
             <div className="muted small">{t(`agent 用 read_context 讀到的完整總覽：目標與差距、目前狀態（等待、GPU 鎖、背景程序）、審查與驗收、交接摘要、專案結構（Graphify）、每個 agent 跑過的指令與結果。約 ${Math.round(shared.length / 4).toLocaleString()} tokens。`, `The full overview agents read with read_context: goal and gap, current status (waits, GPU locks, background processes), reviews and verifications, hand-offs, project structure (Graphify), and every agent's commands and results. About ${Math.round(shared.length / 4).toLocaleString()} tokens.`)}</div>
@@ -127,7 +129,7 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
         <div className="drawer-head wf-modal-head">
           <h3>{t('搜尋紀錄', 'Search records')}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="close">
-            ✕
+            <Ico i={X} size={18} />
           </button>
         </div>
         <div className="row gap wrap">
@@ -191,7 +193,7 @@ export function PreflightList({ items, showOk }: { items: PreflightItem[]; showO
         .filter((p) => showOk || p.level !== 'ok')
         .map((p, i) => (
           <div key={i} className={cx('pf-item', p.level)}>
-            <span className="pf-icon">{p.level === 'ok' ? '✓' : p.level === 'warn' ? '!' : '✕'}</span>
+            <Ico i={p.level === 'ok' ? CircleCheck : p.level === 'warn' ? TriangleAlert : CircleX} size={14} className="pf-icon" />
             <span className="pf-area">{AREA(t, p.area)}</span>
             <span>{p.message}</span>
           </div>
@@ -236,12 +238,12 @@ export function SwitchProvider({ workflowId, agentId, compact, urgent }: { workf
   return (
     <span className={cx('switch-prov', !compact && 'wide')} ref={ref}>
       {compact ? (
-        <button className={cx('icon-btn tiny', urgent && 'warn-text')} title={title} onClick={open}>
-          ⇄
+        <button className={cx('icon-btn tiny', urgent && 'warn-text')} title={title} aria-label={title} onClick={open}>
+          <Ico i={ArrowLeftRight} size={13} />
         </button>
       ) : (
         <button className={cx('btn small', urgent && 'warn')} title={title} onClick={open}>
-          ⇄ {t('換一家重跑', 'Run on another provider')}
+          <Ico i={ArrowLeftRight} size={14} /> {t('換一家重跑', 'Run on another provider')}
         </button>
       )}
       {list && (

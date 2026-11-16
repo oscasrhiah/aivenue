@@ -9,8 +9,8 @@
   --line-strong: #d6d2c6;
   --text: #1f1e1b;
   --text-2: #3d3c38;
-  --muted: #7a776d;
-  --faint: #a8a59b;
+  --muted: #6b685f;
+  --faint: #8a877d;
   --ok: #2f7d4f;
   --warn: #a16207;
   --err: #b42318;
@@ -35,8 +35,8 @@
     --line-strong: #4a4945;
     --text: #f2f0ea;
     --text-2: #dcd9d0;
-    --muted: #a19e94;
-    --faint: #75736b;
+    --muted: #b5b2a8;
+    --faint: #9a978e;
     --ok: #5cb87f;
     --warn: #e0a83a;
     --err: #f07167;
@@ -57,8 +57,8 @@
   --line-strong: #4a4945;
   --text: #f2f0ea;
   --text-2: #dcd9d0;
-  --muted: #a19e94;
-  --faint: #75736b;
+  --muted: #b5b2a8;
+  --faint: #9a978e;
   --ok: #5cb87f;
   --warn: #e0a83a;
   --err: #f07167;
@@ -2275,8 +2275,8 @@ textarea.code {
 }
 
 /*
- * Composer bar: one row that never wraps — 📎 · folder · permission · role summary … send.
- * Sized by the composer's own width; VS Code always uses the compact form.
+ * Composer bar: attach · folder · permission · advisor · role summary … send, on one row; below 440px the buttons
+ * take a second row (see the end of this file). Sized by the composer's own width; VS Code uses the compact form.
  */
 .composer {
   container-type: inline-size;
@@ -2317,8 +2317,7 @@ textarea.code {
 }
 
 .wf-short,
-.wf-bar.compact .wf-long,
-.wf-bar.compact .wf-folder {
+.wf-bar.compact .wf-long {
   display: none;
 }
 
@@ -2327,8 +2326,7 @@ textarea.code {
 }
 
 @container (max-width: 560px) {
-  .wf-long,
-  .wf-folder {
+  .wf-long {
     display: none;
   }
 
@@ -6025,7 +6023,7 @@ textarea.code {
 /* ============ composer row: buttons never break the row ============ */
 /*
  * Every button keeps its icon and cuts its words with "…" when the row is short of room, instead of pushing the row out
- * of the composer or wrapping. The role summary gives way first, then the folder, the advisor and last the permission.
+ * of the composer. The role summary gives way first, then the folder and the advisor; the permission is never cut.
  * The full text stays in each button's tooltip.
  */
 .wf-bar > * {
@@ -6098,4 +6096,252 @@ textarea.code {
   text-align: left;
   font-family: var(--mono);
   color: var(--text-2);
+}
+
+/* ============ icons (Lucide), round 1: the chat page ============ */
+/*
+ * One set of line icons in the colour of their text; colour itself says a state only (ok, warn, bad). Buttons centre
+ * their icon; the spinner stops for people who asked for less motion.
+ */
+.ico {
+  flex: none;
+  vertical-align: -0.18em;
+}
+
+.ico.ok {
+  color: var(--ok);
+}
+
+.ico.bad {
+  color: var(--err);
+}
+
+.ico.spin {
+  animation: ico-spin 1.4s linear infinite;
+}
+
+@keyframes ico-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ico.spin {
+    animation: none;
+  }
+}
+
+.dot-fill {
+  fill: currentColor;
+}
+
+.icon-btn,
+.send,
+.clip,
+.att-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn .ico,
+.send .ico,
+.clip .ico {
+  vertical-align: 0;
+}
+
+.send.resume {
+  padding-left: 0;
+}
+
+.clip {
+  filter: none;
+  color: var(--muted);
+}
+
+.clip:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.side-link .side-icon {
+  color: var(--muted);
+}
+
+.att-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.pp-icon .ico {
+  vertical-align: 0;
+}
+
+.menu button .ico,
+.perm-item-icon {
+  color: var(--muted);
+}
+
+.perm-item.on .perm-item-icon,
+.perm-item.danger .perm-item-icon {
+  color: inherit;
+}
+
+/* ============ the result's verification: each state apart, its reason in view ============ */
+.vstates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.vstate-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.vstate {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.vstate .ico {
+  vertical-align: 0;
+}
+
+.vstate.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
+}
+
+.vstate.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+
+.vstate.bad {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 45%, var(--line));
+}
+
+.vstate-detail {
+  color: var(--muted);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.final-text-label {
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 2px;
+}
+
+/* "agent 自述": the account below is the agent's own, said as a tag (not a parenthesis). */
+.self-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ============ secondary actions without a mouse ============ */
+.user-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-actions .link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  text-decoration: none;
+}
+
+/* Edit and Remember under your message: always there (quiet), so touch and keyboard users find them too. */
+.user-edit,
+.user-remember {
+  opacity: 1;
+  color: var(--faint);
+}
+
+.user-msg-wrap:hover .user-edit,
+.user-msg-wrap:hover .user-remember,
+.user-edit:hover,
+.user-remember:hover,
+.user-edit:focus-visible,
+.user-remember:focus-visible {
+  color: var(--text-2);
+}
+
+/* ============ composer row on a narrow composer ============ */
+/*
+ * The permission is never cut: it says what the agents may do. Below 440px the buttons take a row of their own under
+ * the text (attach and send keep theirs), so nothing has to be cut to a stub.
+ */
+.wf-bar .perm-btn {
+  flex-shrink: 0;
+}
+
+/*
+ * The folder keeps its name while the role summary can give room (that one is in the tooltip anyway): it does not
+ * shrink at all (a share of a pixel already cuts it to "…"), and is at most 40% of the row. With the widest permission
+ * (about 120px), the advisor and the role summary at their 38px and the gaps, that row fits from 360px; below that the
+ * folder is cut too.
+ */
+.wf-bar .wf-folder {
+  flex-shrink: 0;
+  max-width: min(160px, 40%) !important;
+}
+
+@container (max-width: 360px) {
+  .wf-bar .wf-folder {
+    flex-shrink: 1;
+  }
+}
+
+.wf-bar .wf-btn {
+  flex-shrink: 40;
+}
+
+.wf-bar > .perm-wrap:has(.perm-btn) {
+  flex-shrink: 0;
+}
+
+.wf-bar .perm-btn .perm-label {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+@container (max-width: 440px) {
+  .composer-bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .composer-bar .wf-bar {
+    order: 3;
+    flex-basis: 100%;
+  }
+
+  .composer-bar .send-wrap {
+    margin-left: auto;
+  }
 }

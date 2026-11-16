@@ -310,37 +310,75 @@ export function deliverables(run: WorkflowRun, max = 6): { shown: string[]; tota
 }
 
 /**
- * How far the result was checked, from the records: the checks Aivenue saw at the last submission, what the last
- * review left unconfirmed, and the goal verification — not what an agent says it verified.
+ * One state of the result's verification, as the result card shows it: its kind, said in its own words (a failed
+ * check, no check run, a check to run again after a change, too little evidence) and never merged into one
+ * "unverified"; how many; and, when it matters, why. Taken from the records only — the checks Aivenue saw at the last
+ * submission, what the last review left unconfirmed, the goal verification — not from what an agent says it verified.
  */
-export function verificationScope(t: Tr, run: WorkflowRun): string[] {
+export interface VerificationState {
+  kind: 'failed' | 'not_run' | 'recheck' | 'weak' | 'passed' | 'goal';
+  cls: 'ok' | 'bad' | 'warn';
+  label: string;
+  detail?: string;
+}
+
+export function verificationStates(t: Tr, run: WorkflowRun): VerificationState[] {
   const impl = run.stages.implement?.rounds ?? [];
   const last = [...impl].reverse().find((r) => r.submission);
   const checks = last?.submission?.checks;
-  const parts: string[] = [];
+  const out: VerificationState[] = [];
+  const list = (parts: string[]) => parts.filter(Boolean).join(t('、', ', '));
+  let unsure = 0;
+  let inOutput = 0;
   if (checks) {
-    // Each check counted once, by its state; a later file change is said on the check's own row, not as one more.
-    const passed = checks.filter((c) => c.outcome === 'passed').length;
-    const failed = checks.filter((c) => c.outcome === 'failed' || c.outcome === 'output_failure').length;
-    const skipped = checks.filter((c) => c.outcome === 'may_not_run').length;
-    const read = checks.length - passed - failed - skipped;
-    parts.push(
-      checks.length
-        ? `${t(`${checks.length} 項檢查：`, `${checks.length} check(s): `)}${[passed ? t(`${passed} 通過`, `${passed} passed`) : '', failed ? t(`${failed} 失敗`, `${failed} failed`) : '', read > 0 ? t(`${read} 要看輸出`, `${read} to read in the output`) : '', skipped ? t(`${skipped} 不確定是否執行`, `${skipped} not known whether they ran`) : '']
-            .filter(Boolean)
-            .join(t('、', ', '))}`
-        : t('沒看到任何檢查執行（結果裡的「通過」是 agent 自述）', 'no check seen run (any "passed" in the result is the agent\'s own account)'),
-    );
+    // Each check counted once, by its state. A failure stays a failure (a change after it is said with it); a pass
+    // with a change after it is no longer a pass of the code as it is: to run again.
+    const failed = checks.filter((c) => c.outcome === 'failed' || c.outcome === 'output_failure');
+    const changed = (c: ObservedCheck) => c.outdated || c.maybeOutdated;
+    const recheck = checks.filter((c) => !failed.includes(c) && changed(c));
+    const passed = checks.filter((c) => c.outcome === 'passed' && !changed(c));
+    unsure = checks.filter((c) => c.outcome === 'may_not_run' && !changed(c)).length;
+    inOutput = checks.filter((c) => c.outcome === 'in_longer_command' && !changed(c)).length;
+    const failedChanged = failed.filter(changed).length;
+    if (failed.length)
+      out.push({ kind: 'failed', cls: 'bad', label: t(`檢查失敗 ${failed.length} 項`, `${failed.length} check(s) failed`), detail: failedChanged ? t(`其中 ${failedChanged} 項之後有改檔，要重跑才知道現在的結果`, `${failedChanged} of them changed after: run again to know the result now`) : undefined });
+    if (!checks.length)
+      out.push({ kind: 'not_run', cls: 'warn', label: t('尚未執行檢查', 'No check run'), detail: t('沒有看到任何檢查執行；結果裡的「通過」是 agent 自述', 'No check was seen running; any "passed" in the result is the agent\'s own account') });
+    if (recheck.length) {
+      const sure = recheck.filter((c) => c.outdated).length;
+      out.push({
+        kind: 'recheck',
+        cls: 'warn',
+        label: t(`變更後需重驗 ${recheck.length} 項`, `${recheck.length} to re-check after changes`),
+        detail: list([sure ? t(`${sure} 項之後有改檔`, `${sure} with files changed after`) : '', recheck.length - sure ? t(`${recheck.length - sure} 項之後有失敗的編輯，檔案可能已變`, `${recheck.length - sure} with a failed edit after (files may have changed)`) : '']),
+      });
+    }
   }
   const review = [...impl].reverse().find((r) => r.review)?.review;
-  if (review?.needsValidation?.length) parts.push(t(`${review.needsValidation.length} 項待驗證（審查未能確認）`, `${review.needsValidation.length} item(s) not confirmed by the review`));
+  const unconfirmed = review?.needsValidation?.length ?? 0;
+  const weak = unsure + inOutput + unconfirmed;
+  if (weak)
+    out.push({
+      kind: 'weak',
+      cls: 'warn',
+      label: t(`證據不足 ${weak} 項`, `${weak} with too little evidence`),
+      detail: list([
+        unsure ? t(`${unsure} 項不確定是否執行`, `${unsure} not known whether they ran`) : '',
+        inOutput ? t(`${inOutput} 項在較長的指令中執行，結果要看輸出`, `${inOutput} ran within a longer command: read the output`) : '',
+        unconfirmed ? t(`${unconfirmed} 項審查未能確認`, `${unconfirmed} not confirmed by the review`) : '',
+      ]),
+    });
+  const passed = checks?.filter((c) => c.outcome === 'passed' && !c.outdated && !c.maybeOutdated).length ?? 0;
+  if (passed) out.push({ kind: 'passed', cls: 'ok', label: t(`檢查通過 ${passed} 項`, `${passed} check(s) passed`) });
   const v = [...(run.stages.verify?.rounds ?? [])].reverse().find((r) => r.verification)?.verification;
   if (v) {
-    const n = `${v.metrics.filter((m) => m.met).length}/${v.metrics.length}`;
+    const met = v.metrics.filter((m) => m.met).length;
+    const n = `${met}/${v.metrics.length}`;
     // A result measured on code that changed since is history: said as the last one, to be checked again.
-    parts.push(v.stale ? t(`上次目標驗收 ${n}，之後有改動，需重驗`, `last goal verification ${n}; changed since, needs checking again`) : t(`目標驗收 ${n}`, `goal ${n}`));
+    if (v.stale) out.push({ kind: 'recheck', cls: 'warn', label: t(`上次目標驗收 ${n}，之後有改動，需重驗`, `last goal verification ${n}; changed since, needs checking again`) });
+    else out.push({ kind: 'goal', cls: met === v.metrics.length ? 'ok' : 'bad', label: t(`目標驗收 ${n}`, `goal ${n}`) });
   }
-  return parts.filter(Boolean);
+  return out;
 }
 
 /**
@@ -365,7 +403,7 @@ export function readableError(s: string | undefined): string {
 export interface CheckRow {
   cls: 'ok' | 'bad' | 'warn' | 'muted';
   status: string;
-  /** Shown on the row: a rerun. (Whether a check was in the task's scope is not guessed from free text.) */
+  /** Shown on the row: a rerun, a change after it. (Whether a check was in the task's scope is not guessed from free text.) */
   notes: string[];
   /** Behind the row: files changed after it, who ran it. */
   details: string[];
@@ -387,12 +425,15 @@ export function checkRow(t: Tr, c: ObservedCheck): CheckRow {
   const earlier = c.earlier ?? [];
   const notes: string[] = [];
   if (earlier.some((e) => failedLike(e.outcome))) notes.push(c.outcome === 'passed' ? t('先前失敗，重跑通過', 'failed before, passed on rerun') : t(`重跑 ${earlier.length} 次`, `rerun ${earlier.length} time(s)`));
+  if (c.outdated) notes.push(t('變更後需重驗', 're-check after changes'));
+  else if (c.maybeOutdated) notes.push(t('之後有失敗的編輯，可能需重驗', 'a failed edit came after: may need a re-check'));
   const details: string[] = [];
   if (c.outdated) details.push(t('這項檢查之後有改檔：要確認現在的程式碼，需要重跑', 'files changed after this check: re-run it to check the code as it is now'));
   else if (c.maybeOutdated) details.push(t('這項檢查之後有失敗的編輯：檔案可能已變，請確認', 'a failed edit came after this check: files may have changed'));
   details.push(t(`${c.by} 執行`, `run by ${c.by}`));
   return {
-    cls: status.cls,
+    // A pass with a change after it is not a pass of the code as it is now.
+    cls: status.cls === 'ok' && (c.outdated || c.maybeOutdated) ? 'warn' : status.cls,
     status: status.text,
     notes,
     details,

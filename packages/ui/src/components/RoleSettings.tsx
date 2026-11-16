@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowLeftRight, Asterisk, CircleOff, Folder, Lightbulb, Shuffle, SlidersHorizontal, X } from 'lucide-react';
+import { Ico } from '../icons';
 import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
 import { PreflightList } from './RunTools';
 import { ModelPicker } from './ModelPicker';
-import { PERMISSION_ICON, PermissionButton, permissionLabel, SafetySection } from './Safety';
+import { PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
 import { fmtContext } from '../../../core/src/modelContext';
@@ -143,12 +145,12 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
     `Sub agents：${draft.subagents.enabled ? subs.map(name).join(', ') || '—' : t('關閉', 'off')}`,
   ].filter(Boolean);
   const short =
-    (auto ? `✦ ${t('自動指派', 'Auto')}` : implement.enabled ? name(implement.author.provider) : name(plan.author.provider)) +
+    (auto ? t('自動指派', 'Auto') : implement.enabled ? name(implement.author.provider) : name(plan.author.provider)) +
     (!plan.enabled && implement.enabled ? ` · ${t('直接實作', 'no plan')}` : '');
   const pair = (s: StageConfig) => [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ');
   const long = [
     flowModeOf(draft) === 'standard' ? t('標準模式', 'Standard') : '',
-    auto ? `✦ ${t('自動指派', 'Auto')} · ${priority}` : '',
+    auto ? `${t('自動指派', 'Auto')} · ${priority}` : '',
     plan.enabled ? `${t('計畫', 'Plan')} ${pair(plan)}` : t('不規劃', 'No plan'),
     implement.enabled ? `${t('實作', 'Build')} ${pair(implement)}` : '',
     draft.subagents.enabled && subs.length ? t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`) : '',
@@ -160,13 +162,13 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   return (
     <span className={cx('wf-bar', compact && 'compact')}>
       <button className="pill-btn wf-folder" onClick={onOpen} title={draft.cwd}>
-        <span className="pill-icon">📁</span>
+        <Ico i={Folder} size={15} className="pill-icon" />
         <span className="pill-text">{folder}</span>
       </button>
       <PermissionButton permission={permission} isolation={draft.isolation === 'worktree'} onChange={onSafety} onOpen={onOpen} />
       <AdvisorButton value={draft.advisor ?? { mode: 'off' }} providers={providers} onChange={onAdvisor} onOpen={onOpen} mains={claudeMains(t, draft, providers, preview)} />
       <button className="pill-btn wf-btn" onClick={onOpen} title={details.join('\n')}>
-        <span className="wf-gear">⚙</span>
+        <Ico i={auto ? Shuffle : SlidersHorizontal} size={15} className="wf-gear" />
         <span className="wf-hint wf-long">{long}</span>
         <span className="wf-hint wf-short">{short}</span>
       </button>
@@ -743,14 +745,14 @@ export function AdvisorButton({ value, providers, onChange, onOpen, mains }: { v
   return (
     <span className="perm-wrap" ref={ref}>
       <button className={cx('pill-btn adv-btn', value.mode !== 'off' && 'on')} title={`${t('顧問模式', 'Advisor')}：${advisorModeLabel(t, value.mode)}`} onClick={() => (onChange ? setOpen(!open) : onOpen())}>
-        💡 <span className="adv-label">{t('顧問', 'Advisor')}</span>
+        <Ico i={Lightbulb} size={15} /> <span className="adv-label">{t('顧問', 'Advisor')}</span>
         <span className="adv-who">{who}</span>
       </button>
       {open && onChange && (
         <div className="perm-menu adv-menu" role="menu" ref={menu} style={shift ? { left: -shift } : undefined}>
           {(['off', 'claude', 'cross'] as const).map((m) => (
             <button key={m} role="menuitemradio" aria-checked={m === value.mode} className={cx('perm-item', m === value.mode && 'on')} onClick={() => onChange(withMode(value, m, providers))}>
-              <span className="perm-item-icon">{{ off: '○', claude: '✳', cross: '⇄' }[m]}</span>
+              <Ico i={{ off: CircleOff, claude: Asterisk, cross: ArrowLeftRight }[m]} size={16} className="perm-item-icon" />
               <span>
                 <span className="perm-item-title">{advisorModeLabel(t, m)}</span>
                 <span className="perm-item-hint">{advisorModeHint(t, m)}</span>
@@ -882,7 +884,7 @@ export function RoleSettings({
         <div className="drawer-head wf-modal-head">
           <h3>{notice || readOnly ? t('這段對話的設定', 'Settings of this conversation') : t('工作流設定', 'Workflow settings')}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="close">
-            ✕
+            <Ico i={X} size={18} />
           </button>
         </div>
         {notice && <div className="note small">{notice}</div>}
@@ -890,14 +892,14 @@ export function RoleSettings({
         {!readOnly && (
           <div className="seg wide">
             <button className={cx(auto && 'on')} onClick={() => set({ assignment: { mode: 'auto', auto: prefs } })}>
-              ✦ {t('自動指派', 'Auto assign')}
+              <Ico i={Shuffle} size={14} /> {t('自動指派', 'Auto assign')}
             </button>
             <button className={cx(!auto && 'on')} onClick={() => set({ assignment: { mode: 'manual', auto: prefs } })}>
               {t('自訂指派', 'Choose myself')}
             </button>
           </div>
         )}
-        {readOnly && isAuto(draft) && <div className="muted small">✦ {t('這段對話使用自動指派，以下是實際分配到的供應商。', 'This conversation used auto assignment; these are the providers it picked.')}</div>}
+        {readOnly && isAuto(draft) && <div className="muted small"><Ico i={Shuffle} size={14} /> {t('這段對話使用自動指派，以下是實際分配到的供應商。', 'This conversation used auto assignment; these are the providers it picked.')}</div>}
 
         {auto && (
           <section className="sect">
@@ -963,8 +965,8 @@ export function RoleSettings({
                 <button className="chip-btn" onClick={() => onChange(keepFlowMark({ ...p.config, cwd: draft.cwd }))}>
                   {p.name}
                 </button>
-                <button className="icon-btn tiny" title={t('刪除', 'Delete')} onClick={() => hub.call<WorkflowPreset[]>('presets.delete', { id: p.id }).then(setPresets)}>
-                  ✕
+                <button className="icon-btn tiny" title={t('刪除', 'Delete')} onClick={() => hub.call<WorkflowPreset[]>('presets.delete', { id: p.id }).then(setPresets)} aria-label={t('刪除', 'Delete')}>
+                  <Ico i={X} size={13} />
                 </button>
               </span>
             ))}
@@ -1183,11 +1185,11 @@ function ExtraDirs({ dirs, disabled, canPick, onChange }: { dirs: string[]; disa
           {dirs.map((d) => (
             <li key={d}>
               <span className="mono grow" title={d}>
-                📁 {d}
+                <Ico i={Folder} size={14} /> {d}
               </span>
               {!disabled && (
                 <button className="link tiny" onClick={() => onChange(dirs.filter((x) => x !== d))} aria-label={t('移除', 'Remove')}>
-                  ✕
+                  <Ico i={X} size={13} />
                 </button>
               )}
             </li>

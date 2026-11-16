@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Ban } from 'lucide-react';
+import { Ico } from '../icons';
 import type { DeniedAction, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { navigate } from '../App';
@@ -38,7 +40,7 @@ export function DeniedActions({ run, providers }: { run: WorkflowRun; providers:
   return (
     <div className="denied-card">
       <div className="denied-head">
-        <span className="denied-title">🚫 {t(`被你拒絕的對外動作（${list.length}）`, `External actions you denied (${list.length})`)}</span>
+        <span className="denied-title"><Ico i={Ban} /> {t(`被你拒絕的對外動作（${list.length}）`, `External actions you denied (${list.length})`)}</span>
         <span className="muted small">{t('agent 沒有執行這些動作，也沒有改用其他方式繞過。', 'The agents did not do these, nor work around them.')}</span>
       </div>
       {list.map((d) => {

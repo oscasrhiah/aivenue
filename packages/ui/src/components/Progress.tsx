@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Lock, Minus, Pause, Target, X } from 'lucide-react';
+import { Ico } from '../icons';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName, subTitle } from '../util';
@@ -133,7 +135,7 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
         {gap.rows.map((m) => (
           <div key={m.id} className={cx('gw-metric', m.met === true ? 'ok' : m.met === false ? 'no' : 'todo')}>
             <div className="gw-head">
-              <span className="pp-icon">{m.met === true ? '✓' : m.met === false ? '✕' : '·'}</span>
+              <span className="pp-icon">{m.met === true ? <Ico i={Check} size={11} /> : m.met === false ? <Ico i={X} size={11} /> : '·'}</span>
               <b>{m.id}</b> {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
               <span className={cx('badge', m.met === true ? 'ok' : m.met === false ? 'err' : undefined)}>{m.met === true ? t('達標', 'met') : m.met === false ? t('未達標', 'not met') : t('尚未量測', 'not measured')}</span>
             </div>
@@ -210,7 +212,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
     <div className="progress-panel">
       <div className="pp-headrow">
         <button className="pp-head" onClick={() => setOpen(!open)} aria-expanded={open}>
-          <span className="pp-chev">{open ? '▾' : '▸'}</span>
+          <Ico i={open ? ChevronDown : ChevronRight} size={14} className="pp-chev" />
           <span className="pp-title">{t('進度', 'Progress')}</span>
           <span className="muted small pp-summary">
             {/* This round, the delegated batches and background processes, each said apart; the count is the
@@ -218,12 +220,17 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             {runOverview(t, run, subTitle).join(' · ')}
             {live && ` · ${t('工作流步驟', 'workflow steps')} ${done}/${items.length}`}
             {!live && unreported > 0 && t(` · ${unreported} 個步驟未回報完成`, ` · ${unreported} step(s) not reported done`)}
-            {live && !open && block.length ? ` · ⏸ ${block[0]}` : live && !open && current ? ` · ${current.label}` : ''}
+            {live && !open && block.length ? (
+              <>
+                {' · '}
+                <Ico i={Pause} size={12} /> {block[0]}
+              </>
+            ) : live && !open && current ? ` · ${current.label}` : ''}
           </span>
         </button>
         {gap.rows.length > 0 && (
           <button className={cx('pp-goal-btn', gap.met === gap.rows.length && 'ok', gap.stale && 'warn')} onClick={() => setDetail({ goal: true })} title={t('點一下查看每個驗收目標的目標值、最新量測與證據', 'Click to see each acceptance metric: target, latest measurement and evidence')}>
-            🎯 {t('目標', 'Goal')} {gap.met}/{gap.rows.length}
+            <Ico i={Target} size={14} /> {t('目標', 'Goal')} {gap.met}/{gap.rows.length}
             {gap.stale && <span className="badge warn">{t('過期', 'stale')}</span>}
           </button>
         )}
@@ -258,7 +265,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
               <span className="pp-sub">GPU</span>
               {run.gpuLocks.map((l, i) => (
                 <button key={i} className="pp-chip clickable" title={t('點一下查看 GPU 的使用狀態', 'Click to see the GPU status')} onClick={() => setDetail({ gpu: true })}>
-                  🔒 GPU {l.gpus.join(', ')} · {providerName(providers, run.agents[l.agentId]?.provider ?? '')}
+                  <Ico i={Lock} size={13} /> GPU {l.gpus.join(', ')} · {providerName(providers, run.agents[l.agentId]?.provider ?? '')}
                 </button>
               ))}
             </div>
@@ -279,7 +286,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
         <div className="pp-list">
           {items.map((i) => (
             <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
-              <span className={cx('pp-icon', i.state)}>{i.state === 'done' ? '✓' : i.state === 'failed' ? '✕' : i.state === 'skipped' ? '–' : i.state === 'unreported' ? '?' : ''}</span>
+              <span className={cx('pp-icon', i.state)}>{i.state === 'done' ? <Ico i={Check} size={11} /> : i.state === 'failed' ? <Ico i={X} size={11} /> : i.state === 'skipped' ? <Ico i={Minus} size={11} /> : i.state === 'unreported' ? '?' : ''}</span>
               <span className="pp-label">{i.label}</span>
               {i.meta && <span className="pp-meta">{i.meta}</span>}
             </div>

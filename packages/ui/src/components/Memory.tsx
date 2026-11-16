@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { BookmarkPlus, X } from 'lucide-react';
+import { Ico } from '../icons';
 import { createPortal } from 'react-dom';
 import type { MemoryKind, MemoryMode, RunMemoryView, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
@@ -68,7 +70,7 @@ export function RememberButton({ runId, text, noteId, ts, className }: { runId: 
           setOpen(true);
         }}
       >
-        🧠 {t('記住', 'Remember')}
+        <Ico i={BookmarkPlus} size={13} /> {t('記住', 'Remember')}
       </button>
       {open &&
         createPortal(
@@ -89,7 +91,7 @@ export function RememberButton({ runId, text, noteId, ts, className }: { runId: 
                 {t('取消', 'Cancel')}
               </button>
               <button className="btn primary" disabled={!value.trim() || state !== 'idle'} onClick={() => void save()}>
-                {state === 'done' ? t('已記住 ✓', 'Remembered ✓') : state === 'busy' ? t('儲存中…', 'Saving…') : t('記住', 'Remember')}
+                {state === 'done' ? t('已記住', 'Remembered') : state === 'busy' ? t('儲存中…', 'Saving…') : t('記住', 'Remember')}
               </button>
             </div>
           </div>
@@ -141,7 +143,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
         <div className="drawer-head wf-modal-head">
           <h3>{t('專案記憶', 'Project memory')}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="close">
-            ✕
+            <Ico i={X} size={18} />
           </button>
         </div>
         <div className="mem-body">

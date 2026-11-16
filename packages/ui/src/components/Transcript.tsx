@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { Circle, CircleX, CornerDownRight, Network, Paperclip, User, Wrench } from 'lucide-react';
+import { Ico } from '../icons';
 import type { AgentEvent, Attachment } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
 import { clock, cx, elapsed, fmtTokens } from '../util';
@@ -71,15 +73,15 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
   return (
     <div className={cx('tl', tool.status, use && 'tl-ext')}>
       <div className="tl-head" onClick={() => setOpen(!open)}>
-        <span className={cx('tl-dot', tool.status)}>⏺</span>
+        <span className={cx('tl-dot', tool.status)}><Ico i={Circle} size={8} className="dot-fill" /></span>
         {use?.kind === 'skill' ? (
           <>
-            <span className="tl-verb">🧰 {t('使用技能', 'Skill')}</span>
+            <span className="tl-verb"><Ico i={Wrench} size={13} /> {t('使用技能', 'Skill')}</span>
             <span className="tl-arg">{use.name}</span>
           </>
         ) : use?.kind === 'graphify' ? (
           <>
-            <span className="tl-verb">🕸️ Graphify</span>
+            <span className="tl-verb"><Ico i={Network} size={13} /> Graphify</span>
             <span className="tl-arg">
               {action(use.action)}
               {use.arg && use.action !== 'update' ? ` "${use.arg}"` : ''}
@@ -99,7 +101,7 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
       {/* Only the first line by default (the command or file); output on click, except an error's first lines. */}
       {!open && pv && tool.status === 'error' && (
         <div className="tl-out">
-          <span className="tl-elbow">⎿</span>
+          <Ico i={CornerDownRight} size={13} className="tl-elbow" />
           <pre>{pv}</pre>
         </div>
       )}
@@ -138,7 +140,7 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
         </div>
       );
     case 'error':
-      return <div className="tx-err">✕ {e.text}</div>;
+      return <div className="tx-err"><Ico i={CircleX} size={14} /> {e.text}</div>;
     case 'prompt':
       return raw ? (
         <div className="tx-raw" onClick={() => setOpen(!open)}>
@@ -183,7 +185,7 @@ function GroupLine({ item, opened }: { item: Extract<FeedItem, { type: 'group' }
   return (
     <div className="tl ok tl-group">
       <div className="tl-head" onClick={() => (opened ? opened.toggle(key) : setOwn(!own))}>
-        <span className="tl-dot ok">⏺</span>
+        <span className="tl-dot ok"><Ico i={Circle} size={8} className="dot-fill" /></span>
         <span className="tl-verb">{groupLabel(t, item.kind, item.events.length)}</span>
         {!open && <span className="tl-arg">{names.slice(0, 3).join(', ')}{names.length > 3 ? ' …' : ''}</span>}
       </div>
@@ -230,7 +232,7 @@ export function LiveFeed({ events, said = [], limit = 6, hideMessages = false }:
       {rows.map((r, i) =>
         'said' in r ? (
           <div key={`said${r.ts}${i}`} className="tx-said" title={clock(r.ts)}>
-            <span className="tx-said-who">👤 {t('你（執行中追加）', 'You (sent while working)')}</span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')}</span>
             {r.said.text && <div className="tx-said-text">{r.said.text}</div>}
             <Replies replies={r.said.replies} planUpdated={r.said.planUpdated} />
           </div>
@@ -267,9 +269,9 @@ export function Transcript({ events, raw = false, limit, said = [], internal = f
       {items.map((it, i) =>
         'said' in it ? (
           <div key={`said${it.ts}${i}`} className="tx-said" title={clock(it.ts)}>
-            <span className="tx-said-who">👤 {t('你（執行中追加）', 'You (sent while working)')}</span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')}</span>
             {it.said.text && <div className="tx-said-text">{it.said.text}</div>}
-            {!!it.said.attachments?.length && <div className="muted tiny">📎 {it.said.attachments.map((a) => a.name).join('、')}</div>}
+            {!!it.said.attachments?.length && <div className="muted tiny"><Ico i={Paperclip} size={12} /> {it.said.attachments.map((a) => a.name).join('、')}</div>}
             <Replies replies={it.said.replies} planUpdated={it.said.planUpdated} />
           </div>
         ) : (

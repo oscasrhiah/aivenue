@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Menu, PanelLeftClose, Pencil, Plus, Settings as SettingsIcon } from 'lucide-react';
 import { useConnection, useThreads } from './api';
 import logo from './assets/logo.svg';
 import { AskHost } from './components/Ask';
@@ -7,6 +8,7 @@ import { SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { cx, relativeDay, wfStatus } from './util';
+import { Ico } from './icons';
 
 type SettingsTab = 'general' | 'providers' | 'capabilities' | 'usage' | 'memory';
 type Route = { page: 'new' } | { page: 'run'; id: string } | { page: 'settings'; tab: SettingsTab };
@@ -31,17 +33,17 @@ function CompactBar({ route, onMenu }: { route: Route; onMenu: () => void }) {
   const t = useT();
   return (
     <div className="compact-bar">
-      <button className="icon-btn" title={t('對話紀錄', 'Chat history')} onClick={onMenu}>
-        ☰
+      <button className="icon-btn" title={t('對話紀錄', 'Chat history')} aria-label={t('對話紀錄', 'Chat history')} onClick={onMenu}>
+        <Ico i={Menu} size={18} />
       </button>
       <img className="logo" src={logo} alt="" />
       <span className="wordmark">Aivenue</span>
       <span className="grow" />
-      <a className={cx('icon-btn', route.page === 'new' && 'active')} href="#/new" title={t('新對話', 'New chat')}>
-        ＋
+      <a className={cx('icon-btn', route.page === 'new' && 'active')} href="#/new" title={t('新對話', 'New chat')} aria-label={t('新對話', 'New chat')}>
+        <Ico i={Plus} size={18} />
       </a>
-      <a className={cx('icon-btn', route.page === 'settings' && 'active')} href="#/settings/general" title={t('設定', 'Settings')}>
-        ⚙
+      <a className={cx('icon-btn', route.page === 'settings' && 'active')} href="#/settings/general" title={t('設定', 'Settings')} aria-label={t('設定', 'Settings')}>
+        <Ico i={SettingsIcon} size={18} />
       </a>
     </div>
   );
@@ -81,11 +83,11 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
         <span className="wordmark">Aivenue</span>
         <span className="grow" />
         <button className="icon-btn side-hide" title={t('收合側欄', 'Hide the sidebar')} aria-label={t('收合側欄', 'Hide the sidebar')} onClick={onHide}>
-          «
+          <Ico i={PanelLeftClose} size={18} />
         </button>
       </div>
       <a className={cx('side-link', route.page === 'new' && 'active')} href="#/new">
-        <span className="side-icon">＋</span> {t('新對話', 'New chat')}
+        <Ico i={Plus} className="side-icon" /> {t('新對話', 'New chat')}
       </a>
       <div className="side-list">
         {workflows.map((w) => {
@@ -108,10 +110,7 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
                     {(w.status === 'running' || w.status === 'paused' || w.status === 'waiting_human' || w.status === 'failed') && <span className={cx('dot', st.cls)} />}
                   </a>
                   <button className="side-edit" title={t('重新命名', 'Rename')} aria-label={t(`重新命名「${w.title}」`, `Rename "${w.title}"`)} onClick={() => setRenaming(w.id)}>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M11.2 2.3a1.6 1.6 0 0 1 2.3 2.3L5.6 12.5 2.5 13.5l1-3.1z" />
-                      <path d="M10 3.5l2.5 2.5" />
-                    </svg>
+                    <Ico i={Pencil} size={14} />
                   </button>
                 </div>
               )}
@@ -121,7 +120,7 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
       </div>
       <div className="side-bottom">
         <a className={cx('side-link', route.page === 'settings' && 'active')} href="#/settings/general">
-          <span className="side-icon">⚙</span> {t('設定', 'Settings')}
+          <Ico i={SettingsIcon} className="side-icon" /> {t('設定', 'Settings')}
         </a>
         <span className={cx('conn', conn)} title={conn === 'open' ? t('已連線', 'Connected') : t('重新連線中…', 'Reconnecting…')} />
       </div>

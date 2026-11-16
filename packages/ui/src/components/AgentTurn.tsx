@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { BookOpen, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleStop, CircleX, CornerDownRight, Hand, Handshake, LoaderCircle, Network, Pause, Pin, RotateCcw, RotateCw, Ribbon, Square, Wrench, X } from 'lucide-react';
+import { Ico } from '../icons';
 import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ObservedCheck, ProviderInfo, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
@@ -27,7 +29,7 @@ function HandoffBlock({ h }: { h: Handoff }) {
   return (
     <div className="block handoff">
       <button className="link" onClick={() => setOpen(!open)}>
-        {open ? '▾' : '▸'} {t('交接摘要', 'Hand-off')} · {t(`${h.decisions.length} 個決策、${h.open.length} 個未解`, `${h.decisions.length} decisions, ${h.open.length} open`)}
+        <Ico i={open ? ChevronDown : ChevronRight} size={14} /> {t('交接摘要', 'Hand-off')} · {t(`${h.decisions.length} 個決策、${h.open.length} 個未解`, `${h.decisions.length} decisions, ${h.open.length} open`)}
       </button>
       {open && (
         <div className="handoff-body small">
@@ -184,14 +186,14 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
     return (
       <div className="block">
         <div className={cx('verdict', v.outcome === 'met' && round.route?.to === 'done' ? 'ok' : 'warn')}>
-          {round.route?.to === 'done' ? `✓ ${t('目標達成', 'Goal met')}` : `↺ ${outcomeText(t, v)}`} · {v.metrics.filter((m) => m.met).length}/{v.metrics.length} <Stale stale={v.stale} evidence={v.evidence} />
+          {round.route?.to === 'done' ? <><Ico i={CircleCheck} size={14} /> {t('目標達成', 'Goal met')}</> : <><Ico i={RotateCcw} size={14} /> {outcomeText(t, v)}</>} · {v.metrics.filter((m) => m.met).length}/{v.metrics.length} <Stale stale={v.stale} evidence={v.evidence} />
         </div>
         {v.summary && <Markdown className="prose" text={v.summary} />}
         <div className="metrics">
           {v.metrics.map((m) => (
             <div key={m.id} className={cx('metric', m.met ? 'ok' : 'no')}>
               <div className="metric-head">
-                <span className="metric-icon">{m.met ? '✓' : '✕'}</span>
+                <Ico i={m.met ? CircleCheck : CircleX} size={14} className="metric-icon" />
                 <span className="mono">{m.id}</span>
                 <span className="metric-name">{run.plan?.goal?.metrics.find((x) => x.id === m.id)?.name ?? ''}</span>
               </div>
@@ -210,7 +212,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             {i.detail && <div className="muted small">{i.detail}</div>}
           </div>
         ))}
-        {round.route && round.route.to !== 'done' && <div className="route small">➜ {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
+        {round.route && round.route.to !== 'done' && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
       </div>
     );
   }
@@ -236,7 +238,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
     return (
       <div className="block">
         <div className={cx('verdict', r.verdict === 'approve' ? 'ok' : 'warn')}>
-          {r.verdict === 'approve' ? `✓ ${t('通過', 'Approved')}` : `↺ ${t('需要修改', 'Changes requested')} · ${r.issues.length}`} <Stale stale={r.stale} evidence={r.evidence} />
+          {r.verdict === 'approve' ? <><Ico i={CircleCheck} size={14} /> {t('通過', 'Approved')}</> : <><Ico i={RotateCcw} size={14} /> {t('需要修改', 'Changes requested')} · {r.issues.length}</>} <Stale stale={r.stale} evidence={r.evidence} />
         </div>
         {r.summary && <Markdown className="prose" text={r.summary} />}
         {r.issues.map((i) => (
@@ -277,7 +279,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             ))}
           </div>
         )}
-        {round.route && <div className="route small">➜ {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
+        {round.route && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
       </div>
     );
   }
@@ -382,7 +384,7 @@ function Notes({ run, agentId, against }: { run: WorkflowRun; agentId: string; a
             }
             onClick={() => setOpen((s) => new Set(s.has(n.id) ? [...s].filter((x) => x !== n.id) : [...s, n.id]))}
           >
-            <span className="note-pin">{handoff ? '🤝' : '📌'}</span>
+            <Ico i={handoff ? Handshake : Pin} size={14} className="note-pin" />
             {handoff ? <span className="pill">{t('交接', 'Hand-off')}</span> : NOTE_KIND(t, n.kind) && <span className={cx('pill', n.kind === 'fact' ? 'ok' : n.kind === 'decision' ? '' : 'warn')}>{NOTE_KIND(t, n.kind)}</span>}
             <span className="note-text">{shown ? text : same ? t('筆記（與這張卡片的結果相同）', 'Note (same as this card\'s result)') : text}</span>
             {shown && !handoff && <RememberButton runId={run.id} text={text} noteId={n.id} ts={n.ts} />}
@@ -459,7 +461,12 @@ function ObservedChecks({ run, checks }: { run: WorkflowRun; checks?: ObservedCh
       {checks.length ? (
         <CheckRows checks={checks} />
       ) : (
-        <span className="ext-chip warn">{t('沒有看到任何檢查執行：摘要裡說的通過或完成，是 agent 自己的說法', "No check seen: any 'passed' or 'done' in the summary is the agent's own account")}</span>
+        <div className="vstate-row">
+          <span className="vstate warn">
+            <Ico i={CircleDashed} size={14} /> {t('尚未執行檢查', 'No check run')}
+          </span>
+          <span className="vstate-detail">{t('沒有看到任何檢查執行；摘要裡的「通過」或「完成」是 agent 自述', 'No check was seen running; any "passed" or "done" in the summary is the agent\'s own account')}</span>
+        </div>
       )}
     </div>
   );
@@ -538,7 +545,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           <span className="turn-ext">
             {agent.alwaysOn?.map((a) => (
               <span key={a} className="ext-chip" title={t(`整個任務都套用：${a}`, `Applied for the whole task: ${a}`)}>
-                🎀 {a}
+                <Ico i={Ribbon} size={13} /> {a}
               </span>
             ))}
             {agent.skillUses?.map((u) => (
@@ -555,17 +562,17 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
                   .filter(Boolean)
                   .join('\n')}
               >
-                🧰 {u.name} {u.verified ? '✓' : '…'}
+                <Ico i={Wrench} size={13} /> {u.name} {u.verified ? <Ico i={CircleCheck} size={12} /> : '…'}
               </span>
             ))}
             {skillsRead.length > 0 && (
               <span className="ext-chip muted" title={t(`只讀了，沒有回報套用：${skillsRead.join('、')}（只讀不算遵循）`, `Read but not reported as applied: ${skillsRead.join(', ')} (reading is not following)`)}>
-                📖 {skillsRead.length === 1 ? skillsRead[0] : t(`讀了 ${skillsRead.length} 個技能`, `read ${skillsRead.length} skills`)}
+                <Ico i={BookOpen} size={13} /> {skillsRead.length === 1 ? skillsRead[0] : t(`讀了 ${skillsRead.length} 個技能`, `read ${skillsRead.length} skills`)}
               </span>
             )}
             {ext.graphify > 0 && (
               <span className="ext-chip" title={t(`執行了 ${ext.graphify} 次 graphify 指令`, `Ran graphify ${ext.graphify} times`)}>
-                🕸️ Graphify × {ext.graphify}
+                <Ico i={Network} size={13} /> Graphify × {ext.graphify}
               </span>
             )}
           </span>
@@ -589,19 +596,19 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           {live && agent.role !== 'compactor' && (
             <span className="turn-actions">
               {running && (
-                <button className="icon-btn tiny" title={t('停止這個 agent', 'Stop this agent')} onClick={() => act('agents.stop')}>
-                  ■
+                <button className="icon-btn tiny" title={t('停止這個 agent', 'Stop this agent')} onClick={() => act('agents.stop')} aria-label={t('停止這個 agent', 'Stop this agent')}>
+                  <Ico i={Square} size={13} />
                 </button>
               )}
               {((agent.role === 'subagent' && parentLive) || (agent.role !== 'subagent' && agent.role !== 'advisor' && running)) && (
-                <button className="icon-btn tiny" title={agent.role === 'subagent' ? t('用同樣的任務重跑（會通知上層 agent）', 'Run the same task again (its parent is told)') : t('停下並重新派發這個角色', 'Stop and re-dispatch this role')} onClick={() => act('agents.rerun')}>
-                  ↻
+                <button className="icon-btn tiny" title={agent.role === 'subagent' ? t('用同樣的任務重跑（會通知上層 agent）', 'Run the same task again (its parent is told)') : t('停下並重新派發這個角色', 'Stop and re-dispatch this role')} onClick={() => act('agents.rerun')} aria-label={agent.role === 'subagent' ? t('重跑', 'Run again') : t('重新派發', 'Re-dispatch')}>
+                  <Ico i={RotateCw} size={13} />
                 </button>
               )}
               {agent.role === 'subagent' && parentLive && <SwitchProvider compact workflowId={run.id} agentId={agent.id} urgent={agent.failure?.kind === 'quota' || agent.failure?.kind === 'rate_limit'} />}
               {agent.role === 'subagent' && !running && (
-                <button className="icon-btn tiny" title={t('關閉（從 agent 地圖隱藏，紀錄保留）', 'Close (hide from the agent map; records stay)')} onClick={() => act('agents.close')}>
-                  ✕
+                <button className="icon-btn tiny" title={t('關閉（從 agent 地圖隱藏，紀錄保留）', 'Close (hide from the agent map; records stay)')} onClick={() => act('agents.close')} aria-label={t('關閉', 'Close')}>
+                  <Ico i={X} size={13} />
                 </button>
               )}
             </span>
@@ -621,50 +628,55 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           {taskOpen && <div className="turn-brief">{agent.brief ?? agent.task}</div>}
         </div>
       )}
-      {agent.role === 'advisor' && <div className="turn-task">❓ {agent.task}</div>}
+      {agent.role === 'advisor' && <div className="turn-task"><Ico i={CircleHelp} size={14} /> {agent.task}</div>}
 
       <div className="turn-body">
         {/* Why the work came back here, joined to the round that starts now. */}
-        {rework && <div className="turn-rework">↺ {rework}</div>}
+        {rework && <div className="turn-rework"><Ico i={RotateCcw} size={14} /> {rework}</div>}
         {/* Working: what it does now (routine calls folded, failures kept in view). Done: one line on how it ended. */}
         {/* A failure is said once: by its error line below, not again as a bare "Failed" here. */}
         {running ? <LiveFeed events={events} said={said} limit={LIVE_LINES} hideMessages={agent.role === 'compactor'} /> : summary.length > 0 && !(agent.status === 'failed' && agent.error && summary.length === 1) && <div className={cx('turn-summary', agent.status === 'failed' && 'bad')}>{summary.join(' · ')}</div>}
         {now?.kind === 'waiting' && (
           <div className="working">
-            <span className="spark">✻</span> {now.text}
+            <Ico i={LoaderCircle} size={14} className="spark spin" /> {now.text}
             <span className="muted"> · {elapsed(agent.startedAt)}</span>
           </div>
         )}
         {now?.kind === 'paused' && (
           <div className="working">
-            <span className="spark">❚❚</span> {t('已暫停：按 ▶ 繼續', 'Paused: press ▶ to continue')}
+            <Ico i={Pause} size={14} className="spark" /> {t('已暫停：按下方的繼續', 'Paused: press Resume below')}
           </div>
         )}
         {now?.kind === 'approval' && (
           <div className="working">
-            <span className="spark">✋</span> {t(`等你核准 ${now.n} 個動作（在下方）`, `Waiting for your approval of ${now.n} action(s) (below)`)}
+            <Ico i={Hand} size={14} className="spark" /> {t(`等你核准 ${now.n} 個動作（在下方）`, `Waiting for your approval of ${now.n} action(s) (below)`)}
           </div>
         )}
         {now?.kind === 'working' && (
           <div className="working">
-            <span className="spark">✻</span> {events.length ? t('正在處理', 'Working') : t('啟動中…', 'Starting…')}
+            <Ico i={LoaderCircle} size={14} className="spark spin" /> {events.length ? t('正在處理', 'Working') : t('啟動中…', 'Starting…')}
             <span className="muted"> · {elapsed(agent.startedAt)}</span>
           </div>
         )}
         {/* An approval this agent waits for: beside its work, not at the bottom of the page. */}
         {mine.length > 0 && <Approvals run={run} providers={providers} agentId={agent.id} />}
         {agent.role !== 'compactor' && <Outcome run={run} agent={agent} lastMessage={events.filter((e) => e.kind === 'message').pop()?.text} />}
-        {agent.status === 'failed' && agent.error && <div className="tx-err">✕ {agent.error}</div>}
+        {agent.status === 'failed' && agent.error && <div className="tx-err"><Ico i={CircleX} size={14} /> {agent.error}</div>}
         {/* The details: always here, in the same place, for every card. */}
         <div className="turn-foot">
           <button className="link activity-toggle" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-            {expanded ? '▾' : '▸'} {t('活動紀錄', 'Activity log')}
+            <Ico i={expanded ? ChevronDown : ChevronRight} size={14} /> {t('活動紀錄', 'Activity log')}
           </button>
           <span className="muted">
             {agent.stats.tools} {t('個動作', 'actions')}
             {agent.stats.filesChanged.length > 0 && ` · ${t(`以編輯工具改 ${agent.stats.filesChanged.length} 個檔案`, `${agent.stats.filesChanged.length} file(s) changed with the edit tool`)}`}
             {noteCount > 0 && ` · ${t(`${noteCount} 則筆記`, `${noteCount} note(s)`)}`}
-            {agent.sessionId && ` · ${agent.resumed ? '↻ ' : ''}${agent.sessionId.slice(0, 8)}`}
+            {agent.sessionId && (
+              <>
+                {' · '}
+                {agent.resumed && <Ico i={RotateCw} size={12} label={t('續接先前的對話', 'resumed session')} />} {agent.sessionId.slice(0, 8)}
+              </>
+            )}
           </span>
           {expanded && (
             <label className="toggle">
@@ -760,7 +772,7 @@ function BatchRow({ run, b, providers, open, onToggle, parentLive }: { run: Work
   const t = useT();
   const a = b.latest;
   const who = `${providerName(providers, a.provider)}${a.model ? ` · ${modelLabel(a.model)}` : ''}`;
-  const icon = { blocked: '✕', running: '●', stopped: '■', done: '✓' }[b.state];
+  const icon = { blocked: CircleX, running: LoaderCircle, stopped: CircleStop, done: CircleCheck }[b.state];
   // Only the latest attempt's trouble is a blocker; earlier failures are in the attempts behind the row.
   const why =
     b.state === 'blocked'
@@ -777,7 +789,7 @@ function BatchRow({ run, b, providers, open, onToggle, parentLive }: { run: Work
     <div className={cx('batch', b.state)}>
       <div className="batch-row">
         <button className="batch-main" onClick={onToggle} aria-expanded={open}>
-          <span className={cx('batch-icon', b.state)}>{icon}</span>
+          <Ico i={icon} size={14} className={cx('batch-icon', b.state, b.state === 'running' && 'spin')} />
           <span className="batch-title">{b.title}</span>
           <span className="batch-who muted">{who}</span>
           {b.attempts.length > 1 && <span className="badge muted">{t(`第 ${b.attempts.length} 次嘗試`, `attempt ${b.attempts.length}`)}</span>}
@@ -786,14 +798,14 @@ function BatchRow({ run, b, providers, open, onToggle, parentLive }: { run: Work
         {b.state === 'blocked' && parentLive && (
           <span className="batch-actions">
             <button className="btn small" onClick={rerun} title={t('用同樣的任務、同一個模型再試一次（會通知上層 agent）', 'Try the same task again with the same model (its parent is told)')}>
-              ↻ {t('重試', 'Retry')}
+              <Ico i={RotateCw} size={14} /> {t('重試', 'Retry')}
             </button>
             <SwitchProvider compact workflowId={run.id} agentId={a.id} urgent={a.failure?.kind === 'quota' || a.failure?.kind === 'rate_limit'} />
           </span>
         )}
       </div>
       {/* What to do about it, while something still can be done here; once the work has ended, it is history. */}
-      {b.state === 'blocked' && parentLive && a.failure?.action && <div className="batch-next muted small">➜ {a.failure.action}</div>}
+      {b.state === 'blocked' && parentLive && a.failure?.action && <div className="batch-next muted small"><Ico i={CornerDownRight} size={14} /> {a.failure.action}</div>}
       {open && (
         <div className="batch-attempts">
           {b.attempts.map((x) => (

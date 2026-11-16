@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleX, RefreshCw, Target, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
@@ -18,7 +20,7 @@ import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type R
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { followUpGoal } from '../followUp';
-import { deliverableRows, verificationScope } from '../timeline';
+import { deliverableRows, verificationStates, type VerificationState } from '../timeline';
 import { CheckRows } from '../components/Checks';
 import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
@@ -40,6 +42,12 @@ function timeline(run: WorkflowRun): Item[] {
   });
   const order = new Map(items.map((it, i) => [it.key, i]));
   return items.sort((a, b) => a.ts - b.ts || (a.type === b.type ? order.get(a.key)! - order.get(b.key)! : a.type === 'divider' ? -1 : 1));
+}
+
+/** A log line as shown: the records' ✅ (in old chats too) drawn as the same check icon as everywhere else. */
+function logText(text: string): ReactNode {
+  if (!text.includes('✅')) return text;
+  return text.split('✅').flatMap((part, i) => (i ? [<Ico key={i} i={CircleCheck} size={14} className="ok" />, part] : [part]));
 }
 
 /** A message sent while the agents were working: handed to them right away. */
@@ -105,7 +113,7 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
           </div>
         ) : it.type === 'divider' ? (
           <div key={it.key} className={cx('divider', it.level)}>
-            <span>{it.text}</span>
+            <span>{logText(it.text)}</span>
           </div>
         ) : (
           <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />
@@ -206,17 +214,17 @@ function readBase64(file: File): Promise<string> {
   });
 }
 
-export function AttachmentChip({ name, size, src, status, error, onRemove, onOpen, icon }: { name: string; size: number; src?: string; status?: Pending['status']; error?: string; onRemove?: () => void; onOpen?: () => void; icon?: string }) {
+export function AttachmentChip({ name, size, src, status, error, onRemove, onOpen, icon }: { name: string; size: number; src?: string; status?: Pending['status']; error?: string; onRemove?: () => void; onOpen?: () => void; icon?: LucideIcon }) {
   return (
     <div className={cx('att', status === 'error' && 'bad')} title={error ?? name}>
-      {src && isImg(name) ? <img src={src} alt="" onClick={onOpen} /> : <span className="att-icon">{icon ?? '📄'}</span>}
+      {src && isImg(name) ? <img src={src} alt="" onClick={onOpen} /> : <span className="att-icon"><Ico i={icon ?? FileText} size={18} /></span>}
       <span className="att-meta">
         <span className="att-name">{name}</span>
-        <span className="att-size">{status === 'uploading' ? '…' : status === 'error' ? '✕' : fmtSize(size)}</span>
+        <span className="att-size">{status === 'uploading' ? '…' : status === 'error' ? <Ico i={CircleX} size={12} /> : fmtSize(size)}</span>
       </span>
       {onRemove && (
         <button className="att-x" onClick={onRemove} aria-label="remove">
-          ✕
+          <Ico i={X} size={12} />
         </button>
       )}
     </div>
@@ -257,7 +265,7 @@ function compatWarnings(t: ReturnType<typeof useT>, files: Attachment[], targets
   return out;
 }
 
-const KIND_ICON: Record<string, string> = { image: '🖼', 'image-other': '🖼', pdf: '📕', office: '📊', 'legacy-office': '📄', notebook: '📓', archive: '🗜', audio: '🎵', video: '🎬', text: '📄', binary: '📦' };
+const KIND_ICON: Record<string, LucideIcon> = { image: ImageIcon, 'image-other': ImageIcon, pdf: FileText, office: FileSpreadsheet, 'legacy-office': FileText, notebook: NotebookPen, archive: FileArchive, audio: FileAudio, video: FileVideo, text: FileText, binary: File };
 
 function Composer({
   draft,
@@ -430,7 +438,7 @@ function Composer({
         return warn.length ? (
           <div className="att-warn">
             {warn.map((w, i) => (
-              <div key={i}>⚠ {w}</div>
+              <div key={i}><Ico i={TriangleAlert} size={14} /> {w}</div>
             ))}
             <div className="muted">{t('這些 agent 會在回覆中說明讀不到哪些檔案，不會猜測內容。', 'These agents will say which files they could not read instead of guessing.')}</div>
           </div>
@@ -457,8 +465,8 @@ function Composer({
         }}
       />
       <div className="composer-bar">
-        <button className="clip" disabled={disabled} onClick={pick} title={t('附加圖片或檔案（也可以拖曳或貼上）', 'Attach images or files (or drag & drop / paste)')}>
-          📎
+        <button className="clip" disabled={disabled} onClick={pick} title={t('附加圖片或檔案（也可以拖曳或貼上）', 'Attach images or files (or drag & drop / paste)')} aria-label={t('附加檔案', 'Attach files')}>
+          <Ico i={Paperclip} size={18} />
         </button>
         <input
           ref={input}
@@ -483,11 +491,11 @@ function Composer({
         >
         {runState === 'running' && (text.trim() || files.some((f) => f.status === 'ready')) ? (
           <button className="send" onClick={send} title={t('交給正在工作的 agent：它們會停下來看這則訊息，再接著做', 'Hand it to the working agents: they stop, read it and carry on')} aria-label={t('送出', 'Send')}>
-            ↑
+            <Ico i={ArrowUp} size={18} />
           </button>
         ) : runState === 'running' ? (
           <button className="send pause" onClick={onPause} title={t('暫停：停下正在工作的 agent，之後可以繼續', 'Pause: stop the working agents; you can resume later')} aria-label={t('暫停', 'Pause')}>
-            ❚❚
+            <Ico i={Pause} size={18} />
           </button>
         ) : runState === 'paused' ? (
           <button
@@ -499,11 +507,11 @@ function Composer({
             title={text.trim() ? t('繼續，並把輸入的內容交給 agent', 'Resume and pass what you typed to the agents') : t('繼續', 'Resume')}
             aria-label={t('繼續', 'Resume')}
           >
-            ▶
+            <Ico i={Play} size={18} />
           </button>
         ) : (
           <button className="send" disabled={disabled || busy || uploading || !text.trim()} onClick={send} aria-label={t('送出', 'Send')}>
-            ↑
+            <Ico i={ArrowUp} size={18} />
           </button>
         )}
         </span>
@@ -519,7 +527,7 @@ function Composer({
                 setConfirmStop(true);
               }}
             >
-              ■ {t('終止此工作流…', 'End this workflow…')}
+              <Ico i={Square} size={14} /> {t('終止此工作流…', 'End this workflow…')}
             </button>
           </div>
         </>
@@ -569,19 +577,22 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
     return (
       <div className="user-msg-wrap">
         <div className="user-msg">{text}</div>
-        <RememberButton runId={run.id} text={text} ts={run.createdAt} className="user-remember" />
-        {!run.replacedBy && (
-          <button
-            className="link tiny user-edit"
-            title={active ? t('編輯後會中止目前的工作流，用新內容重新執行', 'Editing stops the current workflow and runs the new text') : t('編輯並重新送出', 'Edit and re-send')}
-            onClick={() => {
-              setValue(text);
-              setEditing(true);
-            }}
-          >
-            ✏️ {t('編輯', 'Edit')}
-          </button>
-        )}
+        {/* Always in view (quiet): touch and keyboard users find them without hovering. */}
+        <div className="user-actions">
+          <RememberButton runId={run.id} text={text} ts={run.createdAt} className="user-remember" />
+          {!run.replacedBy && (
+            <button
+              className="link tiny user-edit"
+              title={active ? t('編輯後會中止目前的工作流，用新內容重新執行', 'Editing stops the current workflow and runs the new text') : t('編輯並重新送出', 'Edit and re-send')}
+              onClick={() => {
+                setValue(text);
+                setEditing(true);
+              }}
+            >
+              <Ico i={Pencil} size={13} /> {t('編輯', 'Edit')}
+            </button>
+          )}
+        </div>
       </div>
     );
   const submit = async () => {
@@ -639,7 +650,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   const author = exec ?? last('planner');
   const review = (exec ? implRound : planRound)?.review;
   const rows = deliverableRows(run);
-  const scope = verificationScope(t, run);
+  const states = verificationStates(t, run);
   const checks = exec ? implRound?.submission?.checks : undefined;
   const lastVerification = [...(run.stages.verify?.rounds ?? [])].reverse().find((r) => r.verification)?.verification;
   return (
@@ -666,6 +677,23 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
           </div>
         </div>
       )}
+      {/* How far it was checked, each state apart and with its reason in view: a failed check, no check run, a
+          re-check after a change and too little evidence are different things to the reader. */}
+      {states.length > 0 && (
+        <div className="final-row">
+          <span className="final-label">{t('驗證範圍', 'Checked')}</span>
+          <div className="vstates">
+            {states.map((v) => (
+              <div key={v.kind + v.label} className="vstate-row">
+                <span className={cx('vstate', v.cls)}>
+                  <Ico i={V_ICON[v.kind]} size={14} /> {v.label}
+                </span>
+                {v.detail && <span className="vstate-detail">{v.detail}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {/* Every check once, with its state: a rerun, the user's scope, a later file change are on its own row. */}
       {!!checks?.length && (
         <div className="final-row">
@@ -673,15 +701,17 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
           <CheckRows checks={checks} />
         </div>
       )}
-      {scope.length > 0 && (
-        <div className="final-row">
-          <span className="final-label">{t('驗證範圍', 'Checked')}</span>
-          <span className="small">{scope.join(' · ')}</span>
-        </div>
-      )}
       {/* The author's own account, in full, once: the card above keeps one line, its details keep the same text. */}
       <div className="final-text">
-        <div className="muted tiny">{exec ? t('實作者的說明（agent 自述）', "The implementer's account (its own words)") : t('計畫', 'Plan')}</div>
+        <div className="final-text-label">
+          {exec ? (
+            <>
+              {t('實作者的說明', "The implementer's account")} <span className="self-tag">{t('agent 自述', 'its own words')}</span>
+            </>
+          ) : (
+            t('計畫', 'Plan')
+          )}
+        </div>
         <Markdown className="prose" text={text} />
       </div>
       {/* The goal verification's own evidence, kept even when it is out of date (what was measured, on what). */}
@@ -695,7 +725,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
           )}
           {lastVerification.metrics.map((m) => (
             <div key={m.id} className="small">
-              {m.met ? '✓' : '✕'} <b>{m.id}</b> {run.plan?.goal?.metrics.find((x) => x.id === m.id)?.name ?? ''} — {m.value}
+              <Ico i={m.met ? CircleCheck : CircleX} size={14} className={m.met ? 'ok' : 'bad'} /> <b>{m.id}</b> {run.plan?.goal?.metrics.find((x) => x.id === m.id)?.name ?? ''} — {m.value}
               {m.evidence && <div className="muted tiny mono">{m.evidence}</div>}
             </div>
           ))}
@@ -705,6 +735,8 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   );
 }
 
+const V_ICON: Record<VerificationState['kind'], LucideIcon> = { failed: CircleX, not_run: CircleDashed, recheck: RefreshCw, weak: CircleHelp, passed: CircleCheck, goal: Target };
+
 /** A delivered file: added or modified, and — on click — whether an agent's edit tool changed it, or only the folder's comparison found it (then the commands that name it). */
 function DeliverableRow({ run, row }: { run: WorkflowRun; row: ReturnType<typeof deliverableRows>[number] }) {
   const t = useT();
@@ -712,7 +744,7 @@ function DeliverableRow({ run, row }: { run: WorkflowRun; row: ReturnType<typeof
   return (
     <div className={cx('deliverable', open && 'open')}>
       <span className="deliverable-head" onClick={() => setOpen(!open)} title={t('點一下看這個檔案的來源', 'Click to see where this file came from')}>
-        <span className="check-caret">{open ? '▾' : '▸'}</span>
+        <Ico i={open ? ChevronDown : ChevronRight} size={14} className="check-caret" />
         <span className={cx('pill', row.status === 'added' ? 'ok' : '')}>{row.status === 'added' ? t('新增', 'added') : t('修改', 'modified')}</span> <code>{row.path}</code>
         {row.count ? <span className="muted small"> · {t(`${row.count} 個檔案`, `${row.count} files`)}</span> : null}
       </span>
@@ -1017,8 +1049,8 @@ export function Chat({ id }: { id?: string }) {
             ? run!.status === 'waiting_human'
               ? t('請先回應上方的問題', 'Answer the question above first')
               : paused
-                ? t('已暫停：可以輸入補充說明，按 ▶ 繼續', 'Paused: type extra guidance if you like, then press ▶ to resume')
-                : t('agent 正在工作…輸入訊息會立刻交給它們（或按 ❚❚ 暫停）', 'Agents are working… a message goes to them right away (or press ❚❚ to pause)')
+                ? t('已暫停：可以輸入補充說明，按 Enter 或右邊的繼續', 'Paused: type extra guidance if you like, then press Enter or Resume on the right')
+                : t('agent 正在工作…輸入訊息會立刻交給它們（或按右邊的暫停）', 'Agents are working… a message goes to them right away (or press Pause on the right)')
             : run
               ? t('接著要做什麼？（沿用相同角色與資料夾）', 'What next? (same roles and folder)')
               : t('描述要完成的任務…', 'Describe the task…')
@@ -1051,20 +1083,20 @@ export function Chat({ id }: { id?: string }) {
           <div className="row gap">
             <AgentMapButton run={run} thread={earlier.length > 0} onOpen={() => setAgentMap(true)} />
             <RunMenu run={run} providers={providers} />
-            <button className="icon-btn" title={t('開啟資料夾', 'Open folder')} onClick={() => hub.call('host.openPath', { path: run.config.cwd })}>
-              📁
+            <button className="icon-btn" title={t('開啟資料夾', 'Open folder')} aria-label={t('開啟資料夾', 'Open folder')} onClick={() => hub.call('host.openPath', { path: run.config.cwd })}>
+              <Ico i={Folder} size={18} />
             </button>
             {active ? (
               <button className="btn small danger" onClick={async () => (await ask(t('停止這個工作流？正在執行的 agent 會被中止。之後可以「接續原工作流」（在送出新訊息之前），或送出新訊息開始下一段。', 'Stop this workflow? Running agents are terminated. Afterwards you can resume this workflow (until you send a new message) or send a new message to start the next one.'), { danger: true })) && hub.call('workflows.cancel', { id: run.id })}>
                 {t('停止', 'Stop')}
               </button>
             ) : (
-              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} onClick={async () => {
+              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} aria-label={t('刪除對話', 'Delete chat')} onClick={async () => {
                   const ids = thread?.ids ?? [run.id];
                   if (!(await ask(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息與紀錄？（不會動到專案檔案）`, `Delete this chat's ${ids.length} messages and logs? (project files are not touched)`) : t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)'), { danger: true }))) return;
                   void ids.reduce((p, rid) => p.then(() => hub.call('workflows.delete', { id: rid })), Promise.resolve<unknown>(undefined)).then(() => navigate('new'));
                 }}>
-                🗑
+                <Ico i={Trash2} size={18} />
               </button>
             )}
           </div>
@@ -1144,7 +1176,7 @@ export function Chat({ id }: { id?: string }) {
                       )}
                       {run.config.replaces && (
                         <div className="muted tiny edit-link">
-                          ✏️ {t('這是編輯後重新送出的版本', 'This is the edited, re-sent version')} ·{' '}
+                          <Ico i={Pencil} size={12} /> {t('這是編輯後重新送出的版本', 'This is the edited, re-sent version')} ·{' '}
                           <a href={`#/run/${run.config.replaces}`}>{t('查看原版本', 'See the original')}</a>
                         </div>
                       )}
@@ -1156,7 +1188,7 @@ export function Chat({ id }: { id?: string }) {
                       )}
                       {run.assignment && (
                         <details className="assign-card">
-                          <summary>✦ {t('自動指派', 'Auto assignment')}</summary>
+                          <summary><Ico i={Shuffle} size={14} /> {t('自動指派', 'Auto assignment')}</summary>
                           {run.assignment.notes.map((n, i) => (
                             <div key={i}>{n}</div>
                           ))}
@@ -1167,7 +1199,7 @@ export function Chat({ id }: { id?: string }) {
                 if (it.type === 'divider')
                   return (
                     <div key={it.key} className={cx('divider', it.level)}>
-                      <span>{it.text}</span>
+                      <span>{logText(it.text)}</span>
                     </div>
                   );
                 return <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />;
@@ -1225,7 +1257,7 @@ export function Chat({ id }: { id?: string }) {
             </div>
             {away && (
               <button className="to-latest" onClick={toLatest}>
-                ↓ {t('回到最新', 'Back to latest')}
+                <Ico i={ArrowDown} size={14} /> {t('回到最新', 'Back to latest')}
               </button>
             )}
           </div>
@@ -1298,7 +1330,7 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
       {running > 0 && <span className="am-dot live" />}
       Agent map
       {running > 0 && <span className="muted">· {running}</span>}
-      {alive > 0 && <span className="muted">· ⚙ {alive}</span>}
+      {alive > 0 && <span className="muted">· <Ico i={Activity} size={13} /> {alive}</span>}
     </button>
   );
 }

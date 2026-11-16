@@ -30,7 +30,7 @@ const bundled = await build({
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
-      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationScope } from './packages/ui/src/timeline';
+      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
       export { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './packages/core/src/prReviews';
@@ -3214,8 +3214,9 @@ test('批次回歸：兩個同名但範圍不同的批次算兩批，第一批�
 test('過期的目標驗收：最終結果標成「上次驗收 1/1，之後有改動，需重驗」，不當成目前的 1/1', () => {
   const v = (stale) => ({ outcome: 'met', summary: 's', metrics: [{ id: 'M1', value: 'pass', met: true, evidence: 'npm test: 6 passing' }], issues: [], ...(stale ? { stale: true } : {}) });
   const run = (stale) => ({ stages: { implement: { rounds: [] }, verify: { rounds: [{ n: 1, verification: v(stale) }] } } });
-  assert.deepEqual(W.verificationScope(tr, run(false)), ['goal 1/1']);
-  assert.deepEqual(W.verificationScope(tr, run(true)), ['last goal verification 1/1; changed since, needs checking again']);
+  const kinds = (r) => W.verificationStates(tr, r).map((x) => [x.kind, x.cls, x.label]);
+  assert.deepEqual(kinds(run(false)), [['goal', 'ok', 'goal 1/1']]);
+  assert.deepEqual(kinds(run(true)), [['recheck', 'warn', 'last goal verification 1/1; changed since, needs checking again']]);
 });
 
 test('長工作流的總覽：本輪狀態、子代理批次與背景程序分開說；本輪完成不等於任務做完', () => {
@@ -3240,7 +3241,7 @@ test('工作資料夾外的改動依資料夾收合：最多的資料夾先列�
   assert.equal(W.shortTitle('npm test'), 'npm test');
 });
 
-test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄，沒看到檢查時明說', () => {
+test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄；檢查失敗、尚未執行、變更後需重驗、證據不足各自分開，不合併成「未驗證」', () => {
   const run = {
     outputs: [
       { path: 'src/a.js', status: 'modified' },
@@ -3254,9 +3255,52 @@ test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄，�
     },
   };
   assert.deepEqual(W.deliverables(run), { shown: ['human_check.csv', 'report.md', 'src/a.js', 'cache'], total: 4 });
-  assert.deepEqual(W.verificationScope(tr, run), ['2 check(s): 2 passed', '2 item(s) not confirmed by the review']);
+  const states = (r) => W.verificationStates(tr, r).map((x) => [x.kind, x.cls, x.label, x.detail]);
+  // The lint check passed, then files changed: not a pass of the code as it is, but a check to run again.
+  assert.deepEqual(states(run), [
+    ['recheck', 'warn', '1 to re-check after changes', '1 with files changed after'],
+    ['weak', 'warn', '2 with too little evidence', '2 not confirmed by the review'],
+    ['passed', 'ok', '1 check(s) passed', undefined],
+  ]);
+  // No check at all: said as such, with the reason in view (the "passed" in the account is the agent's own).
   const none = { stages: { implement: { rounds: [{ n: 1, submission: { summary: 's', checks: [] } }] } } };
-  assert.match(W.verificationScope(tr, none)[0], /no check seen run/);
+  assert.deepEqual(states(none).map((x) => x.slice(0, 3)), [['not_run', 'warn', 'No check run']]);
+  assert.match(states(none)[0][3], /agent's own account/);
+  // Each kind apart: a failure (one changed after it), not known whether it ran, its result only in a longer command's
+  // output, a failed edit after a pass; and an unmet goal.
+  const mixed = {
+    stages: {
+      implement: {
+        rounds: [
+          {
+            n: 1,
+            submission: {
+              summary: 's',
+              checks: [
+                { command: 'npm test', outcome: 'failed', outdated: true },
+                { command: 'npm run build', outcome: 'output_failure' },
+                { command: 'npm run lint', outcome: 'may_not_run' },
+                { command: 'make all', outcome: 'in_longer_command' },
+                { command: 'tsc', outcome: 'passed', maybeOutdated: true },
+              ],
+            },
+          },
+        ],
+      },
+      verify: { rounds: [{ n: 1, verification: { outcome: 'not_met', summary: 's', metrics: [{ id: 'M1', met: true }, { id: 'M2', met: false }], issues: [] } }] },
+    },
+  };
+  assert.deepEqual(states(mixed), [
+    ['failed', 'bad', '2 check(s) failed', '1 of them changed after: run again to know the result now'],
+    ['recheck', 'warn', '1 to re-check after changes', '1 with a failed edit after (files may have changed)'],
+    ['weak', 'warn', '2 with too little evidence', '1 not known whether they ran, 1 ran within a longer command: read the output'],
+    ['goal', 'bad', 'goal 1/2', undefined],
+  ]);
+  // A check's row says a change after it on the row itself, and a pass followed by a change is not shown as a plain pass.
+  const en = (_zh, x) => x;
+  const row = W.checkRow(en, { command: 'tsc', agentId: 'a', by: 'a', ts: 1, outcome: 'passed', outdated: true });
+  assert.deepEqual([row.cls, row.status, row.notes], ['warn', 'passed', ['re-check after changes']]);
+  assert.deepEqual(W.checkRow(en, { command: 'tsc', agentId: 'a', by: 'a', ts: 1, outcome: 'passed' }).cls, 'ok');
 });
 
 test('檢查判定回歸：node 執行測試腳本（node test.js、tests/、*.test.js）算檢查；node 跑其他腳本或只是讀測試檔不算', () => {
@@ -3573,16 +3617,19 @@ test('完成摘要：每項檢查一列，重跑與過期放在該列；legacy �
   // slug test passed after an earlier failure.
   const rows = checks.map((c) => W.checkRow(en, c));
   assert.deepEqual(rows.map((r) => [r.status, r.notes]), [
-    ['failed', []],
+    ['failed', ['re-check after changes']],
     ['passed', ['failed before, passed on rerun']],
   ]);
-  // The later file change is in the legacy row's details; both runs of the slug test are behind its row.
+  // The later file change is said on the legacy row and explained in its details; both runs of the slug test are behind its row.
   assert.ok(rows[0].details.some((d) => /files changed after this check/.test(d)), rows[0].details.join(' | '));
   assert.ok(!rows[0].details.some((d) => /outside|your words/i.test(d)), rows[0].details.join(' | '));
   assert.deepEqual(rows[1].runs.map((x) => [x.outcome, x.latest]), [['failed', false], ['passed', true]]);
   // The summary counts each check once.
   run.stages.implement.rounds = [{ n: 1, authorAgentId: a.id, submission: { summary: 's', checks } }];
-  assert.deepEqual(W.verificationScope(en, run), ['2 check(s): 1 passed, 1 failed']);
+  assert.deepEqual(W.verificationStates(en, run).map((x) => [x.kind, x.label, x.detail]), [
+    ['failed', '1 check(s) failed', '1 of them changed after: run again to know the result now'],
+    ['passed', '1 check(s) passed', undefined],
+  ]);
   assert.ok(W.turnSummary(en, run, a).includes('1 check(s) passed, 1 check(s) failed'), W.turnSummary(en, run, a).join(' | '));
   // A failure's preview: the message and actual / expected first, not the stack.
   assert.deepEqual(W.errorPreview(assertion), ["AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:", "actual: 'Hello-World',", "expected: 'Hello_World',"]);
