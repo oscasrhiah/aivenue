@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { AgentEvent, WorkflowPreset, WorkflowRun, WorkflowSummary } from './types';
+import type { AgentEvent, RunHost, WorkflowPreset, WorkflowRun, WorkflowSummary } from './types';
 
 /** Run and agent ids are used as folder and file names. */
 const SAFE_ID = /^[A-Za-z0-9][\w-]{0,79}$/;
@@ -19,7 +19,13 @@ export class RunStore {
   /** Set at app shutdown: what is on disk then stays, later saves (the stopping of its agents) are dropped. */
   private frozen = false;
 
-  constructor(dataDir: string) {
+  /**
+   * `host`: whose conversations these are. The desktop app (and its browser preview) and the VS Code extension each
+   * run their own hub on the same data folder; each lists, resumes and writes only its own workflows, so neither shows
+   * the other's chats nor marks the other's running ones as interrupted. A workflow saved before this was recorded
+   * belongs to the app.
+   */
+  constructor(dataDir: string, readonly host: RunHost = 'app') {
     this.runsDir = path.join(dataDir, 'runs');
     this.presetsFile = path.join(dataDir, 'presets.json');
     fs.mkdirSync(this.runsDir, { recursive: true });
@@ -41,6 +47,8 @@ export class RunStore {
       try {
         if (!SAFE_ID.test(id)) continue;
         const run = JSON.parse(fs.readFileSync(path.join(this.runDir(id), 'run.json'), 'utf8')) as WorkflowRun;
+        // Another host's workflow (the VS Code extension's, or the app's): not this hub's to list, resume or write.
+        if ((run.host ?? 'app') !== this.host) continue;
         // The folder name is the id: an id inside the file must not point anywhere else.
         run.id = id;
         if (run.worktree && !isInside(path.join(path.dirname(this.runsDir), 'worktrees'), run.worktree.path)) run.worktree = undefined;

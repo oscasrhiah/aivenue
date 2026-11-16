@@ -152,7 +152,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   capabilities.ghToken = () => github.getToken();
   void github.check().catch(() => undefined);
   const githubMcpOn = () => capabilities.get().mcpServers.some((s) => s.id === GITHUB_MCP_ID && s.enabled);
-  const store = new RunStore(dataDir);
+  // The VS Code extension's chats are its own; the app (and its browser preview) keeps its own.
+  const store = new RunStore(dataDir, opts.hooks.host === 'vscode' ? 'vscode' : 'app');
   const attachments = new AttachmentStore(dataDir);
   // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
   const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }) });
@@ -404,6 +405,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.approve': (p: { id: string; approvalId: string; decision: 'allow' | 'always' | 'deny'; message?: string }) => orchestrator.approve(p.id, p.approvalId, p.decision, p.message),
     'workflows.worktree': (p: { id: string; action: 'apply' | 'discard' | 'keep' }) => orchestrator.worktreeAction(p.id, p.action),
     'workflows.delete': (p: { id: string }) => orchestrator.delete(p.id),
+    'workflows.rename': (p: { id: string; title: string }) => orchestrator.rename(p.id, p.title),
     'agents.events': (p: { workflowId: string; agentId: string }) => orchestrator.events(p.workflowId, p.agentId),
     'agents.stop': (p: { workflowId: string; agentId: string }) => (orchestrator.stopAgent(p.workflowId, p.agentId), true),
     'agents.close': (p: { workflowId: string; agentId: string }) => (orchestrator.closeAgent(p.workflowId, p.agentId), true),

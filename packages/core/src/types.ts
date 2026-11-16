@@ -1302,8 +1302,13 @@ export interface HumanDecision {
 /** "incomplete": it ended (a limit, or the user stopped retrying) without meeting the goal — never reported as done. */
 export type WorkflowStatus = 'running' | 'paused' | 'waiting_human' | 'completed' | 'incomplete' | 'failed' | 'cancelled' | 'interrupted';
 
+/** Which hub's conversation a workflow is: the desktop app (and its browser preview), or the VS Code extension. */
+export type RunHost = 'app' | 'vscode';
+
 export interface WorkflowRun {
   id: string;
+  /** The hub that started it (absent: saved before hosts were told apart, so the app's). Only that hub lists it. */
+  host?: RunHost;
   /** Time spent waiting on the user (decisions, approvals, pauses), for the cost breakdown (A2). */
   timing?: { waitingMs: number; waitingSince?: number };
   /** The project memory this workflow uses (docs/memory-phase1.md). */

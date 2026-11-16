@@ -56,7 +56,8 @@ function setup(o = {}) {
   };
   const orch = new Orchestrator({
     registry,
-    store: new RunStore(path.join(dir, 'home')),
+    // `host`: whose hub this is (the VS Code extension's or the app's, the default).
+    store: new RunStore(path.join(dir, 'home'), o.host),
     usage: { recordRun() {}, recordError() {}, recordUsage() {}, cachedSummary: () => [], summary: async (specs) => specs.map((s) => ({ providerId: s.id, official: o.windows ? { windows: o.windows(s.id), updatedAt: Date.now(), source: 'codex-live' } : undefined })) },
     capabilities: o.capabilities?.(dir) ?? { serversFor: async () => [], skillsBlock: () => '', instructionsFor: () => undefined, skillsDir: dir },
     attachments: { prepare: async (a) => ({ attachments: a ?? [], warnings: [] }), adopt: (_id, a) => a ?? [], runDir: () => dir },
@@ -1315,6 +1316,67 @@ test('暫停的工作流在重新啟動後不會自動接續，按「繼續」�
   second.orch.resumeInterrupted(id);
   const r = await settle(second.orch, id);
   assert.equal(r.status, 'completed', r.error);
+});
+
+test('VS Code 擴充與 App 的對話各自分開：互不列出，也不會把對方執行中的工作流改成已中斷；舊紀錄歸 App', async () => {
+  const runFile = (dir, id) => path.join(dir, 'home', 'runs', id, 'run.json');
+  const onDisk = (dir, id) => JSON.parse(fs.readFileSync(runFile(dir, id), 'utf8'));
+  // A chat in VS Code that is still running.
+  const vs = setup({ host: 'vscode' });
+  let started;
+  const going = new Promise((r) => (started = r));
+  fakeAgents(vs.orch, { executor: [async () => (started(), await new Promise(() => {}))] });
+  const noPlan = { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } };
+  const vsRun = vs.orch.start(config(vs.cwd, noPlan));
+  await going;
+  vs.orch.d.store.saveNow(vsRun);
+  assert.equal(onDisk(vs.dir, vsRun.id).host, 'vscode');
+
+  // The app starts on the same data folder: it does not list that chat, and leaves it running on disk.
+  const app = setup({ dir: vs.dir });
+  assert.equal(app.orch.runs.has(vsRun.id), false);
+  assert.ok(!app.orch.summaries().some((s) => s.id === vsRun.id));
+  assert.equal(onDisk(vs.dir, vsRun.id).status, 'running');
+  // Its own chat is the app's.
+  fakeAgents(app.orch, {});
+  const appRun = await settle(app.orch, app.orch.start(config(app.cwd, noPlan)).id);
+  assert.equal(appRun.status, 'completed', appRun.error);
+  assert.equal(onDisk(vs.dir, appRun.id).host, 'app');
+
+  // A chat saved before hosts were told apart (no host): the app's.
+  const legacy = onDisk(vs.dir, appRun.id);
+  delete legacy.host;
+  fs.writeFileSync(runFile(vs.dir, appRun.id), JSON.stringify(legacy));
+
+  // VS Code restarts: its own chat only (now interrupted, by itself), not the app's or the old one.
+  const vs2 = setup({ dir: vs.dir, host: 'vscode' });
+  assert.deepEqual([...vs2.orch.runs.keys()], [vsRun.id]);
+  assert.equal(vs2.orch.runs.get(vsRun.id).status, 'interrupted');
+  const app2 = setup({ dir: vs.dir });
+  assert.deepEqual([...app2.orch.runs.keys()], [appRun.id]);
+});
+
+test('對話可以重新命名：用任何一則訊息改整段對話的名稱，存檔後重新啟動仍在；空白名稱不接受', async () => {
+  const first = setup();
+  fakeAgents(first.orch, {});
+  const noPlan = { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } };
+  const r1 = await settle(first.orch, first.orch.start(config(first.cwd, { ...noPlan, title: 'first message' })).id);
+  const r2 = await settle(first.orch, first.orch.start(config(first.cwd, { ...noPlan, title: 'second message', continueFrom: r1.id })).id);
+  const pushed = [];
+  first.orch.d.push = (m) => pushed.push(m.topic);
+  // Renamed from the follow-up: the conversation's title is its first message's.
+  const s = first.orch.rename(r2.id, '  My   renamed\nchat  ');
+  assert.equal(s.id, r1.id);
+  assert.equal(s.title, 'My renamed chat');
+  assert.equal(first.orch.runs.get(r1.id).config.title, 'My renamed chat');
+  assert.equal(first.orch.runs.get(r2.id).config.title, 'second message');
+  assert.ok(pushed.includes('workflows') && pushed.includes('workflow'), JSON.stringify(pushed));
+  assert.throws(() => first.orch.rename(r1.id, '   '), /名稱不能是空的|cannot be empty/);
+  assert.throws(() => first.orch.rename('nope', 'x'), /找不到這個對話|No such chat/);
+  first.orch.d.store.saveNow(first.orch.runs.get(r1.id));
+  // After a restart.
+  const second = setup({ dir: first.dir });
+  assert.equal(second.orch.summaries().find((x) => x.id === r1.id).title, 'My renamed chat');
 });
 
 test('Aivenue 關閉（例如重新安裝 VS Code 套件）時，暫停的工作流不會被存成已取消，重新啟動後可以繼續', async () => {

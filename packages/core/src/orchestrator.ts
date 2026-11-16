@@ -461,6 +461,7 @@ export class Orchestrator {
     const threadId = prev ? prev.config.threadId ?? prev.id : replaced ? replaced.config.threadId ?? replaced.id : config.threadId;
     const run: WorkflowRun = {
       id,
+      host: this.d.store.host,
       assignment,
       config: { ...config, threadId, attachments, title: config.title?.trim() || config.goal.trim().split('\n')[0].slice(0, 60) },
       status: 'running',
@@ -1483,6 +1484,25 @@ export class Orchestrator {
     this.runs.delete(id);
     this.d.store.delete(id);
     this.d.push({ topic: 'workflows', data: this.summaries() });
+  }
+
+  /**
+   * Rename the conversation `id` belongs to. A conversation is shown under the title of its first message (the earliest
+   * workflow of the thread still kept), so that is the one renamed; any of its messages' ids will do. Whitespace is
+   * collapsed; an empty title is refused.
+   */
+  rename(id: string, title: string): WorkflowSummary {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到這個對話', 'No such chat'));
+    const name = String(title ?? '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    if (!name) throw new Error(L('名稱不能是空的', 'The name cannot be empty'));
+    const thread = run.config.threadId ?? run.id;
+    const first = [...this.runs.values()].filter((r) => (r.config.threadId ?? r.id) === thread).sort((a, b) => a.createdAt - b.createdAt)[0];
+    first.config.title = name;
+    this.d.store.save(first);
+    this.d.push({ topic: 'workflow', data: first });
+    this.d.push({ topic: 'workflows', data: this.summaries() });
+    return RunStore.summary(first);
   }
 
   events(workflowId: string, agentId: string): AgentEvent[] {
