@@ -327,3 +327,51 @@ test(
     assert.equal(fs.readFileSync(path.join(desktop, 'Aivenue.lnk'), 'utf8'), 'the user\'s own shortcut');
   },
 );
+
+// ---------- out-dir.mjs: the output folder of the VS Code acceptance scripts ----------
+
+/** prepareOutDir(dir, keep) in a process of its own (it exits on a refusal): its exit code and message. */
+function outDirIn(dir, keep, home) {
+  const code = `import { prepareOutDir } from ${JSON.stringify(new URL('accept/out-dir.mjs', import.meta.url).href)}; prepareOutDir(${JSON.stringify(dir)}${keep ? `, ${JSON.stringify(keep)}` : ''});`;
+  // Always a home folder of the test's own: a broken helper could then only touch the test's files.
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home } });
+  return { status: r.status, err: r.stderr };
+}
+
+test('驗收輸出資料夾：只清空新的、空的或先前驗收留下的資料夾；別人的資料夾、家目錄（測試自己的）、含 repo 的資料夾都拒絕，裡面的檔案不動', () => {
+  const base = tmp('outdir');
+  const home = path.join(base, 'users', 'me');
+  fs.mkdirSync(home, { recursive: true });
+  fs.writeFileSync(path.join(home, 'notes.txt'), 'mine');
+  const outDir = (dir, keep) => outDirIn(dir, keep, home);
+  // A folder with someone's files and no mark: refused, and its files are still there.
+  const theirs = path.join(base, 'theirs');
+  fs.mkdirSync(theirs);
+  fs.writeFileSync(path.join(theirs, 'thesis.docx'), 'mine');
+  const r1 = outDir(theirs);
+  assert.equal(r1.status, 2, r1.err);
+  assert.match(r1.err, /not empty and was not made by an acceptance script/);
+  assert.equal(fs.readFileSync(path.join(theirs, 'thesis.docx'), 'utf8'), 'mine');
+  // A new folder, then an earlier output (with the mark): made, then emptied and marked again.
+  const out = path.join(base, 'out');
+  assert.equal(outDir(out).status, 0);
+  assert.deepEqual(fs.readdirSync(out), ['.aivenue-acceptance-output']);
+  fs.writeFileSync(path.join(out, 'run.json'), '{}');
+  assert.equal(outDir(out).status, 0);
+  assert.deepEqual(fs.readdirSync(out), ['.aivenue-acceptance-output']);
+  // An empty folder is fine too.
+  const empty = path.join(base, 'empty');
+  fs.mkdirSync(empty);
+  assert.equal(outDir(empty).status, 0);
+  // The (test's own) home folder and a folder above it, a folder holding the repository: refused, nothing removed.
+  // (The drive-root refusal is not run here: a broken helper must never get the real root.)
+  assert.match(outDir(home).err, /home folder/);
+  assert.match(outDir(path.dirname(home)).err, /home folder/);
+  assert.equal(fs.readFileSync(path.join(home, 'notes.txt'), 'utf8'), 'mine');
+  const work = path.join(base, 'work');
+  const repo = path.join(work, 'repo');
+  fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  assert.match(outDir(work, repo).err, /holds this repository/);
+  assert.ok(fs.existsSync(path.join(repo, 'scripts')));
+  fs.rmSync(base, { recursive: true, force: true });
+});

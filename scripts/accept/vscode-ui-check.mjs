@@ -15,6 +15,8 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { prepareOutDir } from './out-dir.mjs';
 
 const [vsix, outArg, codeDirArg] = process.argv.slice(2);
 if (!vsix || !outArg) {
@@ -47,8 +49,8 @@ async function until(fn, what, ms = 60_000, every = 1000) {
   }
 }
 
-fs.rmSync(OUT, { recursive: true, force: true });
-fs.mkdirSync(OUT, { recursive: true });
+// Emptied only when new, empty or an earlier output folder of an acceptance script (see out-dir.mjs).
+prepareOutDir(OUT, path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..'));
 const ud = path.join(OUT, 'vscode-user');
 const ext = path.join(OUT, 'vscode-ext');
 const home = path.join(OUT, 'aivenue-home');

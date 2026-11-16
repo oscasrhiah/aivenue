@@ -24,7 +24,8 @@ const APP_FILES = ['aivenue', 'aivenue.sh', 'chrome_crashpad_handler', 'aivenue.
 const LEGACY_FILES = [...APP_FILES, 'install.sh', 'uninstall.sh'];
 // The outside commands the two scripts run (the shell's own builtins cannot fail this way).
 const TOOLS = ['sha256sum', 'cat', 'cp', 'mv', 'sort', 'grep', 'sed', 'cut', 'wc', 'mktemp', 'mkdir', 'chmod', 'rm', 'readlink', 'dirname', 'ls', 'awk', 'rmdir', 'od', 'tr'];
-const real = Object.fromEntries(TOOLS.map((t) => [t, spawnSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout.trim()]));
+// Only where the test runs: elsewhere (Windows) there may be no `sh` at all, and the file must still load and skip.
+const real = skip ? {} : Object.fromEntries(TOOLS.map((t) => [t, (spawnSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).stdout ?? '').trim()]));
 
 function makePackage(dir, tag, files = APP_FILES, scripts = linux) {
   for (const f of files) {
