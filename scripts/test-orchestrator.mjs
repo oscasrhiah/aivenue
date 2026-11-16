@@ -3447,3 +3447,46 @@ test('子代理批次回歸：同名的兩批是兩批（失敗的那批算受�
   assert.equal(third.rerunOf, first.id);
   assert.doesNotMatch(outcomes.true.log, /最後一次嘗試失敗|failed on their last attempt/);
 });
+
+test('agent 在使用者要求時可以改對話名稱：改的是整段對話的名稱，時間線寫出是誰改的；空白名稱被拒；其他角色沒有這個工具', async () => {
+  const { orch, cwd } = setup();
+  const noPlan = { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } };
+  fakeAgents(orch, {});
+  const r1 = await settle(orch, orch.start(config(cwd, { ...noPlan, title: 'first message' })).id);
+  let reply;
+  let empty;
+  let helper;
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret) => {
+        reply = JSON.parse(await o.callTool(secret, 'rename_chat', { title: '  論文第四章   圖表 ' }));
+        empty = await o.callTool(secret, 'rename_chat', { title: '   ' }).then(() => 'no error', (e) => e.message);
+        await o.callTool(secret, 'submit_work', { summary: 'renamed the chat' });
+      },
+    ],
+  });
+  // A follow-up in the same conversation: the user asks for the new name there.
+  const r2 = await settle(orch, orch.start(config(cwd, { ...noPlan, title: '請把這段對話改名為 論文第四章 圖表', continueFrom: r1.id })).id);
+  assert.equal(r2.status, 'completed', r2.error);
+  assert.equal(reply.renamed, '論文第四章 圖表');
+  // The conversation's name is its first message's title; the follow-up keeps its own.
+  assert.equal(orch.runs.get(r1.id).config.title, '論文第四章 圖表');
+  assert.equal(orch.runs.get(r2.id).config.title, '請把這段對話改名為 論文第四章 圖表');
+  assert.match(empty, /名稱不能是空的|cannot be empty/);
+  assert.ok(orch.runs.get(r2.id).log.some((l) => l.chat && /把對話改名為「論文第四章 圖表」|renamed the conversation to "論文第四章 圖表"/.test(l.text)), JSON.stringify(orch.runs.get(r2.id).log.map((l) => l.text)));
+  // A reviewer has no such tool: the call is refused before anything changes.
+  fakeAgents(orch, {
+    executor: [{ tool: 'submit_work', args: { summary: 'x' } }],
+    code_reviewer: [
+      async (o, secret) => {
+        helper = await o.callTool(secret, 'rename_chat', { title: 'reviewer name' }).then(() => 'no error', (e) => e.message);
+        await o.callTool(secret, 'submit_review', { verdict: 'approve', summary: 'ok', issues: [] });
+      },
+    ],
+  });
+  const withReview = { ...noPlan, implement: { enabled: true, author: { provider: 'fake' }, reviewer: { provider: 'fake' }, maxRounds: 1, humanGate: false } };
+  const r3 = await settle(orch, orch.start(config(cwd, { ...withReview, title: 'third', continueFrom: r2.id })).id);
+  assert.equal(r3.status, 'completed', r3.error);
+  assert.match(helper, /not available to the code_reviewer role/);
+  assert.equal(orch.runs.get(r1.id).config.title, '論文第四章 圖表');
+});

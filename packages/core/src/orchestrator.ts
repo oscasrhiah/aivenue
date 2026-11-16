@@ -2166,6 +2166,13 @@ export class Orchestrator {
       }
       case 'capture_screenshot':
         return this.screenshot(run, info, args);
+      case 'rename_chat': {
+        // The same rename as the sidebar's (the conversation's first message carries the name), said in the timeline.
+        const name = this.rename(run.id, String(args.title ?? '')).title;
+        this.log(run, L(`${this.label(info)} 把對話改名為「${name}」`, `${this.label(info)} renamed the conversation to "${name}"`), 'info', true);
+        this.touch(run);
+        return JSON.stringify({ renamed: name, note: 'The user sees the new name in the sidebar and above the chat.' });
+      }
       case 'spawn_subagent':
         return this.spawnSubagent(run, info, args);
       case 'wait_subagent':

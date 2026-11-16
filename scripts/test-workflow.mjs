@@ -288,6 +288,9 @@ test('工具權限：驗收者能交驗收，實作者不能；顧問不能等�
   assert.ok(names('executor').includes('gpu_acquire') && names('executor').includes('wait_for'));
   assert.ok(!names('advisor').includes('gpu_acquire'));
   assert.ok(names('code_reviewer').includes('search_records'));
+  // Renaming the conversation: the agents the user talks with only.
+  assert.ok(names('executor').includes('rename_chat') && names('planner').includes('rename_chat'));
+  for (const r of ['subagent', 'code_reviewer', 'plan_reviewer', 'verifier', 'advisor', 'adjudicator', 'compactor']) assert.ok(!names(r).includes('rename_chat'), r);
 });
 
 // ---------- background process progress ----------

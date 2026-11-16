@@ -495,6 +495,16 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       required: ['target'],
     },
   },
+  rename_chat: {
+    name: 'rename_chat',
+    description:
+      "Rename this conversation: the name the user sees in the sidebar and above the chat. Only when the user asks you to rename (or name) it, with the name they gave or one that fits what they asked for; never on your own. The user sees in the conversation that you renamed it.",
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string', description: "The new name: short, in the user's language (at most 200 characters)." } },
+      required: ['title'],
+    },
+  },
   approval_prompt: {
     name: 'approval_prompt',
     description: 'Permission prompt handled by Aivenue: asks the user to approve a tool call.',
@@ -513,6 +523,8 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   if (role === 'verifier') names.push('submit_verification');
   if (role === 'adjudicator') names.push('submit_ruling');
   if (role === 'executor') names.push('report_progress', 'submit_work');
+  // The agents the user talks with may rename the conversation when the user asks (not helpers, reviewers or checkers).
+  if (role === 'executor' || role === 'planner') names.push('rename_chat');
   if (role === 'subagent') names.push('report_progress');
   // The compactor only reads the material in its prompt.
   if (role === 'compactor') return [];
