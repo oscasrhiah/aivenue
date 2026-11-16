@@ -81,9 +81,12 @@ const GENERIC = new Set(['ask_user', 'reply_user', 'wait_for']);
 export function classifyTool(rawName: string, input: unknown, cwd: string): { category: ToolCategory; title: string; name: string } {
   let name = rawName;
   let hub = false;
+  // A tool another MCP server named ("mcp__github__search_records"): never Aivenue's, whatever its name.
+  let foreign = false;
   const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(rawName);
   if (mcp) {
     hub = mcp[1] === 'aivenue';
+    foreign = !hub;
     name = mcp[2];
   } else {
     // Other CLIs prefix MCP tools differently (e.g. "aivenue_submit_plan", "mcp_aivenue_submit_plan").
@@ -104,7 +107,7 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     const r = path.relative(cwd, p);
     return r && !r.startsWith('..') && !path.isAbsolute(r) ? r : p;
   };
-  if (hub || (HUB_TITLES[lower] && !GENERIC.has(lower))) {
+  if (hub || (!foreign && HUB_TITLES[lower] && !GENERIC.has(lower))) {
     const t = HUB_TITLES[lower];
     let title = t ? L(t[0], t[1]) : name;
     // What the call is about, when its arguments say: in OpenCode's code mode they are inside the agent's code, and the

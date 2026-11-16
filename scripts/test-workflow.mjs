@@ -3854,3 +3854,10 @@ test('截圖的瀏覽器連線：斷線時還在等的指令、斷線之後才�
   cdp.close();
   await new Promise((r) => wss.close(r));
 });
+
+test('活動紀錄：其他工具伺服器的同名工具（mcp__github__search_records 等）不會被當成 Aivenue 的工具', () => {
+  const t = (raw) => W.classifyTool(raw, {}, '/w');
+  for (const raw of ['mcp__github__search_records', 'mcp__nvidia__gpu_status', 'mcp__other__rename_chat']) assert.notEqual(t(raw).category, 'hub', raw);
+  // Aivenue's own, under its own prefix: still Aivenue's.
+  for (const raw of ['mcp__aivenue__search_records', 'mcp__aivenue__gpu_status', 'aivenue_search_records']) assert.equal(t(raw).category, 'hub', raw);
+});
