@@ -115,13 +115,16 @@ const clamp = (v: number | undefined, def: number, min: number, max: number) => 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Minimal Chrome DevTools Protocol client over one page target. */
-class Cdp {
+export class Cdp {
   private id = 0;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
   private waiters = new Map<string, (() => void)[]>();
+  private closed = false;
   private constructor(private ws: WebSocket) {
-    // The browser gone (crashed, closed): every call still waiting fails now instead of never.
+    // The browser gone (crashed, closed): every call still waiting fails now instead of never, and so does every
+    // call made after (see send).
     ws.on('close', () => {
+      this.closed = true;
       for (const p of this.pending.values()) p.reject(new Error(L('瀏覽器連線中斷', 'The browser connection closed')));
       this.pending.clear();
     });
@@ -155,6 +158,8 @@ class Cdp {
   /** The answer to one command, or an error after `timeoutMs`. */
   send<T = any>(method: string, params: Record<string, unknown> = {}, timeoutMs = 60_000): Promise<T> {
     const id = ++this.id;
+    // Already disconnected: no answer will come, so no 60 s wait for it.
+    if (this.closed || this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error(L('瀏覽器連線中斷', 'The browser connection closed')));
     return new Promise((resolve, reject) => {
       const t = setTimeout(() => {
         this.pending.delete(id);
@@ -250,15 +255,20 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
   }
 }
 
-/** The debugging port a Chromium browser wrote into its profile: undefined while the file is missing, empty or partial. */
+/**
+ * The debugging port a Chromium browser wrote into its profile ("53743\n/devtools/browser/<id>"): undefined while the
+ * file is missing, empty or partial. The port counts only once its line is complete (the browser path follows it):
+ * "5374" read before the last digit was written would be another port.
+ */
 export function readPort(file: string): number | undefined {
-  let first: string;
+  let text: string;
   try {
-    first = fs.readFileSync(file, 'utf8').split('\n')[0].trim();
+    text = fs.readFileSync(file, 'utf8');
   } catch {
     return undefined;
   }
-  const port = /^\d{1,5}$/.test(first) ? Number(first) : 0;
+  const m = /^(\d{1,5})\r?\n\/devtools\/browser\//.exec(text);
+  const port = m ? Number(m[1]) : 0;
   return port > 0 && port < 65536 ? port : undefined;
 }
 

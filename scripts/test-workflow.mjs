@@ -31,7 +31,7 @@ const bundled = await build({
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
-      export { resolveTarget as shotTarget, readPort } from './packages/core/src/screenshot';
+      export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
@@ -3806,8 +3806,15 @@ test('截圖的瀏覽器連接埠：檔案還沒寫、空的或只寫了一半�
   assert.equal(W.readPort(f), undefined);
   fs.writeFileSync(f, '91234\n');
   assert.equal(W.readPort(f), undefined);
+  // The first digits written before the rest ("5317" of 53172): another port, so not yet; nor the port line alone.
   fs.writeFileSync(f, '5317');
-  assert.equal(W.readPort(f), 5317);
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '53172\n');
+  assert.equal(W.readPort(f), undefined);
+  fs.writeFileSync(f, '53172\n/devtools/browser/abc');
+  assert.equal(W.readPort(f), 53172);
+  fs.writeFileSync(f, '53172\r\n/devtools/browser/abc');
+  assert.equal(W.readPort(f), 53172);
   fs.writeFileSync(f, '53172\n/devtools/browser/abc\n');
   assert.equal(W.readPort(f), 53172);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -3829,4 +3836,21 @@ test('活動紀錄的 Aivenue 工具標題：舊工具在程式碼模式也不�
   assert.ok(/: http:\/\/localhost:5173\/a-very-long-path$/.test(t('mcp__aivenue__capture_screenshot', { target: 'http://localhost:5173/a-very-long-path' })));
   assert.ok(/: S1 → done$/.test(t('mcp__aivenue__report_progress', { step_id: 'S1', status: 'done' })));
   assert.ok(/: codex — fix the tests$/.test(t('mcp__aivenue__spawn_subagent', { provider: 'codex', task: 'fix the tests' })));
+});
+
+test('截圖的瀏覽器連線：斷線時還在等的指令、斷線之後才送的指令，都馬上失敗，不等 60 秒', async () => {
+  const { WebSocketServer } = createRequire(import.meta.url)('ws');
+  const wss = new WebSocketServer({ port: 0 });
+  await new Promise((r) => wss.on('listening', r));
+  // A "browser" that never answers, then goes away.
+  wss.on('connection', (sock) => setTimeout(() => sock.terminate(), 300));
+  const cdp = await W.Cdp.connect(`ws://127.0.0.1:${wss.address().port}`, 5000);
+  const t0 = Date.now();
+  const waiting = cdp.send('Page.enable').then(() => 'answered', (e) => e.message);
+  assert.match(await waiting, /connection closed|連線中斷/);
+  const after = await cdp.send('Page.navigate', { url: 'about:blank' }).then(() => 'answered', (e) => e.message);
+  assert.match(after, /connection closed|連線中斷/);
+  assert.ok(Date.now() - t0 < 5000, `failed at once (${Date.now() - t0} ms)`);
+  cdp.close();
+  await new Promise((r) => wss.close(r));
 });
