@@ -647,8 +647,15 @@ class OpenCodeParser implements StreamParser {
           this.tools.set(key, t);
         }
         if (st.status === 'completed' || st.status === 'error') {
-          const failed = st.status === 'error';
-          this.sink.updateTool(t.seq, { status: failed ? 'error' : 'ok', output: trunc(str(failed ? st.error ?? st.output : st.output), 4000) }, failed ? undefined : filesOf(t.category, t.input));
+          // A shell command that exited non-zero still comes as "completed": its exit code is in the metadata
+          // (`metadata.exit`, or `metadata.metadata.exit` in OpenCode 2). Like the other CLIs, that is a failed call.
+          const exit = typeof st.metadata?.exit === 'number' ? st.metadata.exit : typeof st.metadata?.metadata?.exit === 'number' ? st.metadata.metadata.exit : undefined;
+          const exited = exit !== undefined && exit !== 0;
+          const failed = st.status === 'error' || exited;
+          const out = str(st.status === 'error' ? st.error ?? st.output : st.output);
+          // The exit code said in the output too (OpenCode puts it beside the output, not in it).
+          const output = exited && !out.includes(`Exited with code ${exit}`) ? `${out}${out && !out.endsWith('\n') ? '\n' : ''}Exited with code ${exit}` : out;
+          this.sink.updateTool(t.seq, { status: failed ? 'error' : 'ok', output: trunc(output, 4000) }, failed ? undefined : filesOf(t.category, t.input));
         }
         break;
       }

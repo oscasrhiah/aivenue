@@ -157,8 +157,11 @@ export interface ReadEntry {
   maybeOutdated?: boolean;
 }
 
-/** The command ran, but what it printed says the check failed (a test run, `…; echo exit=$?`). */
-const FAILED = /\bexit(?: code)?[=: ]+[1-9]|\bFAIL(ED)?\b|\b[1-9]\d* (failed|failing)\b|Traceback|\bError:|ParserError|\w+Exception\b|FullyQualifiedErrorId|command not found|No such file or directory|is not recognized as/;
+/**
+ * The command ran, but what it printed says the check failed (a test run, `…; echo exit=$?`, a shell's "Exited with
+ * code 1", Node's "AssertionError [ERR_ASSERTION]:").
+ */
+const FAILED = /\bexit(?: code)?[=: ]+[1-9]|\bExited with code [1-9]|\b\w*Error \[ERR_[A-Z0-9_]+\]|\bFAIL(ED)?\b|\b[1-9]\d* (failed|failing)\b|Traceback|\bError:|ParserError|\w+Exception\b|FullyQualifiedErrorId|command not found|No such file or directory|is not recognized as/;
 
 const GRAPH = /\bgraphify\s+(query|path|explain|update|build|report)\b/i;
 

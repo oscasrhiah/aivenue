@@ -716,6 +716,38 @@ function opencodeTools(calls) {
   return out.filter((e) => e.kind === 'tool').map((e) => e.tool);
 }
 
+test('OpenCode 的指令結束代碼不是 0：工具標成失敗並註明代碼（OpenCode 把它報成 completed，代碼在 metadata；實機驗收重現）', () => {
+  const ups = [];
+  const out = [];
+  const p = W.createParser('opencode-json', { emit: (e) => (out.push(e), out.length), updateTool: (seq, u) => ups.push(u) }, '/w');
+  const call = (i, metadata, output = '1\n') => p.line(JSON.stringify({ type: 'tool_use', part: { tool: 'shell', callID: `c${i}`, state: { status: 'completed', input: { command: 'node slug.test.js' }, output, metadata } } }));
+  // OpenCode 2 (as captured from opencode-cli run --format json): metadata.metadata.exit.
+  call(1, { metadata: { status: 'completed', truncated: false, exit: 3 }, content: [{ type: 'text', text: '1\n' }, { type: 'text', text: 'Exited with code 3' }] });
+  // OpenCode 1: metadata.exit.
+  call(2, { exit: 2, description: 'x' }, 'boom');
+  // Exit 0, and no exit code at all: as before.
+  call(3, { metadata: { exit: 0 } });
+  call(4, undefined, 'done');
+  assert.deepEqual(ups.map((u) => u.status), ['error', 'error', 'ok', 'ok']);
+  assert.equal(ups[0].output, '1\nExited with code 3');
+  assert.equal(ups[1].output, 'boom\nExited with code 2');
+  assert.equal(ups[2].output, '1\n');
+});
+
+test('檢查輸出回報失敗：Node 的 AssertionError [ERR_ASSERTION] 與「Exited with code N」即使指令看似成功也算失敗（實機驗收重現）', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'opencode', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const assertion = "node:assert:152\n  throw new AssertionError(obj);\n  ^\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n+ actual - expected\n+ 'hello_world'\n- 'hello-world'\nNode.js v24.20.0";
+  const events = [tool(1, 'node slug.test.js', assertion), tool(2, 'node other.test.js', '1\nExited with code 1'), tool(3, 'node third.test.js', 'slug: 1 check passed')];
+  const got = W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  assert.deepEqual(got, [
+    ['node slug.test.js', 'output_failure'],
+    ['node other.test.js', 'output_failure'],
+    ['node third.test.js', 'passed'],
+  ]);
+});
+
 test('OpenCode 程式碼模式：搜尋工具的 execute 在活動紀錄顯示查詢內容，不再只寫 execute', () => {
   const [one, two, hub, other, plain] = opencodeTools([
     { code: 'return await search({ query: "track_process" });' },
