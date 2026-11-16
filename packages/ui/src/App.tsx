@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useConnection, useThreads } from './api';
 import logo from './assets/logo.svg';
 import { AskHost } from './components/Ask';
+import { RenameInput } from './components/Rename';
 import { SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
@@ -46,16 +47,42 @@ function CompactBar({ route, onMenu }: { route: Route; onMenu: () => void }) {
   );
 }
 
-function Sidebar({ route, open }: { route: Route; open: boolean }) {
+/** Wide layouts show the chat list beside the chat; narrower ones (see styles.css) keep it in a drawer. */
+const wide = () => window.matchMedia('(min-width: 1101px)').matches;
+const HIDE_KEY = 'aivenue.sidebarHidden';
+/** Whether the user put the chat list away (kept in this browser only; unreadable storage: shown). */
+function readHidden(): boolean {
+  try {
+    return localStorage.getItem(HIDE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+function writeHidden(v: boolean) {
+  try {
+    if (v) localStorage.setItem(HIDE_KEY, '1');
+    else localStorage.removeItem(HIDE_KEY);
+  } catch {
+    // not kept: it is only a convenience
+  }
+}
+
+function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide: () => void }) {
   const t = useT();
   const conn = useConnection();
   const workflows = useThreads();
+  // The conversation being renamed (its newest message's id, as listed).
+  const [renaming, setRenaming] = useState<string | null>(null);
   let lastGroup = '';
   return (
     <aside className={cx('sidebar', open && 'open')}>
       <div className="side-top">
         <img className="logo" src={logo} alt="" />
         <span className="wordmark">Aivenue</span>
+        <span className="grow" />
+        <button className="icon-btn side-hide" title={t('收合側欄', 'Hide the sidebar')} aria-label={t('收合側欄', 'Hide the sidebar')} onClick={onHide}>
+          «
+        </button>
       </div>
       <a className={cx('side-link', route.page === 'new' && 'active')} href="#/new">
         <span className="side-icon">＋</span> {t('新對話', 'New chat')}
@@ -65,13 +92,26 @@ function Sidebar({ route, open }: { route: Route; open: boolean }) {
           const group = relativeDay(t, w.createdAt);
           const header = group !== lastGroup ? ((lastGroup = group), <div className="side-group">{group}</div>) : null;
           const st = wfStatus(t, w.status);
+          const active = route.page === 'run' && w.ids.includes(route.id);
           return (
             <div key={w.id}>
               {header}
-              <a href={`#/run/${w.id}`} className={cx('side-item', route.page === 'run' && w.ids.includes(route.id) && 'active')} title={`${w.title}\n${st.label}${w.messages > 1 ? `\n${t(`${w.messages} 則訊息`, `${w.messages} messages`)}` : ''}`}>
-                <span className="side-item-title">{w.title}</span>
-                {(w.status === 'running' || w.status === 'paused' || w.status === 'waiting_human' || w.status === 'failed') && <span className={cx('dot', st.cls)} />}
-              </a>
+              {renaming === w.id ? (
+                <div className={cx('side-item', 'renaming', active && 'active')}>
+                  <RenameInput id={w.id} title={w.title} onDone={() => setRenaming(null)} />
+                </div>
+              ) : (
+                // The rename button sits beside the link: a click inside the link would open the chat first.
+                <div className="side-row">
+                  <a href={`#/run/${w.id}`} className={cx('side-item', active && 'active')} title={`${w.title}\n${st.label}${w.messages > 1 ? `\n${t(`${w.messages} 則訊息`, `${w.messages} messages`)}` : ''}`}>
+                    <span className="side-item-title">{w.title}</span>
+                    {(w.status === 'running' || w.status === 'paused' || w.status === 'waiting_human' || w.status === 'failed') && <span className={cx('dot', st.cls)} />}
+                  </a>
+                  <button className="side-edit" title={t('重新命名', 'Rename')} aria-label={t(`重新命名「${w.title}」`, `Rename "${w.title}"`)} onClick={() => setRenaming(w.id)}>
+                    ✎
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}
@@ -89,6 +129,12 @@ function Sidebar({ route, open }: { route: Route; open: boolean }) {
 export function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [menu, setMenu] = useState(false);
+  // Wide layouts: the user can put the chat list away; ☰ brings it back.
+  const [sideHidden, setSideHidden] = useState(readHidden);
+  const hideSide = (v: boolean) => {
+    setSideHidden(v);
+    writeHidden(v);
+  };
   // Where "back to the conversation" in Settings goes: the last chat page shown.
   const [lastChat, setLastChat] = useState('#/new');
   useEffect(() => {
@@ -116,12 +162,13 @@ export function App() {
   }, []);
   return (
     <SettingsProvider>
-      <div className={cx('app', route.page === 'settings' && 'in-settings')}>
+      <div className={cx('app', route.page === 'settings' && 'in-settings', sideHidden && 'side-hidden')}>
         {/* Settings has its own column (with a way back), so the chat list steps aside. */}
-        {route.page !== 'settings' && <Sidebar route={route} open={menu} />}
+        {route.page !== 'settings' && <Sidebar route={route} open={menu} onHide={() => (wide() ? hideSide(true) : setMenu(false))} />}
         {menu && route.page !== 'settings' && <div className="side-scrim" onClick={() => setMenu(false)} />}
         <main className="main">
-          <CompactBar route={route} onMenu={() => setMenu(!menu)} />
+          {/* Narrow: ☰ opens the drawer. Wide with the list put away: ☰ brings it back. */}
+          <CompactBar route={route} onMenu={() => (wide() && sideHidden ? hideSide(false) : setMenu(!menu))} />
           {route.page === 'new' && <Chat key="new" />}
           {route.page === 'run' && <Chat key={route.id} id={route.id} />}
           {route.page === 'settings' && <Settings tab={route.tab} backHref={lastChat} />}

@@ -13,6 +13,7 @@ import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
 import { CompactFailedAsk, ContextAsk, ContextPie } from '../components/ContextPie';
 import { ProgressPanel } from '../components/Progress';
+import { RenameInput } from '../components/Rename';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
@@ -754,6 +755,8 @@ export function Chat({ id }: { id?: string }) {
   // The conversation this message belongs to, and its earlier messages (shown above it, oldest first).
   const summaries = useWorkflows();
   const thread = useThreads().find((th) => !!run && th.ids.includes(run.id));
+  // The title becomes a text box to rename the conversation (✎, or a double click on it).
+  const [renaming, setRenaming] = useState(false);
   const threadKey = run ? run.config.threadId ?? run.id : '';
   const earlierIds = run
     ? summaries
@@ -1022,7 +1025,18 @@ export function Chat({ id }: { id?: string }) {
       {run && (
         <header className="topbar">
           <div className="topbar-title">
-            <span className="title-text">{thread?.title ?? run.config.title}</span>
+            {renaming ? (
+              <RenameInput id={run.id} title={thread?.title ?? run.config.title} onDone={() => setRenaming(false)} className="title-rename" />
+            ) : (
+              <>
+                <span className="title-text" title={thread?.title ?? run.config.title} onDoubleClick={() => setRenaming(true)}>
+                  {thread?.title ?? run.config.title}
+                </span>
+                <button className="icon-btn title-edit" title={t('重新命名對話', 'Rename the chat')} aria-label={t('重新命名對話', 'Rename the chat')} onClick={() => setRenaming(true)}>
+                  ✎
+                </button>
+              </>
+            )}
             <span className={cx('status', st!.cls)}>
               {(run.status === 'running' || run.status === 'waiting_human') && <span className="pulse" />}
               {st!.label}

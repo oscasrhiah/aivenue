@@ -5907,3 +5907,170 @@ textarea.code {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* ============ renaming a conversation ============ */
+.rename-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+}
+
+.rename-input.error {
+  border-color: var(--err);
+}
+
+/* The rename button sits beside the chat's link, shown when the row is pointed at or focused. */
+.side-row {
+  position: relative;
+}
+
+.side-row .side-item {
+  padding-right: 30px;
+}
+
+.side-edit {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+}
+
+.side-row:hover .side-edit,
+.side-edit:focus-visible {
+  opacity: 1;
+}
+
+.side-edit:hover {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+}
+
+/* Touch screens have no pointing: keep it visible there. */
+@media (hover: none) {
+  .side-edit {
+    opacity: 1;
+  }
+}
+
+.side-item.renaming {
+  padding: 3px 6px;
+}
+
+.title-text {
+  cursor: text;
+}
+
+.topbar-title .title-edit {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  opacity: 0.55;
+}
+
+.topbar-title:hover .title-edit,
+.topbar-title .title-edit:focus-visible {
+  opacity: 1;
+}
+
+.title-rename {
+  font-weight: 600;
+  max-width: 52vw;
+}
+
+/* ============ putting the chat list away ============ */
+.side-top .side-hide {
+  width: 26px;
+  height: 26px;
+  font-size: 16px;
+}
+
+/* Wide layouts with the list put away: the compact bar shows, its ☰ brings the list back. */
+@media (min-width: 1101px) {
+  .app.side-hidden .sidebar {
+    display: none;
+  }
+
+  .app.side-hidden .compact-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+
+  .app.side-hidden .compact-bar .wordmark {
+    font-size: 15px;
+  }
+
+  .app.side-hidden .compact-bar .logo {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+  }
+}
+
+/* ============ composer row: buttons never break the row ============ */
+/*
+ * Every button keeps its icon and cuts its words with "…" when the row is short of room, instead of pushing the row out
+ * of the composer or wrapping. The role summary gives way first, then the folder, the advisor and last the permission.
+ * The full text stays in each button's tooltip.
+ */
+.wf-bar > * {
+  min-width: 0;
+}
+
+.wf-bar .pill-btn {
+  min-width: 38px;
+  max-width: 100%;
+  flex-shrink: 1;
+}
+
+.wf-bar > .perm-wrap {
+  flex: 0 1 auto;
+}
+
+.wf-bar > .perm-wrap:has(.adv-btn) {
+  flex-shrink: 2;
+}
+
+.wf-bar .wf-folder {
+  flex-shrink: 3;
+}
+
+.wf-bar .wf-btn {
+  flex-shrink: 8;
+}
+
+.wf-bar .pill-btn > *,
+.wf-bar .pill-icon,
+.wf-bar .wf-gear {
+  flex-shrink: 0;
+}
+
+.wf-bar .pill-text,
+.wf-bar .perm-label,
+.wf-bar .adv-label,
+.wf-bar .adv-who,
+.wf-bar .wf-hint {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -160,7 +160,8 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   return (
     <span className={cx('wf-bar', compact && 'compact')}>
       <button className="pill-btn wf-folder" onClick={onOpen} title={draft.cwd}>
-        📁 {folder}
+        <span className="pill-icon">📁</span>
+        <span className="pill-text">{folder}</span>
       </button>
       <PermissionButton permission={permission} isolation={draft.isolation === 'worktree'} onChange={onSafety} onOpen={onOpen} />
       <AdvisorButton value={draft.advisor ?? { mode: 'off' }} providers={providers} onChange={onAdvisor} onOpen={onOpen} mains={claudeMains(t, draft, providers, preview)} />
