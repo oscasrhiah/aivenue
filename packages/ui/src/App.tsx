@@ -108,7 +108,10 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
                     {(w.status === 'running' || w.status === 'paused' || w.status === 'waiting_human' || w.status === 'failed') && <span className={cx('dot', st.cls)} />}
                   </a>
                   <button className="side-edit" title={t('重新命名', 'Rename')} aria-label={t(`重新命名「${w.title}」`, `Rename "${w.title}"`)} onClick={() => setRenaming(w.id)}>
-                    ✎
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M11.2 2.3a1.6 1.6 0 0 1 2.3 2.3L5.6 12.5 2.5 13.5l1-3.1z" />
+                      <path d="M10 3.5l2.5 2.5" />
+                    </svg>
                   </button>
                 </div>
               )}

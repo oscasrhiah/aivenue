@@ -385,6 +385,13 @@ function Composer({
       }
       return;
     }
+    // Paused: Enter does what the ▶ button does (resume, with what was typed), not start a second message on this chat.
+    if (runState === 'paused' && onResume) {
+      if (!text.trim()) return;
+      onResume(text.trim());
+      setText('');
+      return;
+    }
     if (!text.trim() || disabled || busy || uploading) return;
     if (await onSend(text.trim(), ready)) {
       files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview));
@@ -755,7 +762,7 @@ export function Chat({ id }: { id?: string }) {
   // The conversation this message belongs to, and its earlier messages (shown above it, oldest first).
   const summaries = useWorkflows();
   const thread = useThreads().find((th) => !!run && th.ids.includes(run.id));
-  // The title becomes a text box to rename the conversation (✎, or a double click on it).
+  // A double click on the title renames the conversation (the sidebar has the rename button).
   const [renaming, setRenaming] = useState(false);
   const threadKey = run ? run.config.threadId ?? run.id : '';
   const earlierIds = run
@@ -1023,6 +1030,7 @@ export function Chat({ id }: { id?: string }) {
   return (
     <div className="chat">
       {run && (
+        <>
         <header className="topbar">
           <div className="topbar-title">
             {renaming ? (
@@ -1032,9 +1040,6 @@ export function Chat({ id }: { id?: string }) {
                 <span className="title-text" title={thread?.title ?? run.config.title} onDoubleClick={() => setRenaming(true)}>
                   {thread?.title ?? run.config.title}
                 </span>
-                <button className="icon-btn title-edit" title={t('重新命名對話', 'Rename the chat')} aria-label={t('重新命名對話', 'Rename the chat')} onClick={() => setRenaming(true)}>
-                  ✎
-                </button>
               </>
             )}
             <span className={cx('status', st!.cls)}>
@@ -1064,6 +1069,15 @@ export function Chat({ id }: { id?: string }) {
             )}
           </div>
         </header>
+        {/* The folder this chat works in, whole: it never follows the window it is viewed from. */}
+        <div className="run-cwd" title={run.worktree?.origCwd ?? run.config.cwd}>
+          <span className="run-cwd-label">{t('工作資料夾', 'Folder')}</span>
+          <span className="run-cwd-path">
+            <bdi dir="ltr">{run.worktree?.origCwd ?? run.config.cwd}</bdi>
+          </span>
+          {run.worktree?.state === 'active' && <span className="run-cwd-label">{t('（在隔離副本中工作）', '(works in an isolated copy)')}</span>}
+        </div>
+        </>
       )}
 
       {!run ? (

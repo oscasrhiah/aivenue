@@ -2211,7 +2211,7 @@ textarea.code {
 }
 
 .wf-modal .kv {
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 72px minmax(0, 1fr);
 }
 
 /* A switch row inside a stage section (e.g. "Review the code"). */
@@ -2261,7 +2261,7 @@ textarea.code {
 }
 
 .sub-models .kv {
-  grid-template-columns: 110px 1fr;
+  grid-template-columns: 110px minmax(0, 1fr);
   align-items: center;
 }
 
@@ -2426,7 +2426,7 @@ textarea.code {
 
 .catalog-body {
   display: grid;
-  grid-template-columns: 300px 1fr;
+  grid-template-columns: 300px minmax(0, 1fr);
   gap: 14px;
   min-height: 380px;
 }
@@ -2500,11 +2500,24 @@ textarea.code {
   gap: 10px;
 }
 
+/*
+ * Label | control. The control column may shrink below its content: a <select> is as wide as its longest option,
+ * and with a plain 1fr that width pushed the row (and the dialog) past the window.
+ */
 .kv {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
+}
+
+.kv > * {
+  min-width: 0;
+}
+
+.kv select,
+.kv input:not([type="checkbox"]):not([type="radio"]) {
+  max-width: 100%;
 }
 
 .kv > label {
@@ -2918,7 +2931,7 @@ textarea.code {
 }
 
 .drawer .kv {
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 72px minmax(0, 1fr);
 }
 
 .att-warn {
@@ -3770,7 +3783,7 @@ textarea.code {
 
 .adv-options .kv {
   display: grid;
-  grid-template-columns: 64px 1fr;
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
 }
@@ -5280,7 +5293,7 @@ textarea.code {
 }
 .gw-row {
   display: grid;
-  grid-template-columns: 72px 1fr;
+  grid-template-columns: 72px minmax(0, 1fr);
   gap: 8px;
   font-size: 12.5px;
   line-height: 1.5;
@@ -5925,7 +5938,7 @@ textarea.code {
   border-color: var(--err);
 }
 
-/* The rename button sits beside the chat's link, shown when the row is pointed at or focused. */
+/* The rename button sits at the right of each chat's row, always there (muted until pointed at). */
 .side-row {
   position: relative;
 }
@@ -5944,26 +5957,23 @@ textarea.code {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--muted);
+  color: var(--faint);
   cursor: pointer;
-  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
 }
 
 .side-row:hover .side-edit,
+.side-row .side-item.active + .side-edit,
 .side-edit:focus-visible {
-  opacity: 1;
+  color: var(--muted);
 }
 
 .side-edit:hover {
   background: color-mix(in srgb, var(--text) 9%, transparent);
   color: var(--text);
-}
-
-/* Touch screens have no pointing: keep it visible there. */
-@media (hover: none) {
-  .side-edit {
-    opacity: 1;
-  }
 }
 
 .side-item.renaming {
@@ -5972,19 +5982,6 @@ textarea.code {
 
 .title-text {
   cursor: text;
-}
-
-.topbar-title .title-edit {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  font-size: 13px;
-  opacity: 0.55;
-}
-
-.topbar-title:hover .title-edit,
-.topbar-title .title-edit:focus-visible {
-  opacity: 1;
 }
 
 .title-rename {
@@ -6073,4 +6070,32 @@ textarea.code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ============ the chat's working folder, under its header ============ */
+.run-cwd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 20px 5px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-cwd-label {
+  flex-shrink: 0;
+}
+
+/* A long path keeps its end (the folder's own name) and cuts its beginning with "…". */
+.run-cwd-path {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font-family: var(--mono);
+  color: var(--text-2);
 }
