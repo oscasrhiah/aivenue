@@ -111,14 +111,20 @@ export function openChannel(ep: Endpoint, windowId: string, handlers: WindowHand
   });
 }
 
+/** While no hub answers, how often a window starts one again. */
+const RESPAWN_MS = 2500;
+
 /**
  * Connect this window to the hub, starting it when it is not running (or its endpoint file is stale). `spawn` starts
  * a hub process; when two windows start one at the same time, the second exits on the first one's lock and both
  * connect to the first.
+ * While no hub answers, a hub is started again every RESPAWN_MS: one started a moment after a hub crashed can still
+ * find the dead hub's lock (the system has not released it yet) and exit, and nothing would serve. Extra starts are
+ * harmless: the lock lets one serve and the others exit.
  */
 export async function ensureHub(o: { dataDir: string; windowId: string; handlers: WindowHandlers; spawn: () => Promise<void> | void; timeoutMs?: number }): Promise<Channel> {
   const deadline = Date.now() + (o.timeoutMs ?? 20_000);
-  let spawned = false;
+  let spawnedAt = 0;
   let lastError: unknown;
   for (;;) {
     const ep = readEndpoint(o.dataDir);
@@ -129,8 +135,8 @@ export async function ensureHub(o: { dataDir: string; windowId: string; handlers
         lastError = e;
       }
     }
-    if (!spawned) {
-      spawned = true;
+    if (!spawnedAt || Date.now() - spawnedAt >= RESPAWN_MS) {
+      spawnedAt = Date.now();
       await o.spawn();
     }
     if (Date.now() > deadline) throw new Error(`Aivenue hub did not start${lastError ? `: ${(lastError as Error).message}` : ''}`);

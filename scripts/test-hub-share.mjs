@@ -66,13 +66,14 @@ const bundled = await build({
   ...common,
   stdin: {
     contents: `export { startHub, HubBusyError, WindowRegistry } from './packages/core/src/index';
-export { ensureHub, openChannel, readEndpoint, endpointFile } from './packages/vscode/src/sharedHub';`,
+export { ensureHub, openChannel, readEndpoint, endpointFile } from './packages/vscode/src/sharedHub';
+export { holdOsLock, lockName } from './packages/core/src/osLock';`,
     resolveDir: root,
   },
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', '__dirname', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports, root);
-const { startHub, HubBusyError, WindowRegistry, ensureHub, openChannel, readEndpoint, endpointFile } = mod.exports;
+const { startHub, HubBusyError, WindowRegistry, ensureHub, openChannel, readEndpoint, endpointFile, holdOsLock, lockName } = mod.exports;
 
 const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `aivenue-share-${name}-`));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -629,6 +630,51 @@ test(
       assert.equal(readEndpoint(home), undefined);
     } finally {
       for (const pid of pids) if (alive(pid)) process.kill(pid);
+    }
+  },
+);
+
+test(
+  '共用 hub 當掉後：新的 hub 啟動時舊的鎖還沒被系統放開，它會讓出；視窗會再啟動一次，最後仍然連上（完整測試中重現的競爭）',
+  { timeout: 90_000 },
+  async () => {
+    const dir = tmp('respawn');
+    const home = path.join(dir, 'home');
+    fs.mkdirSync(home, { recursive: true });
+    const script = await daemonScript(dir);
+    const env = { ...process.env, AIVENUE_HOME: home, AIVENUE_HUB_GRACE_MS: '1500', FAKE_LOG: path.join(dir, 'turns.log') };
+    // The crashed hub: its address file is still there (nothing answers), and its lock is not released yet.
+    fs.writeFileSync(endpointFile(home), JSON.stringify({ pid: 999999, port: 1, token: 'x', build: 'dev', version: 'test', startedAt: Date.now() }));
+    const held = await holdOsLock(lockName(home, 'hub-vscode'));
+    assert.ok(held, 'the test holds the hub lock');
+    let spawned = 0;
+    const start = () => {
+      spawned++;
+      const child = spawn(process.execPath, [script], { env, detached: true, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+      child.stdin.end(JSON.stringify({ version: 'test', secrets: {} }));
+      child.unref();
+    };
+    const log = () => {
+      try {
+        return fs.readFileSync(path.join(home, 'logs', 'vscode-hub.log'), 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    let ch;
+    try {
+      const connecting = ensureHub({ dataDir: home, windowId: 'win-a', handlers: {}, spawn: start, timeoutMs: 30_000 });
+      // The hub started first finds the lock and steps aside; then the system releases the dead hub's lock.
+      await until(() => /another hub serves/.test(log()), 'the first hub to step aside', 20_000);
+      await held.release();
+      ch = await connecting;
+      assert.ok(spawned >= 2, `started again (${spawned})`);
+      assert.equal((log().match(/serving on port/g) ?? []).length, 1, log());
+      assert.equal((await ch.control('status')).windows, 1);
+    } finally {
+      ch?.close();
+      const ep = readEndpoint(home);
+      if (ep && alive(ep.pid)) process.kill(ep.pid);
     }
   },
 );
