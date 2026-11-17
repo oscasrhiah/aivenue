@@ -640,7 +640,10 @@ export function observedChecks(act: ReturnType<typeof collectActivity>): { ts: n
  * steps in the same command (`a; npm test; b`, `npm test | tail`): the command's end belongs to the whole line, so
  * success says only that it ran — its own result is in the output, to be read.
  */
-const isCompound = (what: string) => /[;&|\n]/.test(what.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""'));
+/** Redirections that join output streams (`2>&1`, `>&2`, `&>log`, `&>>log`, PowerShell `*>&1`): an `&` that neither
+ *  chains nor backgrounds a command, so a check written `npm test 2>&1` still ends with its own exit code. */
+const JOIN_STREAMS = /[\d*]*>&(?:\d+|-)|&>>?/g;
+const isCompound = (what: string) => /[;&|\n]/.test(what.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""').replace(JOIN_STREAMS, ' '));
 
 function checkOutcome(e: LedgerEntry): string {
   const compound = isCompound(e.command);

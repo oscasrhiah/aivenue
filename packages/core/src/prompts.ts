@@ -338,6 +338,14 @@ export function securityReviewRule(skillPath: string): string {
   ].join('\n');
 }
 
+/**
+ * For the roles that run checks: one written alone ends with its own exit code, so Aivenue can tell the user it
+ * passed or failed; inside a longer line (ledger.ts isCompound) it can only say it ran and the result is unread.
+ */
+export function checksAloneRule(): string {
+  return '\n\nCHECKS ON THEIR OWN: run each check (tests, a build, a type check, a linter) as a command by itself, in the working folder you are already in: nothing piped after it (no `| tail`, `| grep`), no `;`, `&&` or `||` chain, no `cd … &&` in front (for a subfolder, use your shell tool\'s working-directory option or a flag such as `npm --prefix <dir> test`; `2>&1` is fine). Aivenue then knows from its exit code whether it passed and shows the user so; inside a longer line it only knows the line ran, and the user is told the check\'s result is unknown. When the output is long, run the check anyway and look for what you need afterwards (`search_records` finds lines of earlier output) instead of cutting it in the same command.';
+}
+
 export function backgroundRule(): string {
   return '\n\nBACKGROUND JOBS (REQUIRED): right after you start anything in the background (nohup, &, a new terminal, tmux, Start-Process, a script that backgrounds itself, a run_in_background command), register it with the Aivenue tool `track_process` {pid, purpose, cleanup, log or watch_file + expected_size} so the user sees what it is, its status and its progress. Aivenue also finds unregistered jobs from your commands and your GPUs, and refuses your submission until every one is registered. A notice or monitor of your own CLI does not reach you once your turn ends: only Aivenue does. When you need a job\'s result and it takes more than a few minutes (training, a long build or test run, a big download), register it with notify_when_done: true and, once you have nothing else to do, end your turn without submitting: Aivenue continues this conversation as soon as it ends, with its log tail, and you go on from there. For a short wait, use `wait_for` {check: a command that exits 0 when it is done, interval_sec} instead of sleep loops.';
 }

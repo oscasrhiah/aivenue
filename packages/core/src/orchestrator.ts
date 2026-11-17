@@ -3282,7 +3282,7 @@ export class Orchestrator {
       const seenWords = resume ? (run.wordsSeen?.[resume] ?? []) : [];
       const earlierWords = earlier?.text && (!resume || earlierIds.some((id) => !seenWords.includes(id))) ? earlier.text : '';
       // Whole-computer access is said every turn: the user can turn it on or off while the conversation runs.
-      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + (earlierWords ? `\n\n${earlierWords}` : '') + previousText + ciText + reviewText + P.doneEffectsBlock(run.sideEffects);
+      const rules = plain ? '' : P.extraDirsBlock(extraDirs) + (run.config.permission === 'full' && mode !== 'readonly' ? P.fullAccessRule(run.config.cwd) : '') + (resume ? '' : P.externalRule(this.d.github?.() ?? undefined)) + (resume || !['executor', 'subagent', 'verifier'].includes(info.role) ? '' : P.backgroundRule()) + (resume || !['executor', 'subagent', 'verifier', 'code_reviewer'].includes(info.role) ? '' : P.checksAloneRule()) +(resume || mode !== 'write' ? '' : P.windowsFilesRule(this.d.platform ?? process.platform)) + (securitySkill ? P.securityReviewRule(securitySkill) : '') + (earlierWords ? `\n\n${earlierWords}` : '') + previousText + ciText + reviewText + P.doneEffectsBlock(run.sideEffects);
       // What this prompt is made of (observation only, docs/workflow-efficiency-plan.md A1).
       const turn = promptTurn(
         [
@@ -4649,9 +4649,12 @@ export class Orchestrator {
         wf.signal.removeEventListener('abort', onAbort);
         this.decisionWaiters.delete(run.id);
         const label = run.pending?.options.find((o) => o.id === dec.optionId)?.label ?? dec.optionId;
+        // An agent's question answered: "Your answer", without the name of the "write your own" choice.
+        const answered = !!run.pending?.question && (dec.optionId === 'answer' || dec.optionId.startsWith('answer:'));
         run.pending = undefined;
         run.status = 'running';
-        this.log(run, `${L('你的決定', 'Your decision')}: ${label}${dec.text ? ` — ${dec.text}` : ''}`, 'info', true);
+        if (answered) this.log(run, `${L('你的回答', 'Your answer')}: ${[dec.optionId === 'answer' ? '' : label, dec.text ?? ''].filter(Boolean).join(' — ')}`, 'info', true);
+        else this.log(run, `${L('你的決定', 'Your decision')}: ${label}${dec.text ? ` — ${dec.text}` : ''}`, 'info', true);
         this.touch(run);
         resolve(dec);
       });

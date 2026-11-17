@@ -286,8 +286,8 @@ test('在另一個視窗回答 agent 的問題：交給執行者、兩邊同步�
     await assert.rejects(va.call('workflows.decide', { id, decisionId: pending.id, optionId: 'answer:0' }), /已經失效|no longer pending/);
     await until(async () => (await status(va, id)) === 'completed', 'completion');
     const run = await va.call('workflows.get', { id });
-    assert.equal(run.log.filter((l) => /你的決定|Your decision/.test(l.text)).length, 1);
-    assert.match(run.log.find((l) => /你的決定|Your decision/.test(l.text)).text, /right/);
+    assert.equal(run.log.filter((l) => /你的回答|Your answer/.test(l.text)).length, 1);
+    assert.match(run.log.find((l) => /你的回答|Your answer/.test(l.text)).text, /right/);
     assert.equal(fake.turns.length, 2, 'the question turn and the answered one');
     // A's view was told: the question is gone there too.
     await until(() => va.pushes.some((p) => p.topic === 'workflow' && p.data.id === id && !p.data.pending && p.data.status !== 'waiting_human'), 'A to see the answer');

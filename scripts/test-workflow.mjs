@@ -2649,6 +2649,27 @@ test('工具呼叫的輸出超過 8,000 字元：分頁依序讀完，內容與�
   assert.equal(W.toolCallPage(events, 'implementer', 2, 99), W.toolCallPage(events, 'implementer', 2, p));
 });
 
+test('Aivenue 看到的檢查：合併輸出（2>&1、&>log、*>&1）不算較長的指令，照結束代碼判斷；串接、管線仍算，背景執行算不確定', () => {
+  const tool = (seq, title, output, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output, status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const cases = [
+    ['npm test 2>&1', 'passed'],
+    ['npm run build > build.log 2>&1', 'passed'],
+    ['pytest -q &> test.log', 'passed'],
+    ['npm run typecheck *>&1', 'passed'],
+    ['npm run lint 2>&1', 'failed', 'error'],
+    // Each a different check (runs of the same one are kept as one, the latest).
+    ['cargo test 2>&1 | tail -5', 'in_longer_command'],
+    ['go test ./... && echo done', 'in_longer_command'],
+    // Sent to the background: whether it ran (and how it ended) is not known.
+    ['make all &', 'may_not_run'],
+  ];
+  const events = cases.map(([cmd, , status], i) => tool(i + 1, cmd, 'ok', status ?? 'ok'));
+  const got = W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outcome]);
+  assert.deepEqual(got, cases.map(([cmd, outcome]) => [cmd, outcome]));
+});
+
 test('Aivenue 看到的檢查（資料）：通過、失敗、輸出報錯、在較長指令中、改檔後需重驗、可能已變；不是檢查的指令不算', () => {
   const tool = (seq, ts, category, title, output, status = 'ok') => ({ seq, ts, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
   const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };

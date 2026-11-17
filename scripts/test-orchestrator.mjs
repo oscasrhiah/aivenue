@@ -313,13 +313,19 @@ test('agent 的提問：選「其他」自己寫，agent 知道沒有選它列�
   assert.equal(r.status, 'completed', r.error);
   assert.match(prompts[1], /Their answer: None of your options\. The user wrote: 兩個都不要刪，改清 Docker 映像/);
   assert.ok(r.notes.some((n) => n.kind === 'decision' && /Docker/.test(n.text)));
+  // The timeline says the answer, not the name of the "write your own" choice.
+  const said = r.log.filter((l) => l.chat && /^(你的回答|Your answer)/.test(l.text)).map((l) => l.text);
+  assert.deepEqual(said.map((t) => t.replace(/^(你的回答|Your answer): /, '')), ['兩個都不要刪，改清 Docker 映像']);
+  assert.ok(!r.log.some((l) => /其他（自己寫）|Other \(write your own\)/.test(l.text)));
 });
 
 test('agent 的提問：只選選項不補充時，回答就是那個選項；沒有給選項時只有「寫下你的回答」，內容原樣交給 agent', async () => {
   const a = asking({ question: '要刪哪個快取？', options: ['刪 pip 快取', '刪 uv 快取'] });
   const p = await a.pending();
   a.orch.decide(a.id, p.id, 'answer:1');
-  assert.equal((await settle(a.orch, a.id)).status, 'completed');
+  const ra = await settle(a.orch, a.id);
+  assert.equal(ra.status, 'completed');
+  assert.ok(ra.log.some((l) => l.chat && /^(你的回答|Your answer): 刪 uv 快取$/.test(l.text)), JSON.stringify(ra.log.map((l) => l.text)));
   assert.match(a.prompts[1], /Their answer: 刪 uv 快取\n/);
   assert.doesNotMatch(a.prompts[1], /The user added|None of your options/);
   const b = asking({ question: '新模組要叫什麼名字？' });
@@ -327,8 +333,11 @@ test('agent 的提問：只選選項不補充時，回答就是那個選項；�
   assert.deepEqual(q.options.map((o) => o.id), ['answer', 'pause', 'abort']);
   assert.match(q.options[0].label, /寫下你的回答|Write your answer/);
   b.orch.decide(b.id, q.id, 'answer', 'gamma');
-  assert.equal((await settle(b.orch, b.id)).status, 'completed');
+  const rb = await settle(b.orch, b.id);
+  assert.equal(rb.status, 'completed');
   assert.match(b.prompts[1], /Their answer: gamma\n/);
+  // Not "Write your answer — gamma": the name of the box is not part of the answer.
+  assert.ok(rb.log.some((l) => l.chat && /^(你的回答|Your answer): gamma$/.test(l.text)), JSON.stringify(rb.log.map((l) => l.text)));
 });
 
 test('下一輪不接續上一輪的 CLI 對話：開新對話，帶最近的對話紀錄；完整紀錄用 read_context {topic: "log"} 翻頁', async () => {
@@ -2057,6 +2066,16 @@ test('Windows：會改檔的實作者 prompt 有一次 UTF-8 提醒；唯讀的�
   assert.equal(count(p.executor[0], WIN_RULE), 1, '實作者剛好一次');
   assert.match(p.executor[0], /For a partial change prefer `apply_patch` over reading the whole file and writing it back\./);
   for (const role of ['planner', 'plan_reviewer', 'code_reviewer']) for (const text of p[role]) assert.equal(count(text, 'WINDOWS FILES'), 0, role);
+});
+
+test('檢查要單獨執行的提醒：實作者、程式審查各一次（會跑檢查的角色）；計畫、計畫審查沒有', async () => {
+  const p = await promptsOn('linux');
+  for (const role of ['executor', 'code_reviewer']) {
+    assert.equal(p[role].length, 1, role);
+    assert.equal(count(p[role][0], 'CHECKS ON THEIR OWN'), 1, role);
+    assert.match(p[role][0], /no `;`, `&&` or `\|\|` chain, no `cd … &&` in front/, role);
+  }
+  for (const role of ['planner', 'plan_reviewer']) for (const text of p[role]) assert.equal(count(text, 'CHECKS ON THEIR OWN'), 0, role);
 });
 
 test('其他平台：沒有任何角色的 prompt 出現 Windows 提醒', async () => {
