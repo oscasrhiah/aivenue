@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentEvent, AgentRunInfo, ObservedCheck, WorkflowRun } from './types';
+import { withoutHeredocs } from './procdetect';
 
 /**
  * What every agent did, built from their recorded events (no model call), for the shared context:
@@ -213,7 +214,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
         }
         continue;
       }
-      if (t.category === 'command' && t.status === 'ok' && writesFiles((t.title || t.input || '').trim())) commandWrites.push(e.ts);
+      if (t.category === 'command' && t.status === 'ok' && writesFiles((t.title || t.input || '').trim(), run.config.cwd)) commandWrites.push(e.ts);
       if (o.onlyIds ? !o.onlyIds.has(a.id) : a.id === o.selfId) continue;
       if (t.category === 'read') {
         addRead(rel(flat(t.title)), e.ts, a, t.output);
@@ -350,19 +351,54 @@ const unquoted = (s: string) => s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
 
 /** Commands that change files (at the start of a step): PowerShell and .NET writers, cmd's, Unix tools, git's. */
 const WRITER =
-  /^[\s(&.]*(?:(?:Set|Add|Clear)-Content|Out-File|(?:New|Remove|Move|Copy|Rename)-Item|\[(?:System\.)?IO\.File\]::(?:Write|Append|Delete|Move|Copy|Replace)\w*|rm|mv|cp|touch|tee|truncate|del|erase|move|copy|ren|rename|sed\b.*\s-i|perl\b.*\s-p?i|patch|git\s+(?:apply|checkout|restore|reset|stash|mv|rm|pull|merge|rebase|cherry-pick|am|revert))\b/i;
+  /^[\s(&.]*(?:(?:Set|Add|Clear)-Content|Out-File|Tee-Object|(?:New|Remove|Move|Copy|Rename)-Item|\[(?:System\.)?IO\.File\]::(?:Write|Append|Delete|Move|Copy|Replace)\w*|rm|mv|cp|touch|tee|truncate|del|erase|move|copy|ren|rename|sed\b.*\s(?:-[a-zA-Z]*i|--in-place)|perl\b.*\s-[a-zA-Z]*i|patch|git(?:\s+-[Cc]\s+\S+)*\s+(?:apply|checkout|restore|reset|stash|mv|rm|pull|merge|rebase|cherry-pick|am|revert))\b/i;
+/** Formatters and fixers that rewrite files in place (unless run as a check: --check, --diff, --dry-run…). */
+const FORMATTER =
+  /^[\s(&.]*(?:(?:npx|pnpm\s+exec|pnpm\s+dlx|yarn|bunx)\s+)?(?:prettier\b.*\s--write|eslint\b.*\s--fix|biome\b.*\s--(?:write|apply)|go\s+fmt|gofmt\b.*\s-w|black|isort|autopep8\b.*\s(?:-i|--in-place)|rustfmt|cargo\s+fmt|dotnet\s+format|clang-format\b.*\s-i|ruff\s+(?:format|check\b.*\s--fix)|(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:format|fmt|fix|lint:fix|format:write)(?![\w:-]))\b/i;
+const DRY_RUN = /\s--(?:check|check-only|diff|dry-run|verify-no-changes|list-different)\b|\s-l\b/i;
+/** Steps that only pass a check's output on, so a `tee`/`Out-File` at their end writes the check's own log. */
+const PIPES_ON = /^[\s(&.]*(?:grep|findstr|Select-String|head|tail|Select-Object|sort|uniq|cat|more|less|sed(?!\b.*\s(?:-[a-zA-Z]*i|--in-place)))\b/i;
+
+/** Temporary folders: a scratch script or a log written there is not the project's. */
+const TEMP_PATH = /\$env:(?:TEMP|TMP)\b|%(?:TEMP|TMP)%|\$\{?TMPDIR\b|(?:^|[\s"'=(,])\/tmp\/|[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)|^\/var\/folders\/|GetTempPath\(\)/i;
 
 /**
- * A command that changes files: a writer (WRITER) at the start of any step, or output redirected into a file. Not
- * output thrown away ($null, /dev/null, NUL), streams joined (2>&1), nor a check writing its own output to a log
- * (`npm test > test.log`). Which files it changed is not worked out: only that something may have.
+ * A command that changes files: a writer or formatter (WRITER, FORMATTER) at the start of any step, or output
+ * redirected into a file. Not: output thrown away ($null, /dev/null, NUL) or into a temporary folder (outside
+ * `cwd`), streams joined (2>&1), a check writing its own log (`npm test > test.log`, `npm test 2>&1 | tee test.log`),
+ * a formatter run as a check (`prettier --check`), nor the body of a heredoc (data written to a file or a program's
+ * input: the line that writes it counts). Which files it changed is not worked out: only that something may have.
  */
-export function writesFiles(command: string): boolean {
-  return shellParts(unquoted(command)).some(({ text }) => {
-    const step = text.trim();
+export function writesFiles(command: string, cwd?: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\/([a-z])\//i, '$1:/').toLowerCase();
+  const inCwd = (p: string) => !!cwd && norm(p).startsWith(norm(cwd).replace(/\/?$/, '/'));
+  const temp = (p: string) => TEMP_PATH.test(p) && !inCwd(p);
+  // The places a step names (its arguments, quotes taken off), but not values given to -Value, -Encoding and the like.
+  const places = (raw: string) => {
+    const words = raw.trim().split(/[\s,]+/).slice(1);
+    return words.filter((w, i) => w && !w.startsWith('-') && !/^-(?:Value|Encoding|InputObject|ItemType|Stream|Delimiter)$/i.test(words[i - 1] ?? '')).map((w) => w.replace(/^["'(]+|["')]+$/g, ''));
+  };
+  const parts = shellParts(withoutHeredocs(command));
+  return parts.some(({ text }, i) => {
+    const step = unquoted(text).trim();
     if (!step) return false;
-    if (WRITER.test(step)) return true;
-    const into = [...step.matchAll(/>{1,2}\s*([^\s|;&>]+)/g)].map((m) => m[1]).filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f));
+    const writer = WRITER.test(step) || (FORMATTER.test(step) && !DRY_RUN.test(step));
+    if (writer) {
+      // A tee / Out-File at the end of a check's pipeline (`npm test 2>&1 | tee test.log`): the check's own log.
+      if (/^[\s(&.]*(?:tee|Tee-Object|Out-File)\b/i.test(step)) {
+        for (let j = i - 1; j >= 0 && parts[j].sep === '|'; j--) {
+          if (runsCheck(parts[j].text)) return false;
+          if (!PIPES_ON.test(unquoted(parts[j].text).trim())) break;
+        }
+      }
+      // Only into temporary folders (a scratch script deleted, a log under /tmp): not the project's files.
+      // (A plain $variable or a number given beside a temporary path is a value, not another place.)
+      const named = places(text);
+      return !(named.some(temp) && named.every((p) => temp(p) || /^\$(?!env:)\w+$/i.test(p) || /^\d+$/.test(p)));
+    }
+    // A redirect outside quotes (`node -e "1 > 0"` writes nothing); its target as written, to tell a temporary one.
+    if (!/>/.test(step.replace(/\d*>&(?:\d+|-)/g, ''))) return false;
+    const into = [...text.matchAll(/>{1,2}\s*("[^"]*"|'[^']*'|[^\s|;&>]+)/g)].map((m) => m[1].replace(/^["']|["']$/g, '')).filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f) && !temp(f));
     return into.length > 0 && !CHECK.test(step);
   });
 }

@@ -18,7 +18,7 @@ const bundled = await build({
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
       export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
-      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords, verifiedChecks, checkKey, checkRun, isCheckCommand, shellParts } from './packages/core/src/ledger';
+      export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords, verifiedChecks, checkKey, checkRun, isCheckCommand, shellParts, writesFiles } from './packages/core/src/ledger';
       export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
       export { codexContext } from './packages/core/src/agentContext';
@@ -382,6 +382,73 @@ test('背景程序偵測：nohup、&、新終端機、Start-Process 算啟動；
   assert.equal(W.backgroundLaunch('npm test && npm run build'), undefined);
   assert.equal(W.backgroundLaunch('ls 2>&1 | head'), undefined);
   assert.equal(W.pidFromOutput('started\n12345\n'), 12345);
+});
+
+test('背景程序偵測：寫進檔案的腳本（heredoc、here-string）和引號裡的文字不算啟動；交給 shell 執行的字串仍算', () => {
+  // What a reviewer ran in a real conversation: a script testing command patterns, written with a heredoc and run in
+  // the foreground. Its text names Start-Process; Aivenue took it for a background job and refused the submission.
+  const script = [
+    "cd /c/Python/agenthub-skills && cat > scripts/_rv2.mjs <<'EOF'",
+    "const cases = [\"Start-Process x -RedirectStandardOutput o.log\", \"npm run build &\", \"nohup python train.py > t.log 2>&1 &\"];",
+    'for (const c of cases) console.log(c);',
+    'EOF',
+    'node scripts/_rv2.mjs; rm scripts/_rv2.mjs',
+  ].join('\n');
+  assert.equal(W.backgroundLaunch(script, 'Start-Process x\n'), undefined);
+  assert.equal(W.backgroundLaunch("Set-Content a.ps1 @'\nStart-Process notepad\n'@\n.\\a.ps1"), undefined);
+  assert.equal(W.backgroundLaunch('node -e "console.log(\'Start-Process x\')"'), undefined);
+  assert.equal(W.backgroundLaunch('grep -rn "nohup .* &" docs'), undefined);
+  // Quoted text a shell runs is still looked at.
+  assert.ok(W.backgroundLaunch('bash -c "nohup python serve.py > s.log 2>&1 &"'));
+  assert.ok(W.backgroundLaunch('powershell -NoProfile -Command "Start-Process node -ArgumentList srv.js"'));
+  // A heredoc that only feeds a program does not hide a launch after it.
+  assert.ok(W.backgroundLaunch("cat > run.sh <<'EOF'\npython train.py\nEOF\nnohup bash run.sh > run.log 2>&1 &"));
+});
+
+test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri、git -C 算；檢查接 tee／Out-File 寫自己的記錄檔不算', () => {
+  const cwd = path.join(os.tmpdir(), 'aivenue-proj');
+  const yes = [
+    'Set-Content -Encoding UTF8 slug.js "x"',
+    'rm -rf /tmp/x dist',
+    String.raw`Copy-Item $env:TEMP\a.js src\a.js`,
+    `Set-Content ${path.join(cwd, 'a.js')} x`,
+    'echo hi &> out.txt',
+    'node gen.js 2> err.log',
+    'sed -ri s/a/b/ src/a.js',
+    'sed --in-place s/a/b/ a.js',
+    'git -C packages/ui checkout -- a.ts',
+    'prettier --write src',
+    'npx eslint --fix src',
+    'go fmt ./...',
+    'gofmt -w .',
+    'black .',
+    'ruff format .',
+    'npm run format',
+    'npm run lint:fix',
+    'cargo fmt',
+  ];
+  const no = [
+    String.raw`Remove-Item $env:TEMP\ic.mjs`,
+    String.raw`Remove-Item -Force "$env:TEMP\a.mjs","$env:TEMP\b.mjs"`,
+    String.raw`Set-Content -Path $env:TEMP\x.mjs -Value $code`,
+    'node gen.js > /tmp/x.log',
+    'rm -f /tmp/x.mjs',
+    String.raw`echo x > %TEMP%\a.txt`,
+    'npm test 2>&1 | tee test.log',
+    'npm test 2>&1 | Select-String fail | Tee-Object -FilePath t.log',
+    'npm test | Out-File t.log',
+    // Filtered on the way (grep, Select-String): still the check's own output.
+    'npm test 2>&1 | grep x | tee log.txt',
+    'prettier --check src',
+    'npx prettier --check .',
+    'black --check .',
+    'cargo fmt --check',
+    'npm run format:check',
+    'node -e "1 > 0" 2>&1',
+    'python - <<EOF\nif x > 3:\n  print(x)\nEOF',
+  ];
+  for (const c of yes) assert.equal(W.writesFiles(c, cwd), true, c);
+  for (const c of no) assert.equal(W.writesFiles(c, cwd), false, c);
 });
 
 test('讀檔指令算讀檔；輪詢指令認得出來', () => {

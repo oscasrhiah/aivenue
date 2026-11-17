@@ -47,13 +47,34 @@ export interface Launch {
   command: string;
 }
 
+/** A line that hands quoted text to a shell to run: `bash -c "…"`, `cmd /c "…"`, `powershell -Command "…"`. */
+const SHELL_PAYLOAD = /\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b|\bcmd(?:\.exe)?\s+\/[ck]\b|\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-(?:c|command|encodedcommand)\b/i;
+
+/**
+ * The part of a command its shell runs. Left out: a heredoc's body (`cat > a.mjs <<'EOF' … EOF`, `python - <<EOF`) and
+ * a PowerShell here-string (`@' … '@`), which are data written to a file or a program's input; and quoted text, an
+ * argument, unless the line hands it to a shell. (A script being written that mentions `Start-Process` or `nohup …
+ * &` in its text starts nothing.)
+ */
+export function shellText(command: string): string {
+  let s = withoutHeredocs(command);
+  if (!SHELL_PAYLOAD.test(s)) s = s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+  return s;
+}
+
+/** A command without the bodies of its heredocs (`<<'EOF' … EOF`) and PowerShell here-strings (`@' … '@`). */
+export function withoutHeredocs(command: string): string {
+  return command.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\r?\n|$)/g, '<<HEREDOC').replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, '@HERE@');
+}
+
 /** The background job a finished command started, if it started one. `input` is the tool's raw input (its flags). */
 export function backgroundLaunch(command: string, output?: string, input?: string): Launch | undefined {
   const cmd = flat(command);
   if (!cmd) return undefined;
   const flagged = /"run_in_background"\s*:\s*true/.test(input ?? '');
   // "nohup python train.py > log 2>&1 & sleep 10; tail log" starts a job, even though it also waits a little.
-  if (!flagged && (!LAUNCH.test(cmd) || NOT_A_LAUNCH.test(cmd))) return undefined;
+  const ran = flat(shellText(command));
+  if (!flagged && (!LAUNCH.test(ran) || NOT_A_LAUNCH.test(ran))) return undefined;
   return { key: keyOf(cmd), log: logOf(cmd), pid: pidFromOutput(output), command: cmd };
 }
 
