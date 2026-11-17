@@ -12,7 +12,7 @@
 //  - Lucide icons drawn, no emoji or text-symbol icon left in a button;
 //  - the result card's verification states apart (with their reasons) and the "agent's own words" tag;
 //  - agents' Markdown drawn: no raw table rows or code fences; a table in the reply is a table;
-//  - the waiting state and its question in view;
+//  - the waiting state and its question in view: the agent's answers to pick from, "Other", a box, nothing sent yet;
 //  - the folder path: a button the keyboard reaches; when cut, it opens to the whole path;
 //  - nothing past the webview's width, no control cut by its box or drawn over another.
 // PASS / FAIL lines, and JSON + screenshots in <out dir>.
@@ -257,6 +257,16 @@ const INSPECT = `(() => {
     states: [...document.querySelectorAll('.vstate-row')].map((r) => r.innerText.replace(/\\s+/g, ' ').trim()),
     selfTag: !!document.querySelector('.self-tag'),
     waiting: !!document.querySelector('.decision') && /等待你的決定|Waiting for your decision/.test(document.body.innerText),
+    // The agent's question: its answers to pick from, "Other" last, the box, and nothing sent before a pick.
+    question: (() => {
+      const q = document.querySelector('.decision.question');
+      if (!q) return null;
+      const choices = [...q.querySelectorAll('.answer-choice')];
+      const send = [...q.querySelectorAll('button')].find((b) => /送出回答|Send the answer/.test(b.textContent));
+      return { choices: choices.map((c) => c.innerText.trim()), radios: q.querySelectorAll('input[type=radio]').length, other: /其他|Other/.test(choices.at(-1)?.innerText ?? ''), box: !!q.querySelector('textarea'), sendDisabled: !!send?.disabled,
+        // Before a pick no answer may look picked (its dot drawn): a native radio once showed as a filled dot.
+        looksPicked: [...q.querySelectorAll('input[type=radio]')].filter((r) => r.checked || getComputedStyle(r, '::before').transform !== 'matrix(0, 0, 0, 0, 0, 0)').length };
+    })(),
     cwd: btn ? { focusable: btn.tabIndex >= 0 && !btn.disabled, cut: pathEl.scrollWidth > pathEl.clientWidth + 1, expandable: btn.getAttribute('aria-expanded') !== null, text: pathEl.textContent } : null,
     past: past.slice(0, 10),
     pastCount: past.length,
@@ -386,6 +396,12 @@ try {
       if (name !== 'new') check(`${place} · ${theme} · ${name}: agents' Markdown drawn (no raw table rows or code fences)`, r.rawMarkdown.length === 0, { tables: r.tables, raw: r.rawMarkdown });
       if (name === 'result' && agentTable) check(`${place} · ${theme} · result: the agent's Markdown table is drawn as a table`, r.tables > 0, r.tables);
       if (name === 'waiting') check(`${place} · ${theme} · waiting: "等待你的決定" and the question in view`, r.waiting);
+      if (name === 'waiting')
+        check(
+          `${place} · ${theme} · waiting: the question lists the agent's answers and "Other", with a box; nothing sent before a pick`,
+          !!r.question && r.question.radios >= 3 && r.question.radios === r.question.choices.length && r.question.other && r.question.box && r.question.sendDisabled && r.question.looksPicked === 0,
+          r.question,
+        );
       if (name !== 'new') {
         check(`${place} · ${theme} · ${name}: the folder path is a button the keyboard reaches`, !!r.cwd?.focusable, r.cwd);
         if (r.cwd?.cut) {
