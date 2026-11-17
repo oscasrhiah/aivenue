@@ -237,7 +237,13 @@ function Question({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
           </button>
         ))}
         {!ready && !sending && (
-          <span className="muted small">{!picked ? t('選一個答案，或選「其他」自己寫', 'Pick an answer, or "Other" to write your own') : t('選了「其他」：請寫下你的回答', 'You chose "Other": write your answer')}</span>
+          <span className="muted small">
+            {freeOnly
+              ? t('請寫下你的回答', 'Write your answer')
+              : !picked
+                ? t('選一個答案，或選「其他」自己寫', 'Pick an answer, or "Other" to write your own')
+                : t('選了「其他」：請寫下你的回答', 'You chose "Other": write your answer')}
+          </span>
         )}
       </div>
       {error && <div className="note err">{error}</div>}
