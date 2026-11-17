@@ -82,8 +82,8 @@
     - 沒有看到任何檢查時，寫明結果裡的「通過」是 agent 自述；「實作者的說明」旁也標「agent 自述」。
     - 檢查之後有改檔的那一項，列上直接標「變更後需重驗」，不再顯示成單純的通過。
     - agent 用指令寫檔也算改過，不只編輯工具。例如測試通過後用 `Set-Content`、`sed -i`、`>` 寫進檔案、`mv`、`git checkout`，之前的檢查都標「變更後需重驗」。原本這種情況會顯示「檢查通過」。輸出丟掉的（`> $null`、`/dev/null`）、檢查把自己的輸出寫到記錄檔的（`npm test > test.log`）、寫入失敗的不算。
-      - 只寫進暫存資料夾的不算（`$env:TEMP`、`%TEMP%`、`/tmp`），例如 agent 刪掉自己的暫存腳本、把輸出存到 `/tmp/x.log`；工作資料夾剛好在暫存資料夾裡時，寫進工作資料夾的照樣算。
-      - 格式化和自動修正工具也算改檔：`prettier --write`、`eslint --fix`、`black`、`go fmt`、`cargo fmt`、`ruff format`、`npm run format` 等，透過 `npx` 執行的也一樣；只檢查不改的（`--check`、`--diff`、`--dry-run`）不算。`sed -ri`、`sed --in-place`、`git -C <資料夾> checkout` 也認得。
+      - 只寫進暫存資料夾的不算（`$env:TEMP`、`%TEMP%`、`/tmp`），例如 agent 刪掉自己的暫存腳本、把輸出存到 `/tmp/x.log`；工作資料夾剛好在暫存資料夾裡時，寫進工作資料夾的照樣算。同一行先 `cd` 到暫存資料夾再寫檔（`cd /tmp/x && cat > run.mjs`），或寫到 `"$LOCALAPPDATA"/Temp` 下，也不算；但用 `Move-Item` 把專案裡的檔案搬到暫存資料夾，等於從專案拿走，照樣算。
+      - 格式化和自動修正工具也算改檔：`prettier --write`、`eslint --fix`、`black`、`go fmt`、`cargo fmt`、`ruff format`、`npm run format` 等，透過 `npx` 執行的也一樣；只檢查不改的（`--check`、`--diff`、`--dry-run`）不算；`black -l 120`、`isort -l 100` 的 `-l` 是行寬，照樣算改檔。任何指令帶 `--fix` 或 `--write` 也算（例如 `npm run lint -- --fix`）。`sed -ri`、`sed --in-place`、`git -C <資料夾> checkout` 也認得；`git merge-tree` 這類只預覽的不算。引號裡的 `>` 不算寫入（`node -e "1 > 0" > $null`）。
       - 檢查用 `tee`、`Tee-Object`、`Out-File` 把自己的輸出存成記錄檔（例如 `npm test 2>&1 | tee test.log`，中間經過 `grep` 也一樣），和 `npm test > test.log` 一樣不算改檔。
   - **更少「結果要看輸出」**：
     - 檢查只要單獨執行，Aivenue 就能從結束代碼判斷通過或失敗；接了管線（`| tail`）、串接（`;`、`&&`）或前面加 `cd … &&` 時，只能顯示「結果要看輸出」。現在實作者、子 agent、驗收者、程式審查的指示裡都寫明：檢查要單獨執行。
@@ -152,7 +152,7 @@
     - 其他程式碼顯示第一行（跳過註解，太長會截短）。
 - **agent 在前景跑完的腳本不再被當成背景工作**：
   - **原本的問題**：agent 用 heredoc（`cat > a.mjs <<'EOF' … EOF`）寫一個腳本再執行時，只要腳本內容或引號裡的文字提到 `Start-Process`、`nohup … &` 這類字樣，Aivenue 就以為它開了背景工作，要求先用 `track_process` 登記，否則不收它交的結果。有一次審查者只好借用其他已結束程序的編號登記，才交得出結果。
-  - **現在**：找背景工作時，heredoc 和 PowerShell here-string（`@' … '@`）的內容、引號裡的文字都不算指令。交給 shell 執行的字串照樣檢查，例如 `bash -c "nohup … &"`、`powershell -Command "Start-Process …"`。
+  - **現在**：找背景工作時，heredoc 和 PowerShell here-string（`@' … '@`）的內容、引號裡的文字都不算指令。交給 shell 執行的字串照樣檢查，例如 `bash -c "nohup … &"`、`powershell -Command "Start-Process …"`、`Invoke-Expression "Start-Process …"`。
   - 少數抓不到的情況：餵給程式的 heredoc 腳本自己在裡面開背景工作（例如 `python - <<EOF` 裡用 `os.system("nohup … &")`）。
 
 ### 開發
