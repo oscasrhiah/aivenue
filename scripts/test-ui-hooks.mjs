@@ -130,6 +130,37 @@ test('側欄收合存在設定裡（不是頁面自己的 localStorage）：App 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('App 與 VS Code 兩個 hub 各有一個設定存放，寫同一個 settings.json：一邊存的不會被另一邊較舊的副本蓋掉；讀得到對方的修改；殘留的鎖會被接手', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const out = await build({ entryPoints: ['packages/core/src/settings.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const { SettingsStore } = mod.exports;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-settings-two-'));
+  // Both hubs start from the same file, each with its own copy.
+  const app = new SettingsStore(dir);
+  const vscode = new SettingsStore(dir);
+  app.set({ sidebarHidden: { app: true } });
+  vscode.set({ sidebarHidden: { vscode: true } });
+  const disk = () => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  assert.deepEqual(disk().sidebarHidden, { app: true, vscode: true }, "the app's side was not overwritten");
+  app.set({ theme: 'dark' });
+  assert.deepEqual(disk().sidebarHidden, { app: true, vscode: true });
+  assert.equal(vscode.get().theme, 'dark', "the other hub's change is read");
+  assert.deepEqual(new SettingsStore(dir).get().sidebarHidden, { app: true, vscode: true });
+  // A lock left by a hub that stopped while saving.
+  const lock = path.join(dir, 'settings.json.lock');
+  fs.writeFileSync(lock, '');
+  const old = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, old, old);
+  vscode.set({ sidebarHidden: { vscode: false } });
+  assert.deepEqual(disk().sidebarHidden, { app: true, vscode: false });
+  assert.equal(fs.existsSync(lock), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('VS Code 背景服務換了連接埠：頁面不重新載入，直接連到新位址；等待中的呼叫重送過去；舊的重連計時不會多開一條連線', async () => {
   const { api, sockets, posted, fromExtension } = standInHub({ r1: { id: 'r1', config: { title: 'kept' } } }, { vscode: true });
   await tick();
