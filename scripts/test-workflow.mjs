@@ -411,6 +411,7 @@ test('背景程序偵測：寫進檔案的腳本（heredoc、here-string）和�
   // Quoted text a shell runs is still looked at.
   assert.ok(W.backgroundLaunch('bash -c "nohup python serve.py > s.log 2>&1 &"'));
   assert.ok(W.backgroundLaunch('powershell -NoProfile -Command "Start-Process node -ArgumentList srv.js"'));
+  assert.ok(W.backgroundLaunch('Invoke-Expression "Start-Process node -ArgumentList srv.js"'));
   // A heredoc that only feeds a program does not hide a launch after it.
   assert.ok(W.backgroundLaunch("cat > run.sh <<'EOF'\npython train.py\nEOF\nnohup bash run.sh > run.log 2>&1 &"));
 });
@@ -436,6 +437,17 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     'npm run format',
     'npm run lint:fix',
     'cargo fmt',
+    // From the review of 1df1ec6: -l is a line length for black and isort; a fix flag through npm; a move to temp.
+    'black -l 120 src',
+    'isort -l 100 src',
+    'npm run lint -- --fix',
+    'pnpm lint --fix',
+    String.raw`Move-Item $f $env:TEMP`,
+    'node -e "1 > 0" > "out file.txt"',
+    // Back in the project after a temporary folder; a git command that does write; a relative path in the project.
+    'cd /tmp/x && cd /c/Python/proj && rm a.js',
+    'git merge feature',
+    'cd src && sed -i s/a/b/ a.js',
   ];
   const no = [
     String.raw`Remove-Item $env:TEMP\ic.mjs`,
@@ -456,6 +468,18 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     'npm run format:check',
     'node -e "1 > 0" 2>&1',
     'python - <<EOF\nif x > 3:\n  print(x)\nEOF',
+    // From the review of 1df1ec6: a quoted > is no redirect even when the output goes to $null; listing and copying.
+    'node -e "1 > 0" > $null',
+    'gofmt -l .',
+    String.raw`Copy-Item $f $env:TEMP`,
+    'curl -s --write-out "%{http_code}" https://example.com',
+    'git commit --fixup HEAD',
+    'npm run lint -- --fix --dry-run',
+    // Real commands of reviews in Aivenue: a merge preview; a scratch folder the line moved to; LOCALAPPDATA's Temp.
+    'cd /c/Python/agenthub-checks && git merge-tree --write-tree --name-only a b; echo "exit $?"',
+    "mkdir -p /tmp/rvshot && cd /tmp/rvshot && cat > run.mjs <<'EOF'\nx\nEOF\nnode run.mjs",
+    "cd /tmp/rvshot && sed -i \"s#format: 'esm'#format: 'cjs'#\" run.mjs && node run.mjs",
+    'git status --short; rm -rf /tmp/rvshot "$LOCALAPPDATA"/Temp/aivenue-shot-x',
   ];
   for (const c of yes) assert.equal(W.writesFiles(c, cwd), true, c);
   for (const c of no) assert.equal(W.writesFiles(c, cwd), false, c);

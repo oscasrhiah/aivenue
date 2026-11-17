@@ -351,16 +351,24 @@ const unquoted = (s: string) => s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
 
 /** Commands that change files (at the start of a step): PowerShell and .NET writers, cmd's, Unix tools, git's. */
 const WRITER =
-  /^[\s(&.]*(?:(?:Set|Add|Clear)-Content|Out-File|Tee-Object|(?:New|Remove|Move|Copy|Rename)-Item|\[(?:System\.)?IO\.File\]::(?:Write|Append|Delete|Move|Copy|Replace)\w*|rm|mv|cp|touch|tee|truncate|del|erase|move|copy|ren|rename|sed\b.*\s(?:-[a-zA-Z]*i|--in-place)|perl\b.*\s-[a-zA-Z]*i|patch|git(?:\s+-[Cc]\s+\S+)*\s+(?:apply|checkout|restore|reset|stash|mv|rm|pull|merge|rebase|cherry-pick|am|revert))\b/i;
+  /^[\s(&.]*(?:(?:Set|Add|Clear)-Content|Out-File|Tee-Object|(?:New|Remove|Move|Copy|Rename)-Item|\[(?:System\.)?IO\.File\]::(?:Write|Append|Delete|Move|Copy|Replace)\w*|rm|mv|cp|touch|tee|truncate|del|erase|move|copy|ren|rename|sed\b.*\s(?:-[a-zA-Z]*i|--in-place)|perl\b.*\s-[a-zA-Z]*i|patch|git(?:\s+-[Cc]\s+\S+)*\s+(?:apply|checkout|restore|reset|stash|mv|rm|pull|merge|rebase|cherry-pick|am|revert)(?![\w-]))\b/i;
 /** Formatters and fixers that rewrite files in place (unless run as a check: --check, --diff, --dry-run…). */
 const FORMATTER =
   /^[\s(&.]*(?:(?:npx|pnpm\s+exec|pnpm\s+dlx|yarn|bunx)\s+)?(?:prettier\b.*\s--write|eslint\b.*\s--fix|biome\b.*\s--(?:write|apply)|go\s+fmt|gofmt\b.*\s-w|black|isort|autopep8\b.*\s(?:-i|--in-place)|rustfmt|cargo\s+fmt|dotnet\s+format|clang-format\b.*\s-i|ruff\s+(?:format|check\b.*\s--fix)|(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:format|fmt|fix|lint:fix|format:write)(?![\w:-]))\b/i;
-const DRY_RUN = /\s--(?:check|check-only|diff|dry-run|verify-no-changes|list-different)\b|\s-l\b/i;
+// (Not -l: black and isort take it for the line length and still write; gofmt -l lists, and gofmt counts only with -w.)
+const DRY_RUN = /\s--(?:check|check-only|diff|dry-run|verify-no-changes|list-different)\b/i;
+/** A fix or write flag on any tool (`npm run lint -- --fix`, `pnpm lint --fix`); not --write-out and the like. */
+const FIX_FLAG = /\s--(?:fix|write)(?![\w-])/i;
+/** Moving or renaming: what it moves, even when named by a variable, leaves its place. */
+const MOVER = /^[\s(&.]*(?:Move-Item|Rename-Item|mv|move|ren|rename)\b/i;
 /** Steps that only pass a check's output on, so a `tee`/`Out-File` at their end writes the check's own log. */
 const PIPES_ON = /^[\s(&.]*(?:grep|findstr|Select-String|head|tail|Select-Object|sort|uniq|cat|more|less|sed(?!\b.*\s(?:-[a-zA-Z]*i|--in-place)))\b/i;
 
 /** Temporary folders: a scratch script or a log written there is not the project's. */
-const TEMP_PATH = /\$env:(?:TEMP|TMP)\b|%(?:TEMP|TMP)%|\$\{?TMPDIR\b|(?:^|[\s"'=(,])\/tmp\/|[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)|^\/var\/folders\/|GetTempPath\(\)/i;
+const TEMP_PATH =
+  /\$env:(?:TEMP|TMP)\b|%(?:TEMP|TMP)%|\$\{?TMPDIR\b|(?:^|[\s"'=(,])\/tmp(?:\/|$)|[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)|(?:\$\{?LOCALAPPDATA\}?|%LOCALAPPDATA%|\$env:LOCALAPPDATA)["']?[\\/]Temp(?:[\\/"']|$)|^\/var\/folders\/|GetTempPath\(\)/i;
+/** A step that moves the shell to another folder, and where to. */
+const CHANGE_DIR = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|\S+)/i;
 
 /**
  * A command that changes files: a writer or formatter (WRITER, FORMATTER) at the start of any step, or output
@@ -372,35 +380,62 @@ const TEMP_PATH = /\$env:(?:TEMP|TMP)\b|%(?:TEMP|TMP)%|\$\{?TMPDIR\b|(?:^|[\s"'=
 export function writesFiles(command: string, cwd?: string): boolean {
   const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\/([a-z])\//i, '$1:/').toLowerCase();
   const inCwd = (p: string) => !!cwd && norm(p).startsWith(norm(cwd).replace(/\/?$/, '/'));
-  const temp = (p: string) => TEMP_PATH.test(p) && !inCwd(p);
-  // The places a step names (its arguments, quotes taken off), but not values given to -Value, -Encoding and the like.
+  const absolute = (p: string) => /^(?:[a-z]:[\\/]|[\\/~$%])/i.test(p);
+  // In a temporary folder the line moved to (`cd /tmp/x && cat > run.mjs`), a relative path is temporary too.
+  let inTemp = false;
+  const temp = (p: string) => (TEMP_PATH.test(p) || (inTemp && !absolute(p))) && !inCwd(p);
+  const bare = (w: string) => w.replace(/^["'(]+|["')]+$/g, '');
+  // The places a step names (its arguments, each a shell word: quoted and plain pieces run together, as in
+  // `"$LOCALAPPDATA"/Temp/x`; outer quotes taken off), but not values given to -Value, -Encoding and the like.
   const places = (raw: string) => {
-    const words = raw.trim().split(/[\s,]+/).slice(1);
-    return words.filter((w, i) => w && !w.startsWith('-') && !/^-(?:Value|Encoding|InputObject|ItemType|Stream|Delimiter)$/i.test(words[i - 1] ?? '')).map((w) => w.replace(/^["'(]+|["')]+$/g, ''));
+    const words = (raw.trim().match(/(?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s,"'])+/g) ?? []).slice(1);
+    return words.filter((w, i) => !w.startsWith('-') && !/^-(?:Value|Encoding|InputObject|ItemType|Stream|Delimiter)$/i.test(words[i - 1] ?? '')).map(bare);
   };
   const parts = shellParts(withoutHeredocs(command));
-  return parts.some(({ text }, i) => {
+  for (let i = 0; i < parts.length; i++) {
+    const text = parts[i].text;
     const step = unquoted(text).trim();
-    if (!step) return false;
-    const writer = WRITER.test(step) || (FORMATTER.test(step) && !DRY_RUN.test(step));
+    if (!step) continue;
+    const dir = CHANGE_DIR.exec(text.trim());
+    if (dir) {
+      const to = bare(dir[1]);
+      if (absolute(to)) inTemp = TEMP_PATH.test(to) && !inCwd(to);
+      continue;
+    }
+    const writer = WRITER.test(step) || ((FORMATTER.test(step) || FIX_FLAG.test(step)) && !DRY_RUN.test(step));
     if (writer) {
       // A tee / Out-File at the end of a check's pipeline (`npm test 2>&1 | tee test.log`): the check's own log.
+      let ownLog = false;
       if (/^[\s(&.]*(?:tee|Tee-Object|Out-File)\b/i.test(step)) {
         for (let j = i - 1; j >= 0 && parts[j].sep === '|'; j--) {
-          if (runsCheck(parts[j].text)) return false;
-          if (!PIPES_ON.test(unquoted(parts[j].text).trim())) break;
+          if (runsCheck(parts[j].text)) ownLog = true;
+          if (ownLog || !PIPES_ON.test(unquoted(parts[j].text).trim())) break;
         }
       }
+      if (ownLog) continue;
       // Only into temporary folders (a scratch script deleted, a log under /tmp): not the project's files.
-      // (A plain $variable or a number given beside a temporary path is a value, not another place.)
+      // (A plain $variable or a number given beside a temporary path is a value, not another place, except for a move:
+      // `Move-Item $f $env:TEMP` takes a project file out of the project.)
       const named = places(text);
-      return !(named.some(temp) && named.every((p) => temp(p) || /^\$(?!env:)\w+$/i.test(p) || /^\d+$/.test(p)));
+      const value = (p: string) => !MOVER.test(step) && (/^\$(?!env:)\w+$/i.test(p) || /^\d+$/.test(p));
+      const onlyTemp = named.some(temp) && named.every((p) => temp(p) || value(p));
+      if (!onlyTemp) return true;
+      continue;
     }
-    // A redirect outside quotes (`node -e "1 > 0"` writes nothing); its target as written, to tell a temporary one.
-    if (!/>/.test(step.replace(/\d*>&(?:\d+|-)/g, ''))) return false;
-    const into = [...text.matchAll(/>{1,2}\s*("[^"]*"|'[^']*'|[^\s|;&>]+)/g)].map((m) => m[1].replace(/^["']|["']$/g, '')).filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f) && !temp(f));
-    return into.length > 0 && !CHECK.test(step);
-  });
+    // A redirect outside quotes (`node -e "1 > 0"` writes nothing: quoted text is blanked, keeping its place), and its
+    // target read as written (a quoted path too), to tell a temporary one. Not `2>&1` or `>&2` (streams joined).
+    const blanked = text.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (q) => q[0] + ' '.repeat(q.length - 2) + q[q.length - 1]);
+    const into: string[] = [];
+    for (const m of blanked.matchAll(/>{1,2}[ \t]*/g)) {
+      const rest = text.slice(m.index + m[0].length);
+      if (rest.startsWith('&')) continue;
+      const target = /^("[^"]*"|'[^']*'|[^\s|;&>]+)/.exec(rest)?.[1];
+      if (target) into.push(bare(target));
+    }
+    const kept = into.filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f) && !temp(f));
+    if (kept.length > 0 && !CHECK.test(step)) return true;
+  }
+  return false;
 }
 
 /** Whether a part of a command, outside its quotes, runs a check. */

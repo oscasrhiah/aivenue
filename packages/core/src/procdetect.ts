@@ -47,8 +47,8 @@ export interface Launch {
   command: string;
 }
 
-/** A line that hands quoted text to a shell to run: `bash -c "…"`, `cmd /c "…"`, `powershell -Command "…"`. */
-const SHELL_PAYLOAD = /\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b|\bcmd(?:\.exe)?\s+\/[ck]\b|\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-(?:c|command|encodedcommand)\b/i;
+/** A line that hands quoted text to a shell to run: `bash -c "…"`, `cmd /c "…"`, `powershell -Command "…"`, `iex "…"`. */
+const SHELL_PAYLOAD = /\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b|\bcmd(?:\.exe)?\s+\/[ck]\b|\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-(?:c|command|encodedcommand)\b|\b(?:Invoke-Expression|iex)\b/i;
 
 /**
  * The part of a command its shell runs. Left out: a heredoc's body (`cat > a.mjs <<'EOF' … EOF`, `python - <<EOF`) and
