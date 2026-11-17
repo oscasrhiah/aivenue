@@ -26,6 +26,61 @@ export function accountEnv(spec: ProviderSpec): Record<string, string> {
   return spec.accountOf && spec.accounts && spec.accountHome ? { [spec.accounts.env]: spec.accountHome } : {};
 }
 
+/**
+ * A string setting of a TOML file, by its dotted name ("windows.sandbox"): under its [table], or written dotted.
+ * Arrays of tables, multi-line strings and inline tables are not looked into.
+ */
+export function tomlSetting(text: string, dotted: string): string | undefined {
+  const norm = (k: string) => k.replace(/\s*\.\s*/g, '.').replace(/"/g, '');
+  let table = '';
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith('[[')) {
+      table = '\0';
+      continue;
+    }
+    const head = /^\[\s*([^\]]+?)\s*\]\s*(?:#.*)?$/.exec(line);
+    if (head) {
+      table = norm(head[1]);
+      continue;
+    }
+    const kv = /^([\w".\s-]+?)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:#.*)?$/.exec(line);
+    if (!kv || `${table ? `${table}.` : ''}${norm(kv[1])}` !== dotted) continue;
+    if (kv[3] !== undefined) return kv[3];
+    try {
+      return JSON.parse(`"${kv[2]}"`) as string;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Settings an extra account takes from the default config folder (spec.accounts.shared) when its own config file
+ * does not set them. Plain names only (letters, digits, - _ .): they go on the command line.
+ */
+export function sharedAccountArgs(spec: ProviderSpec): ArgGroup[] {
+  const shared = spec.accounts?.shared;
+  if (!spec.accountOf || !spec.accounts || !spec.accountHome || !shared) return [];
+  const read = (dir: string) => {
+    try {
+      return fs.readFileSync(path.join(dir, shared.file), 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  const own = read(spec.accountHome);
+  const main = read(process.env[spec.accounts.env] || expandHome(spec.accounts.home));
+  const out: ArgGroup[] = [];
+  for (const key of shared.keys) {
+    const value = tomlSetting(main, key);
+    if (value === undefined || !/^[\w.-]+$/.test(value) || tomlSetting(own, key) !== undefined) continue;
+    out.push(shared.arg.map((a) => a.replace('{key}', key).replace('{value}', value)));
+  }
+  return out;
+}
+
 /** A path under the CLI's default config folder, moved into an extra account's folder. */
 function inAccount(p: string, spec: ProviderSpec): string {
   if (!spec.accountOf || !spec.accounts || !spec.accountHome) return p;
@@ -452,13 +507,14 @@ export class ProviderRegistry {
   /** Environment/args a run needs for the provider's selected auth mode. */
   async runAuth(id: string): Promise<RunAuth> {
     const spec = this.get(id);
-    if (!spec || this.authMode(id) !== 'api' || !spec.apiKey) return { env: {}, args: [] };
+    const shared = spec ? sharedAccountArgs(spec) : [];
+    if (!spec || this.authMode(id) !== 'api' || !spec.apiKey) return { env: {}, args: shared };
     const key = await this.secrets.get(keyName(id));
     if (!key) throw new Error(L(`${spec.name} 設定為 API 模式，但尚未輸入 API 金鑰`, `${spec.name} is in API mode but no API key has been entered`));
     const env: Record<string, string> = { ...(spec.apiKey.extraEnv ?? {}), [spec.apiKey.env]: key };
     const baseUrl = this.stored.settings[id]?.baseUrl;
     if (baseUrl && spec.apiKey.baseUrlEnv) env[spec.apiKey.baseUrlEnv] = baseUrl;
-    return { env, args: spec.apiKey.args ?? [], settingsExtra: spec.apiKey.settingsExtra };
+    return { env, args: [...(spec.apiKey.args ?? []), ...shared], settingsExtra: spec.apiKey.settingsExtra };
   }
 
   private save() {

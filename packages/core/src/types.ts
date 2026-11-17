@@ -170,8 +170,11 @@ export interface ProviderSpec {
   /**
    * The CLI can run several accounts side by side: `env` points it at a config folder other than `home`
    * (its default, e.g. ~/.claude), so each account keeps its own sign-in.
+   * `shared`: settings in the default folder's config file that belong to the computer, not to an account. An extra
+   * account whose own config file does not set one runs with the default folder's value, passed as `arg` ({key} and
+   * {value} filled in).
    */
-  accounts?: { env: string; home: string };
+  accounts?: { env: string; home: string; shared?: { file: string; keys: string[]; arg: string[] } };
   /** Set on an extra account: the provider it is an account of, its name, and its config folder. */
   accountOf?: string;
   accountName?: string;

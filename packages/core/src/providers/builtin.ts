@@ -106,7 +106,9 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     apiKey: { env: 'CODEX_API_KEY', baseUrlEnv: 'OPENAI_BASE_URL', note: 'OpenAI API 金鑰' },
     quota: { reader: 'codex-sessions' },
     modelSource: { type: 'codex-cache' },
-    accounts: { env: 'CODEX_HOME', home: '~/.codex' },
+    // The Windows sandbox ([windows] sandbox) is chosen and set up for this computer under the default account;
+    // without it an extra account's sandboxed commands are all refused ("blocked by policy").
+    accounts: { env: 'CODEX_HOME', home: '~/.codex', shared: { file: 'config.toml', keys: ['windows.sandbox'], arg: ['-c', '{key}="{value}"'] } },
     configDefaults: { file: '~/.codex/config.toml', model: '^\\s*model\\s*=\\s*"([^"]+)"', effort: '^\\s*model_reasoning_effort\\s*=\\s*"([^"]+)"' },
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     capabilities: { resume: true, mcp: true },

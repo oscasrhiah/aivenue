@@ -8,7 +8,7 @@ import { build } from 'esbuild';
 
 // 模型清單不能因為 CLI 讀取失敗就變成空的：先重試，再用上一次成功的清單，最後用內建的免費模型。
 const bundled = await build({
-  stdin: { contents: `export { ProviderRegistry } from './packages/core/src/providers/registry';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { ProviderRegistry, tomlSetting } from './packages/core/src/providers/registry';`, resolveDir: process.cwd() },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -17,7 +17,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { ProviderRegistry } = mod.exports;
+const { ProviderRegistry, tomlSetting } = mod.exports;
 
 const node = process.execPath;
 const ok = (...ids) => ['-e', `console.log(${JSON.stringify(ids.join('\n'))})`];
@@ -134,4 +134,50 @@ test('settledAuth：等還在跑的登入檢查；沒檢查過就檢查一次；
   assert.equal((await r.settledAuth('fake-oc', 300)).state, 'checking');
   assert.ok(Date.now() - t0 < 2500, `waited ${Date.now() - t0} ms`);
   assert.equal((await long).state, 'logged_in');
+});
+
+// Codex 的 Windows 沙箱是為這台電腦設定的（主帳號的 config.toml）。額外加入的帳號有自己的設定資料夾，
+// 沒有這項設定時，沙箱裡的指令全部被擋（"blocked by policy"）：要沿用主帳號的。
+test('TOML 設定：[表格] 底下、點號寫法、單引號、註解都讀得到；其他表格、陣列表格不算', () => {
+  const text = ['model = "gpt-6-luna"', 'windows.other = "x"', '', '[windows]', 'sandbox = "elevated" # set up once', '', '[[profiles]]', 'sandbox = "nope"', '[mcp_servers.a]', 'sandbox = "nope"'].join('\n');
+  assert.equal(tomlSetting(text, 'windows.sandbox'), 'elevated');
+  assert.equal(tomlSetting(text, 'windows.other'), 'x');
+  assert.equal(tomlSetting(text, 'model'), 'gpt-6-luna');
+  assert.equal(tomlSetting(text, 'sandbox'), undefined);
+  assert.equal(tomlSetting("windows . sandbox = 'unelevated'\r\n", 'windows.sandbox'), 'unelevated');
+  assert.equal(tomlSetting('[ windows ]\r\nsandbox="mxc"\r\n', 'windows.sandbox'), 'mxc');
+  assert.equal(tomlSetting('[windows]\n# sandbox = "elevated"\n', 'windows.sandbox'), undefined);
+  assert.equal(tomlSetting('', 'windows.sandbox'), undefined);
+});
+
+test('額外的 Codex 帳號沿用主帳號的 Windows 沙箱設定；帳號自己有設定時用自己的；主帳號不多加參數', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-accounts-'));
+  const main = path.join(dir, 'main-codex');
+  fs.mkdirSync(main);
+  fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ providers: [], hidden: [], settings: {}, accounts: [{ providerId: 'codex', slug: 'work', name: 'work' }] }));
+  const secrets = { get: async () => undefined, set: async () => undefined, delete: async () => undefined, has: () => false, list: () => [], keys: async () => [] };
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = main;
+  try {
+    const r = new ProviderRegistry(dir, secrets, () => undefined);
+    const own = path.join(dir, 'accounts', 'codex', 'work');
+    assert.equal(r.get('codex~work').accountHome, own);
+    // The main account has no sandbox setting: nothing to take over.
+    assert.deepEqual((await r.runAuth('codex~work')).args, []);
+    fs.writeFileSync(path.join(main, 'config.toml'), 'model = "gpt-6-luna"\n\n[windows]\nsandbox = "elevated"\n');
+    assert.deepEqual((await r.runAuth('codex~work')).args, [['-c', 'windows.sandbox="elevated"']]);
+    assert.deepEqual((await r.runAuth('codex')).args, []);
+    // The account's own choice stays.
+    fs.mkdirSync(own, { recursive: true });
+    fs.writeFileSync(path.join(own, 'config.toml'), '[windows]\nsandbox = "unelevated"\n');
+    assert.deepEqual((await r.runAuth('codex~work')).args, []);
+    // A value that is not a plain name is not put on the command line.
+    fs.rmSync(path.join(own, 'config.toml'));
+    fs.writeFileSync(path.join(main, 'config.toml'), '[windows]\nsandbox = "elevated\\" -c x=\\"y"\n');
+    assert.deepEqual((await r.runAuth('codex~work')).args, []);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
