@@ -1,6 +1,8 @@
 // The chat page inside a real VS Code webview, with OpenCode's free model by default (no other agent's quota). With
-// ACC_PROVIDER=codex and CODEX_HOME set to a secondary Codex account's folder, Codex runs under that account instead
-// (VS Code, its hub and the CLI inherit the environment); never point it at the user's main account unless told to:
+// ACC_PROVIDER=codex~<name> and ACC_ACCOUNT_DIR set to that extra account's folder (e.g. ~/.aivenue/accounts/codex/
+// <name>), Codex runs as that extra account, as in Aivenue: the isolated AIVENUE_HOME lists the account and links its
+// folder (a junction, removed at the end; nothing is copied). ACC_PROVIDER=codex with CODEX_HOME set to an account's
+// folder runs Codex under it as the default account. Never point either at the user's main account unless told to:
 //   node vscode-ui-check.mjs <aivenue.vsix> <out dir> [<VS Code folder>]
 // A throwaway VS Code profile (user data and extensions folders) and an isolated AIVENUE_HOME: the user's own VS Code
 // and ~/.aivenue are never touched. One window, project folder "proj"; Aivenue in an editor tab (wide) and in the
@@ -60,6 +62,21 @@ const ext = path.join(OUT, 'vscode-ext');
 const home = path.join(OUT, 'aivenue-home');
 const proj = path.join(OUT, 'proj');
 for (const d of [ud, ext, home, proj]) fs.mkdirSync(d, { recursive: true });
+// An extra account (provider~slug): listed in the isolated home, its folder linked in where Aivenue keeps it.
+const accountMatch = /^([a-z0-9_-]+)~([a-z0-9_.-]+)$/i.exec(PROVIDER);
+const accountDir = process.env.ACC_ACCOUNT_DIR ? path.resolve(process.env.ACC_ACCOUNT_DIR) : undefined;
+let accountLink;
+if (accountMatch) {
+  if (!accountDir || !fs.existsSync(accountDir)) {
+    console.error(`ACC_PROVIDER=${PROVIDER} is an extra account: set ACC_ACCOUNT_DIR to its folder.`);
+    process.exit(2);
+  }
+  const [, providerId, slug] = accountMatch;
+  fs.writeFileSync(path.join(home, 'providers.json'), JSON.stringify({ providers: [], hidden: [], settings: {}, accounts: [{ providerId, slug, name: slug }] }, null, 2));
+  fs.mkdirSync(path.join(home, 'accounts', providerId), { recursive: true });
+  accountLink = path.join(home, 'accounts', providerId, slug);
+  fs.symlinkSync(accountDir, accountLink, 'junction');
+}
 fs.mkdirSync(path.join(ud, 'User'), { recursive: true });
 const settingsFile = path.join(ud, 'User', 'settings.json');
 // No telemetry prompt, welcome page, workspace-trust or Copilot sign-in dialog (a fresh profile opens one over the
@@ -411,7 +428,15 @@ try {
 } finally {
   for (const pid of ourCode()) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F']);
   for (const pid of hubProcesses()) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F']);
-  fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify({ provider: PROVIDER, model: MODEL ?? '(provider default)', codexHome: process.env.CODEX_HOME ?? null, minutes: ((Date.now() - t0) / 60000).toFixed(1), results, shots, missingShots: missing }, null, 1));
+  // The link only (the account's folder stays as it is).
+  if (accountLink) {
+    try {
+      fs.unlinkSync(accountLink);
+    } catch (e) {
+      console.error(`Could not remove the link ${accountLink}: ${e.message}`);
+    }
+  }
+  fs.writeFileSync(path.join(OUT, 'ui-check.json'), JSON.stringify({ provider: PROVIDER, model: MODEL ?? '(provider default)', codexHome: process.env.CODEX_HOME ?? null, accountDir: accountMatch ? accountDir : null, minutes: ((Date.now() - t0) / 60000).toFixed(1), results, shots, missingShots: missing }, null, 1));
   log(`${fails} failed`);
   process.exit(fails ? 1 : 0);
 }
