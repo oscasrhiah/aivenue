@@ -375,3 +375,104 @@ test('驗收輸出資料夾：只清空新的、空的或先前驗收留下的�
   assert.ok(fs.existsSync(path.join(repo, 'scripts')));
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+// ---------- review-check.mjs: the samples themselves ----------
+
+/**
+ * The "clean" review sample's Store, loaded from review-samples.mjs into a folder of its own, with `fs` that a test can
+ * break: `faults.writeSync(fd, data, at, len)` may return how much it "wrote" (writing that part) or throw;
+ * `faults.renameSync` / `faults.fsyncSync` may throw.
+ */
+async function cleanStore(faults = {}) {
+  const { AFTER } = await import(new URL('./accept/review-samples.mjs', import.meta.url));
+  const dir = tmp('clean-sample');
+  const real = (await import('node:module')).createRequire(import.meta.url)('node:fs');
+  const broken = {
+    ...real,
+    writeSync: (fd, data, at = 0, len = data.length - at) => (faults.writeSync ? faults.writeSync(fd, data, at, len, real) : real.writeSync(fd, data, at, len)),
+    renameSync: (a, b) => (faults.renameSync ? faults.renameSync(a, b, real) : real.renameSync(a, b)),
+    fsyncSync: (fd) => (faults.fsyncSync ? faults.fsyncSync(fd, real) : real.fsyncSync(fd)),
+  };
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', AFTER.clean)((m) => (m === 'fs' ? broken : require(m)), mod, mod.exports);
+  const file = path.join(dir, 'ops.json');
+  return { Store: mod.exports.Store, file, dir, read: () => JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
+const { createRequire } = await import('node:module');
+const require = createRequire(import.meta.url);
+
+test('驗收樣本 clean：寫入只寫了一部分時繼續寫完；沒有進度、fsync 或改名失敗時不回覆、不記住，舊資料完整，重送會再寫', async () => {
+  // A short write: the first call writes only one byte, the rest goes on.
+  let first = true;
+  const short = await cleanStore({
+    writeSync: (fd, data, at, len, real) => {
+      if (first && at === 0) {
+        first = false;
+        return real.writeSync(fd, data, at, 1);
+      }
+      return real.writeSync(fd, data, at, len);
+    },
+  });
+  const s1 = new short.Store(short.file);
+  const replies = [];
+  s1.apply({ id: 'old' }, (r) => replies.push(r));
+  s1.apply({ id: 'new' }, (r) => replies.push(r));
+  assert.deepEqual(short.read(), [{ id: 'old' }, { id: 'new' }], 'all of the data is written');
+  assert.deepEqual(replies, [{ ok: true }, { ok: true }]);
+
+  // No progress: nothing answered or kept, the old data whole (never a loop that waits forever).
+  const stuck = await cleanStore({ writeSync: (fd, data, at, len, real) => (data.includes('"new"') ? 0 : real.writeSync(fd, data, at, len)) });
+  const s0 = new stuck.Store(stuck.file);
+  s0.apply({ id: 'old' }, () => {});
+  let none = 0;
+  assert.throws(() => s0.apply({ id: 'new' }, () => none++), /could not write/);
+  assert.equal(none, 0);
+  assert.deepEqual(stuck.read(), [{ id: 'old' }], 'the old data is whole');
+  assert.deepEqual(s0.ops, [{ id: 'old' }], 'nothing kept in memory');
+
+  // A failed fsync, then a failed rename: the same; and a retry once the disk works writes it.
+  const broken = { on: false, rename: false };
+  const failing = await cleanStore({
+    fsyncSync: (fd, real) => {
+      if (broken.on) throw new Error('EIO: fsync failed');
+      return real.fsyncSync(fd);
+    },
+    renameSync: (a, b, real) => {
+      if (broken.rename) throw new Error('EPERM: rename failed');
+      return real.renameSync(a, b);
+    },
+  });
+  const s2 = new failing.Store(failing.file);
+  s2.apply({ id: 'old' }, () => {});
+  for (const what of ['on', 'rename']) {
+    broken[what] = true;
+    let answered = 0;
+    assert.throws(() => s2.apply({ id: 'new' }, () => answered++), what === 'on' ? /fsync failed/ : /rename failed/);
+    assert.equal(answered, 0);
+    assert.deepEqual(failing.read(), [{ id: 'old' }]);
+    assert.deepEqual(s2.ops, [{ id: 'old' }]);
+    broken[what] = false;
+  }
+  // The retry once the disk works again: saved, then answered.
+  const later = [];
+  s2.apply({ id: 'new' }, (r) => later.push(r));
+  assert.deepEqual(later, [{ ok: true }]);
+  assert.deepEqual(failing.read(), [{ id: 'old' }, { id: 'new' }]);
+  for (const c of [short, stuck, failing]) fs.rmSync(c.dir, { recursive: true, force: true });
+});
+
+test('驗收樣本：有缺陷的版本確實先回覆、後存檔（樣本本身沒有被改成正確的）；兩份樣本都標明是修訂後的版本', async () => {
+  const { AFTER, BEFORE, SAMPLE_VERSION } = await import(new URL('./accept/review-samples.mjs', import.meta.url));
+  assert.match(SAMPLE_VERSION, /revised/);
+  assert.match(BEFORE, /one Store per file; nothing else writes it/);
+  const dir = tmp('defect-sample');
+  const file = path.join(dir, 'ops.json');
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', AFTER.defect)(require, mod, mod.exports);
+  const s = new mod.exports.Store(file);
+  let onDiskAtReply;
+  s.apply({ id: 'a' }, () => (onDiskAtReply = fs.existsSync(file)));
+  assert.equal(onDiskAtReply, false, 'the defect: answered before the save');
+  clearTimeout(s.timer);
+  fs.rmSync(dir, { recursive: true, force: true });
+});

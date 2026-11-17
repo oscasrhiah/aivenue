@@ -16,6 +16,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { AFTER, BEFORE, MATERIAL, REQUEST, SAMPLE_VERSION, TEST_JS } from './review-samples.mjs';
 
 const [repoArg, outArg] = process.argv.slice(2);
 if (!repoArg || !outArg) {
@@ -48,109 +49,7 @@ if (accountMatch) {
   if (!fs.existsSync(accountLink)) fs.symlinkSync(accountDir, accountLink, 'junction');
 }
 
-// ---------- the samples ----------
-
-const TEST_JS = [
-  "const fs = require('fs');",
-  "const path = require('path');",
-  "const { Store } = require('./store');",
-  "const file = path.join(__dirname, 'ops.json');",
-  'fs.rmSync(file, { force: true });',
-  'const s = new Store(file);',
-  "s.apply({ id: 'a', value: 1 }, (r) => {",
-  "  if (!r.ok) throw new Error('not ok');",
-  '  setTimeout(() => {',
-  "    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));",
-  "    if (!saved.some((o) => o.id === 'a')) throw new Error('not saved');",
-  "    console.log('ok: the operation is saved');",
-  '    fs.rmSync(file, { force: true });',
-  '  }, 600);',
-  '});',
-  '',
-].join('\n');
-
-const BEFORE = [
-  "const fs = require('fs');",
-  '',
-  '/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. */',
-  'class Store {',
-  '  constructor(file) {',
-  '    this.file = file;',
-  "    this.ops = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];",
-  '    this.timer = null;',
-  '  }',
-  '  apply(op, reply) {',
-  '    if (this.ops.some((o) => o.id === op.id)) return reply({ ok: true, duplicate: true });',
-  '    this.ops.push(op);',
-  '    reply({ ok: true });',
-  '    this.save();',
-  '  }',
-  '  save() {',
-  '    clearTimeout(this.timer);',
-  '    this.timer = setTimeout(() => fs.writeFileSync(this.file, JSON.stringify(this.ops)), 400);',
-  '  }',
-  '}',
-  'module.exports = { Store };',
-  '',
-].join('\n');
-
-// The reviewed change. "defect": a flush() was added and the comment claims the save comes first, but apply() still
-// answers before the (debounced) save. "clean": apply() writes the file, then answers; every write goes to a temporary
-// file first and is renamed over the old one, so a crash midway leaves the earlier confirmed operations whole; an
-// operation is kept in memory only once it is saved. (Earlier "clean" samples were rightly blocked by real reviews: one
-// overwrote the file in place, so a crash in the middle corrupted every operation confirmed before; one kept the
-// operation in memory before the write, so after a failed write a retry was answered "duplicate, ok" unsaved.)
-const AFTER = {
-  defect: BEFORE.replace('/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. */', '/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. A confirmed operation is on disk before the reply. */').replace(
-    '  save() {',
-    '  /** Write what is waiting now. */\n  flush() {\n    clearTimeout(this.timer);\n    fs.writeFileSync(this.file, JSON.stringify(this.ops));\n  }\n  save() {',
-  ),
-  clean: [
-    "const fs = require('fs');",
-    '',
-    '/**',
-    ' * Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it.',
-    ' * A confirmed operation is on disk before the reply, and a crash while writing never damages what was saved before',
-    ' * (a temporary file, then a rename).',
-    ' */',
-    'class Store {',
-    '  constructor(file) {',
-    '    this.file = file;',
-    "    this.ops = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];",
-    '  }',
-    '  apply(op, reply) {',
-    '    if (this.ops.some((o) => o.id === op.id)) return reply({ ok: true, duplicate: true });',
-    '    const next = [...this.ops, op];',
-    '    // Throws when it cannot be saved: then nothing is answered and nothing is kept, so a retry writes again.',
-    '    this.write(next);',
-    '    this.ops = next;',
-    '    reply({ ok: true });',
-    '  }',
-    '  /** Write the operations: into a temporary file, flushed to disk, then renamed over the old file. */',
-    '  write(ops) {',
-    "    const tmp = this.file + '.tmp';",
-    "    const fd = fs.openSync(tmp, 'w');",
-    '    try {',
-    '      fs.writeSync(fd, JSON.stringify(ops));',
-    '      fs.fsyncSync(fd);',
-    '    } finally {',
-    '      fs.closeSync(fd);',
-    '    }',
-    '    fs.renameSync(tmp, this.file);',
-    '  }',
-    '}',
-    'module.exports = { Store };',
-    '',
-  ].join('\n'),
-};
-
-const MATERIAL = [
-  '實作者的回報：',
-  '已完成「回覆前先存檔」：確認成功的操作在服務崩潰後不會遺失（新增 flush()，存檔不再只靠延遲計時）。',
-  '我跑了 node test.js，全部通過。',
-  '接下來我會先合併到 main 並推送，再處理去重的部分。',
-].join('\n');
-const REQUEST = '請獨立審查這次的變更：確認成功的操作，是否真的在回覆之前就已經存到磁碟上（服務程序在回覆後立刻崩潰也不會遺失；整台電腦斷電不在這次的範圍）。';
+// ---------- the samples (review-samples.mjs) ----------
 
 function git(cwd, ...a) {
   const r = spawnSync('git', ['-c', 'user.name=sample', '-c', 'user.email=sample@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
@@ -288,6 +187,7 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
+log(`samples ${SAMPLE_VERSION}`);
 const hubProc = await startHub();
 const hub = await connect(hubProc);
 const results = {};
@@ -341,7 +241,7 @@ try {
     }
   }
 }
-fs.writeFileSync(path.join(OUT, 'review-checks.json'), JSON.stringify({ provider: PROVIDER, model: MODEL, checks }, null, 2));
+fs.writeFileSync(path.join(OUT, 'review-checks.json'), JSON.stringify({ provider: PROVIDER, model: MODEL, samples: SAMPLE_VERSION, checks }, null, 2));
 const failed = checks.filter((c) => !c.ok).length;
 console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
 process.exit(failed ? 1 : 0);
