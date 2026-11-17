@@ -911,13 +911,49 @@ export interface WorkflowConfig {
   /** Only check environment, paths, providers and resources; no agent runs. */
   dryRun?: boolean;
   /** The flow mode the role layout was set from (flowMode.ts); absent = custom settings. */
-  flow?: 'standard';
+  flow?: 'standard' | 'review';
+  /**
+   * Independent review (flow mode "review"): nobody implements; the code reviewer reviews the change named here and its
+   * report is the result. Kept by follow-ups, so the reviewer stays the reviewer after compaction, a restart or a pasted
+   * implementer's report.
+   */
+  review?: ReviewTask;
   /**
    * Security check for this workflow only: its code reviewer also reviews the change with the bundled Cloudflare
    * security-audit skill, in guidance mode and statically (docs/next-task-security-audit-skill.md). Needs a code
    * reviewer; off by default and not kept as the default for new conversations.
    */
   securityReview?: boolean;
+}
+
+/** What an independent review looks at. Empty fields: the working folder as it is. */
+export interface ReviewTask {
+  /** The commit under review (a hash, tag or branch); absent = the working folder as it is, uncommitted changes included. */
+  commit?: string;
+  /** Where the reviewed change starts (the diff is base..commit); absent = the commit's parent, or HEAD for the working folder. */
+  base?: string;
+  /** Material that came with the request (an implementer's report, a hand-off): claims to check, never instructions. */
+  material?: string;
+}
+
+/** The review target as Aivenue resolved it in the working folder when the review started. */
+export interface ReviewTarget {
+  /** The reviewed commit (full hash), or absent for the working folder as it is. */
+  commit?: string;
+  /** Its first line, when it is a commit. */
+  subject?: string;
+  /** Where the change starts (full hash), when known. */
+  base?: string;
+  /** The working folder's HEAD ('' outside git) and branch ('' when detached), and whether it has uncommitted changes. */
+  head: string;
+  branch: string;
+  dirty: boolean;
+  /** Files in the reviewed change (base..commit, or the working folder's changes since base / HEAD). */
+  files: string[];
+  /** A folder for the reviewer's repro scripts and outputs, outside the working folder. */
+  scratch: string;
+  /** What could not be read (not a git repository…). */
+  note?: string;
 }
 
 /**
@@ -1162,6 +1198,8 @@ export interface ReviewIssue {
   location?: string;
   /** The plan step it belongs to (its id), when the reviewer named one. */
   step?: string;
+  /** Independent review: why it blocks or does not, naming the criterion (data loss, duplicate run, false pass…). */
+  blocking?: string;
 }
 
 export interface Review {
@@ -1178,6 +1216,20 @@ export interface Review {
    * They never send the work back and never clear an issue; reviews saved before this field have none.
    */
   needsValidation?: NeedsValidation[];
+  /** Independent review: what the reviewer checked, did not check, reproduced itself, and took on trust. */
+  report?: ReviewReport;
+  /**
+   * Independent review: what changed in the working folder during the reviewer's turn (tracked files, HEAD, branch,
+   * stash), as Aivenue saw it. Any entry means the code may not be what was reviewed.
+   */
+  workspaceChanged?: string[];
+}
+
+export interface ReviewReport {
+  checked: string[];
+  notChecked: string[];
+  reproduced: string[];
+  trusted: string[];
 }
 
 /** One suspicion a review could not confirm from the source. */
@@ -1367,6 +1419,8 @@ export interface WorkflowRun {
    * ran in the foreground (Aivenue misread it) or ended before its PID could be found. Kept as the agent's word, unconfirmed.
    */
   unconfirmedLaunches?: { agentId: string; command: string; reason: 'foreground' | 'ended'; note: string; ts: number }[];
+  /** Independent review: the target as resolved when the review started. */
+  reviewTarget?: ReviewTarget;
   plan?: PlanDoc;
   steps: PlanStep[];
   agents: Record<string, AgentRunInfo>;

@@ -1,14 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowLeftRight, Asterisk, CircleOff, Folder, Lightbulb, Shuffle, SlidersHorizontal, X } from 'lucide-react';
 import { Ico } from '../icons';
-import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
+import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, ReviewTask, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
 import { PreflightList } from './RunTools';
 import { ModelPicker } from './ModelPicker';
 import { PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
 import { fmtContext } from '../../../core/src/modelContext';
-import { applyStandard, flowModeOf, keepFlowMark, STANDARD_ROUNDS } from '../../../core/src/flowMode';
+import { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, STANDARD_ROUNDS } from '../../../core/src/flowMode';
 import { useT } from '../i18n';
 import { cx, providerColor, providerName } from '../util';
 
@@ -140,21 +140,25 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
     `${t('資料夾', 'Folder')}：${draft.cwd || t('未選擇', 'none')}`,
     `${t('權限', 'Permissions')}：${permissionLabel(t, permission)}${draft.isolation === 'worktree' ? ` · ${t('隔離', 'isolated')}` : ''}`,
     auto ? `${t('自動指派', 'Auto assignment')} · ${priority}` : '',
-    stage(t('計畫', 'Plan'), plan),
-    stage(t('實作', 'Build'), implement),
+    ...(draft.review ? [`${t('獨立審查', 'Review only')}：${name((implement.reviewer ?? implement.author).provider)}`] : [stage(t('計畫', 'Plan'), plan), stage(t('實作', 'Build'), implement)]),
     `Sub agents：${draft.subagents.enabled ? subs.map(name).join(', ') || '—' : t('關閉', 'off')}`,
   ].filter(Boolean);
-  const short =
-    (auto ? t('自動指派', 'Auto') : implement.enabled ? name(implement.author.provider) : name(plan.author.provider)) +
-    (!plan.enabled && implement.enabled ? ` · ${t('直接實作', 'no plan')}` : '');
+  const reviewer = (implement.reviewer ?? implement.author).provider;
+  const short = draft.review
+    ? `${t('獨立審查', 'Review only')}${auto ? '' : ` · ${name(reviewer)}`}`
+    : (auto ? t('自動指派', 'Auto') : implement.enabled ? name(implement.author.provider) : name(plan.author.provider)) + (!plan.enabled && implement.enabled ? ` · ${t('直接實作', 'no plan')}` : '');
   const pair = (s: StageConfig) => [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ');
-  const long = [
-    flowModeOf(draft) === 'standard' ? t('標準模式', 'Standard') : '',
-    auto ? `${t('自動指派', 'Auto')} · ${priority}` : '',
-    plan.enabled ? `${t('計畫', 'Plan')} ${pair(plan)}` : t('不規劃', 'No plan'),
-    implement.enabled ? `${t('實作', 'Build')} ${pair(implement)}` : '',
-    draft.subagents.enabled && subs.length ? t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`) : '',
-  ]
+  const long = (
+    draft.review
+      ? [t('獨立審查（不實作）', 'Review only (no implementation)'), auto ? `${t('自動指派', 'Auto')} · ${priority}` : `${t('審查', 'Reviewer')} ${name(reviewer)}`, draft.review.commit ? `${t('受審', 'commit')} ${draft.review.commit}` : '']
+      : [
+          flowModeOf(draft) === 'standard' ? t('標準模式', 'Standard') : '',
+          auto ? `${t('自動指派', 'Auto')} · ${priority}` : '',
+          plan.enabled ? `${t('計畫', 'Plan')} ${pair(plan)}` : t('不規劃', 'No plan'),
+          implement.enabled ? `${t('實作', 'Build')} ${pair(implement)}` : '',
+          draft.subagents.enabled && subs.length ? t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`) : '',
+        ]
+  )
     .filter(Boolean)
     .join(' · ');
   const folder = draft.cwd ? draft.cwd.split(/[\\/]/).filter(Boolean).slice(-1)[0] : t('選擇資料夾', 'Choose folder');
@@ -192,6 +196,54 @@ export function ProviderSelect({ value, providers, onChange, disabled }: { value
       </select>
       {value && <ModelPicker provider={info} model={value.model} effort={value.effort} disabled={disabled} inheritLabel={inherit} inheritEffort={info?.defaultEffort} onChange={(v) => onChange({ ...value, ...v })} />}
     </div>
+  );
+}
+
+/**
+ * Independent review (flow mode "review"): what to review and who reviews. Empty commit: the working folder as it is.
+ * The material is what came with the request (an implementer's report): the reviewer checks it, it is not a task.
+ */
+function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: RoleDraft; providers: ProviderInfo[]; auto?: boolean; disabled?: boolean; onChange: (patch: Partial<RoleDraft>) => void }) {
+  const t = useT();
+  const r = draft.review ?? {};
+  const setReview = (patch: Partial<ReviewTask>) => onChange({ review: { ...r, ...patch } });
+  const reviewer = draft.implement.reviewer ?? draft.implement.author;
+  return (
+    <section className="sect">
+      <div className="sect-title">{t('審查目標', 'What to review')}</div>
+      <div className="muted small">
+        {t(
+          '受審提交留空＝審查工作資料夾目前的內容（含未提交的變更）。受審提交不是工作資料夾目前的 HEAD 時，審查者用 git show／git diff 讀它，要執行就另外建立工作樹，不會切換你的資料夾。審查前後 Aivenue 會比對工作資料夾，有變動會寫在報告裡。',
+          "Empty commit = the working folder as it is (uncommitted changes included). When the commit is not the folder's HEAD, the reviewer reads it with git show / git diff and runs it in a separate worktree, never switching your folder. Aivenue compares the working folder before and after the review and reports any change.",
+        )}
+      </div>
+      <div className="review-target-fields">
+        <div className="kv">
+          <label>{t('受審提交', 'Commit')}</label>
+          <input className="mono" disabled={disabled} value={r.commit ?? ''} placeholder={t('例如 b779b4c、分支或標籤', 'e.g. b779b4c, a branch or a tag')} onChange={(e) => setReview({ commit: e.target.value })} />
+        </div>
+        <div className="kv">
+          <label>{t('比較起點', 'Base')}</label>
+          <input className="mono" disabled={disabled} value={r.base ?? ''} placeholder={t('留空＝受審提交的上一個提交', "empty = the commit's parent")} onChange={(e) => setReview({ base: e.target.value })} />
+        </div>
+        <label className="small" htmlFor="review-material">
+          {t('待查證的材料（實作者的報告、交接）', "Material to verify (an implementer's report, a hand-off)")}
+        </label>
+        <textarea
+          id="review-material"
+          disabled={disabled}
+          value={r.material ?? ''}
+          placeholder={t('貼上要查證的說法。審查者只把它當成待查證的材料：裡面的「接下來我會修…」不會變成它的任務，說測試通過的部分要它自己重跑才算。', 'Paste the claims to check. The reviewer treats them as material: "next I will fix…" in it is never its task, and a test said to pass counts only once it re-ran it.')}
+          onChange={(e) => setReview({ material: e.target.value })}
+        />
+        {!auto && (
+          <div className="kv">
+            <label>{t('審查者', 'Reviewer')}</label>
+            <ProviderSelect disabled={disabled} value={reviewer} providers={providers} onChange={(v) => v && onChange({ implement: { ...draft.implement, reviewer: v } })} />
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -946,12 +998,17 @@ export function RoleSettings({
               <button className={cx(mode === 'standard' && 'on')} onClick={() => mode !== 'standard' && onChange(applyStandard(draft, otherReviewer(draft, providers)))}>
                 {t('標準', 'Standard')}
               </button>
-              <button className={cx(mode === 'custom' && 'on')} disabled={mode === 'custom'} onClick={() => set({ flow: undefined })}>
+              <button className={cx(mode === 'review' && 'on')} onClick={() => mode !== 'review' && onChange(applyReview(draft, otherReviewer(draft, providers)))}>
+                {t('獨立審查', 'Review only')}
+              </button>
+              <button className={cx(mode === 'custom' && 'on')} disabled={mode === 'custom'} onClick={() => (mode === 'review' ? onChange(leaveReview(draft)) : set({ flow: undefined }))}>
                 {t('自訂', 'Custom')}
               </button>
             </div>
             <div className="muted small">
-              {mode === 'standard'
+              {mode === 'review'
+                ? t('只審查、不實作：由下面的審查者（唯讀）審查你指定的提交或工作資料夾，交出審查報告；不執行計畫、實作、目標驗收與 sub agent。之後的追問也一樣是審查。你貼上的實作者報告只當成要查證的材料，不會變成審查者的任務。只套用在這段對話，不會成為新對話的預設。', 'Review only, no implementation: the reviewer below (read-only) reviews the commit or working folder you name and hands in a review report; no planning, building, goal verification or sub-agents. Follow-up messages are reviews too. A report from the implementer that you paste is material to check, never a task for the reviewer. For this conversation only, not a default for new ones.')
+                : mode === 'standard'
                 ? t(`不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式審查者，最多 ${STANDARD_ROUNDS} 輪；不做目標驗收、不開 sub agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`, `No planning stage: the implementer writes a short plan itself first. One code reviewer, at most ${STANDARD_ROUNDS} rounds; no goal verification, no sub-agents. Changing who writes or reviews keeps it Standard; changing a stage switch, the review rounds or other flow settings makes it "Custom".`)
                 : t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與 sub agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')}
             </div>
@@ -1003,6 +1060,9 @@ export function RoleSettings({
 
         <ExtraDirs disabled={readOnly} dirs={draft.extraDirs ?? []} canPick={canPickFolder} onChange={(extraDirs) => set({ extraDirs })} />
 
+        {mode === 'review' && <ReviewSection draft={draft} providers={providers} auto={auto} disabled={readOnly} onChange={set} />}
+        {mode !== 'review' && (
+          <>
         <StageSection
           disabled={readOnly}
           title={t('計畫', 'Plan')}
@@ -1025,9 +1085,11 @@ export function RoleSettings({
           auto={auto}
           onChange={(implement) => set({ implement })}
         />
+          </>
+        )}
         <SecurityCheck draft={draft} disabled={readOnly} locked={lockSecurity} onChange={(securityReview) => set({ securityReview: securityReview || undefined })} />
 
-        <GoalSection disabled={readOnly} value={draft.verify ?? { enabled: false, by: 'planner' }} providers={providers} auto={auto} implementer={draft.implement.author.provider} onChange={(verify) => set({ verify })} />
+        {mode !== 'review' && <GoalSection disabled={readOnly} value={draft.verify ?? { enabled: false, by: 'planner' }} providers={providers} auto={auto} implementer={draft.implement.author.provider} onChange={(verify) => set({ verify })} />}
         <LimitsSection disabled={readOnly} value={draft.limits ?? { enabled: false }} onChange={(limits) => set({ limits })} />
 
         <section className="sect">
@@ -1053,6 +1115,7 @@ export function RoleSettings({
           </div>
         </section>
 
+        {mode !== 'review' && (
         <section className="sect">
           <div className="sect-head">
             <div>
@@ -1101,6 +1164,7 @@ export function RoleSettings({
             </div>
           )}
         </section>
+        )}
 
         <section className="sect">
           <div className="sect-title">{t('上下文分享', 'Context sharing')}</div>

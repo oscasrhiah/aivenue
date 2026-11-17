@@ -65,9 +65,11 @@ export function draftInit<D>(o: {
 
 /**
  * The settings kept as the default for new conversations: what is chosen for one conversation only stays out.
- * Whole-computer access goes back to Full auto; the security check (securityReview) is dropped.
+ * Whole-computer access goes back to Full auto; the security check (securityReview) and independent review (review,
+ * flow "review") are dropped: a new conversation never starts as a review of another one's target.
  */
-export function forNewConversations<D extends { permission?: string; securityReview?: boolean }>(d: D): D {
-  const { securityReview: _once, ...rest } = d;
-  return (rest.permission === 'full' ? { ...rest, permission: 'auto' } : rest) as D;
+export function forNewConversations<D extends { permission?: string; securityReview?: boolean; review?: unknown; flow?: string }>(d: D): D {
+  const { securityReview: _once, review: _review, ...rest } = d;
+  const kept = (rest.flow === 'review' ? { ...rest, flow: undefined } : rest) as D;
+  return (kept.permission === 'full' ? { ...kept, permission: 'auto' } : kept) as D;
 }

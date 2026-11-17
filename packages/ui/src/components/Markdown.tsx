@@ -1,5 +1,5 @@
 import { Fragment, useMemo, type ReactNode } from 'react';
-import { parseMarkdown, type Block, type Inline } from '../markdown';
+import { inline, parseMarkdown, type Block, type Inline } from '../markdown';
 
 /** Inline content as React elements (never innerHTML: an agent's text cannot inject markup). */
 function renderInline(c: Inline[], key: string): ReactNode[] {
@@ -116,4 +116,9 @@ function renderBlocks(blocks: Block[], key: string, tight = false): ReactNode[] 
 export function Markdown({ text, className }: { text: string; className?: string }) {
   const blocks = useMemo(() => parseMarkdown(text), [text]);
   return <div className={`md ${className ?? ''}`}>{renderBlocks(blocks, 'b')}</div>;
+}
+
+/** One line of an agent's text with its inline formatting (code, bold, links), no paragraphs around it. */
+export function InlineMarkdown({ text }: { text: string }) {
+  return <>{renderInline(inline(text), 'i')}</>;
 }

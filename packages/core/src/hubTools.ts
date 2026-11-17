@@ -17,10 +17,14 @@ const issuesSchema = {
       detail: { type: 'string' },
       location: { type: 'string', description: 'File/line or plan step the issue refers to.' },
       step: { type: 'string', description: 'Code review: the id of the plan step this issue belongs to ("1", "2"…), if any.' },
+      blocking: { type: 'string', description: 'Independent review: why it blocks approval or why not, naming the criterion (data loss, duplicate run, lost confirmed operation, false pass or distorted evidence, a constraint the user set).' },
     },
     required: ['id', 'severity', 'title'],
   },
 };
+
+/** Independent review: what the report rests on. */
+const reportSchema = (what: string) => ({ type: 'array', items: { type: 'string' }, description: what });
 
 const goalSchema = {
   type: 'object',
@@ -169,6 +173,10 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
             required: ['id', 'value', 'met'],
           },
         },
+        checked: reportSchema('Independent review (required there): what you checked and how — the commands, files and failure cases.'),
+        not_checked: reportSchema('Independent review (required there): what you did not check, and why.'),
+        reproduced: reportSchema('Independent review: what you ran or reproduced yourself, with the result and the commit it ran at.'),
+        trusted: reportSchema('Independent review: what you took from the material or another agent without running it yourself.'),
         findings: findingsSchema,
         handoff: handoffSchema,
       },
@@ -653,8 +661,18 @@ function parseIssues(v: unknown, prefix = 'R'): ReviewIssue[] {
         detail: i?.detail ? s(i.detail) : undefined,
         location: i?.location ? s(i.location) : undefined,
         step: i?.step ? s(i.step).replace(/^(step|s)s*/i, '').slice(0, 40) : undefined,
+        ...(s(i?.blocking).trim() ? { blocking: s(i.blocking).trim().slice(0, 2000) } : {}),
       }))
     : [];
+}
+
+/** A list of short texts (a string alone counts as one). */
+function texts(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === 'string' && v.trim() ? [v] : [];
+  return list
+    .map((x) => s(x).trim().slice(0, 2000))
+    .filter(Boolean)
+    .slice(0, 60);
 }
 
 export function parseVerification(v: any): Verification | undefined {
@@ -694,7 +712,9 @@ export function parseReview(v: any): Review | undefined {
     ? v.goal.filter((m: any) => m && typeof m === 'object' && s(m.id)).map((m: any) => ({ id: s(m.id), value: s(m.value), met: m.met === true || s(m.met).toLowerCase() === 'true', evidence: s(m.evidence) }))
     : [];
   const needsValidation = parseNeedsValidation(v.needs_validation ?? v.needsValidation);
-  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}), ...(needsValidation.length ? { needsValidation } : {}) };
+  const report = { checked: texts(v.checked), notChecked: texts(v.not_checked ?? v.notChecked), reproduced: texts(v.reproduced), trusted: texts(v.trusted) };
+  const hasReport = Object.values(report).some((x) => x.length);
+  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}), ...(needsValidation.length ? { needsValidation } : {}), ...(hasReport ? { report } : {}) };
 }
 
 /** A review's "needs validation" list: kept apart from its issues (no severity, never routed). */

@@ -60,6 +60,7 @@ import { applyCarried, carriedState, earlierPlanBlock, earlierPlanTopic } from '
 import { batchCounts, runBatches } from './batches';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
+import { normalizeReview, resolveReviewTarget, workspaceChanges, workspaceState } from './reviewTarget';
 import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
@@ -444,6 +445,15 @@ export class Orchestrator {
         if (role && !this.d.registry.get(role.provider)) throw new Error(L(`未知的供應商：${role.provider}`, `Unknown provider: ${role.provider}`));
       }
     }
+    // Independent review: only the reviewer runs (the implementation stage's reviewer); planning and goal verification
+    // are off, and the target is checked here (a revision git could read as an option is refused).
+    if (config.review) {
+      // No sub-agents either: helpers work in write mode, and the review is read-only.
+      config = { ...config, review: normalizeReview(config.review), flow: 'review', plan: { ...config.plan, enabled: false }, implement: { ...config.implement, enabled: true }, verify: config.verify ? { ...config.verify, enabled: false } : undefined, subagents: { ...config.subagents, enabled: false } };
+    } else if (config.flow === 'review') {
+      const { flow: _flow, ...rest } = config;
+      config = rest as WorkflowConfig;
+    }
     if (!config.plan.enabled && !config.implement.enabled) throw new Error(L('至少要啟用一個階段', 'Enable at least one stage'));
     // A pre-approval is never inherited by follow-ups or edits; only continueDenied() sets one.
     config = { ...config, extraDirs: checkExtraDirs(config.extraDirs, config.cwd), preApproved: undefined };
@@ -517,6 +527,13 @@ export class Orchestrator {
    * is handed back to the author to confirm. Goal verification measures again.
    */
   private resumePoint(run: WorkflowRun): ResumeFrom | undefined {
+    // Independent review: a finished review is the result; one cut off starts again, still as the reviewer.
+    if (run.config.review) {
+      const st = run.stages.implement;
+      if (st.rounds.at(-1)?.review) return undefined;
+      if (st.rounds.length) st.rounds.pop();
+      return { stage: 'implement', entry: { resumed: true, prompt: () => P.resumeAfterRestartPrompt({}) } };
+    }
     const order = (['plan', 'implement', 'verify'] as const).filter((k) => (k === 'verify' ? run.config.verify?.enabled : run.config[k].enabled));
     const running = order.filter((k) => run.stages[k]?.status === 'running');
     // Several "running" (a re-plan after an earlier implementation): the one whose newest round started last.
@@ -1689,9 +1706,10 @@ export class Orchestrator {
     for (const d of config.extraDirs ?? []) if (!fs.existsSync(d)) add('error', 'path', L(`找不到額外資料夾：${d}`, `Extra folder not found: ${d}`));
     // providers, models, efforts
     const roles: [string, RoleConfig | null | undefined][] = [];
-    if (config.plan.enabled) roles.push([L('計畫撰寫', 'Planner'), config.plan.author], [L('計畫審查', 'Plan reviewer'), config.plan.reviewer]);
-    if (config.implement.enabled) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
-    if (config.verify?.enabled) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
+    if (config.review) roles.push([L('獨立審查', 'Independent reviewer'), config.implement.reviewer ?? config.implement.author]);
+    else if (config.plan.enabled) roles.push([L('計畫撰寫', 'Planner'), config.plan.author], [L('計畫審查', 'Plan reviewer'), config.plan.reviewer]);
+    if (config.implement.enabled && !config.review) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
+    if (config.verify?.enabled && !config.review) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
     if (config.advisor?.mode === 'cross' && config.advisor.provider) roles.push([L('顧問', 'Advisor'), { provider: config.advisor.provider, model: config.advisor.model }]);
     // Right after Aivenue starts, every provider's sign-in check is still running: wait for it (or run one that never
     // ran) instead of reporting "checking" as signed out. Each provider once (auto mode has already waited for all).
@@ -1754,7 +1772,7 @@ export class Orchestrator {
     this.d.store.saveNow(run);
     const back = this.d.store.loadAll().find((r) => r.id === run.id);
     (run.preflight ??= []).push(back ? { level: 'ok', area: 'recovery', message: L('存檔後可重新載入（中斷可恢復）', 'Saved and reloaded (an interruption can be recovered)') } : { level: 'error', area: 'recovery', message: L('存檔後無法重新載入', 'The run could not be reloaded after saving') });
-    const stages = [run.config.plan.enabled && L('計畫 → 計畫審查', 'plan → plan review'), run.config.implement.enabled && L('實作 → 程式審查', 'implement → code review'), run.config.verify?.enabled && L(`目標驗收（${run.config.verify.by === 'planner' ? '計畫者' : '獨立驗收者'}）`, `goal verification (${run.config.verify.by === 'planner' ? 'planner' : 'independent'})`)].filter(Boolean);
+    const stages = run.config.review ? [L('獨立審查（不實作）', 'independent review (no implementation)')] : [run.config.plan.enabled && L('計畫 → 計畫審查', 'plan → plan review'), run.config.implement.enabled && L('實作 → 程式審查', 'implement → code review'), run.config.verify?.enabled && L(`目標驗收（${run.config.verify.by === 'planner' ? '計畫者' : '獨立驗收者'}）`, `goal verification (${run.config.verify.by === 'planner' ? 'planner' : 'independent'})`)].filter(Boolean);
     this.log(run, L(`試跑：流程 ${stages.join(' → ')}`, `Dry run: ${stages.join(' → ')}`), 'info', true);
     if (run.config.verify?.enabled) {
       const m = [{ id: 'M1', value: '-', met: false, evidence: '-' }];
@@ -1958,6 +1976,7 @@ export class Orchestrator {
       case 'submit_review': {
         const r = parseReview(args);
         if (!r) throw new Error('Invalid review: verdict must be "approve" or "revise"');
+        if (run.config.review && info.role === 'code_reviewer') this.requireReport(run, info, r);
         sub.review = r;
         return 'Review received by Aivenue. You can finish your turn now.';
       }
@@ -2503,6 +2522,7 @@ export class Orchestrator {
    * surviving several fixes) back to the planner. Without goal verification it is plan → implement, as before.
    */
   private async cycle(run: WorkflowRun, from?: ResumeFrom) {
+    if (run.config.review) return this.runReview(run, from);
     let planEntry: Entry | undefined = from?.stage === 'plan' ? from.entry : undefined;
     let implEntry: Entry | undefined = from?.stage === 'implement' ? from.entry : undefined;
     for (let first = true; ; first = false) {
@@ -3046,6 +3066,122 @@ export class Orchestrator {
     return {};
   }
 
+  /**
+   * Independent review (flow mode "review"): one reviewer, read-only, reviews the change the user named; its report
+   * (submit_review) is the result. Nobody implements, so there are no fix rounds: a follow-up message is the next review,
+   * again as the reviewer. Aivenue resolves the target first (an unknown commit stops it before any agent runs) and
+   * compares the working folder before and after each of the reviewer's turns.
+   */
+  private async runReview(run: WorkflowRun, from?: ResumeFrom) {
+    const stage = run.stages.implement;
+    const cfg = run.config.implement;
+    run.stages.plan.status = 'skipped';
+    stage.status = 'running';
+    const t = await resolveReviewTarget(run.config.cwd, run.config.review ?? {}, path.join(this.d.dataDir, 'review-scratch', run.id));
+    run.reviewTarget = t;
+    const short = (s?: string) => (s ?? '').slice(0, 10);
+    this.log(
+      run,
+      t.commit
+        ? L(`獨立審查開始（不實作）：受審提交 ${short(t.commit)}${t.base ? `，比較起點 ${short(t.base)}` : ''}，${t.files.length} 個檔案`, `Independent review started (no implementation): commit ${short(t.commit)}${t.base ? `, base ${short(t.base)}` : ''}, ${t.files.length} file(s)`)
+        : L(`獨立審查開始（不實作）：工作資料夾目前的內容${t.base ? `，比較起點 ${short(t.base)}` : ''}${t.files.length ? `，${t.files.length} 個變更的檔案` : ''}`, `Independent review started (no implementation): the working folder as it is${t.base ? `, base ${short(t.base)}` : ''}${t.files.length ? `, ${t.files.length} changed file(s)` : ''}`),
+      'info',
+      true,
+    );
+    if (t.note) this.log(run, t.note, 'warn', true);
+    if (t.commit && t.head && t.commit !== t.head)
+      this.log(run, L(`工作資料夾的 HEAD 是 ${short(t.head)}，不是受審提交：審查者會用 git show／git diff 讀受審的程式碼，要執行時另外建立工作樹，不切換這個資料夾`, `The working folder's HEAD is ${short(t.head)}, not the reviewed commit: the reviewer reads it with git show / git diff and runs it in a separate worktree, without switching this folder`), 'warn', true);
+    this.touch(run);
+
+    const n = stage.rounds.length + 1;
+    const round: Round = { n };
+    stage.rounds.push(round);
+    let reviewer = cfg.reviewer ?? cfg.author;
+    let entry = from?.stage === 'implement' && from.entry ? `\n\n${from.entry.prompt()}` : '';
+    let note = '';
+    let review: Review | undefined;
+    const tried = new Set<string>();
+    for (;;) {
+      this.checkCancelled(run);
+      const spec = this.d.registry.get(reviewer.provider);
+      const resume = !!(this.keepsSessions(run) && stage.reviewerSessionId && spec?.run.resume && spec.capabilities?.resume !== false);
+      // The whole prompt every time, also into a continued conversation: the role and the target never depend on what
+      // the conversation remembers (a compaction, a restart, a pasted report written as an implementer).
+      const prompt = P.independentReviewPrompt(run.config, t, this.subBlock(run, 0)) + entry + note + (!resume && stage.reviewerHandoff ? P.handoffBlock(stage.reviewerHandoff) : '');
+      entry = '';
+      const before = await workspaceState(run.config.cwd);
+      const r = await this.runRole(run, {
+        role: 'code_reviewer',
+        roleCfg: reviewer,
+        stage: 'implement',
+        round: n,
+        prompt,
+        mode: 'readonly',
+        resume: resume ? stage.reviewerSessionId : undefined,
+        expect: 'submit_review',
+        task: L('獨立審查', 'Independent review'),
+      });
+      const changed = workspaceChanges(before, await workspaceState(run.config.cwd));
+      round.reviewerAgentId = r.info.id;
+      if (!resume) stage.reviewerHandoff = undefined;
+      if (r.info.sessionId) stage.reviewerSessionId = r.info.sessionId;
+      if (changed.length) this.log(run, L(`審查期間工作資料夾有變動（可能是審查者，也可能是你或其他程式）：${changed.join('；')}`, `The working folder changed during the review (by the reviewer, or by you or another program): ${changed.join('; ')}`), 'warn', true);
+      review = r.sub?.review;
+      if (review) {
+        review.evidence = evidenceStamp(run.config.cwd, run.plan?.goal?.data);
+        if (changed.length) review.workspaceChanged = changed;
+        break;
+      }
+      if (this.redispatch.delete(r.info.id)) continue;
+      tried.add(reviewer.provider);
+      const fallback = this.stoppedByUser.has(r.info.id) ? undefined : this.failoverTarget(run, 'review', tried);
+      if (fallback) {
+        this.log(run, L(`自動換手：審查者 ${this.providerName(reviewer.provider)} 失敗，改由 ${this.providerName(fallback)} 審查`, `Auto failover: reviewer ${this.providerName(reviewer.provider)} failed; ${this.providerName(fallback)} reviews instead`), 'warn', true);
+        reviewer = cfg.reviewer = { provider: fallback };
+        stage.reviewerSessionId = undefined;
+        continue;
+      }
+      const dec = await this.ask(run, 'implement', L(`審查者（${this.providerName(r.info.provider)}）沒有提交審查報告：${r.res.error ?? '未呼叫 submit_review'}`, `The reviewer (${this.providerName(r.info.provider)}) submitted no report: ${r.res.error ?? 'submit_review was not called'}`), [
+        { id: 'retry', label: L('重新審查', 'Review again') },
+        ...this.switchOptions(reviewer.provider),
+        { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+      ]);
+      if (dec.optionId === 'abort') throw new Cancelled();
+      if (dec.optionId.startsWith('switch:')) {
+        reviewer = cfg.reviewer = { provider: dec.optionId.slice(7) };
+        stage.reviewerSessionId = undefined;
+      }
+      note = dec.text ? `\n\nUSER NOTE: ${dec.text}` : '';
+    }
+    round.review = review;
+    round.handoff = buildHandoff(run, 'implement', round);
+    stage.status = 'approved';
+    const blocking = review.issues.filter((i) => i.severity !== 'minor').length;
+    this.log(
+      run,
+      review.verdict === 'approve'
+        ? L(`獨立審查完成：建議通過${review.issues.length ? `（${review.issues.length} 個小問題）` : ''}`, `Independent review done: approve${review.issues.length ? ` (${review.issues.length} minor issue(s))` : ''}`)
+        : L(`獨立審查完成：要求修改，${review.issues.length} 個問題${blocking ? `（${blocking} 個阻擋或主要）` : ''}`, `Independent review done: changes requested, ${review.issues.length} issue(s)${blocking ? ` (${blocking} blocker or major)` : ''}`),
+      review.verdict === 'approve' ? 'info' : 'warn',
+      true,
+    );
+    this.touch(run);
+  }
+
+  /** Independent review: a report must say what was checked and what was not. Refused twice at most, then logged. */
+  private reportRefused = new Map<string, number>();
+  private requireReport(run: WorkflowRun, info: AgentRunInfo, r: Review) {
+    const missing = [!r.report?.checked.length && '`checked`', !r.report?.notChecked.length && '`not_checked`'].filter(Boolean);
+    if (!missing.length) return;
+    const tries = (this.reportRefused.get(info.id) ?? 0) + 1;
+    if (tries > 2) {
+      this.log(run, L(`審查報告沒有列出${missing.length > 1 ? '查過和沒查過' : missing[0] === '`checked`' ? '查過' : '沒查過'}的項目`, `The review report does not list what was ${missing.length > 1 ? 'checked and not checked' : missing[0] === '`checked`' ? 'checked' : 'not checked'}`), 'warn', true);
+      return;
+    }
+    this.reportRefused.set(info.id, tries);
+    throw new Error(`An independent review must say what rests on what. Add ${missing.join(' and ')} (and \`reproduced\` / \`trusted\`), then call submit_review again with the whole report. If you left nothing unchecked, say so in not_checked and why.`);
+  }
+
   private hasEvidence(run: WorkflowRun): boolean {
     return [run.stages.implement, run.stages.verify].some((st) => st?.rounds.some((r) => r.review?.evidence || r.verification?.evidence));
   }
@@ -3274,7 +3410,8 @@ export class Orchestrator {
               ? '\nADVISOR: Your built-in advisor tool is enabled. It runs a more expensive model, so use it only when you are genuinely stuck after investigating and trying yourself, or for a high-stakes decision the facts do not settle.'
               : '';
       // Extra folders are named every turn: they can be added while the conversation runs.
-      const extraDirs = (run.config.extraDirs ?? []).filter((d) => fs.existsSync(d));
+      // An independent reviewer also gets its scratch folder (repro scripts and outputs, outside the project).
+      const extraDirs = [...(run.config.extraDirs ?? []), ...(info.role === 'code_reviewer' && run.config.review && run.reviewTarget ? [run.reviewTarget.scratch] : [])].filter((d) => fs.existsSync(d));
       const turnStart = now();
       const systemPrompt = caps.instructionsFor(info.role);
       // What this turn runs with, to tell later which settings and messages reached it.

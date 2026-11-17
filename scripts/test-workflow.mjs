@@ -27,7 +27,8 @@ const bundled = await build({
       export { createParser, classifyTool, HUB_TITLES } from './packages/core/src/providers/parsers';
       export { capture, cliEnv, consoleCodePage, decodeShellOutput } from './packages/core/src/proc';
       export { runAgent } from './packages/core/src/agentRunner';
-      export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
+      export { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
+      export { normalizeReview, workspaceChanges } from './packages/core/src/reviewTarget';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { msgTime } from './packages/ui/src/util';
@@ -4044,4 +4045,72 @@ test('最終結果的實作者說明：最後的回覆和提交的摘要，取�
   assert.equal(W.resultText(answer, undefined), answer);
   assert.equal(W.resultText('{"summary":"x"}', 'the summary'), 'the summary');
   assert.equal(W.resultText('  ', ''), undefined);
+});
+
+test('獨立審查模式：審查者是原本的程式審查者，其他階段的設定不動（離開模式或開新對話時回到原本的配置）；離開時去掉審查目標；改其他設定不會掉出審查模式；新對話不沿用', () => {
+  const d = heavyDraft();
+  const r = W.applyReview(d, { provider: 'gemini' });
+  assert.equal(r.flow, 'review');
+  assert.deepEqual(r.review, {});
+  assert.deepEqual(r.implement.reviewer, { provider: 'codex' }, '原本的程式審查者擔任審查');
+  // The rest of the layout stays: the hub switches the other stages off in the run's own settings.
+  assert.deepEqual({ plan: r.plan, verify: r.verify, subagents: r.subagents, author: r.implement.author }, { plan: d.plan, verify: d.verify, subagents: d.subagents, author: d.implement.author });
+  assert.deepEqual(d, heavyDraft(), '原本的物件不被改到');
+  assert.equal(W.flowModeOf(r), 'review');
+  // Without a reviewer: the given one (else the plan reviewer, else the implementer).
+  assert.deepEqual(W.applyReview({ ...d, implement: { ...d.implement, reviewer: null } }, { provider: 'gemini' }).implement.reviewer, { provider: 'gemini' });
+  // An edit elsewhere keeps the mode; a review target alone is the mode.
+  assert.equal(W.keepFlowMark({ ...r, permission: 'full' }).flow, 'review');
+  assert.equal(W.flowModeOf({ ...heavyDraft(), review: { commit: 'abc' } }), 'review');
+  // Leaving it: Custom drops the target and the mark, and the layout is the one from before; Standard drops the target too.
+  const left = W.leaveReview({ ...r, review: { commit: 'abc', material: 'x' } });
+  assert.equal(left.review, undefined);
+  assert.equal(left.flow, undefined);
+  assert.equal(W.flowModeOf(left), 'custom');
+  assert.deepEqual(left, (({ flow: _f, ...rest }) => rest)(d), 'back to the layout from before');
+  const std = W.applyStandard({ ...r, review: { commit: 'abc' } });
+  assert.equal(std.review, undefined);
+  assert.equal(W.flowModeOf(std), 'standard');
+  // Not a default for new conversations.
+  const kept = W.forNewConversations({ ...r, review: { commit: 'abc' } });
+  assert.equal(kept.review, undefined);
+  assert.equal(kept.flow, undefined);
+});
+
+test('獨立審查：送出的版本先檢查（不讓 git 讀成選項）；材料有長度上限；報告欄位與阻擋理由被保留', () => {
+  assert.deepEqual(W.normalizeReview({ commit: ' b779b4c ', base: '', material: '  report  ' }), { commit: 'b779b4c', material: 'report' });
+  assert.deepEqual(W.normalizeReview({ commit: 'HEAD~2', base: 'origin/main' }), { commit: 'HEAD~2', base: 'origin/main' });
+  for (const bad of ['--output=x', '-p', 'a b', 'a;rm', 'x'.repeat(201)]) assert.throws(() => W.normalizeReview({ commit: bad }), /valid git revision|有效的 git 版本/, bad);
+  assert.equal(W.normalizeReview({ material: 'y'.repeat(200000) }).material.length, 100000);
+  const r = W.parseReview({ verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'blocker', title: 't', blocking: ' data loss ' }], checked: ['a', ''], not_checked: 'b', reproduced: [], trusted: ['c'] });
+  assert.equal(r.issues[0].blocking, 'data loss');
+  assert.deepEqual(r.report, { checked: ['a'], notChecked: ['b'], reproduced: [], trusted: ['c'] });
+  // A plain code review has no report.
+  assert.equal(W.parseReview({ verdict: 'approve', summary: 's', issues: [] }).report, undefined);
+});
+
+test('獨立審查：工作資料夾前後比對——追蹤中的檔案改了又改回、HEAD、分支、新的未追蹤檔案都算；只讀不算', () => {
+  const state = (o = {}) => ({ head: 'h1', branch: 'main', tracked: new Map(o.tracked ?? []), untracked: new Set(o.untracked ?? []) });
+  assert.deepEqual(W.workspaceChanges(state({ tracked: [['a.js', ' M|1']] }), state({ tracked: [['a.js', ' M|1']] })), []);
+  const out = W.workspaceChanges(state({ tracked: [['a.js', ' M|1'], ['b.js', ' M|2']], untracked: ['old.txt'] }), { ...state({ tracked: [['a.js', ' M|9'], ['c.js', ' D|missing']], untracked: ['old.txt', 'repro.js'] }), head: 'h2', branch: '' });
+  assert.equal(out.length, 4);
+  assert.match(out[0], /main[\s\S]*（分離的 HEAD）|main[\s\S]*\(detached HEAD\)/);
+  assert.match(out[1], /h1[\s\S]*h2/);
+  assert.match(out[2], /a\.js, b\.js, c\.js/);
+  assert.match(out[3], /repro\.js/);
+  assert.doesNotMatch(out[3], /old\.txt/);
+  // Not a git repository: nothing to compare.
+  assert.deepEqual(W.workspaceChanges(undefined, undefined), []);
+});
+
+test('獨立審查的追問：背景裡的「上次結果」是審查報告（結論、摘要、問題），不是實作者的回覆', () => {
+  const run = {
+    status: 'completed',
+    config: { goal: 'review b779b4c', review: { commit: 'b779b4c' } },
+    agents: { a: { role: 'executor', finalText: 'not this', endedAt: 1 } },
+    stages: { implement: { rounds: [{ n: 1, review: { verdict: 'revise', summary: 'loses data', issues: [{ id: 'R1', severity: 'blocker', title: 'crash loses the save' }] } }] } },
+  };
+  const goal = W.followUpGoal('fixed, please look again', run);
+  assert.match(goal, /Its outcome: review verdict "revise": loses data Issues: R1 \[blocker\] crash loses the save/);
+  assert.doesNotMatch(goal, /not this/);
 });

@@ -39,6 +39,17 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
     const failed = st.status === 'failed' || st.status === 'cancelled';
     const stateOf = (isRunning: boolean, isDone: boolean): ItemState => (isRunning ? 'active' : isDone ? 'done' : failed || (ended && st.status !== 'approved') ? 'failed' : 'pending');
 
+    // Independent review: nobody implements; the one item is the review and its verdict.
+    if (key === 'implement' && run.config.review) {
+      const verdict = round?.review && !running(reviewerRole) ? (round.review.verdict === 'approve' ? t('建議通過', 'approve') : t(`要求修改，${round.review.issues.length} 個問題`, `changes requested, ${round.review.issues.length} issue(s)`)) : undefined;
+      items.push({
+        key: 'review-only',
+        label: t('獨立審查（不實作）', 'Independent review (no implementation)'),
+        meta: [who(reviewerRole, (cfg.reviewer ?? cfg.author).provider), verdict].filter(Boolean).join(' · '),
+        state: stateOf(running(reviewerRole), st.status === 'approved'),
+      });
+      continue;
+    }
     const authorDone = st.status === 'approved' || (!!round?.submission && !running(authorRole));
     items.push({
       key: `${key}-author`,

@@ -6615,3 +6615,73 @@ textarea.code {
     margin-left: auto;
   }
 }
+
+/* Independent review: the reviewer's report is the result (components/ReviewResult.tsx). */
+.review-result.revise {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.review-changed {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+}
+.review-changed ul,
+.review-basis ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.review-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.review-issue {
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--line-strong);
+  font-size: 13px;
+}
+.review-issue.blocker {
+  border-color: var(--err);
+}
+.review-issue.major {
+  border-color: var(--warn);
+}
+.review-issue summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.review-basis {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.review-basis-row {
+  display: grid;
+  grid-template-columns: minmax(88px, max-content) 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+.review-basis-row li {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+  .review-basis-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+.review-target-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.review-target-fields textarea {
+  min-height: 90px;
+  resize: vertical;
+}

@@ -22,6 +22,7 @@ import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { followUpGoal } from '../followUp';
 import { deliverableRows, resultText, verificationStates, type VerificationState } from '../timeline';
 import { CheckRows } from '../components/Checks';
+import { ReviewResult } from '../components/ReviewResult';
 import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
@@ -167,6 +168,7 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
         ),
       )}
       <FinalResult run={run} providers={providers} />
+      <ReviewResult run={run} providers={providers} />
       <DeniedActions run={run} providers={providers} />
       <OutsideChanges run={run} />
       <Outputs run={run} onImage={onImage} />
@@ -1350,6 +1352,7 @@ export function Chat({ id }: { id?: string }) {
                 return <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />;
               })}
               <FinalResult run={run} providers={providers} />
+              <ReviewResult run={run} providers={providers} />
               <DeniedActions run={run} providers={providers} />
               <OutsideChanges run={run} />
               <Outputs run={run} onImage={setLightbox} />
