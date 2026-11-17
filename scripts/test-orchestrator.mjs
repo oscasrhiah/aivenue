@@ -681,6 +681,58 @@ test('agent 自己在背景開的程序：沒有 track_process 也會被找到�
   }
 });
 
+test('背景啟動找不到 PID：登記無關或已結束的程序不能抵銷它；印出的 PID 才算；前景誤判用 dismiss_launch 申報並留下未確認紀錄', { exclusive: true }, async () => {
+  const { orch, cwd } = setup();
+  // A job that already ended, whose PID its launch line printed.
+  const ended = spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' });
+  await new Promise((res) => ended.on('exit', res));
+  let bgRun;
+  const seen = {};
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        const launch = (id, title, output = '') => a.onEvent({ seq: id, ts: Date.now(), kind: 'tool', tool: { id: `bg${id}`, name: 'bash', category: 'command', title, output, status: 'ok' } }, false);
+        // L1: a script Aivenue reads as a background launch (no such process exists: it ran in the foreground).
+        launch(1, 'nohup node aivenue-ghost-job.js > ghost.log 2>&1 &');
+        // L2: it printed its PID, and that job has ended.
+        launch(2, 'nohup node aivenue-short-job.js > short.log 2>&1 & echo $!', String(ended.pid));
+        const run = o.runs.get(bgRun);
+        seen.first = await o.callTool(secret, 'submit_work', { summary: 'done' }).then(() => '', (e) => e.message);
+        // Unrelated processes: a running one (this test's own) named for L1, an ended one, one with no launch named.
+        seen.unrelated = await o.callTool(secret, 'track_process', { pid: process.pid, purpose: 'unrelated, only to pass', cleanup: 'keep', launch: 'L1' });
+        seen.noLaunch = await o.callTool(secret, 'track_process', { pid: process.pid, purpose: 'unrelated again', cleanup: 'keep' });
+        seen.wrongId = await o.callTool(secret, 'dismiss_launch', { launch: 'L9', reason: 'foreground', note: 'x' }).then(() => '', (e) => e.message);
+        seen.noNote = await o.callTool(secret, 'dismiss_launch', { launch: 'L1', reason: 'foreground' }).then(() => '', (e) => e.message);
+        seen.second = await o.callTool(secret, 'submit_work', { summary: 'done' }).then(() => '', (e) => e.message);
+        // The PID L2 printed closes L2, although that job has ended.
+        seen.printed = await o.callTool(secret, 'track_process', { pid: ended.pid, purpose: 'short job', cleanup: 'keep', launch: 'L2' });
+        seen.dismissed = await o.callTool(secret, 'dismiss_launch', { launch: 'L1', reason: 'foreground', note: 'the script waits for its child and printed its result before returning' });
+        seen.registered = run.processes.map((p) => p.pid);
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  bgRun = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  const r = await settle(orch, bgRun, 60000);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(seen.first, /L1: started `nohup node aivenue-ghost-job\.js[\s\S]*L2: started[\s\S]*dismiss_launch[\s\S]*Never register an unrelated process/);
+  assert.match(seen.unrelated, /does not close launch L1: process \d+ runs `/);
+  assert.doesNotMatch(seen.noLaunch, /It is launch/);
+  assert.match(seen.wrongId, /no open launch L9; open: L1, L2/);
+  assert.match(seen.noNote, /note is required/);
+  // Two unrelated registrations later, both launches are still open.
+  assert.match(seen.second, /L1: started[\s\S]*L2: started/);
+  assert.match(seen.printed, /It is launch L2/);
+  assert.match(seen.dismissed, /L1 closed as unconfirmed/);
+  assert.deepEqual(
+    r.unconfirmedLaunches.map((u) => [u.command, u.reason]),
+    [['nohup node aivenue-ghost-job.js > ghost.log 2>&1 &', 'foreground']],
+  );
+  assert.ok(r.log.some((l) => /misread this command|誤判為背景工作/.test(l.text)), 'the user sees the agent\'s claim');
+  // The third submission went through because nothing was open, not because the gate gave up.
+  assert.ok(!r.log.some((l) => /still unregistered|沒有登記/.test(l.text)));
+});
+
 /** A job that runs `ms`, then writes `line` to `log` (in cwd) and ends. */
 function shortJob(cwd, log, line, ms) {
   const fd = fs.openSync(path.join(cwd, log), 'w');

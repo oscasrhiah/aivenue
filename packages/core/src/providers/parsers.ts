@@ -66,6 +66,7 @@ export const HUB_TITLES: Record<string, [string, string]> = {
   report_skill_use: ['回報使用的技能', 'Report a skill used'],
   track_process: ['追蹤背景程序', 'Track a background process'],
   update_process: ['更新背景程序', 'Update a background process'],
+  dismiss_launch: ['申報背景工作誤判或已結束', 'Close an unconfirmed launch'],
   wait_for: ['等待條件', 'Wait for a condition'],
   gpu_status: ['查詢 GPU', 'GPU status'],
   gpu_acquire: ['鎖定 GPU', 'Lock GPUs'],
@@ -131,6 +132,7 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     if (lower === 'search_records') about(pick('q'));
     if (lower === 'report_skill_use') about(pick('name'));
     if (lower === 'track_process' || lower === 'update_process') about([inp.pid === undefined ? '' : String(inp.pid), pick('purpose') ?? ''].filter(Boolean).join(' — '));
+    if (lower === 'dismiss_launch') about([pick('launch') ?? '', pick('reason') ?? ''].filter(Boolean).join(' — '));
     if (lower === 'stop_subagent') about(pick('subagent_id'));
     return { category: 'hub', title, name };
   }

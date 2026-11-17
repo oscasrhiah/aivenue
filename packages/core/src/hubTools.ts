@@ -317,6 +317,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         log: { type: 'string', description: 'The file its output goes to (path relative to the working directory or absolute).' },
         watch_file: { type: 'string', description: 'The file or folder it writes, whose size shows its progress.' },
         expected_size: { type: 'string', description: 'The final size of watch_file, e.g. "15.6GB" or a number of bytes.' },
+        launch: { type: 'string', description: 'When Aivenue listed this job as a launch it could not find a PID for (L1, L2, …): its id. The launch is closed only when Aivenue can tell this process is it.' },
         notify_when_done: {
           type: 'boolean',
           description:
@@ -324,6 +325,20 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         },
       },
       required: ['pid', 'purpose', 'cleanup'],
+    },
+  },
+  dismiss_launch: {
+    name: 'dismiss_launch',
+    description:
+      'Close a launch (L1, L2, …) that Aivenue lists as an unregistered background job when there is no process of it to register: reason "foreground" when Aivenue misread a command that ran in the foreground and finished; "ended" when it did run in the background but already ended and its PID cannot be found. The launch is kept as unconfirmed with your note, and the user sees it. Never register an unrelated process with track_process to close a launch.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        launch: { type: 'string', description: 'The launch id from Aivenue\'s message, e.g. "L1".' },
+        reason: { type: 'string', enum: ['foreground', 'ended'] },
+        note: { type: 'string', description: 'How you know: what the command did and how you can tell it finished.' },
+      },
+      required: ['launch', 'reason', 'note'],
     },
   },
   ask_user: {
@@ -529,7 +544,7 @@ export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = 
   // The compactor only reads the material in its prompt.
   if (role === 'compactor') return [];
   // Jobs that run long or need a GPU: implementers, their helpers and the verifier (who measures).
-  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', 'update_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
+  if (role === 'executor' || role === 'subagent' || role === 'verifier') names.push('wait_for', 'track_process', 'dismiss_launch', 'update_process', ...(gpu ? ['gpu_status', 'gpu_acquire', 'gpu_release'] : []));
   if (role !== 'test' && role !== 'advisor') names.push('search_records', 'report_skill_use');
   if (role !== 'test' && role !== 'advisor' && role !== 'adjudicator') names.push('reply_user', 'ask_user');
   if (role === 'test') names.push('list_providers');

@@ -1362,6 +1362,11 @@ export interface WorkflowRun {
   lastProgressAt?: number;
   /** Background processes agents registered (track_process): alive or not, and who cleans them up. */
   processes?: TrackedProcess[];
+  /**
+   * Background launches Aivenue saw but could not confirm, closed by the agent with dismiss_launch: it says the command
+   * ran in the foreground (Aivenue misread it) or ended before its PID could be found. Kept as the agent's word, unconfirmed.
+   */
+  unconfirmedLaunches?: { agentId: string; command: string; reason: 'foreground' | 'ended'; note: string; ts: number }[];
   plan?: PlanDoc;
   steps: PlanStep[];
   agents: Record<string, AgentRunInfo>;

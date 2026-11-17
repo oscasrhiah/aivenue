@@ -2029,13 +2029,34 @@ export class Orchestrator {
         const notify = args.notify_when_done === true || undefined;
         list.push({ pid, purpose: String(args.purpose ?? '').slice(0, 200), cleanup, agentId: info.id, startedAt: now(), alive: pidAlive(pid), checkedAt: now(), log: str('log'), watchFile: str('watch_file'), expectedBytes: expected, notify });
         run.processes = list;
-        // It stands for one launch Aivenue saw but could not find a PID for.
-        const waiting = this.launches.get(info.id);
-        if (waiting?.length) this.launches.set(info.id, waiting.slice(1));
+        const launchNote = await this.matchLaunch(run, info, pid, str('launch'));
         this.touch(run);
         const how = expected && str('watch_file') ? ' Its progress is the size of the watched file.' : str('log') ? ' Its progress is read from its log.' : ' Add watch_file + expected_size or log so the user sees its progress, or report it with update_process.';
         const wake = notify ? ' When you have nothing else to do, end your turn without submitting: Aivenue continues this conversation when it ends.' : '';
-        return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how + wake;
+        return (pidAlive(pid) ? `Tracking process ${pid}.` : `Process ${pid} is not running (registered anyway).`) + how + wake + launchNote;
+      }
+      case 'dismiss_launch': {
+        const id = String(args.launch ?? '').trim();
+        const reason = args.reason === 'foreground' || args.reason === 'ended' ? args.reason : undefined;
+        if (!reason) throw new Error('reason must be "foreground" (Aivenue misread a command that ran in the foreground and finished) or "ended" (it ran in the background and ended; its PID cannot be found)');
+        const note = String(args.note ?? '').trim().slice(0, 500);
+        if (!note) throw new Error('note is required: say how you know (what the command did, how you can tell it finished)');
+        const open = this.openLaunches(run, info);
+        const hit = open.find((x) => x.l.id === id);
+        if (!hit) throw new Error(`There is no open launch ${id || '(none given)'}; open: ${open.map((x) => x.l.id).join(', ') || 'none'}`);
+        this.launches.set(hit.agentId, (this.launches.get(hit.agentId) ?? []).filter((x) => x !== hit.l));
+        (run.unconfirmedLaunches ??= []).push({ agentId: info.id, command: hit.l.cmd.slice(0, 500), reason, note, ts: now() });
+        const cmd = hit.l.cmd.length > 160 ? `${hit.l.cmd.slice(0, 159)}…` : hit.l.cmd;
+        this.log(
+          run,
+          reason === 'foreground'
+            ? L(`${this.label(info)} 表示 Aivenue 把這個指令誤判為背景工作，它其實在前景執行完畢（未經確認）：\`${cmd}\`。理由：${note}`, `${this.label(info)} says Aivenue misread this command as a background job; it ran in the foreground and finished (not confirmed): \`${cmd}\`. Reason: ${note}`)
+            : L(`${this.label(info)} 表示這個背景工作已經結束、找不到它的 PID（未經確認）：\`${cmd}\`。說明：${note}`, `${this.label(info)} says this background job already ended and its PID cannot be found (not confirmed): \`${cmd}\`. Note: ${note}`),
+          'warn',
+          true,
+        );
+        this.touch(run);
+        return `Launch ${id} closed as unconfirmed (${reason}); the user sees your reason.`;
       }
       case 'ask_user': {
         const question = String(args.question ?? '').trim().slice(0, 3000);
@@ -3594,8 +3615,44 @@ export class Orchestrator {
     throw new Error(`Your sub-agents ${open.map((a) => `${a.id} (${a.provider})`).join(', ')} are still running. Before you submit: wait for them (wait_subagent), stop them (stop_subagent), or hand them off (stop_subagent {subagent_id, handoff: "who takes over its result"}).`);
   }
 
-  /** Background launches seen in an agent's commands whose process is not registered or found yet (agent id → launches). */
-  private launches = new Map<string, { cmd: string; ts: number }[]>();
+  /**
+   * Background launches seen in an agent's commands whose process is not registered or found yet (agent id → launches).
+   * `key` and `pid` are what Aivenue can confirm a process by: what the line runs, and the PID it printed.
+   */
+  private launches = new Map<string, { id: string; cmd: string; ts: number; key?: string; pid?: number }[]>();
+  private launchSeq = 0;
+
+  /** The open launches of this agent's conversation (its earlier turns are other agent ids). */
+  private openLaunches(run: WorkflowRun, info: AgentRunInfo) {
+    const mine = info.sessionId ? this.conversationIds(run, info.sessionId) : new Set<string>();
+    mine.add(info.id);
+    return [...mine].flatMap((agentId) => (this.launches.get(agentId) ?? []).map((l) => ({ agentId, l })));
+  }
+
+  /**
+   * A registered process closes an open launch only when Aivenue can tell it is that launch: the PID the launch printed,
+   * or a running process whose command line has what the launch runs. Registering another process (an unrelated or an
+   * ended PID) never closes one. Returns what to tell the agent about the launch it named.
+   */
+  private async matchLaunch(run: WorkflowRun, info: AgentRunInfo, pid: number, want?: string): Promise<string> {
+    const open = this.openLaunches(run, info);
+    if (!open.length) return want ? ` There is no open launch ${want}.` : '';
+    const alive = pidAlive(pid);
+    const line = alive && open.some((x) => x.l.key) ? ((await commandOf(pid)) ?? '').toLowerCase() : '';
+    const same = (l: { key?: string; pid?: number }) => l.pid === pid || (!!l.key && !!line && line.includes(l.key.toLowerCase()));
+    const named = want ? open.find((x) => x.l.id === want) : undefined;
+    const hit = named ? (same(named.l) ? named : undefined) : open.find((x) => same(x.l));
+    if (hit) this.launches.set(hit.agentId, (this.launches.get(hit.agentId) ?? []).filter((x) => x !== hit.l));
+    if (!want || hit) return hit ? ` It is launch ${hit.l.id}.` : '';
+    if (!named) return ` There is no open launch ${want}; open: ${open.map((x) => x.l.id).join(', ')}.`;
+    const short = (s: string) => (s.length > 120 ? `${s.slice(0, 119)}…` : s);
+    const why = !alive
+      ? `process ${pid} is not running, so Aivenue cannot tell it is \`${short(named.l.cmd)}\``
+      : line
+        ? `process ${pid} runs \`${short(line)}\`, not \`${short(named.l.cmd)}\``
+        : `Aivenue cannot read what process ${pid} runs, so it cannot tell it is \`${short(named.l.cmd)}\``;
+    return ` It does not close launch ${want}: ${why}. Register the PID of that job itself; if it ran in the foreground and finished, or it ended and its PID cannot be found, call dismiss_launch {launch: "${want}", reason: "foreground" | "ended", note}. Do not register an unrelated process for it.`;
+  }
   /** Submissions refused for unregistered background jobs (agent id → times). */
   private registerRefused = new Map<string, number>();
 
@@ -3609,9 +3666,9 @@ export class Orchestrator {
     const mine = info.sessionId ? this.conversationIds(run, info.sessionId) : new Set<string>();
     mine.add(info.id);
     const found = (run.processes ?? []).filter((p) => p.detected && mine.has(p.agentId));
-    const pending = [...mine].flatMap((id) => this.launches.get(id) ?? []);
+    const pending = this.openLaunches(run, info).map((x) => x.l);
     if (!found.length && !pending.length) return;
-    const list = [...found.map((p) => `PID ${p.pid}: ${p.purpose}`), ...pending.map((l) => `started \`${l.cmd.length > 160 ? `${l.cmd.slice(0, 159)}…` : l.cmd}\` (Aivenue did not find its PID)`)];
+    const list = [...found.map((p) => `PID ${p.pid}: ${p.purpose}`), ...pending.map((l) => `${l.id}: started \`${l.cmd.length > 160 ? `${l.cmd.slice(0, 159)}…` : l.cmd}\` (Aivenue did not find its PID)`)];
     const tries = (this.registerRefused.get(info.id) ?? 0) + 1;
     if (tries > 2) {
       this.log(run, L(`${this.label(info)} 交結果時仍有 ${list.length} 個背景程序沒有登記：${list.join('；')}`, `${this.label(info)} submitted with ${list.length} background job(s) still unregistered: ${list.join('; ')}`), 'warn', true);
@@ -3620,7 +3677,15 @@ export class Orchestrator {
     }
     this.registerRefused.set(info.id, tries);
     throw new Error(
-      `Register your background jobs before you submit (required, so the user sees them): ${list.join('; ')}. For each, call track_process {pid, purpose, cleanup: "aivenue"|"agent"|"keep", log or watch_file + expected_size}. A job that already ended is registered too (it shows as ended). Find a PID you do not know with ps / pgrep -f / Get-Process.`,
+      [
+        `Register your background jobs before you submit (required, so the user sees them): ${list.join('; ')}.`,
+        'For each job, call track_process {pid, purpose, cleanup: "aivenue"|"agent"|"keep", log or watch_file + expected_size}; for a launch (L1, L2, …) also give launch: "L1". A job that already ended is registered too (it shows as ended). Find a PID you do not know with ps / pgrep -f / Get-Process.',
+        pending.length
+          ? 'A launch is closed only by its own process (the PID it printed, or a running process that runs it). If Aivenue misread a command that ran in the foreground and finished, or the job ended and its PID cannot be found, call dismiss_launch {launch, reason: "foreground" | "ended", note: how you know} instead. Never register an unrelated process to close a launch.'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
     );
   }
 
@@ -4309,7 +4374,7 @@ export class Orchestrator {
     // A job started in the background, also when the same line then waits a moment ("… & sleep 10; tail log").
     const launch = backgroundLaunch(cmd, t.output, t.input);
     if (launch) {
-      const entry = { cmd: launch.command, ts: e.ts };
+      const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid };
       this.launches.set(info.id, [...(this.launches.get(info.id) ?? []), entry]);
       void this.adoptProcess(run, info, launch)
         .then((pid) => pid && this.launches.set(info.id, (this.launches.get(info.id) ?? []).filter((x) => x !== entry)))
