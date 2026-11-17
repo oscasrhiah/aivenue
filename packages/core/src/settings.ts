@@ -1,23 +1,63 @@
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AppSettings } from './types';
 
 const DEFAULTS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#c96442' };
 
-/** A lock older than this is left over from a hub that stopped while holding it. */
-const STALE_LOCK_MS = 10_000;
-/** How long a change waits for the other hub's change to finish. */
+/** How long a change waits for another hub's change to finish; then it is refused, never forced. */
 const LOCK_WAIT_MS = 3_000;
+/** An empty lock (its owner stopped between making it and writing its name) older than this is left over. */
+const EMPTY_LOCK_MS = 10_000;
 
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+/** When this process started (with the PID, it names the lock's owner: a PID can be reused, a start time not). */
+const STARTED = Math.round(Date.now() - process.uptime() * 1000);
+
+interface Owner {
+  pid: number;
+  started: number;
+  host: string;
+  token: string;
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/** When a running process started (undefined when it cannot be read). Synchronous: only asked about an old lock's owner. */
+function startedAt(pid: number): number | undefined {
+  try {
+    const out =
+      process.platform === 'win32'
+        ? execFileSync('powershell', ['-NoProfile', '-Command', `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Math.round(pid)}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString('o') }`], { encoding: 'utf8', timeout: 15000, windowsHide: true })
+        : execFileSync('ps', ['-o', 'lstart=', '-p', String(Math.round(pid))], { encoding: 'utf8', timeout: 15000 });
+    return Date.parse(out.trim()) || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * UI/app preferences persisted by the hub, shared by the desktop app, the VS Code extension and the browser.
  *
  * The app's hub and the shared VS Code hub each keep a SettingsStore on the same settings.json. A change is made to the
- * file as it is now (read under a lock file, written to a temporary file and renamed over it), not to this store's
- * copy, so one hub never writes back an older copy over what the other just saved (e.g. each side's sidebarHidden).
+ * file as it is now, read and written while holding settings.json.lock (written to a temporary file and renamed over
+ * it), so one hub never writes back an older copy over what the other just saved (e.g. each side's sidebarHidden).
  * Reading picks up the other hub's changes too.
+ *
+ * The lock names its owner (PID, when that process started, host, a token of its own). It is taken over only when the
+ * owner is provably gone: its process ended, or the PID now belongs to a process started at another time. A live owner,
+ * however long it takes, is waited for and then the change is refused with an error: a settings change is never forced.
+ * Each holder removes the lock only while it is still its own.
  */
 export class SettingsStore {
   private file: string;
@@ -74,24 +114,27 @@ export class SettingsStore {
     }
   }
 
-  /** Runs `fn` holding settings.json.lock (made with exclusive create); a lock left by a stopped hub is taken over. */
+  /** Runs `fn` holding settings.json.lock (see the class comment). */
   private locked(fn: () => void) {
     const lock = `${this.file}.lock`;
+    const mine = JSON.stringify({ pid: process.pid, started: STARTED, host: os.hostname(), token: randomUUID() } satisfies Owner);
     const until = Date.now() + LOCK_WAIT_MS;
     for (;;) {
       try {
-        fs.closeSync(fs.openSync(lock, 'wx'));
+        const fd = fs.openSync(lock, 'wx');
+        try {
+          fs.writeSync(fd, mine);
+        } finally {
+          fs.closeSync(fd);
+        }
         break;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
-        let age = 0;
-        try {
-          age = Date.now() - fs.statSync(lock).mtimeMs;
-        } catch {
-          continue; // released meanwhile
-        }
-        if (age > STALE_LOCK_MS) {
-          fs.rmSync(lock, { force: true });
+        const seen = readLock(lock);
+        if (seen === undefined) continue; // released meanwhile
+        if (ownerGone(seen.text, seen.age)) {
+          // Removed only if it is still the lock that was judged (another waiter may have taken it over meanwhile).
+          if (readLock(lock)?.text === seen.text) fs.rmSync(lock, { force: true });
           continue;
         }
         if (Date.now() > until) throw new Error('settings are being saved by another Aivenue: try again');
@@ -101,7 +144,33 @@ export class SettingsStore {
     try {
       fn();
     } finally {
-      fs.rmSync(lock, { force: true });
+      if (readLock(lock)?.text === mine) fs.rmSync(lock, { force: true });
     }
   }
+}
+
+function readLock(lock: string): { text: string; age: number } | undefined {
+  try {
+    const age = Date.now() - fs.statSync(lock).mtimeMs;
+    return { text: fs.readFileSync(lock, 'utf8'), age };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a lock's owner is provably gone. Anything that cannot be checked counts as alive. */
+function ownerGone(text: string, age: number): boolean {
+  let owner: Owner | undefined;
+  try {
+    owner = JSON.parse(text) as Owner;
+  } catch {
+    // empty or cut short: its owner stopped right after making it, unless it is still writing
+    return age > EMPTY_LOCK_MS;
+  }
+  if (!owner || typeof owner.pid !== 'number' || owner.host !== os.hostname()) return false;
+  if (!alive(owner.pid)) return true;
+  // The PID runs: the owner itself, or another process that got the same PID after the owner ended.
+  if (owner.pid === process.pid) return owner.started !== STARTED;
+  const started = startedAt(owner.pid);
+  return started !== undefined && Math.abs(started - owner.started) > 5_000;
 }

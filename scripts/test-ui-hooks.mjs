@@ -184,3 +184,57 @@ test('VS Code 背景服務換了連接埠：頁面不重新載入，直接連到
   assert.equal(sockets.length, 2);
   assert.equal(posted.length, 1);
 });
+
+test('設定鎖：另一個程序還活著時，不管拿著鎖多久都不搶，這邊的修改逾時報錯、不會蓋掉對方；對方結束或 PID 被別的程序重用時才接手；只刪自己的鎖', { exclusive: true }, async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const out = await build({ entryPoints: ['packages/core/src/settings.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const { SettingsStore } = mod.exports;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-settings-lock-'));
+  const lock = path.join(dir, 'settings.json.lock');
+  const disk = () => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  const store = new SettingsStore(dir);
+  store.set({ sidebarHidden: { app: true } });
+  // Another process holds the lock (as a hub that stalls between reading and writing), with its own name in it.
+  const holder = spawn(process.execPath, ['-e', `
+    const fs = require('fs'), os = require('os');
+    fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: process.pid, started: Math.round(Date.now() - process.uptime() * 1000), host: os.hostname(), token: 'holder' }), { flag: 'wx' });
+    process.stdout.write('held');
+    setTimeout(() => {}, 60000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  try {
+    await new Promise((r) => holder.stdout.once('data', r));
+    // Older than any time limit: still not taken while its owner lives.
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const t0 = Date.now();
+    assert.throws(() => store.set({ sidebarHidden: { vscode: true } }), /being saved by another Aivenue/);
+    assert.ok(Date.now() - t0 >= 2900, 'it waited first');
+    assert.match(fs.readFileSync(lock, 'utf8'), /"token":"holder"/, "the holder's lock is untouched");
+    assert.deepEqual(disk().sidebarHidden, { app: true }, 'nothing written over');
+    // The holder ends without releasing: its lock is taken over.
+    holder.kill();
+    await new Promise((r) => holder.once('exit', r));
+    store.set({ sidebarHidden: { vscode: true } });
+    assert.deepEqual(disk().sidebarHidden, { app: true, vscode: true });
+    assert.equal(fs.existsSync(lock), false, 'released after the change');
+  } finally {
+    try {
+      holder.kill();
+    } catch {}
+  }
+  // A lock whose PID now belongs to another process (started at another time): its owner is gone.
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  try {
+    fs.writeFileSync(lock, JSON.stringify({ pid: other.pid, started: 1, host: os.hostname(), token: 'long gone' }));
+    store.set({ theme: 'dark' });
+    assert.equal(disk().theme, 'dark');
+    assert.equal(fs.existsSync(lock), false);
+  } finally {
+    other.kill();
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
