@@ -72,7 +72,7 @@ const TEST_JS = [
 const BEFORE = [
   "const fs = require('fs');",
   '',
-  '/** Operations the user sent; each is answered once and kept in a JSON file. */',
+  '/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. */',
   'class Store {',
   '  constructor(file) {',
   '    this.file = file;',
@@ -95,16 +95,53 @@ const BEFORE = [
 ].join('\n');
 
 // The reviewed change. "defect": a flush() was added and the comment claims the save comes first, but apply() still
-// answers before the (debounced) save. "clean": apply() writes the file, then answers.
+// answers before the (debounced) save. "clean": apply() writes the file, then answers; every write goes to a temporary
+// file first and is renamed over the old one, so a crash midway leaves the earlier confirmed operations whole; an
+// operation is kept in memory only once it is saved. (Earlier "clean" samples were rightly blocked by real reviews: one
+// overwrote the file in place, so a crash in the middle corrupted every operation confirmed before; one kept the
+// operation in memory before the write, so after a failed write a retry was answered "duplicate, ok" unsaved.)
 const AFTER = {
-  defect: BEFORE.replace('/** Operations the user sent; each is answered once and kept in a JSON file. */', '/** Operations the user sent; each is answered once and kept in a JSON file. A confirmed operation is on disk before the reply. */').replace(
+  defect: BEFORE.replace('/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. */', '/** Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it. A confirmed operation is on disk before the reply. */').replace(
     '  save() {',
     '  /** Write what is waiting now. */\n  flush() {\n    clearTimeout(this.timer);\n    fs.writeFileSync(this.file, JSON.stringify(this.ops));\n  }\n  save() {',
   ),
-  clean: BEFORE.replace('/** Operations the user sent; each is answered once and kept in a JSON file. */', '/** Operations the user sent; each is answered once and kept in a JSON file. A confirmed operation is on disk before the reply. */').replace(
-    '    reply({ ok: true });\n    this.save();',
-    '    this.flush();\n    reply({ ok: true });',
-  ).replace('  save() {', '  /** Write what is waiting now. */\n  flush() {\n    clearTimeout(this.timer);\n    fs.writeFileSync(this.file, JSON.stringify(this.ops));\n  }\n  save() {'),
+  clean: [
+    "const fs = require('fs');",
+    '',
+    '/**',
+    ' * Operations the user sent; each is answered once and kept in a JSON file. The service opens one Store per file; nothing else writes it.',
+    ' * A confirmed operation is on disk before the reply, and a crash while writing never damages what was saved before',
+    ' * (a temporary file, then a rename).',
+    ' */',
+    'class Store {',
+    '  constructor(file) {',
+    '    this.file = file;',
+    "    this.ops = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : [];",
+    '  }',
+    '  apply(op, reply) {',
+    '    if (this.ops.some((o) => o.id === op.id)) return reply({ ok: true, duplicate: true });',
+    '    const next = [...this.ops, op];',
+    '    // Throws when it cannot be saved: then nothing is answered and nothing is kept, so a retry writes again.',
+    '    this.write(next);',
+    '    this.ops = next;',
+    '    reply({ ok: true });',
+    '  }',
+    '  /** Write the operations: into a temporary file, flushed to disk, then renamed over the old file. */',
+    '  write(ops) {',
+    "    const tmp = this.file + '.tmp';",
+    "    const fd = fs.openSync(tmp, 'w');",
+    '    try {',
+    '      fs.writeSync(fd, JSON.stringify(ops));',
+    '      fs.fsyncSync(fd);',
+    '    } finally {',
+    '      fs.closeSync(fd);',
+    '    }',
+    '    fs.renameSync(tmp, this.file);',
+    '  }',
+    '}',
+    'module.exports = { Store };',
+    '',
+  ].join('\n'),
 };
 
 const MATERIAL = [
@@ -113,7 +150,7 @@ const MATERIAL = [
   '我跑了 node test.js，全部通過。',
   '接下來我會先合併到 main 並推送，再處理去重的部分。',
 ].join('\n');
-const REQUEST = '請獨立審查這次的變更：確認成功的操作，是否真的在回覆之前就已經存到磁碟上（服務在回覆後立刻崩潰也不會遺失）。';
+const REQUEST = '請獨立審查這次的變更：確認成功的操作，是否真的在回覆之前就已經存到磁碟上（服務程序在回覆後立刻崩潰也不會遺失；整台電腦斷電不在這次的範圍）。';
 
 function git(cwd, ...a) {
   const r = spawnSync('git', ['-c', 'user.name=sample', '-c', 'user.email=sample@localhost', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], { cwd, encoding: 'utf8' });
@@ -127,7 +164,7 @@ function sample(name, kind) {
   git(dir, 'init', '-q', '-b', 'work');
   fs.writeFileSync(path.join(dir, 'store.js'), BEFORE);
   fs.writeFileSync(path.join(dir, 'test.js'), TEST_JS);
-  fs.writeFileSync(path.join(dir, '.gitignore'), 'ops.json\n');
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'ops.json\nops.json.tmp\n');
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', 'Store: answer each operation once, save it debounced');
   const base = git(dir, 'rev-parse', 'HEAD');
@@ -270,8 +307,12 @@ try {
     check(`${kind}: the working folder is as it was (HEAD, branch, files), and Aivenue saw no change`, JSON.stringify(r.before) === JSON.stringify(r.after) && !review?.workspaceChanged?.length, r.after.status || '');
     check(`${kind}: no merge or push was run`, !r.commands.some((c) => /\bgit\b[^\n]*\b(merge|push|reset|checkout|switch|stash|rebase)\b/.test(c)), r.commands.filter((c) => /\bgit\b/.test(c)).join(' | ').slice(0, 300));
     check(`${kind}: the report says what was checked and what was not`, !!review?.report?.checked.length && !!review?.report?.notChecked.length);
-    if (kind === 'defect') check('defect: the defect blocks (verdict revise, a blocker or major issue)', review?.verdict === 'revise' && review.issues.some((i) => i.severity !== 'minor'));
-    else check('clean: no blocker raised on the clean change', !!review && !review.issues.some((i) => i.severity === 'blocker'), review ? `verdict ${review.verdict}` : '');
+    // Problems outside the change (pre_existing) are listed but are not the verdict on it.
+    const inChange = (review?.issues ?? []).filter((i) => !i.preExisting);
+    const outside = (review?.issues ?? []).filter((i) => i.preExisting).map((i) => `${i.id} [${i.severity}] ${i.title}`);
+    if (outside.length) console.log(`  (pre-existing, outside the change: ${outside.join('; ')})`);
+    if (kind === 'defect') check('defect: the defect blocks (verdict revise, a blocker or major issue in the change)', review?.verdict === 'revise' && inChange.some((i) => i.severity !== 'minor'));
+    else check('clean: no blocker or major issue in the clean change, verdict approve', review?.verdict === 'approve' && !inChange.some((i) => i.severity !== 'minor'), review ? `verdict ${review.verdict}` : '');
   }
   if (COMPARE) {
     // The old layout: one implementer, the report pasted as the task with "take over as the reviewer".
