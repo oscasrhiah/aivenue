@@ -27,11 +27,21 @@ export function accountEnv(spec: ProviderSpec): Record<string, string> {
 }
 
 /**
- * A string setting of a TOML file, by its dotted name ("windows.sandbox"): under its [table], or written dotted.
- * Arrays of tables, multi-line strings and inline tables are not looked into.
+ * A string setting of a TOML file, by its dotted name ("windows.sandbox"): under its [table], written dotted, or in an
+ * inline table on one line (`windows = { sandbox = "elevated" }`). Arrays of tables, multi-line strings and inline
+ * tables inside inline tables are not looked into.
  */
 export function tomlSetting(text: string, dotted: string): string | undefined {
-  const norm = (k: string) => k.replace(/\s*\.\s*/g, '.').replace(/"/g, '');
+  const norm = (k: string) => k.trim().replace(/\s*\.\s*/g, '.').replace(/"/g, '');
+  const STR = String.raw`(?:"((?:[^"\\]|\\.)*)"|'([^']*)')`;
+  const str = (basic: string | undefined, literal: string | undefined) => {
+    if (literal !== undefined) return literal;
+    try {
+      return JSON.parse(`"${basic}"`) as string;
+    } catch {
+      return undefined;
+    }
+  };
   let table = '';
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -44,25 +54,27 @@ export function tomlSetting(text: string, dotted: string): string | undefined {
       table = norm(head[1]);
       continue;
     }
-    const kv = /^([\w".\s-]+?)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(?:#.*)?$/.exec(line);
-    if (!kv || `${table ? `${table}.` : ''}${norm(kv[1])}` !== dotted) continue;
-    if (kv[3] !== undefined) return kv[3];
-    try {
-      return JSON.parse(`"${kv[2]}"`) as string;
-    } catch {
-      return undefined;
+    const at = (key: string) => `${table ? `${table}.` : ''}${norm(key)}`;
+    const kv = new RegExp(String.raw`^([\w".\s-]+?)\s*=\s*${STR}\s*(?:#.*)?$`).exec(line);
+    if (kv) {
+      if (at(kv[1]) === dotted) return str(kv[2], kv[3]);
+      continue;
     }
+    const inline = /^([\w".\s-]+?)\s*=\s*\{([^{}]*)\}\s*(?:#.*)?$/.exec(line);
+    if (!inline || !dotted.startsWith(`${at(inline[1])}.`)) continue;
+    for (const m of inline[2].matchAll(new RegExp(String.raw`([\w".\s-]+?)\s*=\s*${STR}`, 'g'))) if (`${at(inline[1])}.${norm(m[1])}` === dotted) return str(m[2], m[3]);
   }
   return undefined;
 }
 
 /**
  * Settings an extra account takes from the default config folder (spec.accounts.shared) when its own config file
- * does not set them. Plain names only (letters, digits, - _ .): they go on the command line.
+ * does not set them, as command-line args (plain names only: letters, digits, - _ .). `notices`: what the user should
+ * know before the run (spec.accounts.shared.setup: e.g. Windows asking for administrator rights the first time).
  */
-export function sharedAccountArgs(spec: ProviderSpec): ArgGroup[] {
+export function sharedAccountSettings(spec: ProviderSpec): { args: ArgGroup[]; notices: string[] } {
   const shared = spec.accounts?.shared;
-  if (!spec.accountOf || !spec.accounts || !spec.accountHome || !shared) return [];
+  if (!spec.accountOf || !spec.accounts || !spec.accountHome || !shared) return { args: [], notices: [] };
   const read = (dir: string) => {
     try {
       return fs.readFileSync(path.join(dir, shared.file), 'utf8');
@@ -72,13 +84,20 @@ export function sharedAccountArgs(spec: ProviderSpec): ArgGroup[] {
   };
   const own = read(spec.accountHome);
   const main = read(process.env[spec.accounts.env] || expandHome(spec.accounts.home));
-  const out: ArgGroup[] = [];
+  const args: ArgGroup[] = [];
+  const notices: string[] = [];
   for (const key of shared.keys) {
-    const value = tomlSetting(main, key);
-    if (value === undefined || !/^[\w.-]+$/.test(value) || tomlSetting(own, key) !== undefined) continue;
-    out.push(shared.arg.map((a) => a.replace('{key}', key).replace('{value}', value)));
+    const mine = tomlSetting(own, key);
+    const theirs = tomlSetting(main, key);
+    const taken = mine === undefined && theirs !== undefined && /^[\w.-]+$/.test(theirs) ? theirs : undefined;
+    if (taken !== undefined) args.push(shared.arg.map((a) => a.replace('{key}', key).replace('{value}', taken)));
+    // The value the account runs with: its own, or the one taken over.
+    const value = mine ?? taken;
+    const s = shared.setup;
+    if (s && s.key === key && s.value === value && (!s.platform || s.platform === process.platform) && !fs.existsSync(path.join(spec.accountHome, s.done)))
+      notices.push(`${spec.name}：${L(s.zh, s.en)}`);
   }
-  return out;
+  return { args, notices };
 }
 
 /** A path under the CLI's default config folder, moved into an extra account's folder. */
@@ -92,6 +111,8 @@ export interface RunAuth {
   env: Record<string, string>;
   args: ArgGroup[];
   settingsExtra?: Record<string, unknown>;
+  /** To tell the user before the CLI starts (see sharedAccountSettings). */
+  notices?: string[];
 }
 
 const keyName = (id: string) => `apikey:${id}`;
@@ -507,14 +528,14 @@ export class ProviderRegistry {
   /** Environment/args a run needs for the provider's selected auth mode. */
   async runAuth(id: string): Promise<RunAuth> {
     const spec = this.get(id);
-    const shared = spec ? sharedAccountArgs(spec) : [];
-    if (!spec || this.authMode(id) !== 'api' || !spec.apiKey) return { env: {}, args: shared };
+    const shared = spec ? sharedAccountSettings(spec) : { args: [], notices: [] };
+    if (!spec || this.authMode(id) !== 'api' || !spec.apiKey) return { env: {}, args: shared.args, notices: shared.notices };
     const key = await this.secrets.get(keyName(id));
     if (!key) throw new Error(L(`${spec.name} 設定為 API 模式，但尚未輸入 API 金鑰`, `${spec.name} is in API mode but no API key has been entered`));
     const env: Record<string, string> = { ...(spec.apiKey.extraEnv ?? {}), [spec.apiKey.env]: key };
     const baseUrl = this.stored.settings[id]?.baseUrl;
     if (baseUrl && spec.apiKey.baseUrlEnv) env[spec.apiKey.baseUrlEnv] = baseUrl;
-    return { env, args: [...(spec.apiKey.args ?? []), ...shared], settingsExtra: spec.apiKey.settingsExtra };
+    return { env, args: [...(spec.apiKey.args ?? []), ...shared.args], settingsExtra: spec.apiKey.settingsExtra, notices: shared.notices };
   }
 
   private save() {

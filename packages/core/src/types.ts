@@ -172,9 +172,15 @@ export interface ProviderSpec {
    * (its default, e.g. ~/.claude), so each account keeps its own sign-in.
    * `shared`: settings in the default folder's config file that belong to the computer, not to an account. An extra
    * account whose own config file does not set one runs with the default folder's value, passed as `arg` ({key} and
-   * {value} filled in).
+   * {value} filled in). `setup`: a value of one of them that the CLI sets up once per account folder with the user's
+   * say (an administrator prompt): until `done` (a path in the account's folder) exists, a run of the account is told
+   * so first (on `platform` only, when given).
    */
-  accounts?: { env: string; home: string; shared?: { file: string; keys: string[]; arg: string[] } };
+  accounts?: {
+    env: string;
+    home: string;
+    shared?: { file: string; keys: string[]; arg: string[]; setup?: { key: string; value: string; done: string; platform?: string; zh: string; en: string } };
+  };
   /** Set on an extra account: the provider it is an account of, its name, and its config folder. */
   accountOf?: string;
   accountName?: string;

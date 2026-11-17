@@ -3490,3 +3490,23 @@ test('agent 在使用者要求時可以改對話名稱：改的是整段對話�
   assert.match(helper, /not available to the code_reviewer role/);
   assert.equal(orch.runs.get(r1.id).config.title, '論文第四章 圖表');
 });
+
+test('執行前的提醒（例如副帳號第一次設定 Codex 沙箱會跳管理員權限視窗）：在 CLI 啟動前寫進時間線，同一段對話只寫一次', async () => {
+  const notice = 'fake：Windows 可能會跳出管理員權限視窗';
+  const asked = [];
+  const { orch, cwd } = setup({ registry: { runAuth: async (id) => (asked.push(id), { env: {}, args: [], notices: id === 'fake' ? [notice] : [] }) } });
+  const seen = [];
+  fakeAgents(orch, {
+    // When the planner's CLI starts, the notice is already in the timeline.
+    planner: [async (o, secret) => (seen.push(o.runs.get(o.sessions.get(secret).workflowId).log.filter((l) => l.text === notice).length), void (await o.callTool(secret, 'submit_plan', defaults.planner.args)))],
+  });
+  const done = await settle(orch, orch.start(config(cwd)).id);
+  assert.equal(done.status, 'completed', done.error);
+  // Planner, executor and verifier all ran as "fake": said once, as a warning in the chat.
+  assert.ok(asked.filter((id) => id === 'fake').length >= 3, JSON.stringify(asked));
+  const lines = done.log.filter((l) => l.text === notice);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].level, 'warn');
+  assert.equal(lines[0].chat, true);
+  assert.deepEqual(seen, [1]);
+});

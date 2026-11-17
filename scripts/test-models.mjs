@@ -148,6 +148,12 @@ test('TOML 設定：[表格] 底下、點號寫法、單引號、註解都讀得
   assert.equal(tomlSetting('[ windows ]\r\nsandbox="mxc"\r\n', 'windows.sandbox'), 'mxc');
   assert.equal(tomlSetting('[windows]\n# sandbox = "elevated"\n', 'windows.sandbox'), undefined);
   assert.equal(tomlSetting('', 'windows.sandbox'), undefined);
+  // An inline table on one line.
+  assert.equal(tomlSetting('windows = { sandbox = "elevated", other = \'x\' } # inline\n', 'windows.sandbox'), 'elevated');
+  assert.equal(tomlSetting("windows = { other = 'x, y', sandbox = 'unelevated' }\r\n", 'windows.sandbox'), 'unelevated');
+  assert.equal(tomlSetting('[a]\nwindows = { sandbox = "x" }\n', 'a.windows.sandbox'), 'x');
+  assert.equal(tomlSetting('[profiles]\nwindows = { sandbox = "nope" }\n', 'windows.sandbox'), undefined);
+  assert.equal(tomlSetting('windows = { other = "x" }\n', 'windows.sandbox'), undefined);
 });
 
 test('額外的 Codex 帳號沿用主帳號的 Windows 沙箱設定；帳號自己有設定時用自己的；主帳號不多加參數', async () => {
@@ -171,10 +177,51 @@ test('額外的 Codex 帳號沿用主帳號的 Windows 沙箱設定；帳號自�
     fs.mkdirSync(own, { recursive: true });
     fs.writeFileSync(path.join(own, 'config.toml'), '[windows]\nsandbox = "unelevated"\n');
     assert.deepEqual((await r.runAuth('codex~work')).args, []);
+    fs.writeFileSync(path.join(own, 'config.toml'), 'windows = { sandbox = "unelevated" }\n');
+    assert.deepEqual((await r.runAuth('codex~work')).args, []);
     // A value that is not a plain name is not put on the command line.
     fs.rmSync(path.join(own, 'config.toml'));
     fs.writeFileSync(path.join(main, 'config.toml'), '[windows]\nsandbox = "elevated\\" -c x=\\"y"\n');
     assert.deepEqual((await r.runAuth('codex~work')).args, []);
+  } finally {
+    if (before === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('額外的 Codex 帳號第一次用 elevated 沙箱前會先提醒（Windows 會跳管理員權限視窗）；設定好之後、或不是 elevated 時不提醒', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-accounts-'));
+  const main = path.join(dir, 'main-codex');
+  fs.mkdirSync(main);
+  fs.writeFileSync(path.join(dir, 'providers.json'), JSON.stringify({ providers: [], hidden: [], settings: {}, accounts: [{ providerId: 'codex', slug: 'work', name: 'work' }] }));
+  const secrets = { get: async () => undefined, set: async () => undefined, delete: async () => undefined, has: () => false, list: () => [], keys: async () => [] };
+  const before = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = main;
+  // Windows only (the setting is the Windows sandbox).
+  const onWindows = process.platform === 'win32';
+  try {
+    const r = new ProviderRegistry(dir, secrets, () => undefined);
+    const own = path.join(dir, 'accounts', 'codex', 'work');
+    fs.mkdirSync(own, { recursive: true });
+    const notices = async (id = 'codex~work') => (await r.runAuth(id)).notices ?? [];
+    fs.writeFileSync(path.join(main, 'config.toml'), '[windows]\nsandbox = "elevated"\n');
+    const told = await notices();
+    assert.equal(told.length, onWindows ? 1 : 0, JSON.stringify(told));
+    if (onWindows) assert.match(told[0], /^Codex（work）：.*(管理員權限|administrator rights)/);
+    // The main account itself: nothing.
+    assert.deepEqual(await notices('codex'), []);
+    // Set up (Codex keeps it in the account's folder): no more notice.
+    fs.mkdirSync(path.join(own, '.sandbox-secrets'));
+    assert.deepEqual(await notices(), []);
+    fs.rmSync(path.join(own, '.sandbox-secrets'), { recursive: true });
+    // The account chose elevated itself: told as well; another sandbox: not.
+    fs.writeFileSync(path.join(main, 'config.toml'), '');
+    fs.writeFileSync(path.join(own, 'config.toml'), 'windows = { sandbox = "elevated" }\n');
+    assert.equal((await notices()).length, onWindows ? 1 : 0);
+    fs.writeFileSync(path.join(own, 'config.toml'), '[windows]\nsandbox = "unelevated"\n');
+    fs.writeFileSync(path.join(main, 'config.toml'), '[windows]\nsandbox = "elevated"\n');
+    assert.deepEqual(await notices(), []);
   } finally {
     if (before === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = before;

@@ -108,7 +108,24 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     modelSource: { type: 'codex-cache' },
     // The Windows sandbox ([windows] sandbox) is chosen and set up for this computer under the default account;
     // without it an extra account's sandboxed commands are all refused ("blocked by policy").
-    accounts: { env: 'CODEX_HOME', home: '~/.codex', shared: { file: 'config.toml', keys: ['windows.sandbox'], arg: ['-c', '{key}="{value}"'] } },
+    // "elevated" is set up once per account folder, after Windows asks for administrator rights (.sandbox-secrets).
+    accounts: {
+      env: 'CODEX_HOME',
+      home: '~/.codex',
+      shared: {
+        file: 'config.toml',
+        keys: ['windows.sandbox'],
+        arg: ['-c', '{key}="{value}"'],
+        setup: {
+          key: 'windows.sandbox',
+          value: 'elevated',
+          done: '.sandbox-secrets',
+          platform: 'win32',
+          zh: 'Windows 可能會跳出管理員權限視窗：Codex 要為這個帳號設定沙箱（elevated，和主帳號一樣），每個帳號只有第一次需要。允許之後，agent 才能在沙箱裡改檔案、執行指令；剛允許後的第一個指令可能逾時失敗，之後就正常。',
+          en: 'Windows may ask for administrator rights: Codex sets up its sandbox for this account (elevated, as the main account uses), once per account. Only after you allow it can the agent change files and run commands in the sandbox; the first command right after may time out, the next ones work.',
+        },
+      },
+    },
     configDefaults: { file: '~/.codex/config.toml', model: '^\\s*model\\s*=\\s*"([^"]+)"', effort: '^\\s*model_reasoning_effort\\s*=\\s*"([^"]+)"' },
     efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     capabilities: { resume: true, mcp: true },

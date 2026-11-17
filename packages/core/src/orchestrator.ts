@@ -2196,6 +2196,8 @@ export class Orchestrator {
     this.d.usage.recordRun(providerId, this.d.registry.defaults(providerId).model);
     void Promise.all([this.d.registry.runAuth(providerId), this.d.capabilities.serversFor(providerId)])
       .then(([auth, mcpServers]) => {
+        // Shown above the test's output, before the CLI starts (the run's own events come after it).
+        if (auth?.notices?.length) this.d.push({ topic: 'test', data: { testId, providerId, event: { seq: 0, ts: now(), kind: 'info', text: auth.notices.join('\n') } } });
         if (spec.mcpRegistration) this.sessions.get(secret)!.proxyServers = mcpServers;
         const def = this.d.registry.defaults(providerId);
         return runAgent({
@@ -3184,6 +3186,8 @@ export class Orchestrator {
       let mcpServers;
       try {
         auth = await this.d.registry.runAuth(info.provider);
+        // Before the CLI starts, once per conversation (e.g. Windows about to ask for administrator rights).
+        for (const n of auth?.notices ?? []) if (!run.log.some((l) => l.text === n)) this.log(run, n, 'warn', true);
         mcpServers = await this.d.capabilities.serversFor(info.provider);
         if (spec.mcpRegistration) this.sessions.get(secret)!.proxyServers = mcpServers;
       } catch (e) {
