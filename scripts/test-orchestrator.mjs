@@ -2074,6 +2074,10 @@ test('檢查要單獨執行的提醒：實作者、程式審查各一次（會�
     assert.equal(p[role].length, 1, role);
     assert.equal(count(p[role][0], 'CHECKS ON THEIR OWN'), 1, role);
     assert.match(p[role][0], /no `;`, `&&` or `\|\|` chain, no `cd … &&` in front/, role);
+    // Agreed with the background rule: a check long enough for the background is the one exception, said so.
+    assert.match(p[role][0], /\(BACKGROUND JOBS\) is the exception: Aivenue cannot see its exit code/, role);
+    // A subfolder: a folder named in the command first; a working-directory setting only "if your shell tool has" one.
+    assert.match(p[role][0], /npm --prefix <dir> test`, `pytest <dir>`[\s\S]*if your shell tool has a working-directory setting/, role);
   }
   for (const role of ['planner', 'plan_reviewer']) for (const text of p[role]) assert.equal(count(text, 'CHECKS ON THEIR OWN'), 0, role);
 });

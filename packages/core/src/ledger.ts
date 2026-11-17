@@ -188,6 +188,9 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
     }
   };
   let lastEdit = 0;
+  // When a command that writes files succeeded (Set-Content, sed -i, a redirect into a file…), by any agent: a check
+  // run before it may no longer hold. Kept apart from `changed`: which files it wrote is not known.
+  const commandWrites: number[] = [];
   for (const a of Object.values(run.agents)) {
     if (a.role === 'test' || a.role === 'compactor') continue;
     const events = eventsOf(a.id);
@@ -210,6 +213,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
         }
         continue;
       }
+      if (t.category === 'command' && t.status === 'ok' && writesFiles((t.title || t.input || '').trim())) commandWrites.push(e.ts);
       if (o.onlyIds ? !o.onlyIds.has(a.id) : a.id === o.selfId) continue;
       if (t.category === 'read') {
         addRead(rel(flat(t.title)), e.ts, a, t.output);
@@ -236,7 +240,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
   const sure = changes.filter(([, c]) => c.sure);
   const maybe = changes.filter(([, c]) => !c.sure);
   for (const en of entries) {
-    en.outdated = sure.some(([, c]) => c.ts > en.ts);
+    en.outdated = sure.some(([, c]) => c.ts > en.ts) || commandWrites.some((ts) => ts > en.ts);
     en.maybeOutdated = !en.outdated && maybe.some(([, c]) => c.ts > en.ts);
   }
   const same = (x: string, y: string) => x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
@@ -343,6 +347,25 @@ const CD_FAILED = /no such file or directory|cannot find path|cannot find the pa
 
 /** Quoted text emptied (`printf "npm test"` → `printf ""`): what is inside quotes is an argument, never a command. */
 const unquoted = (s: string) => s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+
+/** Commands that change files (at the start of a step): PowerShell and .NET writers, cmd's, Unix tools, git's. */
+const WRITER =
+  /^[\s(&.]*(?:(?:Set|Add|Clear)-Content|Out-File|(?:New|Remove|Move|Copy|Rename)-Item|\[(?:System\.)?IO\.File\]::(?:Write|Append|Delete|Move|Copy|Replace)\w*|rm|mv|cp|touch|tee|truncate|del|erase|move|copy|ren|rename|sed\b.*\s-i|perl\b.*\s-p?i|patch|git\s+(?:apply|checkout|restore|reset|stash|mv|rm|pull|merge|rebase|cherry-pick|am|revert))\b/i;
+
+/**
+ * A command that changes files: a writer (WRITER) at the start of any step, or output redirected into a file. Not
+ * output thrown away ($null, /dev/null, NUL), streams joined (2>&1), nor a check writing its own output to a log
+ * (`npm test > test.log`). Which files it changed is not worked out: only that something may have.
+ */
+export function writesFiles(command: string): boolean {
+  return shellParts(unquoted(command)).some(({ text }) => {
+    const step = text.trim();
+    if (!step) return false;
+    if (WRITER.test(step)) return true;
+    const into = [...step.matchAll(/>{1,2}\s*([^\s|;&>]+)/g)].map((m) => m[1]).filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f));
+    return into.length > 0 && !CHECK.test(step);
+  });
+}
 
 /** Whether a part of a command, outside its quotes, runs a check. */
 const runsCheck = (part: string) => CHECK.test(unquoted(part.trim()));

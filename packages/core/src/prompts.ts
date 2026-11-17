@@ -343,7 +343,12 @@ export function securityReviewRule(skillPath: string): string {
  * passed or failed; inside a longer line (ledger.ts isCompound) it can only say it ran and the result is unread.
  */
 export function checksAloneRule(): string {
-  return '\n\nCHECKS ON THEIR OWN: run each check (tests, a build, a type check, a linter) as a command by itself, in the working folder you are already in: nothing piped after it (no `| tail`, `| grep`), no `;`, `&&` or `||` chain, no `cd … &&` in front (for a subfolder, use your shell tool\'s working-directory option or a flag such as `npm --prefix <dir> test`; `2>&1` is fine). Aivenue then knows from its exit code whether it passed and shows the user so; inside a longer line it only knows the line ran, and the user is told the check\'s result is unknown. When the output is long, run the check anyway and look for what you need afterwards (`search_records` finds lines of earlier output) instead of cutting it in the same command.';
+  return [
+    '\n\nCHECKS ON THEIR OWN: run each check (tests, a build, a type check, a linter) as a command by itself, in the working folder you are already in: nothing piped after it (no `| tail`, `| grep`), no `;`, `&&` or `||` chain, no `cd … &&` in front (`2>&1` is fine). Aivenue then knows from its exit code whether it passed and shows the user so; inside a longer line it only knows the line ran, and the user is told the check\'s result is unknown.',
+    'For a check in a subfolder, name the folder in the command if the tool takes it (`npm --prefix <dir> test`, `pytest <dir>`, `go test ./<dir>/...`); if your shell tool has a working-directory setting, that works too. Only if neither does, put `cd <dir> &&` in front: the result then has to be read from the output.',
+    'When the output is long, run the check anyway and look for what you need afterwards (`search_records` finds lines of earlier output) instead of cutting it in the same command.',
+    'A check so long that you send it to the background (BACKGROUND JOBS) is the exception: Aivenue cannot see its exit code, so say its result from its log in your report. Run every check that finishes within a few minutes in the foreground, on its own.',
+  ].join(' ');
 }
 
 export function backgroundRule(): string {

@@ -2670,6 +2670,27 @@ test('Aivenue 看到的檢查：合併輸出（2>&1、&>log、*>&1）不算較�
   assert.deepEqual(got, cases.map(([cmd, outcome]) => [cmd, outcome]));
 });
 
+test('檢查之後用指令寫檔（Set-Content、sed -i、> 檔案…）也算改過，檢查要重驗；丟掉的輸出、檢查自己的記錄檔、失敗的寫入不算', () => {
+  const tool = (seq, title, status = 'ok') => ({ seq, ts: seq, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category: 'command', title, output: '', status } });
+  const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
+  const run = { id: 'r', config: { cwd: os.tmpdir(), goal: 'g' }, agents: { [a.id]: a }, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } }, notes: [] };
+  const outdated = (events) => Object.fromEntries(W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, !!c.outdated]));
+  // What the agent did in the VS Code check: the test passed, then a PowerShell command added a comment to slug.js.
+  assert.deepEqual(
+    outdated([tool(1, 'node slug.test.js'), tool(2, '$content = Get-Content -Raw -Encoding UTF8 slug.js; Set-Content -Encoding UTF8 slug.js "// slug helper`r`n$content"')]),
+    { 'node slug.test.js': true },
+  );
+  for (const write of ["sed -i 's/_/-/' slug.js", 'echo "// note" >> slug.js', 'git checkout -- slug.js', 'mv slug.tmp slug.js'])
+    assert.deepEqual(outdated([tool(1, 'npm test'), tool(2, write)]), { 'npm test': true }, write);
+  // Not a change: output thrown away, a check writing its own log, reading, a write that failed.
+  for (const [later, status] of [['ls > $null', 'ok'], ['cat a.txt > /dev/null', 'ok'], ['npm run lint > lint.log 2>&1', 'ok'], ['Get-Content slug.js', 'ok'], ['git diff', 'ok'], ['Set-Content slug.js x', 'error']])
+    assert.equal(outdated([tool(1, 'npm test'), tool(2, later, status)])['npm test'], false, later);
+  // A check run after the write holds.
+  assert.deepEqual(outdated([tool(1, 'Set-Content slug.js x'), tool(2, 'npm test')]), { 'npm test': false });
+  // A write and the check in one line: the check comes after it there, so it is not outdated by it.
+  assert.equal(outdated([tool(1, "(Get-Content slug.js) -replace 'a','b' | Set-Content slug.js; node slug.test.js")])["(Get-Content slug.js) -replace 'a','b' | Set-Content slug.js; node slug.test.js"], false);
+});
+
 test('Aivenue 看到的檢查（資料）：通過、失敗、輸出報錯、在較長指令中、改檔後需重驗、可能已變；不是檢查的指令不算', () => {
   const tool = (seq, ts, category, title, output, status = 'ok') => ({ seq, ts, kind: 'tool', tool: { id: `t${seq}`, name: 'shell', category, title, output, status }, ...(category === 'edit' ? { files: [title] } : {}) });
   const a = { id: 'aaaaaaaa-111', role: 'executor', provider: 'codex', status: 'completed', depth: 0, stage: 'implement', round: 1, startedAt: 1, endedAt: 99, stats: {} };
