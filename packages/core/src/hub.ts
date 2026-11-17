@@ -22,7 +22,7 @@ import { UsageTracker } from './usage';
 import { Orchestrator } from './orchestrator';
 import { BUILTIN_PROVIDERS, PROVIDER_TEMPLATES } from './providers/builtin';
 import { ProviderRegistry } from './providers/registry';
-import { RunStore } from './store';
+import { RunStore, runRef } from './store';
 import { FileSecretStore, type SecretStore } from './secrets';
 import { holdOsLock, lockName } from './osLock';
 import { OpLog } from './opLog';
@@ -620,7 +620,13 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
             if (change) store.flush();
           }
         };
-        const result = await (op ? ops.once(op, run, () => store.appliedOp(op)) : run());
+        // A kept answer that stands for a workflow is answered with that workflow as it is now.
+        const recorded = () => {
+          const r = store.appliedOp(op!);
+          const id = r && runRef(r.result);
+          return id ? { ...r, result: orchestrator.runs.get(id) ?? null } : r;
+        };
+        const result = await (op ? ops.once(op, run, recorded) : run());
         reply({ id: req.id, result: result ?? null });
       } catch (e) {
         reply({ id: req.id, error: (e as Error).message });

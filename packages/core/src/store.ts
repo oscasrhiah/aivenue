@@ -3,6 +3,12 @@ import * as path from 'node:path';
 import type { AgentEvent, RunHost, WorkflowPreset, WorkflowRun, WorkflowSummary } from './types';
 import { requestContext } from './windows';
 
+/** A workflow run (an answer that is one is kept as a reference, see endOp). */
+const isRun = (v: unknown): v is WorkflowRun => !!v && typeof v === 'object' && typeof (v as WorkflowRun).id === 'string' && !!(v as WorkflowRun).config && !!(v as WorkflowRun).stages;
+
+/** A kept answer that stands for a workflow: `{ $run: id }`. */
+export const runRef = (v: unknown): string | undefined => (v && typeof v === 'object' && typeof (v as { $run?: unknown }).$run === 'string' ? (v as { $run: string }).$run : undefined);
+
 /** How long a run remembers the client operations that changed it (as the operation log), how many, how large an answer. */
 const OP_KEEP_MS = 10 * 60_000;
 const OP_MAX_PER_RUN = 20;
@@ -112,13 +118,25 @@ export class RunStore {
     const runs = this.activeOps.get(op);
     this.activeOps.delete(op);
     if (!runs?.size) return;
-    const kept = result.error === undefined && JSON.stringify(result.value ?? null).length <= OP_RESULT_MAX;
+    // Kept as a copy, never the live object: an answer that is a workflow (workflows.resumeInterrupted answers with the
+    // run itself) would otherwise be stored inside its own record, a cycle no write or reply can serialize. A workflow is
+    // kept as a reference to it, answered on replay with the workflow as it is then.
+    const v = result.value;
+    let json: string | undefined;
+    if (result.error === undefined) {
+      try {
+        json = JSON.stringify(isRun(v) ? { $run: v.id } : (v ?? null));
+      } catch {
+        json = undefined; // not serializable: done, its answer not kept
+      }
+    }
+    const kept = json !== undefined && json.length <= OP_RESULT_MAX;
     for (const run of runs) {
       const entry = run.ops?.find((o) => o.op === op);
       if (!entry) continue;
       entry.done = true;
       if (result.error !== undefined) entry.error = result.error.slice(0, 500);
-      else if (kept) entry.result = result.value ?? null;
+      else if (kept) entry.result = JSON.parse(json!);
       this.opIndex.set(op, entry);
       this.save(run);
     }

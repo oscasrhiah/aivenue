@@ -775,6 +775,68 @@ test('工作流已存、操作紀錄還沒存時 hub 停止：重送同一個操
   }
 });
 
+test('經 WebSocket 接續中斷的工作流：回覆的是工作流本身也不會存成自己的一部分；能回覆、能存檔；重啟後重送同一個操作不會再接續一次', async () => {
+  const dir = tmp('resume-rpc');
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRename = nfs.renameSync;
+  const runFile = (id) => path.join(dir, 'runs', id, 'run.json');
+  let h = await sharedHub(dir);
+  let fake = agents(h.hub, { hold: true });
+  try {
+    let w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    let v = new View(h.ep, w.id);
+    const id = await v.call('workflows.start', { config: cfg(w.cwd) });
+    await until(() => fake.turns.length === 1, 'the agent to start');
+    h.hub.orchestrator.d.store.saveNow(h.hub.orchestrator.runs.get(id));
+    v.close();
+    w.ch.close();
+    fake.release();
+    await h.hub.close();
+
+    // Reopened: resumed through the socket, as the page does. The hub stops before its operation log is saved.
+    h = await sharedHub(dir);
+    fake = agents(h.hub, { hold: true });
+    w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    v = new View(h.ep, w.id);
+    nfs.renameSync = function (from, to) {
+      if (String(to).endsWith('hub-ops-vscode.json')) throw new Error('stopped before the operation log was saved');
+      return realRename.apply(this, arguments);
+    };
+    const resumed = await v.call('workflows.resumeInterrupted', { id }, 'resume-op');
+    assert.equal(resumed.id, id, 'answered with the workflow');
+    assert.equal(resumed.resumes, 1);
+    const run = h.hub.orchestrator.runs.get(id);
+    assert.ok(!(run.ops ?? []).some((o) => o.result === run), 'the run is not inside its own record');
+    assert.doesNotThrow(() => JSON.stringify(run));
+    h.hub.orchestrator.d.store.saveNow(run);
+    const onDisk = JSON.parse(fs.readFileSync(runFile(id), 'utf8'));
+    assert.deepEqual(onDisk.ops.find((o) => o.op === 'resume-op'), { op: 'resume-op', at: onDisk.ops.find((o) => o.op === 'resume-op').at, done: true, result: { $run: id } });
+    await until(() => fake.turns.length === 1, 'the resumed agent');
+    nfs.renameSync = realRename;
+    v.close();
+    w.ch.close();
+    fake.release();
+    await h.hub.close();
+
+    // Reopened again (the workflow is interrupted again): the same operation resent is answered, not run again.
+    h = await sharedHub(dir);
+    fake = agents(h.hub, { hold: true });
+    w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    v = new View(h.ep, w.id);
+    const again = await v.call('workflows.resumeInterrupted', { id }, 'resume-op');
+    assert.equal(again.id, id);
+    assert.equal(h.hub.orchestrator.runs.get(id).resumes, 1, 'not resumed a second time');
+    assert.equal(h.hub.orchestrator.runs.get(id).status, 'interrupted');
+    assert.equal(fake.turns.length, 0, 'no agent ran again');
+    v.close();
+    w.ch.close();
+  } finally {
+    nfs.renameSync = realRename;
+    fake.release();
+    await h?.hub.close();
+  }
+});
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();
