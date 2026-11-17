@@ -464,6 +464,13 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     'npm test > src/a.js',
     'npm test 2>&1 | tee requirements.txt',
     'cd src && sed -i s/a/b/ a.js',
+    // From the review of c3e41d7: a cd after `||` may be skipped while the write after `&&` still runs; a cd sent to
+    // the background or into a pipeline changes no folder of the steps after it.
+    'true || cd /tmp && echo changed > src/a.js',
+    'true || cd /tmp/x && cat > src/a.js',
+    'false || cd /tmp && rm a.js',
+    'cd /tmp & echo changed > src/a.js',
+    'cd /tmp | cat && echo changed > src/a.js',
   ];
   const no = [
     String.raw`Remove-Item $env:TEMP\ic.mjs`,
@@ -493,6 +500,9 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     'npm run lint -- --fix --dry-run',
     // Only after a cd that surely worked; a check's own log.
     'cd /tmp/x && cat > a.mjs',
+    // The write runs only when the cd did (`&&` after it), whatever came before it.
+    'a || b && cd /tmp/x && cat > a.mjs',
+    'make && cd /tmp/x && echo done > a.log',
     'npm test > test-output.txt',
     'npm test 2>&1 | tee logs/run.txt',
     // Real commands of reviews in Aivenue: a merge preview; a scratch folder the line moved to; LOCALAPPDATA's Temp.

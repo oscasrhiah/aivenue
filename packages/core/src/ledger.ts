@@ -370,7 +370,7 @@ const PIPES_ON = /^[\s(&.]*(?:grep|findstr|Select-String|head|tail|Select-Object
 const TEMP_PATH =
   /\$env:(?:TEMP|TMP)\b|%(?:TEMP|TMP)%|\$\{?TMPDIR\b|(?:^|[\s"'=(,])\/tmp(?:\/|$)|[\\/]AppData[\\/]Local[\\/]Temp(?:[\\/]|$)|(?:\$\{?LOCALAPPDATA\}?|%LOCALAPPDATA%|\$env:LOCALAPPDATA)["']?[\\/]Temp(?:[\\/"']|$)|^\/var\/folders\/|GetTempPath\(\)/i;
 /** A step that moves the shell to another folder, and where to. */
-const CHANGE_DIR = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|\S+)/i;
+const CHANGE_DIR = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s&]+)\s*$/i;
 
 /**
  * A command that changes files: a writer or formatter (WRITER, FORMATTER) at the start of any step, or output
@@ -409,11 +409,16 @@ export function writesFiles(command: string, cwd?: string): boolean {
       inTemp = false;
       continue;
     }
+    // A step that is only a cd (`cd /tmp & echo > a` sends the cd to the background: the rest is read as a step).
     const dir = CHANGE_DIR.exec(text.trim());
     if (dir) {
-      // Followed only into a temporary folder named in full; a relative cd or `cd -` may lead anywhere.
+      // Followed only into a temporary folder named in full; a relative cd or `cd -` may lead anywhere. And only when
+      // the steps after it run only if it did: it starts the command or follows `&&` (`a || b && cd /tmp && w`), not
+      // `||` (`true || cd /tmp && w` skips the cd and still writes), and its output is not piped (a pipeline runs it in
+      // a subshell of its own).
       const to = bare(dir[1]);
-      inTemp = absolute(to) && to !== '-' && TEMP_PATH.test(to) && !inCwd(to);
+      const certain = (before === '' || before === ';' || before === '\n' || before === '&&') && parts[i].sep !== '|';
+      inTemp = certain && absolute(to) && to !== '-' && TEMP_PATH.test(to) && !inCwd(to);
       continue;
     }
     const writer = WRITER.test(step) || ((FORMATTER.test(step) || FIX_FLAG.test(step)) && !DRY_RUN.test(step));
