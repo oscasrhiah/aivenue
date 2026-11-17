@@ -1,6 +1,7 @@
 import { Check, CornerDownRight } from 'lucide-react';
 import type { WorkflowRun } from '../../../core/src/types';
 import { Ico } from '../icons';
+import { MsgTime } from './MsgTime';
 import { useT } from '../i18n';
 import { cx } from '../util';
 
@@ -17,6 +18,7 @@ export function Replies({ replies, planUpdated, pending }: { replies?: Reply[]; 
           <span className="reply-who"><Ico i={CornerDownRight} size={13} /> {r.who}</span>
           <span className="reply-text">{r.text}</span>
           {r.changesPlan && <span className="pill warn">{t('會更新計畫', 'changes the plan')}</span>}
+          <MsgTime ts={r.ts} />
         </div>
       ))}
       {planUpdated && <div className="reply plan-updated"><Ico i={Check} size={13} /> {t('計畫已依這則訊息更新', 'The plan was updated for this message')}</div>}

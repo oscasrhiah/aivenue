@@ -26,6 +26,7 @@ import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus }
 import { Markdown } from '../components/Markdown';
 import { ask } from '../components/Ask';
 import { RememberButton } from '../components/Memory';
+import { MsgTime } from '../components/MsgTime';
 
 type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
 
@@ -106,6 +107,7 @@ function MidRunMessage({ runId, ts, text, files, onImage, delivered, replies, pl
       {text && <RememberButton runId={runId} text={text} ts={ts} className="user-remember" />}
       <Replies replies={replies} planUpdated={planUpdated} />
       <div className="muted tiny mid-run-tag">
+        <MsgTime ts={ts} /> ·{' '}
         {delivered
           ? t(`執行中追加 · 已送達 ${delivered} 個 agent`, `Sent while working · reached ${delivered} agent(s)`)
           : t('執行中追加 · 會交給下一個開始工作的 agent', 'Sent while working · goes to the next agent that starts')}
@@ -149,11 +151,16 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
             )}
             <div className="user-msg-wrap">
               <div className="user-msg">{it.text}</div>
+              <div className="user-actions">
+                <MsgTime ts={it.ts} />
+              </div>
             </div>
           </div>
         ) : it.type === 'divider' ? (
           <div key={it.key} className={cx('divider', it.level)}>
-            <span>{logText(it.text)}</span>
+            <span>
+              {logText(it.text)} <MsgTime ts={it.ts} />
+            </span>
           </div>
         ) : (
           <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />
@@ -703,6 +710,7 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
         <div className="user-msg">{text}</div>
         {/* Always in view (quiet): touch and keyboard users find them without hovering. */}
         <div className="user-actions">
+          <MsgTime ts={run.createdAt} />
           <RememberButton runId={run.id} text={text} ts={run.createdAt} className="user-remember" />
           {!run.replacedBy && (
             <button
@@ -788,6 +796,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
           </span>
         )}
         {review && <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}</span>}
+        <MsgTime ts={run.endedAt} className="final-time" />
       </div>
       {/* What was delivered, from the workflow's file list (not an agent's account): each file with where it came from. */}
       {rows.length > 0 && (
@@ -1317,7 +1326,9 @@ export function Chat({ id }: { id?: string }) {
                 if (it.type === 'divider')
                   return (
                     <div key={it.key} className={cx('divider', it.level)}>
-                      <span>{logText(it.text)}</span>
+                      <span>
+                        {logText(it.text)} <MsgTime ts={it.ts} />
+                      </span>
                     </div>
                   );
                 return <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />;

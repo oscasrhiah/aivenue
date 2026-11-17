@@ -30,6 +30,7 @@ const bundled = await build({
       export { applyStandard, flowModeOf, keepFlowMark, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
+      export { msgTime } from './packages/ui/src/util';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
@@ -361,6 +362,15 @@ test('常駐 CLI：設成不自動關閉就一直保留', async () => {
   assert.equal(closed, false);
   pool.closeAll();
   assert.equal(closed, true);
+});
+
+test('訊息時間：今天只顯示時分；今年較早的加上月日；更早的加上年；午夜是 00 不是 24', () => {
+  const now = new Date(2026, 10, 17, 15, 30).getTime();
+  assert.match(W.msgTime(new Date(2026, 10, 17, 9, 5).getTime(), now), /^09:05$/);
+  assert.match(W.msgTime(new Date(2026, 10, 17, 0, 7).getTime(), now), /^00:07$/);
+  assert.match(W.msgTime(new Date(2026, 10, 16, 23, 59).getTime(), now), /^11\/16 23:59$/);
+  assert.match(W.msgTime(new Date(2026, 0, 2, 8, 0).getTime(), now), /^1\/2 08:00$/);
+  assert.match(W.msgTime(new Date(2025, 11, 31, 18, 45).getTime(), now), /^2025\/12\/31 18:45$/);
 });
 
 // ---------- shared context ----------

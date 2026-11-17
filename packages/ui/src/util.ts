@@ -88,6 +88,21 @@ export function clock(ts: number): string {
   return new Date(ts).toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
+/** A message's time as shown on it: "14:05" today, "11/16 14:05" earlier this year, "2025/11/16 14:05" before. */
+export function msgTime(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const n = new Date(now);
+  const hm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  if (d.toDateString() === n.toDateString()) return hm;
+  const md = `${d.getMonth() + 1}/${d.getDate()}`;
+  return d.getFullYear() === n.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}/${md} ${hm}`;
+}
+
+/** The full date and time, to the second (a message time's tooltip). */
+export function fullTime(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+}
+
 export function relativeDay(t: T, ts: number): string {
   const d = new Date(ts);
   const today = new Date();

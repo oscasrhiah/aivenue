@@ -15,6 +15,7 @@ import { CheckRows } from './Checks';
 import { extensionSummary } from '../extensionUse';
 import { outcomeText } from './Progress';
 import { RememberButton } from './Memory';
+import { MsgTime } from './MsgTime';
 
 export const failureLabel = (t: ReturnType<typeof useT>, k: FailureKind) =>
   ({ rate_limit: t('限流', 'Rate limited'), quota: t('額度用完', 'Out of quota'), network: t('網路', 'Network'), auth: t('登入失效', 'Signed out'), model_service: t('模型服務故障', 'Model service'), logic: t('執行錯誤', 'Task error'), unknown: t('未知錯誤', 'Unknown') })[k];
@@ -592,7 +593,9 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           {agent.endedWithoutResult &&<span className="badge warn" title={t('CLI 已經結束，但沒有交出這個角色要交的結果', 'The CLI exited without handing in the result its role must submit')}>{t('程序結束≠完成', 'ended ≠ done')}</span>}
           {agent.handoff && <span className="badge" title={agent.handoff}>{t('已交接', 'handed off')}</span>}
           {!running && <span className={cx('status', st.cls)}>{st.label}</span>}
-          <span>{elapsed(agent.startedAt, agent.endedAt)}</span>
+          <MsgTime ts={agent.startedAt} end={agent.endedAt} />
+          {/* Named, so the duration is not read as a second clock time beside the start. */}
+          <span title={t('這一輪花的時間', 'How long this turn took')}>{t(`用時 ${elapsed(agent.startedAt, agent.endedAt)}`, `took ${elapsed(agent.startedAt, agent.endedAt)}`)}</span>
           {live && agent.role !== 'compactor' && (
             <span className="turn-actions">
               {running && (

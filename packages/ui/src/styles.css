@@ -465,6 +465,38 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* When a message was said (MsgTime): quiet, on one line, every digit the same width. Muted rather than faint, so the
+   small text keeps its contrast. */
+.msg-time {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.divider .msg-time {
+  margin-left: 4px;
+}
+
+.final-head .final-time {
+  margin-left: auto;
+}
+
+.reply .msg-time {
+  margin-left: auto;
+}
+
+/* An agent's message in its log: the time at the top right, the text flowing beside it. */
+.tx-msg {
+  display: flow-root;
+}
+
+.tx-msg .tx-time {
+  float: right;
+  margin: 2px 0 0 10px;
+}
+
 .turn-task {
   color: var(--muted);
   font-size: 13px;

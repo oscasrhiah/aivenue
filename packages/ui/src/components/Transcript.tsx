@@ -6,6 +6,7 @@ import { useT, type T } from '../i18n';
 import { clock, cx, elapsed, fmtTokens } from '../util';
 import { actKind, errorPreview, feed, groupLabel, groupNames, isInternal, isSubmissionText, preview as feedPreview, shortTitle, type FeedItem } from '../timeline';
 import { Markdown } from './Markdown';
+import { MsgTime } from './MsgTime';
 import { Clamp } from './Clamp';
 import { Replies, type Reply } from './Replies';
 import { extensionUse } from '../extensionUse';
@@ -124,13 +125,19 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
     case 'tool':
       return <ToolLine e={e} opened={opened} />;
     case 'message':
-      // Long narration folds: the card's result block carries what counts.
-      return !raw && (e.text?.length ?? 0) > 600 ? (
-        <Clamp height={150} more={t('展開這段說明', 'Show the rest')}>
-          <Markdown className="tx-text" text={e.text ?? ''} />
-        </Clamp>
-      ) : (
-        <Markdown className="tx-text" text={e.text ?? ''} />
+      // What the agent said, with when (its steps keep theirs in a tooltip). Long narration folds: the card's result
+      // block carries what counts.
+      return (
+        <div className="tx-msg">
+          <MsgTime ts={e.ts} className="tx-time" />
+          {!raw && (e.text?.length ?? 0) > 600 ? (
+            <Clamp height={150} more={t('展開這段說明', 'Show the rest')}>
+              <Markdown className="tx-text" text={e.text ?? ''} />
+            </Clamp>
+          ) : (
+            <Markdown className="tx-text" text={e.text ?? ''} />
+          )}
+        </div>
       );
     case 'thinking':
       return (
@@ -232,7 +239,7 @@ export function LiveFeed({ events, said = [], limit = 6, hideMessages = false }:
       {rows.map((r, i) =>
         'said' in r ? (
           <div key={`said${r.ts}${i}`} className="tx-said" title={clock(r.ts)}>
-            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')}</span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')} <MsgTime ts={r.ts} /></span>
             {r.said.text && <div className="tx-said-text">{r.said.text}</div>}
             <Replies replies={r.said.replies} planUpdated={r.said.planUpdated} />
           </div>
@@ -269,7 +276,7 @@ export function Transcript({ events, raw = false, limit, said = [], internal = f
       {items.map((it, i) =>
         'said' in it ? (
           <div key={`said${it.ts}${i}`} className="tx-said" title={clock(it.ts)}>
-            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')}</span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')} <MsgTime ts={it.ts} /></span>
             {it.said.text && <div className="tx-said-text">{it.said.text}</div>}
             {!!it.said.attachments?.length && <div className="muted tiny"><Ico i={Paperclip} size={12} /> {it.said.attachments.map((a) => a.name).join('、')}</div>}
             <Replies replies={it.said.replies} planUpdated={it.said.planUpdated} />
