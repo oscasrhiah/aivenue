@@ -13,8 +13,8 @@ import { L } from './i18n';
  * new chat starts in that window's project.
  */
 
-/** The window behind the RPC call being handled (set by the hub for every call of a webview). */
-export const requestContext = new AsyncLocalStorage<{ window?: string }>();
+/** The window behind the RPC call being handled (set by the hub for every call of a webview), and its operation id. */
+export const requestContext = new AsyncLocalStorage<{ window?: string; op?: string }>();
 
 interface Win {
   id: string;

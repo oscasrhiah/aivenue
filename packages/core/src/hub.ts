@@ -603,13 +603,24 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       try {
         // Runs as the window whose webview called (its folder dialog, its project); a change runs once per `op`. A change
         // is on disk before it is answered or kept as done: a hub that stops right after loses nothing it confirmed.
+        // The operation's id and answer are written into the runs it changed, with the change (store.ts): a hub that
+        // stops before its operation log is saved still answers a resend from them instead of running it again.
         const change = !READ_ONLY.has(req.method);
+        const op = req.op && change ? req.op : undefined;
         const run = async () => {
-          const r = await requestContext.run({ window: win }, () => fn(req.params ?? {}));
-          if (change) store.flush();
-          return r;
+          if (op) store.beginOp(op);
+          try {
+            const r = await requestContext.run({ window: win, op }, () => fn(req.params ?? {}));
+            if (op) store.endOp(op, { value: r });
+            return r;
+          } catch (e) {
+            if (op) store.endOp(op, { error: (e as Error).message });
+            throw e;
+          } finally {
+            if (change) store.flush();
+          }
         };
-        const result = await (req.op && change ? ops.once(req.op, run) : run());
+        const result = await (op ? ops.once(op, run, () => store.appliedOp(op)) : run());
         reply({ id: req.id, result: result ?? null });
       } catch (e) {
         reply({ id: req.id, error: (e as Error).message });

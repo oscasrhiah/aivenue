@@ -67,7 +67,8 @@ const bundled = await build({
   stdin: {
     contents: `export { startHub, HubBusyError, WindowRegistry } from './packages/core/src/index';
 export { ensureHub, openChannel, readEndpoint, endpointFile } from './packages/vscode/src/sharedHub';
-export { holdOsLock, lockName } from './packages/core/src/osLock';`,
+export { holdOsLock, lockName } from './packages/core/src/osLock';
+export { OpLog } from './packages/core/src/opLog';`,
     resolveDir: root,
   },
 });
@@ -719,6 +720,74 @@ test(
     }
   },
 );
+
+test('工作流已存、操作紀錄還沒存時 hub 停止：重送同一個操作得到原本的回覆，不會再執行一次（訊息不會變兩份）', async () => {
+  const dir = tmp('op-with-run');
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRename = nfs.renameSync;
+  let first = await sharedHub(dir);
+  let fake = agents(first.hub, { hold: true });
+  let second;
+  try {
+    const a = await windowOf(first.ep, 'win-a', path.join(dir, 'projA'));
+    const va = new View(first.ep, a.id);
+    const id = await va.call('workflows.start', { config: cfg(a.cwd) });
+    await until(() => fake.turns.length === 1, 'the agent to start');
+    // The hub stops right after the run is saved, before its operation log is: that file is never written.
+    nfs.renameSync = function (from, to) {
+      if (String(to).endsWith('hub-ops-vscode.json')) throw new Error('stopped before the operation log was saved');
+      return realRename.apply(this, arguments);
+    };
+    const answer = await va.call('workflows.say', { id, text: 'CRITICAL_USER_REQUEST' }, 'say-once');
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'runs', id, 'run.json'), 'utf8'));
+    assert.deepEqual(onDisk.userMessages.map((m) => m.text), ['CRITICAL_USER_REQUEST']);
+    // Each operation that changed the run is recorded with the change it made (starting it, then the message).
+    assert.deepEqual(onDisk.ops.map((o) => [o.op, o.done]), [['win-a-1', true], ['say-once', true]]);
+    assert.equal(onDisk.ops[0].result, id, 'the start answered with the new run');
+    nfs.renameSync = realRename;
+    va.close();
+    a.ch.close();
+    fake.release();
+    await first.hub.close();
+    first = undefined;
+
+    // A new hub on the same data: its operation log does not know the operation; the run does.
+    second = await sharedHub(dir);
+    fake = agents(second.hub, { hold: true });
+    const b = await windowOf(second.ep, 'win-a', path.join(dir, 'projA'));
+    const vb = new View(second.ep, b.id);
+    second.hub.orchestrator.resumeInterrupted(id);
+    await until(async () => (await vb.call('workflows.get', { id }))?.status === 'running', 'resumed');
+    const again = await vb.call('workflows.say', { id, text: 'CRITICAL_USER_REQUEST' }, 'say-once');
+    assert.deepEqual(again, answer, 'the first answer, not a second run');
+    const after = await vb.call('workflows.get', { id });
+    assert.deepEqual(after.userMessages.map((m) => m.text), ['CRITICAL_USER_REQUEST'], 'the message is there once');
+    // A new operation still runs.
+    await vb.call('workflows.say', { id, text: 'another' }, 'say-two');
+    assert.equal((await vb.call('workflows.get', { id })).userMessages.length, 2);
+    vb.close();
+    b.ch.close();
+  } finally {
+    nfs.renameSync = realRename;
+    fake.release();
+    await first?.hub.close();
+    await second?.hub.close();
+  }
+});
+
+test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
+  const { OpLog } = mod.exports;
+  const log = new OpLog();
+  let ran = 0;
+  const fn = () => (ran++, 'ran');
+  assert.equal(await log.once('a', fn, () => ({ done: true, result: 'first answer' })), 'first answer');
+  await assert.rejects(log.once('b', fn, () => ({ done: true, error: 'it failed' })), /it failed/);
+  await assert.rejects(log.once('c', fn, () => ({ done: false })), /不會再執行一次|not run again/);
+  assert.equal(ran, 0);
+  assert.equal(await log.once('d', fn, () => undefined), 'ran');
+  assert.equal(ran, 1);
+});
+
 
 test(
   '共用 hub 當掉後：新的 hub 啟動時舊的鎖還沒被系統放開，它會讓出；視窗會再啟動一次，最後仍然連上（完整測試中重現的競爭）',

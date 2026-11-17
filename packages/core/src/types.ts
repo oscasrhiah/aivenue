@@ -1450,6 +1450,11 @@ export interface WorkflowRun {
   interruptedAt?: number;
   /** Times it was resumed after an interruption. */
   resumes?: number;
+  /**
+   * Client operations that changed this run (store.ts), with their answer once done: written with the change, so a resend
+   * after the hub stopped before its operation log was saved gets the answer instead of running again.
+   */
+  ops?: { op: string; at: number; done?: boolean; result?: unknown; error?: string }[];
   /** Tokens at which a model's CLI compacted its own conversation in this run (`provider model` → tokens). */
   compactPoints?: Record<string, number>;
   /** Highest ask level already shown per agent conversation (session id), and conversations the user muted. */

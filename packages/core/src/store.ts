@@ -1,6 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentEvent, RunHost, WorkflowPreset, WorkflowRun, WorkflowSummary } from './types';
+import { requestContext } from './windows';
+
+/** How long a run remembers the client operations that changed it (as the operation log), how many, how large an answer. */
+const OP_KEEP_MS = 10 * 60_000;
+const OP_MAX_PER_RUN = 20;
+const OP_RESULT_MAX = 16 * 1024;
 
 /** Run and agent ids are used as folder and file names. */
 const SAFE_ID = /^[A-Za-z0-9][\w-]{0,79}$/;
@@ -52,6 +58,7 @@ export class RunStore {
         // The folder name is the id: an id inside the file must not point anywhere else.
         run.id = id;
         if (run.worktree && !isInside(path.join(path.dirname(this.runsDir), 'worktrees'), run.worktree.path)) run.worktree = undefined;
+        for (const o of run.ops ?? []) if (Date.now() - o.at < OP_KEEP_MS) this.opIndex.set(o.op, o);
         if (run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human') {
           // Kept so it can be resumed where it stopped (by itself, or when the user continues a paused one).
           run.interruptedFrom = run.status;
@@ -70,6 +77,7 @@ export class RunStore {
   }
 
   save(run: WorkflowRun): void {
+    this.markOp(run);
     if (this.frozen || this.saveTimers.has(run.id)) return;
     this.waiting.set(run.id, run);
     this.saveTimers.set(
@@ -79,6 +87,59 @@ export class RunStore {
         this.saveNow(run);
       }, 400),
     );
+  }
+
+  // ---------- client operations, kept with the runs they changed ----------
+  /*
+   * A client operation (`op`, see opLog.ts) that changes a run is recorded in that run's own run.json, with its answer
+   * once it is done, in the same write as the change. The hub's operation log is a second file written after it: if
+   * the hub stops between the two, a resend of the operation finds it here and gets its answer instead of running again
+   * (a message added twice, a run started twice).
+   */
+  private activeOps = new Map<string, Set<WorkflowRun>>();
+  private opIndex = new Map<string, NonNullable<WorkflowRun['ops']>[number]>();
+
+  /** An operation starts: the runs saved while it runs (within its request) are the ones it changed. */
+  beginOp(op: string): void {
+    this.activeOps.set(op, new Set());
+  }
+
+  /**
+   * It ended: its answer (or error) goes into each run it changed, saved with the change. Answers too large to keep are
+   * left out (a resend is then refused as already done, not run again).
+   */
+  endOp(op: string, result: { value?: unknown; error?: string }): void {
+    const runs = this.activeOps.get(op);
+    this.activeOps.delete(op);
+    if (!runs?.size) return;
+    const kept = result.error === undefined && JSON.stringify(result.value ?? null).length <= OP_RESULT_MAX;
+    for (const run of runs) {
+      const entry = run.ops?.find((o) => o.op === op);
+      if (!entry) continue;
+      entry.done = true;
+      if (result.error !== undefined) entry.error = result.error.slice(0, 500);
+      else if (kept) entry.result = result.value ?? null;
+      this.opIndex.set(op, entry);
+      this.save(run);
+    }
+  }
+
+  /** What a run records of an operation (done or cut off), for a resend the operation log does not know. */
+  appliedOp(op: string): NonNullable<WorkflowRun['ops']>[number] | undefined {
+    const o = this.opIndex.get(op);
+    return o && Date.now() - o.at < OP_KEEP_MS ? o : undefined;
+  }
+
+  private markOp(run: WorkflowRun) {
+    const op = requestContext.getStore()?.op;
+    const runs = op ? this.activeOps.get(op) : undefined;
+    if (!op || !runs || runs.has(run)) return;
+    runs.add(run);
+    const now = Date.now();
+    const list = (run.ops ?? []).filter((o) => now - o.at < OP_KEEP_MS && o.op !== op).slice(-(OP_MAX_PER_RUN - 1));
+    const entry = { op, at: now };
+    run.ops = [...list, entry];
+    this.opIndex.set(op, entry);
   }
 
   /** Runs changed but not written yet (their save is still waiting). */
@@ -94,6 +155,7 @@ export class RunStore {
   }
 
   saveNow(run: WorkflowRun): void {
+    this.markOp(run);
     if (this.frozen) return;
     const t = this.saveTimers.get(run.id);
     if (t) {

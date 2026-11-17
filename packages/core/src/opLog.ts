@@ -33,8 +33,12 @@ export class OpLog {
     }
   }
 
-  /** Run `fn` for `op` unless it already ran (or is running): then its answer. */
-  once<T>(op: string, fn: () => T | Promise<T>): Promise<T> {
+  /**
+   * Run `fn` for `op` unless it already ran (or is running): then its answer. `recorded`: what the changed data itself
+   * records of the operation (store.ts), for one this log lost (the hub stopped before saving it): done with an answer,
+   * done with an error, or cut off midway (then refused, never run twice).
+   */
+  once<T>(op: string, fn: () => T | Promise<T>, recorded?: () => { done?: boolean; result?: unknown; error?: string } | undefined): Promise<T> {
     const running = this.running.get(op);
     if (running) return running as Promise<T>;
     const d = this.done.get(op);
@@ -42,6 +46,12 @@ export class OpLog {
       if (d.error) return Promise.reject(new Error(d.error));
       if (d.big && !('result' in d)) return Promise.reject(new Error(L('這個操作已經執行過了', 'This operation was already done')));
       return Promise.resolve(d.result as T);
+    }
+    const r = recorded?.();
+    if (r) {
+      if (r.error !== undefined) return Promise.reject(new Error(r.error));
+      if (r.done && 'result' in r) return Promise.resolve(r.result as T);
+      return Promise.reject(new Error(r.done ? L('這個操作已經執行過了', 'This operation was already done') : L('這個操作在 Aivenue 中斷時已經開始執行，為了不重複，不會再執行一次；請確認目前的狀態', 'This operation had started when Aivenue stopped; it is not run again, so nothing happens twice. Check the current state.')));
     }
     const p = Promise.resolve()
       .then(fn)
