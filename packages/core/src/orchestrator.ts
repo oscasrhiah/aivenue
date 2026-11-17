@@ -66,7 +66,7 @@ import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification 
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { inspectProcess, parseSize } from './procstat';
-import { backgroundLaunch, commandOf, findProcesses, isInside, logOf, processCwd, type Launch } from './procdetect';
+import { backgroundLaunch, commandOf, commandRuns, findProcesses, isInside, logOf, processCwd, processInfo, type Launch } from './procdetect';
 import { checkRecords, collectActivity, fileReadOf, ownWorkBlock, POLLING, toolCallPage } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
@@ -153,6 +153,9 @@ interface Entry {
 }
 /** Where a resumed workflow starts: the stage, and what its first agent is told. */
 type ResumeFrom = { stage: StageKey | 'verify'; entry?: Entry };
+
+/** A process that runs what a background launch started counts as it only when it started at most this long before it. */
+const LAUNCH_WINDOW_MS = 10 * 60000;
 
 /** A sub-agent with no sign of life this long is reported to its parent as stalled. */
 const STALL_MS = 10 * 60000;
@@ -3760,7 +3763,7 @@ export class Orchestrator {
    * Background launches seen in an agent's commands whose process is not registered or found yet (agent id → launches).
    * `key` and `pid` are what Aivenue can confirm a process by: what the line runs, and the PID it printed.
    */
-  private launches = new Map<string, { id: string; cmd: string; ts: number; key?: string; pid?: number }[]>();
+  private launches = new Map<string, { id: string; cmd: string; ts: number; key?: string; pid?: number; script?: string }[]>();
   private launchSeq = 0;
 
   /** The open launches of this agent's conversation (its earlier turns are other agent ids). */
@@ -3779,8 +3782,14 @@ export class Orchestrator {
     const open = this.openLaunches(run, info);
     if (!open.length) return want ? ` There is no open launch ${want}.` : '';
     const alive = pidAlive(pid);
-    const line = alive && open.some((x) => x.l.key) ? ((await commandOf(pid)) ?? '').toLowerCase() : '';
-    const same = (l: { key?: string; pid?: number }) => l.pid === pid || (!!l.key && !!line && line.includes(l.key.toLowerCase()));
+    const proc = alive ? await processInfo(pid) : undefined;
+    // Started around the launch, not before it: an older process (or one reusing the PID of an older job) is not it.
+    const recent = (l: { ts: number }) => proc?.startedAt !== undefined && proc.startedAt >= l.ts - LAUNCH_WINDOW_MS;
+    const same = (l: { key?: string; pid?: number; script?: string; ts: number }) =>
+      // The PID the launch printed: ended (nothing left to check), or running since around the launch.
+      (l.pid === pid && (!alive || proc?.startedAt === undefined || recent(l))) ||
+      // A running process that runs what the launch started (its program, or the script its interpreter runs).
+      (!!l.key && !!proc && recent(l) && commandRuns(proc.command, l.key, l.script));
     const named = want ? open.find((x) => x.l.id === want) : undefined;
     const hit = named ? (same(named.l) ? named : undefined) : open.find((x) => same(x.l));
     if (hit) this.launches.set(hit.agentId, (this.launches.get(hit.agentId) ?? []).filter((x) => x !== hit.l));
@@ -3789,9 +3798,11 @@ export class Orchestrator {
     const short = (s: string) => (s.length > 120 ? `${s.slice(0, 119)}…` : s);
     const why = !alive
       ? `process ${pid} is not running, so Aivenue cannot tell it is \`${short(named.l.cmd)}\``
-      : line
-        ? `process ${pid} runs \`${short(line)}\`, not \`${short(named.l.cmd)}\``
-        : `Aivenue cannot read what process ${pid} runs, so it cannot tell it is \`${short(named.l.cmd)}\``;
+      : !proc
+        ? `Aivenue cannot read what process ${pid} runs, so it cannot tell it is \`${short(named.l.cmd)}\``
+        : !recent(named.l)
+          ? `process ${pid} started before that launch (or its start time cannot be read), so it is not \`${short(named.l.cmd)}\``
+          : `process ${pid} runs \`${short(proc.command)}\`, which does not run \`${short(named.l.cmd)}\``;
     return ` It does not close launch ${want}: ${why}. Register the PID of that job itself; if it ran in the foreground and finished, or it ended and its PID cannot be found, call dismiss_launch {launch: "${want}", reason: "foreground" | "ended", note}. Do not register an unrelated process for it.`;
   }
   /** Submissions refused for unregistered background jobs (agent id → times). */
@@ -4515,7 +4526,7 @@ export class Orchestrator {
     // A job started in the background, also when the same line then waits a moment ("… & sleep 10; tail log").
     const launch = backgroundLaunch(cmd, t.output, t.input);
     if (launch) {
-      const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid };
+      const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid, script: launch.script };
       this.launches.set(info.id, [...(this.launches.get(info.id) ?? []), entry]);
       void this.adoptProcess(run, info, launch)
         .then((pid) => pid && this.launches.set(info.id, (this.launches.get(info.id) ?? []).filter((x) => x !== entry)))
@@ -4611,7 +4622,10 @@ export class Orchestrator {
     for (const wait of [1500, 5000, 15000]) {
       if (pid || !l.key) break;
       await sleep(wait);
-      pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid))?.pid;
+      // Only a process that runs what the line started (not one whose command line merely mentions it), started
+      // around the launch.
+      const since = Date.now() - LAUNCH_WINDOW_MS - wait;
+      pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid) && p.startedAt !== undefined && p.startedAt >= since && commandRuns(p.command, l.key!, l.script))?.pid;
     }
     if (!pid || !['running', 'paused', 'waiting_human'].includes(run.status)) return undefined;
     // Already registered by the agent itself in the meantime.

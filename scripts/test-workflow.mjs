@@ -17,7 +17,7 @@ const bundled = await build({
       export { parseVerification, parsePlan, parseReview, parseRulings, parseWork, parseOpenDecisions, parseResponses, unclassifiedNotice, toolsForRole, TOOL_DEFS } from './packages/core/src/hubTools';
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
-      export { backgroundLaunch, pidFromOutput } from './packages/core/src/procdetect';
+      export { backgroundLaunch, commandRuns, pidFromOutput, scriptOf } from './packages/core/src/procdetect';
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords, verifiedChecks, checkKey, checkRun, isCheckCommand, shellParts, writesFiles } from './packages/core/src/ledger';
       export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
@@ -4125,4 +4125,25 @@ test('獨立審查的追問：背景裡的「上次結果」是審查報告（�
   const goal = W.followUpGoal('fixed, please look again', run);
   assert.match(goal, /Its outcome: review verdict "revise": loses data Issues: R1 \[blocker\] crash loses the save/);
   assert.doesNotMatch(goal, /not this/);
+});
+
+test('背景啟動與程序的對應：程式本身或直譯器執行的腳本才算；只在參數、-e／-c 的程式碼裡提到、同名但不同資料夾的都不算', () => {
+  const cases = [
+    ['node -e "setInterval(()=>{},1000)" unrelated-aivenue-review-job.js', 'aivenue-review-job.js', undefined, false],
+    ['"C:\\Program Files\\nodejs\\node.exe" C:\\proj\\scripts\\job.js', 'job.js', 'scripts/job.js', true],
+    ['node other/job.js', 'job.js', 'scripts/job.js', false],
+    ['node unrelated/aivenue-review-job.js', 'aivenue-review-job.js', 'C:\\proj\\aivenue-review-job.js', false],
+    ['node job.js', 'job.js', 'scripts/job.js', true],
+    ['python -u train.py --epochs 3', 'train.py', 'train.py', true],
+    ['python -m pkg.train', 'pkg.train', undefined, true],
+    ['bash -c "nohup python train.py"', 'train.py', 'train.py', false],
+    ['/bin/bash ./run.sh', 'run.sh', './run.sh', true],
+    ['./train --x', 'train', undefined, true],
+    ['node --test scripts/test-orchestrator.mjs', 'aivenue-ghost-job.js', undefined, false],
+    ['pwsh -File C:\\x\\job.ps1', 'job.ps1', 'job.ps1', true],
+    ['grep aivenue-review-job.js log', 'aivenue-review-job.js', undefined, false],
+  ];
+  for (const [line, key, script, want] of cases) assert.equal(W.commandRuns(line, key, script), want, line);
+  assert.equal(W.scriptOf('nohup node scripts/a/job.js > x.log 2>&1 &'), 'scripts/a/job.js');
+  assert.equal(W.scriptOf('Start-Process node -ArgumentList C:\\p\\job.js'), 'C:\\p\\job.js');
 });

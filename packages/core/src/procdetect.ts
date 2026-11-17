@@ -44,6 +44,8 @@ export interface Launch {
   log?: string;
   /** The PID the command printed (`echo $!`, `[1] 12345`, `PID 12345`). */
   pid?: number;
+  /** The script it runs, as written (with its folders). */
+  script?: string;
   command: string;
 }
 
@@ -77,7 +79,7 @@ export function backgroundLaunch(command: string, output?: string, input?: strin
   // "nohup python train.py > log 2>&1 & sleep 10; tail log" starts a job, even though it also waits a little.
   const ran = flat(shellText(command));
   if (!flagged && (!LAUNCH.test(ran) || NOT_A_LAUNCH.test(ran))) return undefined;
-  return { key: keyOf(cmd), log: logOf(cmd), pid: pidFromOutput(output), command: cmd };
+  return { key: keyOf(cmd), script: scriptOf(cmd), log: logOf(cmd), pid: pidFromOutput(output), command: cmd };
 }
 
 /** A PID the command printed. */
@@ -86,6 +88,74 @@ export function pidFromOutput(output?: string): number | undefined {
   const m = /\b(?:pid|PID|Id)\s*[:=]?\s*(\d{2,8})\b/.exec(o) ?? /^\[\d+\]\s+(\d{2,8})\s*$/m.exec(o) ?? /^\s*(\d{2,8})\s*$/m.exec(o);
   const n = m ? Number(m[1]) : NaN;
   return n > 1 ? n : undefined;
+}
+
+/** The script a launch line runs, as written (with its folders), when it names one. */
+export function scriptOf(cmd: string): string | undefined {
+  return /(?:^|[\s"'=(])((?:[A-Za-z]:)?(?:[\w.~-]*[\\/])*[\w.-]+\.(?:py|sh|bash|js|mjs|cjs|ts|rb|pl|jl|r|lua|exe|bat|ps1))\b/i.exec(cmd)?.[1];
+}
+
+/** A command line as its words (quoted words kept whole, quotes taken off). */
+function words(line: string): string[] {
+  return (line.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((w) => w.replace(/^(["'])([\s\S]*)\1$/, '$2'));
+}
+
+const INTERPRETER = /^(node|nodejs|python[\d.]*|pythonw|py|bash|sh|zsh|dash|ruby|perl|php|deno|bun|tsx|ts-node|pwsh|powershell|rscript|julia|lua|java)$/i;
+/** Options that give the interpreter code inline: then it runs no script file. */
+const INLINE = /^(-e|-c|-p|-i|--eval|--print|-Command|-EncodedCommand|-ec)$/i;
+
+/** Path endings agree: the shorter one (by folders) is the tail of the longer one, compared without case or slash kind. */
+function sameTail(a: string, b: string): boolean {
+  const parts = (p: string) => p.toLowerCase().replace(/\\/g, '/').split('/').filter((x) => x && x !== '.');
+  const x = parts(a);
+  const y = parts(b);
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.every((s, i) => s === long[long.length - short.length + i]);
+}
+
+/**
+ * Whether a process's command line runs what a launch started (`key`, and the script path as the launch wrote it): as
+ * its program, or as the script file an interpreter runs (its first argument that is not an option; `python -m mod`,
+ * `pwsh -File x.ps1`). A name that only appears elsewhere (an argument, inline code given with -e / -c) does not count,
+ * nor a script of the same name in another folder.
+ */
+export function commandRuns(commandLine: string, key: string, script?: string): boolean {
+  const w = words(commandLine);
+  if (!w.length || !key) return false;
+  const base = (p: string) => p.replace(/^.*[\\/]/, '').toLowerCase();
+  const plain = (p: string) => base(p).replace(/\.(exe|cmd|bat)$/i, '');
+  const k = key.toLowerCase();
+  const fits = (p: string) => base(p) === k && (!script || sameTail(script, p));
+  // The program itself (`./train`, `job.exe`).
+  if (plain(w[0]) === k.replace(/\.(exe|cmd|bat)$/i, '')) return !script || sameTail(script, w[0]);
+  if (!INTERPRETER.test(plain(w[0]))) return false;
+  for (let i = 1; i < w.length; i++) {
+    const a = w[i];
+    if (INLINE.test(a)) return false;
+    if (a === '-m') return (w[i + 1] ?? '').toLowerCase() === k;
+    if (/^-(File|f)$/i.test(a)) return fits(w[i + 1] ?? '');
+    if (a.startsWith('-')) continue;
+    return fits(a);
+  }
+  return false;
+}
+
+/** A running process's command line and when it started (undefined when it is gone or cannot be read). */
+export async function processInfo(pid: number): Promise<{ command: string; startedAt?: number } | undefined> {
+  const id = Math.round(pid);
+  try {
+    if (process.platform === 'win32') {
+      const { stdout } = await run('powershell', ['-NoProfile', '-Command', `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${id}"; if ($p) { "$($p.CreationDate.ToUniversalTime().ToString('o'))\`t$($p.CommandLine)" }`], { encoding: 'utf8', timeout: 15000, windowsHide: true });
+      const [when, ...rest] = stdout.trim().split('\t');
+      const command = rest.join('\t').trim();
+      return command ? { command, startedAt: Date.parse(when) || undefined } : undefined;
+    }
+    const { stdout } = await run('ps', ['-o', 'lstart=,args=', '-p', String(id)], { encoding: 'utf8', timeout: 15000 });
+    const m = /^\s*(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(stdout.trim());
+    return m ? { command: m[2], startedAt: Date.parse(m[1]) || undefined } : stdout.trim() ? { command: stdout.trim() } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A running process's command line (undefined when it is gone or cannot be read). */
@@ -119,22 +189,29 @@ export function isInside(root: string, dir: string): boolean {
   return !r.startsWith('..') && !path.isAbsolute(r);
 }
 
-/** Running processes whose command line contains `key` (newest PID first), not counting Aivenue's own shell. */
-export async function findProcesses(key: string): Promise<{ pid: number; command: string }[]> {
+/**
+ * Running processes whose command line contains `key` (newest PID first), with when each started, not counting
+ * Aivenue's own shell. Only candidates: whether one runs a launch is for commandRuns to tell.
+ */
+export async function findProcesses(key: string): Promise<{ pid: number; command: string; startedAt?: number }[]> {
   if (!key || key.length < 3) return [];
   try {
-    const rows: { pid: number; command: string }[] = [];
+    const rows: { pid: number; command: string; startedAt?: number }[] = [];
     if (process.platform === 'win32') {
-      const { stdout: out } = await run('powershell', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }'], { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+      const { stdout: out } = await run(
+        'powershell',
+        ['-NoProfile', '-Command', "Get-CimInstance Win32_Process | ForEach-Object { $d = if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { '' }; \"$($_.ProcessId)`t$d`t$($_.CommandLine)\" }"],
+        { encoding: 'utf8', timeout: 15000, windowsHide: true, maxBuffer: 32 * 1024 * 1024 },
+      );
       for (const l of out.split(/\r?\n/)) {
-        const [pid, ...rest] = l.split('\t');
-        if (Number(pid) && rest.join('\t')) rows.push({ pid: Number(pid), command: rest.join('\t') });
+        const [pid, when, ...rest] = l.split('\t');
+        if (Number(pid) && rest.join('\t')) rows.push({ pid: Number(pid), command: rest.join('\t'), startedAt: Date.parse(when) || undefined });
       }
     } else {
-      const { stdout: out } = await run('ps', ['-eo', 'pid=,args='], { encoding: 'utf8', timeout: 15000, maxBuffer: 32 * 1024 * 1024 });
+      const { stdout: out } = await run('ps', ['-eo', 'pid=,lstart=,args='], { encoding: 'utf8', timeout: 15000, maxBuffer: 32 * 1024 * 1024 });
       for (const l of out.split('\n')) {
-        const m = /^\s*(\d+)\s+(.*)$/.exec(l);
-        if (m) rows.push({ pid: Number(m[1]), command: m[2] });
+        const m = /^\s*(\d+)\s+(\S+\s+\S+\s+\d+\s+[\d:]+\s+\d{4})\s+(.*)$/.exec(l);
+        if (m) rows.push({ pid: Number(m[1]), command: m[3], startedAt: Date.parse(m[2]) || undefined });
       }
     }
     const k = key.toLowerCase();

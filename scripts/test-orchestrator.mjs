@@ -733,6 +733,53 @@ test('背景啟動找不到 PID：登記無關或已結束的程序不能抵銷�
   assert.ok(!r.log.some((l) => /still unregistered|沒有登記/.test(l.text)));
 });
 
+test('背景啟動只由真的執行它的程序抵銷：命令列只是提到腳本名稱的無關程序不算；比啟動早很多的程序不算；真的跑那個腳本的才算', { exclusive: true }, async () => {
+  const { orch, cwd } = setup();
+  fs.writeFileSync(path.join(cwd, 'aivenue-real-job.js'), 'setTimeout(() => {}, 60000);');
+  // Not the job: inline code whose arguments only mention the script's name (the case from the review of c3e41d7).
+  const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'unrelated-aivenue-review-job.js'], { stdio: 'ignore' });
+  let real;
+  let bgRun;
+  const seen = {};
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        const launch = (n, title, ts = Date.now()) => a.onEvent({ seq: n, ts, kind: 'tool', tool: { id: `bg${n}`, name: 'bash', category: 'command', title, output: '', status: 'ok' } }, false);
+        launch(1, 'nohup node aivenue-review-job.js > r.log 2>&1 &');
+        seen.unrelated = await o.callTool(secret, 'track_process', { pid: unrelated.pid, purpose: 'mentions the name', cleanup: 'keep', launch: 'L1' });
+        // A launch reported as 11 minutes from now: every running process started long before it.
+        launch(2, 'nohup node aivenue-real-job.js > j.log 2>&1 &', Date.now() + 11 * 60000);
+        real = spawn(process.execPath, [path.join(cwd, 'aivenue-real-job.js')], { stdio: 'ignore' });
+        seen.early = await o.callTool(secret, 'track_process', { pid: real.pid, purpose: 'real job, but before the launch', cleanup: 'keep', launch: 'L2' });
+        // The same script launched now: its process closes it.
+        launch(3, 'nohup node aivenue-real-job.js > j.log 2>&1 &');
+        seen.real = await o.callTool(secret, 'track_process', { pid: real.pid, purpose: 'the real job', cleanup: 'aivenue', launch: 'L3' });
+        seen.left = await o.callTool(secret, 'submit_work', { summary: 'done' }).then(() => '', (e) => e.message);
+        await o.callTool(secret, 'dismiss_launch', { launch: 'L1', reason: 'foreground', note: 'test' });
+        await o.callTool(secret, 'dismiss_launch', { launch: 'L2', reason: 'ended', note: 'test' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  try {
+    bgRun = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+    const r = await settle(orch, bgRun, 90000);
+    assert.equal(r.status, 'completed', r.error);
+    assert.match(seen.unrelated, /does not close launch L1: process \d+ runs `[^`]*-e[^`]*`, which does not run/);
+    assert.match(seen.early, /does not close launch L2: process \d+ started before that launch/);
+    // Ours, or Aivenue's own search found it first: either way L3 is closed by the real job.
+    assert.match(seen.real, /It is launch L3|no open launch L3/);
+    assert.match(seen.left, /L1: started[\s\S]*L2: started/);
+    assert.doesNotMatch(seen.left, /L3: started/);
+  } finally {
+    for (const c of [unrelated, real]) {
+      try {
+        c && process.kill(c.pid);
+      } catch {}
+    }
+  }
+});
+
 /** A job that runs `ms`, then writes `line` to `log` (in cwd) and ends. */
 function shortJob(cwd, log, line, ms) {
   const fd = fs.openSync(path.join(cwd, log), 'w');
