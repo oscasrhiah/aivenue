@@ -102,6 +102,18 @@ export function liveLine(agent: Pick<AgentRunInfo, 'status' | 'waiting'>, events
   return calls.length ? { kind: 'tool', calls } : { kind: 'working' };
 }
 
+/**
+ * What the final result shows as the implementer's account: its last reply or the summary it submitted, whichever says
+ * more. A reply that is the whole answer (a question asked) wins over a short summary; a one-line "submitted" after
+ * a full report (a table of the steps) does not hide the report. A reply that is only the submission's JSON is the
+ * summary's.
+ */
+export function resultText(reply: string | undefined, summary: string | undefined): string | undefined {
+  const r = isSubmissionText(reply) ? '' : (reply ?? '').trim();
+  const s = (summary ?? '').trim();
+  return (s.length > r.length ? s : r) || undefined;
+}
+
 /** A message that is a submission's JSON (the text fallback): the card shows the parsed result instead. */
 export function isSubmissionText(text: string | undefined): boolean {
   const s = (text ?? '').trim().replace(/^```(json)?\s*/i, '').replace(/```\s*$/, '').trim();
@@ -350,7 +362,7 @@ export function verificationStates(t: Tr, run: WorkflowRun): VerificationState[]
         kind: 'recheck',
         cls: 'warn',
         label: t(`變更後需重驗 ${recheck.length} 項`, `${recheck.length} to re-check after changes`),
-        detail: list([sure ? t(`${sure} 項之後有改檔`, `${sure} with files changed after`) : '', recheck.length - sure ? t(`${recheck.length - sure} 項之後有失敗的編輯，檔案可能已變`, `${recheck.length - sure} with a failed edit after (files may have changed)`) : '']),
+        detail: list([sure ? t(`${sure} 項之後有改檔`, `${sure} with files changed after`) : '', recheck.length - sure ? t(`${recheck.length - sure} 項之後有失敗的編輯或寫檔指令，檔案可能已變`, `${recheck.length - sure} with a failed edit or file-writing command after (files may have changed)`) : '']),
       });
     }
   }
@@ -426,10 +438,10 @@ export function checkRow(t: Tr, c: ObservedCheck): CheckRow {
   const notes: string[] = [];
   if (earlier.some((e) => failedLike(e.outcome))) notes.push(c.outcome === 'passed' ? t('先前失敗，重跑通過', 'failed before, passed on rerun') : t(`重跑 ${earlier.length} 次`, `rerun ${earlier.length} time(s)`));
   if (c.outdated) notes.push(t('變更後需重驗', 're-check after changes'));
-  else if (c.maybeOutdated) notes.push(t('之後有失敗的編輯，可能需重驗', 'a failed edit came after: may need a re-check'));
+  else if (c.maybeOutdated) notes.push(t('之後有失敗的編輯或寫檔指令，可能需重驗', 'a failed edit or file-writing command came after: may need a re-check'));
   const details: string[] = [];
   if (c.outdated) details.push(t('這項檢查之後有改檔：要確認現在的程式碼，需要重跑', 'files changed after this check: re-run it to check the code as it is now'));
-  else if (c.maybeOutdated) details.push(t('這項檢查之後有失敗的編輯：檔案可能已變，請確認', 'a failed edit came after this check: files may have changed'));
+  else if (c.maybeOutdated) details.push(t('這項檢查之後有失敗的編輯或寫檔指令：檔案可能已變，請確認', 'a failed edit or file-writing command came after this check: files may have changed'));
   details.push(t(`${c.by} 執行`, `run by ${c.by}`));
   return {
     // A pass with a change after it is not a pass of the code as it is now.

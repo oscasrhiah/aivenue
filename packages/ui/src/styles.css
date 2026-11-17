@@ -465,6 +465,17 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+/* A chat deleted while its page was open: the note, and the way to a new chat. */
+.chat-deleted {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 640px;
+  margin: 48px auto;
+  padding: 0 16px;
+}
+
 /* When a message was said (MsgTime): quiet, on one line, every digit the same width. Muted rather than faint, so the
    small text keeps its contrast. */
 .msg-time {

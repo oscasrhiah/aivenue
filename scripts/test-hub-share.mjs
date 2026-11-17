@@ -312,6 +312,11 @@ test('改名與刪除：在任一個視窗做，其他視窗立刻更新', async
     await vb.call('workflows.delete', { id });
     await until(() => va.last('workflows') && !va.last('workflows').some((w) => w.id === id), 'A to see it deleted');
     assert.equal(await va.call('workflows.get', { id }), null);
+    // A's page open on it is told it was deleted (not only the list); a follow-up from A is refused, not started as a
+    // new conversation without what came before.
+    assert.ok(va.pushes.some((p) => p.topic === 'deleted' && p.data?.id === id), 'A told the workflow was deleted');
+    await assert.rejects(va.call('workflows.start', { config: cfg(a.cwd, { continueFrom: id, goal: 'and one more thing' }) }), /已經刪除|was deleted/);
+    assert.equal((await va.call('workflows.list')).length, 0);
   } finally {
     await hub.close();
   }
@@ -628,6 +633,87 @@ test(
       await until(() => !alive(na.endpoint.pid), 'the hub to stop after the last window', 15_000);
       assert.equal(fs.existsSync(endpointFile(home)), false);
       assert.equal(readEndpoint(home), undefined);
+    } finally {
+      for (const pid of pids) if (alive(pid)) process.kill(pid);
+    }
+  },
+);
+
+test('回覆成功的那一刻，改變已經在磁碟上（不等 400 ms 後的存檔）：執行中追加的訊息、改名', async () => {
+  const dir = tmp('answered-on-disk');
+  const { hub, ep } = await sharedHub(dir);
+  const fake = agents(hub, { hold: true });
+  try {
+    const a = await windowOf(ep, 'win-a', path.join(dir, 'projA'));
+    const va = new View(ep, a.id);
+    const id = await va.call('workflows.start', { config: cfg(a.cwd) });
+    await until(() => fake.turns.length === 1, 'the agent to start');
+    const disk = () => JSON.parse(fs.readFileSync(path.join(dir, 'runs', id, 'run.json'), 'utf8'));
+    const { store } = hub.orchestrator.d;
+    const run = hub.orchestrator.runs.get(id);
+    // Nothing waiting to be saved: what is on disk when an answer arrives is all a crash right then would leave.
+    store.saveNow(run);
+    await va.call('workflows.say', { id, text: 'CRITICAL_USER_REQUEST' });
+    assert.deepEqual((disk().userMessages ?? []).map((m) => m.text), ['CRITICAL_USER_REQUEST']);
+    store.saveNow(run);
+    await va.call('workflows.rename', { id, title: 'renamed before the answer' });
+    assert.equal(disk().config.title, 'renamed before the answer');
+  } finally {
+    fake.release();
+    await hub.close();
+  }
+});
+
+test(
+  'hub 回覆成功後立刻被強制結束：執行中追加的訊息和改名都已在磁碟上；重新啟動後重送同一個操作，不重複也不遺失',
+  { timeout: 120_000 },
+  async () => {
+    const dir = tmp('crash-after-answer');
+    const home = path.join(dir, 'home');
+    const script = await daemonScript(dir);
+    const fakeLog = path.join(dir, 'turns.log');
+    fs.writeFileSync(fakeLog, '');
+    const env = { ...process.env, AIVENUE_HOME: home, AIVENUE_HUB_GRACE_MS: '1500', FAKE_LOG: fakeLog };
+    const start = () => {
+      const child = spawn(process.execPath, [script], { env, detached: true, stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+      child.stdin.end(JSON.stringify({ version: 'test', secrets: {} }));
+      child.unref();
+    };
+    const turns = () => fs.readFileSync(fakeLog, 'utf8').split('\n').filter(Boolean).length;
+    const onDisk = (id) => JSON.parse(fs.readFileSync(path.join(home, 'runs', id, 'run.json'), 'utf8'));
+    const pids = [];
+    try {
+      const ch = await ensureHub({ dataDir: home, windowId: 'win-a', handlers: {}, spawn: start, timeoutMs: 30_000 });
+      pids.push(ch.endpoint.pid);
+      fs.mkdirSync(path.join(dir, 'proj'), { recursive: true });
+      ch.state({ cwd: path.join(dir, 'proj') });
+      const va = new View(ch.endpoint, 'win-a');
+      const id = await va.call('workflows.start', { config: cfg(path.join(dir, 'proj')) });
+      await until(() => turns() === 1, 'the agent to start');
+      await until(() => { try { return onDisk(id).status === 'running'; } catch { return false; } }, 'the workflow saved as running');
+      // Answered as done; then the hub dies at once (no shutdown, no pending save gets its turn).
+      const said = await va.call('workflows.say', { id, text: 'CRITICAL_USER_REQUEST' }, 'crash-say');
+      const renamed = await va.call('workflows.rename', { id, title: 'renamed before the crash' }, 'crash-rename');
+      process.kill(ch.endpoint.pid, 'SIGKILL');
+      await until(() => !alive(ch.endpoint.pid), 'the hub to end');
+      va.close();
+      ch.close();
+      // What the window was told is on disk.
+      const saved = onDisk(id);
+      assert.deepEqual((saved.userMessages ?? []).map((m) => m.text), ['CRITICAL_USER_REQUEST']);
+      assert.equal(saved.config.title, 'renamed before the crash');
+      // A new hub; the window sends both operations again (it never knew they arrived): answered as before, not run twice.
+      const nc = await ensureHub({ dataDir: home, windowId: 'win-a', handlers: {}, spawn: start, timeoutMs: 30_000 });
+      pids.push(nc.endpoint.pid);
+      const vb = new View(nc.endpoint, 'win-a');
+      assert.deepEqual(await vb.call('workflows.say', { id, text: 'CRITICAL_USER_REQUEST' }, 'crash-say'), said);
+      assert.deepEqual(await vb.call('workflows.rename', { id, title: 'renamed before the crash' }, 'crash-rename'), renamed);
+      const now = await vb.call('workflows.get', { id });
+      assert.deepEqual((now.userMessages ?? []).map((m) => m.text), ['CRITICAL_USER_REQUEST']);
+      assert.equal(now.config.title, 'renamed before the crash');
+      fs.writeFileSync(path.join(dir, 'release'), '');
+      vb.close();
+      nc.close();
     } finally {
       for (const pid of pids) if (alive(pid)) process.kill(pid);
     }

@@ -601,9 +601,15 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
       const fn = methods[req.method];
       if (!fn) return reply({ id: req.id, error: `unknown method: ${req.method}` });
       try {
-        // Runs as the window whose webview called (its folder dialog, its project); a change runs once per `op`.
-        const run = () => requestContext.run({ window: win }, () => fn(req.params ?? {}));
-        const result = await (req.op && !READ_ONLY.has(req.method) ? ops.once(req.op, run) : run());
+        // Runs as the window whose webview called (its folder dialog, its project); a change runs once per `op`. A change
+        // is on disk before it is answered or kept as done: a hub that stops right after loses nothing it confirmed.
+        const change = !READ_ONLY.has(req.method);
+        const run = async () => {
+          const r = await requestContext.run({ window: win }, () => fn(req.params ?? {}));
+          if (change) store.flush();
+          return r;
+        };
+        const result = await (req.op && change ? ops.once(req.op, run) : run());
         reply({ id: req.id, result: result ?? null });
       } catch (e) {
         reply({ id: req.id, error: (e as Error).message });

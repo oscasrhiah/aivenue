@@ -640,6 +640,11 @@ export interface AppSettings {
   cliIdleMinutes?: number;
   /** Workflows that were running when Aivenue closed (an update, a restart) go on by themselves when it starts again (default on). Paused ones wait for the user. */
   autoResume?: boolean;
+  /**
+   * The chat list put away (wide layouts), for the app and for VS Code apart. Kept here, not in the page's storage: the
+   * app's page comes from a hub on a new port each start, a new origin whose storage is empty.
+   */
+  sidebarHidden?: { app?: boolean; vscode?: boolean };
 }
 
 // ---------- Workflow configuration ----------
@@ -1562,6 +1567,8 @@ export interface RpcResponse {
 export type PushMessage =
   | { topic: 'workflow'; data: WorkflowRun }
   | { topic: 'workflows'; data: WorkflowSummary[] }
+  /** A workflow deleted (in any window): a page that shows it says so, instead of keeping it as if it were there. */
+  | { topic: 'deleted'; data: { id: string } }
   | { topic: 'agentEvent'; data: { workflowId: string; agentId: string; event: AgentEvent } }
   | { topic: 'providers'; data: ProviderInfo[] }
   | { topic: 'settings'; data: AppSettings }

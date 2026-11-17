@@ -125,7 +125,7 @@ function connect(ctx: vscode.ExtensionContext): Promise<Channel> {
       setTimeout(() => {
         void connect(ctx)
           .then((next) => {
-            for (const v of views) void render(v, ctx, next.endpoint);
+            for (const v of views) void moveTo(v, ctx, next.endpoint);
           })
           .catch(() => undefined);
       }, 500);
@@ -149,25 +149,56 @@ async function render(webview: vscode.Webview, ctx: vscode.ExtensionContext, ep:
   webview.html = await webviewHtml(webview, ctx, ep);
 }
 
-async function webviewHtml(webview: vscode.Webview, ctx: vscode.ExtensionContext, ep: Endpoint): Promise<string> {
-  const uiDir = vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'ui');
-  let html = fs.readFileSync(path.join(uiDir.fsPath, 'index.html'), 'utf8');
-  const nonce = randomBytes(16).toString('base64');
+/** Where a webview reaches the hub: its http base and its socket (with this window's id). */
+async function hubAddress(ep: Endpoint): Promise<{ httpBase: string; wsUrl: string }> {
   // Remote workspaces: the webview runs locally, so the hub port must be forwarded.
   const external = await vscode.env.asExternalUri(vscode.Uri.parse(`http://127.0.0.1:${ep.port}`));
   const httpBase = external.toString(true).replace(/\/$/, '');
   // `window`: the hub runs this webview's calls as this window (its dialogs, its project).
   const wsUrl = httpBase.replace(/^http/, 'ws') + `/ws?token=${ep.token}&window=${encodeURIComponent(windowId)}`;
+  return { httpBase, wsUrl };
+}
+
+/**
+ * The hub came back (on another port): the page is told where and connects there itself, so it is not rebuilt. What
+ * the user was writing, the chat shown and the calls still waiting (sent again with their operation ids) stay. A page
+ * that does not answer within a few seconds (it was not ready) is loaded anew, as before.
+ */
+async function moveTo(webview: vscode.Webview, ctx: vscode.ExtensionContext, ep: Endpoint) {
+  const { wsUrl } = await hubAddress(ep);
+  const answered = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => (sub.dispose(), resolve(false)), 3000);
+    const sub = webview.onDidReceiveMessage((m: { type?: string; wsUrl?: string }) => {
+      if (m?.type !== 'aivenue.hub.moved' || m.wsUrl !== wsUrl) return;
+      clearTimeout(timer);
+      sub.dispose();
+      resolve(true);
+    });
+    void webview.postMessage({ type: 'aivenue.hub', wsUrl }).then((sent) => {
+      if (!sent) (clearTimeout(timer), sub.dispose(), resolve(false));
+    });
+  });
+  if (!answered && views.has(webview)) await render(webview, ctx, ep);
+}
+
+async function webviewHtml(webview: vscode.Webview, ctx: vscode.ExtensionContext, ep: Endpoint): Promise<string> {
+  const uiDir = vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'ui');
+  let html = fs.readFileSync(path.join(uiDir.fsPath, 'index.html'), 'utf8');
+  const nonce = randomBytes(16).toString('base64');
+  const { httpBase, wsUrl } = await hubAddress(ep);
+  // Any port of the hub's host: a hub started again (another port) is reached without rebuilding the page.
+  const hubHttp = `${new URL(httpBase).protocol}//${new URL(httpBase).hostname}:*`;
+  const hubWs = hubHttp.replace(/^http/, 'ws');
   const assetBase = webview.asWebviewUri(uiDir).toString();
   html = html.replace(/(src|href)="\.?\/(assets\/[^"]+)"/g, (_m, attr: string, rel: string) => `${attr}="${assetBase}/${rel}"`);
   html = html.replace(/<script /g, `<script nonce="${nonce}" `);
   const csp = [
     `default-src 'none'`,
-    `img-src ${webview.cspSource} data: blob: ${httpBase}`,
+    `img-src ${webview.cspSource} data: blob: ${hubHttp}`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `font-src ${webview.cspSource}`,
     `script-src 'nonce-${nonce}'`,
-    `connect-src ${wsUrl.replace(/\/ws\?.*$/, '')} ${httpBase}`,
+    `connect-src ${hubWs} ${hubHttp}`,
   ].join('; ');
   const boot = `<meta http-equiv="Content-Security-Policy" content="${csp}"><script nonce="${nonce}">window.__AIVENUE__=${JSON.stringify({ wsUrl, host: 'vscode' })};</script>`;
   return html.replace('<head>', `<head>${boot}`);

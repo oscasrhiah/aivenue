@@ -3595,3 +3595,21 @@ test('執行前的提醒（例如副帳號第一次設定 Codex 沙箱會跳管�
   assert.equal(lines[0].chat, true);
   assert.deepEqual(seen, [1]);
 });
+
+test('刪除還在等存檔的對話：等待中的存檔不會在刪除之後把它寫回磁碟', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-store-'));
+  const store = new RunStore(path.join(dir, 'home'));
+  const run = { id: 'r-delete', config: { title: 't', cwd: dir }, status: 'completed', createdAt: 1, updatedAt: 1, agents: {}, log: [] };
+  store.saveNow(run);
+  const folder = store.dirOf(run.id);
+  assert.ok(fs.existsSync(path.join(folder, 'run.json')));
+  // Changed (its save waits 400 ms), then deleted.
+  run.config.title = 'changed';
+  store.save(run);
+  store.delete(run.id);
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(fs.existsSync(folder), false);
+  // flush() has nothing left to write either.
+  store.flush();
+  assert.equal(fs.existsSync(folder), false);
+});

@@ -189,9 +189,11 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
     }
   };
   let lastEdit = 0;
-  // When a command that writes files succeeded (Set-Content, sed -i, a redirect into a file…), by any agent: a check
-  // run before it may no longer hold. Kept apart from `changed`: which files it wrote is not known.
-  const commandWrites: number[] = [];
+  // When a command that writes files ran (Set-Content, sed -i, a redirect into a file…), by any agent: a check run
+  // before it may no longer hold. Kept apart from `changed`: which files it wrote is not known. One that failed may
+  // still have written before it failed (`Set-Content a.js x; throw`): "maybe", unless the CLI said which files it
+  // changed (then sure).
+  const commandWrites: { ts: number; sure: boolean }[] = [];
   for (const a of Object.values(run.agents)) {
     if (a.role === 'test' || a.role === 'compactor') continue;
     const events = eventsOf(a.id);
@@ -214,7 +216,7 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
         }
         continue;
       }
-      if (t.category === 'command' && t.status === 'ok' && writesFiles((t.title || t.input || '').trim(), run.config.cwd)) commandWrites.push(e.ts);
+      if (t.category === 'command' && writesFiles((t.title || t.input || '').trim(), run.config.cwd)) commandWrites.push({ ts: e.ts, sure: t.status === 'ok' || !!e.files?.length });
       if (o.onlyIds ? !o.onlyIds.has(a.id) : a.id === o.selfId) continue;
       if (t.category === 'read') {
         addRead(rel(flat(t.title)), e.ts, a, t.output);
@@ -241,8 +243,8 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
   const sure = changes.filter(([, c]) => c.sure);
   const maybe = changes.filter(([, c]) => !c.sure);
   for (const en of entries) {
-    en.outdated = sure.some(([, c]) => c.ts > en.ts) || commandWrites.some((ts) => ts > en.ts);
-    en.maybeOutdated = !en.outdated && maybe.some(([, c]) => c.ts > en.ts);
+    en.outdated = sure.some(([, c]) => c.ts > en.ts) || commandWrites.some((w) => w.sure && w.ts > en.ts);
+    en.maybeOutdated = !en.outdated && (maybe.some(([, c]) => c.ts > en.ts) || commandWrites.some((w) => w.ts > en.ts));
   }
   const same = (x: string, y: string) => x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`);
   for (const r of read.values()) {
@@ -385,6 +387,9 @@ export function writesFiles(command: string, cwd?: string): boolean {
   let inTemp = false;
   const temp = (p: string) => (TEMP_PATH.test(p) || (inTemp && !absolute(p))) && !inCwd(p);
   const bare = (w: string) => w.replace(/^["'(]+|["')]+$/g, '');
+  // Where a check's own output may go without changing the project: a log (test.log, run.out, result.txt, logs/…)
+  // or a temporary folder. `npm test > src/a.js` overwrites a source file: a change like any other.
+  const logLike = (f: string) => temp(f) || /\.(?:log|out)$/i.test(f) || (/\.txt$/i.test(f) && /(?:log|out|result|test|report|run)[^\\/]*$/i.test(f)) || /(?:^|[\\/])(?:logs?|test-results|reports?)[\\/]/i.test(f);
   // The places a step names (its arguments, each a shell word: quoted and plain pieces run together, as in
   // `"$LOCALAPPDATA"/Temp/x`; outer quotes taken off), but not values given to -Value, -Encoding and the like.
   const places = (raw: string) => {
@@ -395,11 +400,20 @@ export function writesFiles(command: string, cwd?: string): boolean {
   for (let i = 0; i < parts.length; i++) {
     const text = parts[i].text;
     const step = unquoted(text).trim();
+    // After `;`, a new line or `||` a step runs whether or not an earlier cd worked (`false && cd /tmp; echo > a`,
+    // `cd /tmp/x; cat > a` with no /tmp/x): the folder is no longer known. After `&&` only if the step before worked.
+    const before = i > 0 ? parts[i - 1].sep : '';
+    if (before === ';' || before === '\n' || before === '||') inTemp = false;
     if (!step) continue;
+    if (/^\s*popd\b/i.test(step)) {
+      inTemp = false;
+      continue;
+    }
     const dir = CHANGE_DIR.exec(text.trim());
     if (dir) {
+      // Followed only into a temporary folder named in full; a relative cd or `cd -` may lead anywhere.
       const to = bare(dir[1]);
-      if (absolute(to)) inTemp = TEMP_PATH.test(to) && !inCwd(to);
+      inTemp = absolute(to) && to !== '-' && TEMP_PATH.test(to) && !inCwd(to);
       continue;
     }
     const writer = WRITER.test(step) || ((FORMATTER.test(step) || FIX_FLAG.test(step)) && !DRY_RUN.test(step));
@@ -412,7 +426,10 @@ export function writesFiles(command: string, cwd?: string): boolean {
           if (ownLog || !PIPES_ON.test(unquoted(parts[j].text).trim())) break;
         }
       }
-      if (ownLog) continue;
+      if (ownLog) {
+        const logs = places(text);
+        if (logs.length && logs.every(logLike)) continue;
+      }
       // Only into temporary folders (a scratch script deleted, a log under /tmp): not the project's files.
       // (A plain $variable or a number given beside a temporary path is a value, not another place, except for a move:
       // `Move-Item $f $env:TEMP` takes a project file out of the project.)
@@ -433,7 +450,7 @@ export function writesFiles(command: string, cwd?: string): boolean {
       if (target) into.push(bare(target));
     }
     const kept = into.filter((f) => !/^(\$null|\/dev\/null|nul)$/i.test(f) && !temp(f));
-    if (kept.length > 0 && !CHECK.test(step)) return true;
+    if (kept.length > 0 && !(CHECK.test(step) && kept.every(logLike))) return true;
   }
   return false;
 }
@@ -568,7 +585,7 @@ const indent = (s: string) => s.replace(/\n/g, '\n    ');
  */
 const commandLine = (e: LedgerEntry, showWho = true, mask = false) => {
   const mark = !e.ok ? '✗' : FAILED.test(e.result) ? '⚠' : '✓';
-  const head = `- ${showWho ? `[${who(e.agent)}] ` : ''}${mark} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : e.maybeOutdated ? ' (a failed edit since may have changed files; check before relying on it)' : ''}`;
+  const head = `- ${showWho ? `[${who(e.agent)}] ` : ''}${mark} \`${clip(e.what, 400)}\`${e.outdated ? ' (files changed since; re-run if it matters)' : e.maybeOutdated ? ' (a failed edit or file-writing command since may have changed files; check before relying on it)' : ''}`;
   const shown = e.result ? (e.result.includes('\n') ? `\n    ${indent(e.result)}` : ` → ${e.result}`) : '';
   if (mask && mark === '✓' && e.outdated && e.result && e.source) {
     const ref = `\n    (its output, ${e.source.chars} chars, is left out because files changed since: read_context {agent_id: "${e.agent.id}", event: ${e.source.seq}} has that run's output whole)`;

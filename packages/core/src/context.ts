@@ -169,7 +169,7 @@ export function handoffRecords(run: WorkflowRun, info: AgentRunInfo, ids: Set<st
   const head = `FROM AIVENUE'S RECORDS (attached by Aivenue, not written by the summarizer; source: the tool records of agent(s) ${[...ids].map((id) => id.slice(0, 8)).join(', ')} and the workflow's review records, up to ${new Date(at).toISOString().slice(0, 16)}Z; full outputs: read_context {agent_id}):`;
   const { open, nv } = openReviewLines(run);
   const shown = (e: { ok: boolean; result: string; outdated?: boolean; maybeOutdated?: boolean; what: string }) =>
-    `- ${!e.ok ? '✗' : /\b(fail(ed|ing|ure)?|error)\b/i.test(e.result) ? '⚠' : '✓'} \`${cut(e.what, 160)}\`${e.outdated ? ' — files changed since' : e.maybeOutdated ? ' — a failed edit since may have changed files' : ''}`;
+    `- ${!e.ok ? '✗' : /\b(fail(ed|ing|ure)?|error)\b/i.test(e.result) ? '⚠' : '✓'} \`${cut(e.what, 160)}\`${e.outdated ? ' — files changed since' : e.maybeOutdated ? ' — a failed edit or file-writing command since may have changed files' : ''}`;
   const checks = verifiedChecks(act, 10);
   const checkSet = new Set(checks.map((l) => /`([^`]*)`/.exec(l)?.[1]));
   const latest = new Map<string, (typeof act.entries)[number]>();

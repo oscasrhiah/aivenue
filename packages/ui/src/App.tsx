@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Menu, PanelLeftClose, Pencil, Plus, Settings as SettingsIcon } from 'lucide-react';
-import { useConnection, useThreads } from './api';
+import { useConnection, useHostInfo, useSettings, useThreads } from './api';
 import logo from './assets/logo.svg';
 import { AskHost } from './components/Ask';
 import { RenameInput } from './components/Rename';
-import { SettingsProvider, useT } from './i18n';
+import { saveSettingsQuietly, SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { cx, relativeDay, wfStatus } from './util';
@@ -52,7 +52,10 @@ function CompactBar({ route, onMenu }: { route: Route; onMenu: () => void }) {
 /** Wide layouts show the chat list beside the chat; narrower ones (see styles.css) keep it in a drawer. */
 const wide = () => window.matchMedia('(min-width: 1101px)').matches;
 const HIDE_KEY = 'aivenue.sidebarHidden';
-/** Whether the user put the chat list away (kept in this browser only; unreadable storage: shown). */
+/**
+ * Whether the user put the chat list away, as this page's storage last saw it: only the first guess, for the first
+ * frame. The choice is kept in the settings (sidebarHidden, for the app and VS Code apart), which win once loaded.
+ */
 function readHidden(): boolean {
   try {
     return localStorage.getItem(HIDE_KEY) === '1';
@@ -131,11 +134,20 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
 export function App() {
   const [route, setRoute] = useState<Route>(parseHash);
   const [menu, setMenu] = useState(false);
-  // Wide layouts: the user can put the chat list away; ☰ brings it back.
+  // Wide layouts: the user can put the chat list away; ☰ brings it back. Kept in the settings, for the app and VS Code
+  // apart: the app's page is served from a new port each start (another origin, its storage empty).
+  const settings = useSettings();
+  const host = useHostInfo();
+  const side = host ? (host.host === 'vscode' ? 'vscode' : 'app') : undefined;
+  const saved = side ? settings.sidebarHidden?.[side] : undefined;
   const [sideHidden, setSideHidden] = useState(readHidden);
+  useEffect(() => {
+    if (saved !== undefined) setSideHidden(saved);
+  }, [saved]);
   const hideSide = (v: boolean) => {
     setSideHidden(v);
     writeHidden(v);
+    if (side) saveSettingsQuietly({ sidebarHidden: { [side]: v } });
   };
   // Where "back to the conversation" in Settings goes: the last chat page shown.
   const [lastChat, setLastChat] = useState('#/new');

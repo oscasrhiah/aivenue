@@ -33,7 +33,7 @@ const bundled = await build({
       export { msgTime } from './packages/ui/src/util';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
-      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates } from './packages/ui/src/timeline';
+      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates, resultText } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
       export { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './packages/core/src/prReviews';
@@ -412,6 +412,10 @@ test('背景程序偵測：寫進檔案的腳本（heredoc、here-string）和�
   assert.ok(W.backgroundLaunch('bash -c "nohup python serve.py > s.log 2>&1 &"'));
   assert.ok(W.backgroundLaunch('powershell -NoProfile -Command "Start-Process node -ArgumentList srv.js"'));
   assert.ok(W.backgroundLaunch('Invoke-Expression "Start-Process node -ArgumentList srv.js"'));
+  // From the review of b779b4c: the words "Invoke-Expression" printed (in quotes) hand nothing to a shell.
+  assert.equal(W.backgroundLaunch('echo "Invoke-Expression Start-Process node"'), undefined);
+  assert.equal(W.backgroundLaunch('node -e "console.log(\'Invoke-Expression Start-Process node\')"'), undefined);
+  assert.equal(W.backgroundLaunch('echo "bash -c nohup x &"'), undefined);
   // A heredoc that only feeds a program does not hide a launch after it.
   assert.ok(W.backgroundLaunch("cat > run.sh <<'EOF'\npython train.py\nEOF\nnohup bash run.sh > run.log 2>&1 &"));
 });
@@ -447,6 +451,17 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     // Back in the project after a temporary folder; a git command that does write; a relative path in the project.
     'cd /tmp/x && cd /c/Python/proj && rm a.js',
     'git merge feature',
+    // From the review of b779b4c: a cd that may not have happened, or a way out of the temporary folder; a check's
+    // output written over a source file.
+    'false && cd /tmp; echo changed > src/a.js',
+    'cd /tmp/x || echo changed > src/a.js',
+    'cd /tmp/x; cat > a.mjs',
+    'cd /tmp/x && cd .. && rm a.js',
+    'cd /tmp/x && cd - && rm a.js',
+    'pushd /tmp/x && rm a.js && popd && rm b.js',
+    'npm test | tee src/a.js',
+    'npm test > src/a.js',
+    'npm test 2>&1 | tee requirements.txt',
     'cd src && sed -i s/a/b/ a.js',
   ];
   const no = [
@@ -475,6 +490,10 @@ test('寫檔判斷：寫進暫存資料夾的不算；格式化工具、sed -ri�
     'curl -s --write-out "%{http_code}" https://example.com',
     'git commit --fixup HEAD',
     'npm run lint -- --fix --dry-run',
+    // Only after a cd that surely worked; a check's own log.
+    'cd /tmp/x && cat > a.mjs',
+    'npm test > test-output.txt',
+    'npm test 2>&1 | tee logs/run.txt',
     // Real commands of reviews in Aivenue: a merge preview; a scratch folder the line moved to; LOCALAPPDATA's Temp.
     'cd /c/Python/agenthub-checks && git merge-tree --write-tree --name-only a b; echo "exit $?"',
     "mkdir -p /tmp/rvshot && cd /tmp/rvshot && cat > run.mjs <<'EOF'\nx\nEOF\nnode run.mjs",
@@ -1340,7 +1359,7 @@ test('失敗的編輯：只有失敗時列為「可能改動，需確認」，�
   assert.match(text, /src\/duration\.js \(read by aaaaaaaa\) — possibly changed since \(an edit of it failed\): check it/);
   // What was read is still shown (flagged), since the file may well be unchanged.
   assert.match(text, /possibly changed since[^\n]*\n\s+export function parseDuration/);
-  assert.match(text, /npm test` \(a failed edit since may have changed files; check before relying on it\)/);
+  assert.match(text, /npm test` \(a failed edit or file-writing command since may have changed files; check before relying on it\)/);
   assert.doesNotMatch(text, /CHANGED since, read it again/);
 });
 
@@ -2783,9 +2802,17 @@ test('檢查之後用指令寫檔（Set-Content、sed -i、> 檔案…）也算�
   );
   for (const write of ["sed -i 's/_/-/' slug.js", 'echo "// note" >> slug.js', 'git checkout -- slug.js', 'mv slug.tmp slug.js'])
     assert.deepEqual(outdated([tool(1, 'npm test'), tool(2, write)]), { 'npm test': true }, write);
-  // Not a change: output thrown away, a check writing its own log, reading, a write that failed.
-  for (const [later, status] of [['ls > $null', 'ok'], ['cat a.txt > /dev/null', 'ok'], ['npm run lint > lint.log 2>&1', 'ok'], ['Get-Content slug.js', 'ok'], ['git diff', 'ok'], ['Set-Content slug.js x', 'error']])
+  // Not a change: output thrown away, a check writing its own log, reading.
+  for (const [later, status] of [['ls > $null', 'ok'], ['cat a.txt > /dev/null', 'ok'], ['npm run lint > lint.log 2>&1', 'ok'], ['Get-Content slug.js', 'ok'], ['git diff', 'ok']])
     assert.equal(outdated([tool(1, 'npm test'), tool(2, later, status)])['npm test'], false, later);
+  // A write in a command that then failed may have happened (from the review of b779b4c: the file had changed):
+  // "may need a re-check"; sure when the CLI said which files the command changed.
+  const states = (events) => Object.fromEntries(W.checkRecords(W.collectActivity(run, () => events)).map((c) => [c.command, c.outdated ? 'outdated' : c.maybeOutdated ? 'maybe' : 'holds']));
+  for (const failed of ['Set-Content src/a.js changed; throw "after write"', 'prettier --write src; exit 1', 'Set-Content slug.js x'])
+    assert.equal(states([tool(1, 'node test.js'), tool(2, failed, 'error')])['node test.js'], 'maybe', failed);
+  assert.equal(states([tool(1, 'node test.js'), { ...tool(2, 'Set-Content src/a.js changed; throw "after write"', 'error'), files: ['src/a.js'] }])['node test.js'], 'outdated');
+  // A failed command that writes nothing: the check holds.
+  assert.equal(states([tool(1, 'node test.js'), tool(2, 'git status --short; exit 1', 'error')])['node test.js'], 'holds');
   // A check run after the write holds.
   assert.deepEqual(outdated([tool(1, 'Set-Content slug.js x'), tool(2, 'npm test')]), { 'npm test': false });
   // A write and the check in one line: the check comes after it there, so it is not outdated by it.
@@ -3440,7 +3467,7 @@ test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄；�
   };
   assert.deepEqual(states(mixed), [
     ['failed', 'bad', '2 check(s) failed', '1 of them changed after: run again to know the result now'],
-    ['recheck', 'warn', '1 to re-check after changes', '1 with a failed edit after (files may have changed)'],
+    ['recheck', 'warn', '1 to re-check after changes', '1 with a failed edit or file-writing command after (files may have changed)'],
     ['weak', 'warn', '2 with too little evidence', '1 not known whether they ran, 1 ran within a longer command: read the output'],
     ['goal', 'bad', 'goal 1/2', undefined],
   ]);
@@ -4003,4 +4030,18 @@ test('活動紀錄：其他工具伺服器的同名工具（mcp__github__search_
   for (const raw of ['mcp__github__search_records', 'mcp__nvidia__gpu_status', 'mcp__other__rename_chat']) assert.notEqual(t(raw).category, 'hub', raw);
   // Aivenue's own, under its own prefix: still Aivenue's.
   for (const raw of ['mcp__aivenue__search_records', 'mcp__aivenue__gpu_status', 'aivenue_search_records']) assert.equal(t(raw).category, 'hub', raw);
+});
+
+test('最終結果的實作者說明：最後的回覆和提交的摘要，取說得比較完整的；只有一句收尾時不會蓋掉帶表格的摘要', () => {
+  const table = '已完成。\n\n| 步驟 | 動作 | 結果 |\n|---|---|---|\n| 1 | 建立 slug.js | 完成 |\n| 2 | 執行測試 | 通過 |';
+  // What happened in the VS Code check: a full summary submitted, then one closing line.
+  assert.equal(W.resultText('已按指定順序完成並提交工作摘要。', table), table);
+  // A question answered in the reply, a terse summary: the reply.
+  const answer = '第四章的圖表建議用三張：\n1. 系統架構\n2. 實驗流程\n3. 結果比較（含誤差線）';
+  assert.equal(W.resultText(answer, 'answered'), answer);
+  // Only one of them; a reply that is the submission's JSON counts as nothing.
+  assert.equal(W.resultText(undefined, table), table);
+  assert.equal(W.resultText(answer, undefined), answer);
+  assert.equal(W.resultText('{"summary":"x"}', 'the summary'), 'the summary');
+  assert.equal(W.resultText('  ', ''), undefined);
 });

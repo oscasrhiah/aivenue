@@ -71,6 +71,7 @@ export class RunStore {
 
   save(run: WorkflowRun): void {
     if (this.frozen || this.saveTimers.has(run.id)) return;
+    this.waiting.set(run.id, run);
     this.saveTimers.set(
       run.id,
       setTimeout(() => {
@@ -80,6 +81,18 @@ export class RunStore {
     );
   }
 
+  /** Runs changed but not written yet (their save is still waiting). */
+  private waiting = new Map<string, WorkflowRun>();
+
+  /**
+   * Write now every run whose save is waiting. Before an operation is answered (and kept as done): what the user was
+   * told happened must be on disk, so a hub that stops right after loses nothing a repeat of the operation would not
+   * bring back.
+   */
+  flush(): void {
+    for (const run of [...this.waiting.values()]) this.saveNow(run);
+  }
+
   saveNow(run: WorkflowRun): void {
     if (this.frozen) return;
     const t = this.saveTimers.get(run.id);
@@ -87,6 +100,7 @@ export class RunStore {
       clearTimeout(t);
       this.saveTimers.delete(run.id);
     }
+    this.waiting.delete(run.id);
     fs.mkdirSync(this.runDir(run.id), { recursive: true });
     const file = path.join(this.runDir(run.id), 'run.json');
     fs.writeFileSync(file + '.tmp', JSON.stringify(run));
@@ -140,6 +154,11 @@ export class RunStore {
 
   delete(runId: string): void {
     this.release(runId);
+    // A save still waiting would write the run back after it was deleted.
+    const t = this.saveTimers.get(runId);
+    if (t) clearTimeout(t);
+    this.saveTimers.delete(runId);
+    this.waiting.delete(runId);
     fs.rmSync(this.runDir(runId), { recursive: true, force: true });
   }
 

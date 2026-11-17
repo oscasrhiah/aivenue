@@ -57,9 +57,11 @@ const SHELL_PAYLOAD = /\b(?:ba|z|da|k)?sh\s+(?:-\w+\s+)*-\w*c\b|\bcmd(?:\.exe)?\
  * &` in its text starts nothing.)
  */
 export function shellText(command: string): string {
-  let s = withoutHeredocs(command);
-  if (!SHELL_PAYLOAD.test(s)) s = s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
-  return s;
+  const s = withoutHeredocs(command);
+  // Whether a shell is handed quoted text is read outside the quotes: `echo "Invoke-Expression Start-Process x"`
+  // only prints those words.
+  const outside = s.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+  return SHELL_PAYLOAD.test(outside) ? s : outside;
 }
 
 /** A command without the bodies of its heredocs (`<<'EOF' … EOF`) and PowerShell here-strings (`@' … '@`). */

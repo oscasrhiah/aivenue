@@ -47,7 +47,32 @@ class HubClient {
     this.statusListeners.forEach((l) => l());
   }
 
+  /** The next try after a lost connection, so a move to another hub (moveTo) does not leave a second socket. */
+  private again?: ReturnType<typeof setTimeout>;
+
+  /**
+   * The hub is now at `wsUrl` (VS Code's shared hub came back on another port): connect there at once, keeping the
+   * page as it is. Calls still waiting go again there (with their operation ids), as after any reconnect.
+   */
+  moveTo(wsUrl: string) {
+    if (window.__AIVENUE__) window.__AIVENUE__.wsUrl = wsUrl;
+    else window.__AIVENUE__ = { wsUrl, host: 'vscode' };
+    const old = this.ws;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = null;
+      try {
+        old.close();
+      } catch {
+        // already closed
+      }
+    }
+    this.retry = 0;
+    this.connect();
+  }
+
   private connect() {
+    clearTimeout(this.again);
+    this.again = undefined;
     this.setStatus('connecting');
     const ws = new WebSocket(socketUrl());
     this.ws = ws;
@@ -74,7 +99,7 @@ class HubClient {
     };
     ws.onclose = () => {
       this.setStatus('closed');
-      setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** this.retry++));
+      this.again = setTimeout(() => this.connect(), Math.min(5000, 500 * 2 ** this.retry++));
     };
   }
 
@@ -110,6 +135,26 @@ class HubClient {
 }
 
 export const hub = new HubClient();
+
+/** VS Code's webview API: there only, and to be taken once per page. */
+declare const acquireVsCodeApi: undefined | (() => { postMessage(message: unknown): void });
+const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
+
+// VS Code: the extension says where the shared hub is after it came back (another port). The page connects there and
+// answers, so the extension does not load it anew (which would lose what is being written and the chat shown). Only an
+// address on the same host as now is taken.
+if (vscodeApi)
+  window.addEventListener('message', (e: MessageEvent) => {
+    const m = e.data as { type?: string; wsUrl?: string } | undefined;
+    if (m?.type !== 'aivenue.hub' || typeof m.wsUrl !== 'string') return;
+    try {
+      if (new URL(m.wsUrl).hostname !== new URL(socketUrl()).hostname) return;
+    } catch {
+      return;
+    }
+    hub.moveTo(m.wsUrl);
+    vscodeApi.postMessage({ type: 'aivenue.hub.moved', wsUrl: m.wsUrl });
+  });
 
 /** URL that serves an attachment from the hub (same token as the socket). */
 export function fileUrl(filePath: string): string {
@@ -218,8 +263,21 @@ export function useThreads(): ThreadSummary[] {
 }
 
 export function useWorkflow(id: string | undefined): WorkflowRun | null {
-  const [run] = useSynced<WorkflowRun | null>('workflows.get', { id }, 'workflow', null, (d: WorkflowRun) => d.id === id);
+  const [run, setRun] = useSynced<WorkflowRun | null>('workflows.get', { id }, 'workflow', null, (d: WorkflowRun) => d.id === id);
+  // Deleted (here or in another window): no longer shown as if it were still there.
+  useEffect(() => hub.on('deleted', (d: { id: string }) => d?.id === id && setRun(null)), [id]); // eslint-disable-line react-hooks/exhaustive-deps
   return id ? run : null;
+}
+
+/** Whether the workflow `id` was deleted while this page was open (here or in another window). */
+export function useDeleted(id: string | undefined): boolean {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    setGone(false);
+    if (!id) return;
+    return hub.on('deleted', (d: { id: string }) => d?.id === id && setGone(true));
+  }, [id]);
+  return gone;
 }
 
 const modelCache = new Map<string, Promise<ModelInfo[]>>();

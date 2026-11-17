@@ -455,6 +455,10 @@ export class Orchestrator {
     // One workflow at a time per conversation: two windows sending a follow-up together (or one sent again) must not
     // start two on the same conversation and folder. The first is running by the time the second arrives.
     const from = config.continueFrom ? this.runs.get(config.continueFrom) : undefined;
+    // A follow-up or an edit of a conversation deleted meanwhile (in another window): refused, not started as a new
+    // conversation without what came before.
+    if (config.continueFrom && !from) throw new Error(L('這段對話已經刪除，不能再接續；請開新對話', 'This chat was deleted and cannot be continued: start a new chat'));
+    if (config.replaces && !this.runs.get(config.replaces)) throw new Error(L('這則訊息所在的對話已經刪除，不能再編輯', 'The chat of this message was deleted: it cannot be edited'));
     if (from) {
       const thread = from.config.threadId ?? from.id;
       const busy = [...this.runs.values()].find((r) => r.id !== config.replaces && (r.config.threadId ?? r.id) === thread && (r.status === 'running' || r.status === 'paused' || r.status === 'waiting_human'));
@@ -1497,6 +1501,8 @@ export class Orchestrator {
     if (run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human') throw new Error(L('請先停止這個工作流', 'Stop this workflow first'));
     this.runs.delete(id);
     this.d.store.delete(id);
+    // Every window: the list, and a page open on this workflow (it shows it was deleted).
+    this.d.push({ topic: 'deleted', data: { id } });
     this.d.push({ topic: 'workflows', data: this.summaries() });
   }
 

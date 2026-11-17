@@ -15,7 +15,9 @@
 //  - the waiting state and its question in view: the agent's answers to pick from, "Other", a box, nothing sent yet;
 //  - the folder path: a button the keyboard reaches; when cut, it opens to the whole path;
 //  - every message's time shown (the user's, the timeline's lines, each agent's turn);
-//  - nothing past the webview's width, no control cut by its box or drawn over another.
+//  - nothing past the webview's width, no control cut by its box or drawn over another;
+//  - the hub killed while a follow-up is being written: the extension starts it again, the page connects to the new
+//    port by itself, is not reloaded, and keeps the unsent text and the chat shown.
 // PASS / FAIL lines, and JSON + screenshots in <out dir>.
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -439,6 +441,37 @@ try {
 
   // The waiting chat is not needed any more.
   await E.call('workflows.cancel', { id: askId });
+
+  // The hub crashes and the extension starts it again (another port): the page is not rebuilt, so what was being
+  // written and the chat shown stay, and it works on with the new hub.
+  log('the hub stops and comes back');
+  await E.evaluate(`location.hash = ${JSON.stringify('#/run/' + slugId)}`);
+  await sleep(2000);
+  const unsent = '還沒送出的追問：記得也跑型別檢查';
+  await E.evaluate(`(() => {
+    window.__notReloaded = 42;
+    const ta = document.querySelector('.composer textarea');
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(ta, ${JSON.stringify(unsent)});
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    return ta.value;
+  })()`);
+  const portBefore = await E.evaluate('new URL(window.__AIVENUE__.wsUrl).port');
+  const before = hubProcesses();
+  for (const pid of before) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F']);
+  const after = await until(async () => {
+    const now = hubProcesses().filter((p) => !before.includes(p));
+    return now.length ? now : undefined;
+  }, 'a new hub', 60_000, 1000).catch(() => []);
+  check('the hub killed, the extension starts a new one', after.length > 0, { before, after });
+  const back = await until(async () => {
+    const r = await E.evaluate(`({ open: !!document.querySelector('.conn.open'), port: new URL(window.__AIVENUE__.wsUrl).port })`).catch(() => undefined);
+    return r?.open && r.port !== portBefore ? r : undefined;
+  }, 'the page on the new hub', 60_000, 1000).catch(() => undefined);
+  const kept = await E.evaluate(`({ notReloaded: window.__notReloaded === 42, text: document.querySelector('.composer textarea')?.value, hash: location.hash, turns: document.querySelectorAll('.turn').length })`).catch((e) => ({ error: e.message }));
+  check('after the hub came back: the page connected to the new port by itself', !!back, { portBefore, back });
+  check('after the hub came back: the page was not reloaded; the unsent text and the chat shown are kept', kept.notReloaded && kept.text === unsent && kept.hash === `#/run/${slugId}` && kept.turns > 0, kept);
+  await shot(w, 'editor-after-hub-restart');
+
   log('closing the window');
   await palette(w, 'workbench.action.closeWindow');
   const stopped = await until(async () => hubProcesses().length === 0, 'the hub to stop', 60_000, 1000).catch(() => false);

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, CircleCheck, CircleDashed, CircleHelp, CircleX, RefreshCw, Target, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
-import { fileUrl, hub, useAgentEvents, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
+import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { navigate } from '../App';
@@ -20,7 +20,7 @@ import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type R
 import { saveSettings, useAppSettings, useT } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { followUpGoal } from '../followUp';
-import { deliverableRows, verificationStates, type VerificationState } from '../timeline';
+import { deliverableRows, resultText, verificationStates, type VerificationState } from '../timeline';
 import { CheckRows } from '../components/Checks';
 import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
@@ -777,7 +777,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   const exec = last('executor');
   const implRound = run.stages.implement.rounds[run.stages.implement.rounds.length - 1];
   const planRound = run.stages.plan.rounds[run.stages.plan.rounds.length - 1];
-  const text = exec ? exec.finalText?.trim() || implRound?.submission?.summary : run.plan ? run.plan.markdown?.trim() || run.plan.summary : undefined;
+  const text = exec ? resultText(exec.finalText, implRound?.submission?.summary) : run.plan ? run.plan.markdown?.trim() || run.plan.summary : undefined;
   if (!text) return null;
   const author = exec ?? last('planner');
   const review = (exec ? implRound : planRound)?.review;
@@ -924,6 +924,7 @@ export function Chat({ id }: { id?: string }) {
   const providers = useProviders();
   const host = useHostInfo();
   const run = useWorkflow(id);
+  const deleted = useDeleted(id);
   // The conversation this message belongs to, and its earlier messages (shown above it, oldest first).
   const summaries = useWorkflows();
   const thread = useThreads().find((th) => !!run && th.ids.includes(run.id));
@@ -1191,6 +1192,21 @@ export function Chat({ id }: { id?: string }) {
       />
     </>
   );
+
+  // Deleted while open (here or in another window): said so, with nothing left to act on, and a way out.
+  if (id && deleted && !run)
+    return (
+      <div className="chat">
+        <div className="chat-deleted">
+          <div className="note warn" role="status">
+            {t('這段對話已經刪除（可能是在另一個視窗刪的），不能再接續或操作。', 'This chat was deleted (perhaps in another window): it cannot be continued or changed.')}
+          </div>
+          <button className="btn primary" onClick={() => navigate('new')}>
+            {t('開新對話', 'Start a new chat')}
+          </button>
+        </div>
+      </div>
+    );
 
   return (
     <div className="chat">
