@@ -4194,3 +4194,44 @@ test('背景啟動與程序的對應：比完整路徑——另一個專案的�
   assert.equal(W.launchFolder('nohup node job.js &', undefined, '/p', linux), '/p');
   assert.equal(W.scriptOf('nohup node scripts/a/job.js > x.log 2>&1 &'), 'scripts/a/job.js');
 });
+
+test('獨立審查：讀不到的檔案不能當成「沒變」：前後都讀不到時，比對不說有變也不說沒變，而是寫明無法確認並列出檔案（git 專案與一般資料夾）', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const real = nfs.readFileSync;
+  const denied = (p) => String(p).replace(/\\/g, '/').endsWith('/draft.js');
+  const check = async (dir) => {
+    nfs.readFileSync = function (p, ...rest) {
+      if (denied(p)) throw Object.assign(new Error(`EACCES: permission denied, open '${p}'`), { code: 'EACCES' });
+      return real.call(this, p, ...rest);
+    };
+    try {
+      const before = await W.workspaceState(dir);
+      fs.writeFileSync(path.join(dir, 'draft.js'), 'changed while it could not be read');
+      const after = await W.workspaceState(dir);
+      assert.deepEqual(W.workspaceChanges(before, after), [], 'not reported as a change it cannot see');
+      assert.match(W.workspaceUnknown(before, after) ?? '', /draft\.js \(EACCES\)/, 'said it cannot tell, with the file and why');
+    } finally {
+      nfs.readFileSync = real;
+    }
+  };
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-unreadable-'));
+  fs.writeFileSync(path.join(plain, 'draft.js'), 'before');
+  fs.writeFileSync(path.join(plain, 'ok.js'), 'readable');
+  await check(plain);
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-unreadable-git-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], { cwd: repo, encoding: 'utf8' });
+  git('init', '-q');
+  fs.writeFileSync(path.join(repo, 'a.js'), '1');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'one');
+  fs.writeFileSync(path.join(repo, 'draft.js'), 'untracked, not yet in git');
+  await check(repo);
+  // A file that is really gone is still told apart: missing, not unreadable.
+  const gone = await W.workspaceState(plain);
+  fs.rmSync(path.join(plain, 'draft.js'));
+  const after = await W.workspaceState(plain);
+  assert.match(W.workspaceChanges(gone, after).join('\n'), /draft\.js/);
+  assert.equal(W.workspaceUnknown(gone, after), undefined);
+  for (const d of [plain, repo]) fs.rmSync(d, { recursive: true, force: true });
+});

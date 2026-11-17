@@ -100,16 +100,28 @@ const MAX_FILES = 20_000;
 /** Larger files are fingerprinted by size and time of change, not content. */
 const MAX_HASHED = 20 * 1024 * 1024;
 
-function fingerprint(file: string): string {
+/**
+ * A file's fingerprint. Only a file that is not there is "missing"; one that is there but cannot be read (no permission,
+ * locked, an I/O error) has no fingerprint: it goes to `unreadable` (its path and why), so two failed reads are never
+ * taken as "the same content".
+ */
+function fingerprint(file: string, rel: string, unreadable: string[]): string {
   try {
     const st = fs.statSync(file);
     if (!st.isFile()) return 'not a file';
     if (st.size > MAX_HASHED) return `size ${st.size} changed ${st.mtimeMs}`;
     return createHash('sha1').update(fs.readFileSync(file)).digest('hex');
-  } catch {
-    return 'missing';
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return 'missing';
+    unreadable.push(`${rel} (${code ?? (e as Error).message})`);
+    return 'unreadable';
   }
 }
+
+/** Why a state is not whole because of files it could not read. */
+const unreadableNote = (unreadable: string[]) =>
+  unreadable.length ? L(`有 ${unreadable.length} 個檔案讀不到，無法比對：${list(unreadable)}`, `${unreadable.length} file(s) could not be read, so they are not compared: ${list(unreadable)}`) : undefined;
 
 export async function workspaceState(cwd: string): Promise<WorkspaceState> {
   const head = await git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']);
@@ -121,24 +133,26 @@ export async function workspaceState(cwd: string): Promise<WorkspaceState> {
   const untracked = new Map<string, string>();
   if (r.code !== 0 || r.error) return { git: true, head, branch, tracked, untracked, unknown: L('git status 失敗', 'git status failed') };
   let skipped = 0;
+  const unreadable: string[] = [];
   for (const entry of r.stdout.split('\0')) {
     if (entry.length < 4) continue;
     const code = entry.slice(0, 2);
     const file = entry.slice(3);
     if (code === '??') {
       if (untracked.size >= MAX_FILES) skipped++;
-      else untracked.set(file, fingerprint(path.join(top, file)));
+      else untracked.set(file, fingerprint(path.join(top, file), file, unreadable));
       continue;
     }
-    tracked.set(file, `${code}|${fingerprint(path.join(top, file))}`);
+    tracked.set(file, `${code}|${fingerprint(path.join(top, file), file, unreadable)}`);
   }
-  const unknown = skipped ? L(`未追蹤的檔案太多，有 ${skipped} 個沒有比對`, `too many untracked files: ${skipped} not compared`) : undefined;
+  const unknown = [skipped ? L(`未追蹤的檔案太多，有 ${skipped} 個沒有比對`, `too many untracked files: ${skipped} not compared`) : undefined, unreadableNote(unreadable)].filter(Boolean).join(L('；', '; ')) || undefined;
   return { git: true, head, branch, tracked, untracked, ...(unknown ? { unknown } : {}) };
 }
 
 /** A folder that is not a git repository: every file with its fingerprint. */
 function folderState(cwd: string): WorkspaceState {
   const files = new Map<string, string>();
+  const unreadable: string[] = [];
   let unknown: string | undefined;
   const walk = (dir: string, rel: string) => {
     let entries: fs.Dirent[];
@@ -155,17 +169,19 @@ function folderState(cwd: string): WorkspaceState {
         if (e.name !== 'node_modules' && e.name !== '.git') walk(path.join(dir, e.name), r);
       } else if (e.isFile()) {
         if (files.size >= MAX_FILES) unknown = L(`資料夾的檔案超過 ${MAX_FILES} 個，無法全部比對`, `more than ${MAX_FILES} files in the folder: not all compared`);
-        else files.set(r, fingerprint(path.join(dir, e.name)));
+        else files.set(r, fingerprint(path.join(dir, e.name), r, unreadable));
       }
     }
   };
   walk(cwd, '');
+  unknown = [unknown, unreadableNote(unreadable)].filter(Boolean).join(L('；', '; ')) || undefined;
   return { git: false, head: '', branch: '', tracked: new Map(), untracked: files, ...(unknown ? { unknown } : {}) };
 }
 
 /** Why the comparison of two states cannot rule out a change (a state was not taken whole). */
 export function workspaceUnknown(before: WorkspaceState, after: WorkspaceState): string | undefined {
-  return before.unknown ?? after.unknown;
+  const notes = [...new Set([before.unknown, after.unknown].filter((x): x is string => !!x))];
+  return notes.length ? notes.join(L('；', '; ')) : undefined;
 }
 
 /**
