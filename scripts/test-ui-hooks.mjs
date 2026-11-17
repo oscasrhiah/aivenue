@@ -61,6 +61,9 @@ function standInHub(runs, o = {}) {
     }
     send(text) {
       const m = JSON.parse(text);
+      (this.sent ??= []).push(m);
+      // Calls the stand-in hub leaves unanswered (the connection drops before the answer).
+      if (o.silent?.has(m.method)) return;
       const result = m.method === 'workflows.get' ? (runs[m.params?.id] ?? null) : m.method === 'workflows.list' ? Object.values(runs).map((r) => ({ id: r.id, title: r.config.title })) : null;
       queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ id: m.id, result }) }));
     }
@@ -237,4 +240,29 @@ test('設定鎖：另一個程序還活著時，不管拿著鎖多久都不搶�
     other.kill();
   }
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('連線中斷後：已送出的外部效果操作（上傳、安裝、登入…）不自動重送，改回報「無法確定有沒有完成」；一般操作照樣重送；斷線時才發出、還沒送出去的照常送', async () => {
+  const { api, sockets } = standInHub({ r1: { id: 'r1', config: { title: 'kept' } } }, { silent: new Set(['attachments.upload', 'workflows.say', 'providers.install']) });
+  await tick();
+  const upload = api.hub.call('attachments.upload', { name: 'a.txt', data: 'eA==' });
+  const say = api.hub.call('workflows.say', { id: 'r1', text: 'hi' });
+  await tick();
+  assert.deepEqual(sockets[0].sent.map((m) => m.method), ['attachments.upload', 'workflows.say']);
+  // The connection drops before either is answered; an install is asked for while it is down (never sent).
+  sockets[0].readyState = 3;
+  sockets[0].onclose();
+  const install = api.hub.call('providers.install', { id: 'x' });
+  const outcome = upload.then(() => 'answered', (e) => e.message);
+  await new Promise((r) => setTimeout(r, 700));
+  assert.equal(sockets.length, 2, 'reconnected');
+  assert.match(await outcome, /無法確定這個操作有沒有完成；為了不重複執行，沒有自動重送/);
+  const resent = sockets[1].sent.map((m) => m.method);
+  assert.ok(!resent.includes('attachments.upload'), 'the upload is not sent again');
+  assert.ok(resent.includes('workflows.say'), 'an ordinary call is sent again (the hub runs it once)');
+  assert.ok(resent.includes('providers.install'), 'one that never went out is sent now');
+  // The hub answers them now (so nothing is left waiting).
+  for (const m of sockets[1].sent) sockets[1].onmessage({ data: JSON.stringify({ id: m.id, result: null }) });
+  assert.equal(await say, null);
+  assert.equal(await install, null);
 });

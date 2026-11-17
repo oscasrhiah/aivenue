@@ -23,6 +23,7 @@ import { Orchestrator } from './orchestrator';
 import { BUILTIN_PROVIDERS, PROVIDER_TEMPLATES } from './providers/builtin';
 import { ProviderRegistry } from './providers/registry';
 import { RunStore, runRef } from './store';
+import { NOT_REPLAYED } from './replay';
 import { FileSecretStore, type SecretStore } from './secrets';
 import { holdOsLock, lockName } from './osLock';
 import { OpLog } from './opLog';
@@ -626,7 +627,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
           const id = r && runRef(r.result);
           return id ? { ...r, result: orchestrator.runs.get(id) ?? null } : r;
         };
-        const result = await (op ? ops.once(op, run, recorded) : run());
+        // An effect outside Aivenue's records (replay.ts): marked as started on disk before it runs, never run twice.
+        const result = await (op ? ops.once(op, run, recorded, NOT_REPLAYED.has(req.method)) : run());
         reply({ id: req.id, result: result ?? null });
       } catch (e) {
         reply({ id: req.id, error: (e as Error).message });

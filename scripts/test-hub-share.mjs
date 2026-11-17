@@ -837,6 +837,53 @@ test('經 WebSocket 接續中斷的工作流：回覆的是工作流本身也不
   }
 });
 
+test('外部效果的操作（上傳附件）：執行前先在操作紀錄記下「已開始」；hub 在記下結果前停止，重啟後重送會回覆「結果未知」而不再執行，檔案只有一份', async () => {
+  const dir = tmp('outside-effect');
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRename = nfs.renameSync;
+  const uploads = () => {
+    const root = path.join(dir, 'uploads-vscode');
+    return fs.existsSync(root) ? fs.readdirSync(root).length : 0;
+  };
+  let h = await sharedHub(dir);
+  try {
+    let w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    let v = new View(h.ep, w.id);
+    // Answered normally: the same operation sent again gets the same answer and uploads nothing more.
+    const first = await v.call('attachments.upload', { name: 'a.txt', mime: 'text/plain', data: Buffer.from('one').toString('base64') }, 'up-ok');
+    assert.deepEqual(await v.call('attachments.upload', { name: 'a.txt', mime: 'text/plain', data: Buffer.from('one').toString('base64') }, 'up-ok'), first);
+    assert.equal(uploads(), 1);
+    // The hub stops after the upload, before its result is written: only "started" is on disk.
+    let writes = 0;
+    nfs.renameSync = function (from, to) {
+      if (String(to).endsWith('hub-ops-vscode.json') && ++writes > 1) throw new Error('stopped before the result was written');
+      return realRename.apply(this, arguments);
+    };
+    await v.call('attachments.upload', { name: 'b.txt', mime: 'text/plain', data: Buffer.from('two').toString('base64') }, 'up-cut');
+    nfs.renameSync = realRename;
+    assert.equal(uploads(), 2);
+    const ops = JSON.parse(fs.readFileSync(path.join(dir, 'hub-ops-vscode.json'), 'utf8'));
+    assert.equal(ops['up-cut'].started, true, 'marked as started before it ran');
+    v.close();
+    w.ch.close();
+    await h.hub.close();
+
+    h = await sharedHub(dir);
+    w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    v = new View(h.ep, w.id);
+    await assert.rejects(v.call('attachments.upload', { name: 'b.txt', mime: 'text/plain', data: Buffer.from('two').toString('base64') }, 'up-cut'), /不知道有沒有完成|whether it finished is unknown/);
+    assert.equal(uploads(), 2, 'not uploaded a second time');
+    // A new upload (a new operation) still runs.
+    await v.call('attachments.upload', { name: 'c.txt', mime: 'text/plain', data: Buffer.from('three').toString('base64') }, 'up-new');
+    assert.equal(uploads(), 3);
+    v.close();
+    w.ch.close();
+  } finally {
+    nfs.renameSync = realRename;
+    await h?.hub.close();
+  }
+});
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();

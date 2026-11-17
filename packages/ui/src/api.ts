@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus } from '../../core/src/types';
 import { setPickedColors } from './util';
+import { NOT_REPLAYED } from '../../core/src/replay';
 
 type Listener = (data: any) => void;
 
@@ -31,8 +32,12 @@ class HubClient {
   private seq = 0;
   /** This page's id: with a call's number, the operation id the hub runs once (OpLog). */
   private clientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  /** Calls not answered yet, in the order made: sent again after a reconnect (the hub still runs each once). */
-  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; msg: string; timer: ReturnType<typeof setTimeout> }>();
+  /**
+   * Calls not answered yet, in the order made: sent again after a reconnect (the hub still runs each once), except one
+   * with an effect outside Aivenue's records (replay.ts) that was already sent: its result is unknown, so it fails
+   * instead and the user checks. `sent`: it went out on a connection.
+   */
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; msg: string; method: string; sent: boolean; timer: ReturnType<typeof setTimeout> }>();
   private listeners = new Map<string, Set<Listener>>();
   private statusListeners = new Set<() => void>();
   private retry = 0;
@@ -79,8 +84,18 @@ class HubClient {
     ws.onopen = () => {
       this.retry = 0;
       this.setStatus('open');
-      // Unanswered calls go again with the same operation id: one that already ran answers without running twice.
-      for (const p of this.pending.values()) ws.send(p.msg);
+      // Unanswered calls go again with the same operation id: one that already ran answers without running twice. One
+      // with an outside effect that already went out is not sent again: whether it happened is unknown.
+      for (const [id, p] of this.pending) {
+        if (p.sent && NOT_REPLAYED.has(p.method)) {
+          this.pending.delete(id);
+          clearTimeout(p.timer);
+          p.reject(new Error('與 Aivenue 的連線中斷，無法確定這個操作有沒有完成；為了不重複執行，沒有自動重送。請確認目前的狀態後再試'));
+          continue;
+        }
+        ws.send(p.msg);
+        p.sent = true;
+      }
       this.emit('reconnect', null);
     };
     ws.onmessage = (ev) => {
@@ -115,9 +130,13 @@ class HubClient {
         this.pending.delete(id);
         reject(new Error('與 Aivenue 的連線中斷，這個操作沒有得到回應'));
       }, CALL_TIMEOUT_MS);
-      this.pending.set(id, { resolve, reject, msg, timer });
+      const entry = { resolve, reject, msg, method, sent: false, timer };
+      this.pending.set(id, entry);
       // Not connected now: sent when the connection opens.
-      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(msg);
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(msg);
+        entry.sent = true;
+      }
     });
   }
 
