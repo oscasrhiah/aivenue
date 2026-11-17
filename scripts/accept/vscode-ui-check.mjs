@@ -14,6 +14,7 @@
 //  - agents' Markdown drawn: no raw table rows or code fences; a table in the reply is a table;
 //  - the waiting state and its question in view: the agent's answers to pick from, "Other", a box, nothing sent yet;
 //  - the folder path: a button the keyboard reaches; when cut, it opens to the whole path;
+//  - every message's time shown (the user's, the timeline's lines, each agent's turn);
 //  - nothing past the webview's width, no control cut by its box or drawn over another.
 // PASS / FAIL lines, and JSON + screenshots in <out dir>.
 import { spawn, spawnSync } from 'node:child_process';
@@ -275,6 +276,8 @@ const INSPECT = `(() => {
     // Agents' Markdown drawn, not shown as source: no table delimiter row or code fence left in the text.
     rawMarkdown: [...document.querySelectorAll('.md')].map((e) => e.innerText).filter((t) => /^\\s*\\|?\\s*:?-{3,}:?\\s*\\|/m.test(t) || /^\\s*\`\`\`/m.test(t)).map((t) => t.slice(0, 60)),
     tables: document.querySelectorAll('.md table').length,
+    // Every message shows when it was said: the user's, the timeline's lines, each agent's turn.
+    times: { user: document.querySelectorAll('.user-actions time.msg-time').length, lines: document.querySelectorAll('.divider time.msg-time').length, agents: document.querySelectorAll('.turn-meta time.msg-time').length, turns: document.querySelectorAll('.turn-meta').length },
     scrollX: document.documentElement.scrollWidth > W,
   };
 })()`;
@@ -396,6 +399,7 @@ try {
       if (name !== 'new') check(`${place} · ${theme} · ${name}: agents' Markdown drawn (no raw table rows or code fences)`, r.rawMarkdown.length === 0, { tables: r.tables, raw: r.rawMarkdown });
       if (name === 'result' && agentTable) check(`${place} · ${theme} · result: the agent's Markdown table is drawn as a table`, r.tables > 0, r.tables);
       if (name === 'waiting') check(`${place} · ${theme} · waiting: "等待你的決定" and the question in view`, r.waiting);
+      if (name !== 'new') check(`${place} · ${theme} · ${name}: every message shows its time (the user's, the timeline's, each agent's)`, r.times.user > 0 && r.times.lines > 0 && r.times.agents === r.times.turns && r.times.turns > 0, r.times);
       if (name === 'waiting')
         check(
           `${place} · ${theme} · waiting: the question lists the agent's answers and "Other", with a box; nothing sent before a pick`,
