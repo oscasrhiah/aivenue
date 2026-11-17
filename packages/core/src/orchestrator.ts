@@ -1239,16 +1239,21 @@ export class Orchestrator {
       const who = `${this.providerName(info.provider)} · ${roleLabel(info.role)}`;
       this.log(run, L(`${who} 有問題要問你`, `${who} has a question for you`), 'warn', true);
       const options = q.options.map((label, i) => ({ id: `answer:${i}`, label }));
-      const dec = await this.ask(
-        run,
-        info.stage ?? 'run',
-        L(`${who} 問你：${q.question}`, `${who} asks: ${q.question}`),
-        [...(options.length ? options : [{ id: 'answer', label: L('送出回覆（寫在下面）', 'Send the answer (write it below)') }]), { id: 'abort', label: L('中止工作流', 'Stop the workflow') }],
-        true,
-      );
+      // Always a way to answer otherwise: none of the listed answers fits, or there were none.
+      const own = { id: 'answer', label: options.length ? L('其他（自己寫）', 'Other (write your own)') : L('寫下你的回答', 'Write your answer') };
+      const dec = await this.ask(run, info.stage ?? 'run', L(`${who} 問你：${q.question}`, `${who} asks: ${q.question}`), [...options, own, { id: 'abort', label: L('中止工作流', 'Stop the workflow') }], true, true);
       if (dec.optionId === 'abort') throw new Cancelled();
       const picked = options.find((o) => o.id === dec.optionId)?.label;
-      const answer = [picked, dec.text].filter(Boolean).join(' — ') || L('（沒有填寫內容）', '(no text given)');
+      // Said so the agent can tell a listed answer with a condition from an answer of the user's own.
+      const answer = picked
+        ? dec.text
+          ? `${picked}\nThe user added: ${dec.text}`
+          : picked
+        : dec.text
+          ? options.length
+            ? `None of your options. The user wrote: ${dec.text}`
+            : dec.text
+          : L('（沒有填寫內容）', '(no text given)');
       // Kept as a decision, so later agents and rounds do not ask the same again.
       (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: info.id, kind: 'decision', text: `The user answered ${who}'s question "${q.question.slice(0, 600)}": ${answer.slice(0, 1200)}`, ts: now() });
       this.touch(run);
@@ -1482,6 +1487,7 @@ export class Orchestrator {
     const run = this.runs.get(id);
     if (!run?.pending || run.pending.id !== decisionId) throw new Error(L('這個決定已經失效', 'This decision is no longer pending'));
     if (!run.pending.options.some((o) => o.id === optionId)) throw new Error(L('無效的選項', 'Invalid option'));
+    if (run.pending.question && optionId === 'answer' && !text?.trim()) throw new Error(L('請先寫下你的回答', 'Write your answer first'));
     this.decisionWaiters.get(id)?.({ optionId, text: text?.trim() || undefined });
   }
 
@@ -4613,12 +4619,12 @@ export class Orchestrator {
    * Ask the user. Every question can also pause the workflow (like the pause button): nothing runs until the user
    * resumes; then a question about a turn without a result retries it (e.g. after a quota reset), any other is asked again.
    */
-  private async ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true): Promise<{ optionId: string; text?: string }> {
+  private async ask(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true, question = false): Promise<{ optionId: string; text?: string }> {
     const pause = { id: 'pause', label: L('暫停工作流', 'Pause the workflow') };
     const at = options.findIndex((o) => o.id === 'abort');
     const withPause = at < 0 ? [...options, pause] : [...options.slice(0, at), pause, ...options.slice(at)];
     for (;;) {
-      const dec = await this.askOnce(run, stage, message, withPause, allowText);
+      const dec = await this.askOnce(run, stage, message, withPause, allowText, question);
       if (dec.optionId !== 'pause') return dec;
       this.pause(run.id);
       const note = await this.waitIfPaused(run);
@@ -4627,7 +4633,7 @@ export class Orchestrator {
     }
   }
 
-  private askOnce(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true): Promise<{ optionId: string; text?: string }> {
+  private askOnce(run: WorkflowRun, stage: HumanDecision['stage'], message: string, options: HumanDecision['options'], allowText = true, question = false): Promise<{ optionId: string; text?: string }> {
     const wf = this.aborts.get(run.id);
     return new Promise((resolve, reject) => {
       if (!wf || wf.signal.aborted) return reject(new Cancelled());
@@ -4636,7 +4642,7 @@ export class Orchestrator {
         reject(new Cancelled());
       };
       wf.signal.addEventListener('abort', onAbort, { once: true });
-      run.pending = { id: randomUUID().slice(0, 8), stage, message, options, allowText };
+      run.pending = { id: randomUUID().slice(0, 8), stage, message, options, allowText, ...(question ? { question: true } : {}) };
       run.status = 'waiting_human';
       this.touch(run);
       this.decisionWaiters.set(run.id, (dec) => {

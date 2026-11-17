@@ -329,12 +329,12 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   ask_user: {
     name: 'ask_user',
     description:
-      'Ask the user for a decision or for something only they can give (a permission, a missing input, a choice between approaches). The question is shown to them as a decision with your options and a box for any other answer. After calling it, stop and end your turn: the answer comes in your next message. Never only write a question in your reply or report — the user is not asked it and the workflow goes on without an answer. Do not ask about things you can decide or check yourself.',
+      'Ask the user for a decision or for something only they can give (a permission, a missing input, a choice between approaches). The question is shown to them as a decision with your options and "Other": they may pick an option and add conditions to it, or answer in their own words instead (the answer then says none of your options was chosen). After calling it, stop and end your turn: the answer comes in your next message. Never only write a question in your reply or report — the user is not asked it and the workflow goes on without an answer. Do not ask about things you can decide or check yourself.',
     inputSchema: {
       type: 'object',
       properties: {
         question: { type: 'string', description: 'What you need decided, with the facts the user needs to decide (in the language of the goal).' },
-        options: { type: 'array', items: { type: 'string' }, description: 'Up to 6 short answers to choose from (the user can also write their own).' },
+        options: { type: 'array', items: { type: 'string' }, description: 'Up to 6 short answers to choose from (the user can also write their own, or add a condition to the one they pick). No "Other" option: Aivenue adds it.' },
       },
       required: ['question'],
     },

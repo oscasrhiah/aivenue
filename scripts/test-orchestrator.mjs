@@ -262,11 +262,73 @@ test('agent 用 ask_user 問問題 → 跳出決定（選項＋自行輸入）�
   assert.match(r.pending.message, /磁碟不夠/);
   assert.deepEqual(r.pending.options.map((o) => o.label).slice(0, 2), ['刪 pip 快取', '刪 uv 快取']);
   assert.equal(r.pending.allowText, true);
+  // Shown as a question: the agent's answers, then "Other" (an answer of the user's own), then pause and stop.
+  assert.equal(r.pending.question, true);
+  assert.deepEqual(r.pending.options.map((o) => o.id), ['answer:0', 'answer:1', 'answer', 'pause', 'abort']);
+  assert.match(r.pending.options[2].label, /其他|Other/);
+  // An option with a condition added.
   orch.decide(id, r.pending.id, 'answer:0', '不要碰 huggingface 快取');
   r = await settle(orch, id);
   assert.equal(r.status, 'completed', r.error);
-  assert.match(prompts[1], /THE USER ANSWERED[\s\S]*刪 pip 快取 — 不要碰 huggingface 快取/);
+  assert.match(prompts[1], /THE USER ANSWERED[\s\S]*Their answer: 刪 pip 快取\nThe user added: 不要碰 huggingface 快取/);
   assert.ok(r.notes.some((n) => n.kind === 'decision' && /刪 pip 快取/.test(n.text)));
+});
+
+/** A run whose executor asks `ask` (question, options), then submits; `prompts` gets the prompt of each of its turns. */
+function asking(ask) {
+  const { orch, cwd } = setup();
+  const prompts = [];
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'ask_user', ask);
+        await new Promise((res) => opts.signal?.addEventListener('abort', res));
+        return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: 'Cancelled' };
+      },
+      async (o, secret, opts) => {
+        prompts.push(opts.prompt);
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  const id = orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id;
+  const pending = async () => {
+    const r = orch.runs.get(id);
+    for (let i = 0; i < 200 && !r.pending; i++) await new Promise((res) => setTimeout(res, 25));
+    return r.pending;
+  };
+  return { orch, id, prompts, pending };
+}
+
+test('agent 的提問：選「其他」自己寫，agent 知道沒有選它列的選項；「其他」一定要寫內容', async () => {
+  const { orch, id, prompts, pending } = asking({ question: '磁碟不夠，要刪哪個快取？', options: ['刪 pip 快取', '刪 uv 快取'] });
+  const p = await pending();
+  assert.equal(p.question, true);
+  // "Other" with nothing written: refused, still waiting.
+  assert.throws(() => orch.decide(id, p.id, 'answer', '   '), /請先寫下你的回答|Write your answer first/);
+  assert.equal(orch.runs.get(id).status, 'waiting_human');
+  orch.decide(id, p.id, 'answer', '兩個都不要刪，改清 Docker 映像');
+  const r = await settle(orch, id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.match(prompts[1], /Their answer: None of your options\. The user wrote: 兩個都不要刪，改清 Docker 映像/);
+  assert.ok(r.notes.some((n) => n.kind === 'decision' && /Docker/.test(n.text)));
+});
+
+test('agent 的提問：只選選項不補充時，回答就是那個選項；沒有給選項時只有「寫下你的回答」，內容原樣交給 agent', async () => {
+  const a = asking({ question: '要刪哪個快取？', options: ['刪 pip 快取', '刪 uv 快取'] });
+  const p = await a.pending();
+  a.orch.decide(a.id, p.id, 'answer:1');
+  assert.equal((await settle(a.orch, a.id)).status, 'completed');
+  assert.match(a.prompts[1], /Their answer: 刪 uv 快取\n/);
+  assert.doesNotMatch(a.prompts[1], /The user added|None of your options/);
+  const b = asking({ question: '新模組要叫什麼名字？' });
+  const q = await b.pending();
+  assert.deepEqual(q.options.map((o) => o.id), ['answer', 'pause', 'abort']);
+  assert.match(q.options[0].label, /寫下你的回答|Write your answer/);
+  b.orch.decide(b.id, q.id, 'answer', 'gamma');
+  assert.equal((await settle(b.orch, b.id)).status, 'completed');
+  assert.match(b.prompts[1], /Their answer: gamma\n/);
 });
 
 test('下一輪不接續上一輪的 CLI 對話：開新對話，帶最近的對話紀錄；完整紀錄用 read_context {topic: "log"} 翻頁', async () => {

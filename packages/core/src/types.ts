@@ -1306,6 +1306,11 @@ export interface HumanDecision {
   /** `input`: picking it opens a number box beside the button; the number is sent as the decision's text. */
   options: { id: string; label: string; input?: { min: number; max: number; value?: number; suffix?: string } }[];
   allowText: boolean;
+  /**
+   * An agent's question (ask_user): its answers ("answer:<i>") are picked one at a time, with a box for what to add;
+   * "answer" is the user's own answer instead of the listed ones (its text is required). Sent with a button.
+   */
+  question?: boolean;
 }
 
 /** "incomplete": it ended (a limit, or the user stopped retrying) without meeting the goal — never reported as done. */

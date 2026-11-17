@@ -167,6 +167,84 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
   );
 }
 
+/**
+ * An agent's question (ask_user): pick one of its answers, or "Other" to write your own; either way the box takes what
+ * to add (a condition, a detail). Nothing is sent until "Send the answer" (or Ctrl+Enter in the box).
+ */
+function Question({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
+  const t = useT();
+  const answers = d.options.filter((o) => o.id === 'answer' || o.id.startsWith('answer:'));
+  const actions = d.options.filter((o) => !answers.includes(o));
+  // The agent gave no answers to pick from: only the box.
+  const freeOnly = answers.length === 1 && answers[0].id === 'answer';
+  const [picked, setPicked] = useState<string | undefined>(freeOnly ? 'answer' : undefined);
+  const [text, setText] = useState('');
+  const [error, setError] = useState<string>();
+  const [sending, setSending] = useState(false);
+  const own = picked === 'answer';
+  const ready = !!picked && (!own || !!text.trim()) && !sending;
+  const send = (optionId: string, value: string) => {
+    setSending(true);
+    setError(undefined);
+    hub.call('workflows.decide', { id: run.id, decisionId: d.id, optionId, text: value }).catch((e) => {
+      setError(e.message);
+      setSending(false);
+    });
+  };
+  const submit = () => {
+    if (ready) send(picked!, text);
+  };
+  const qid = `question-${d.id}`;
+  return (
+    <div className="decision question">
+      <div className="decision-q" id={qid}>
+        {d.message}
+      </div>
+      {!freeOnly && (
+        <div className="answer-choices" role="radiogroup" aria-labelledby={qid}>
+          {answers.map((o) => (
+            <label key={o.id} className={cx('answer-choice', picked === o.id && 'on', o.id === 'answer' && 'own')}>
+              <input type="radio" name={qid} value={o.id} aria-label={o.label} checked={picked === o.id} onChange={() => setPicked(o.id)} />
+              <span>{o.label}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      <textarea
+        rows={2}
+        aria-label={own ? t('你的回答', 'Your answer') : t('補充說明', 'Anything to add')}
+        placeholder={own ? t('寫下你的回答（必填）', 'Write your answer (required)') : t('補充說明或額外條件（選填）', 'Anything to add, such as a condition (optional)')}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          // Writing before picking anything: an answer of your own.
+          if (!picked && e.target.value.trim()) setPicked('answer');
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+      />
+      <div className="row gap wrap">
+        <button className="btn primary" disabled={!ready} onClick={submit}>
+          {t('送出回答', 'Send the answer')}
+        </button>
+        {actions.map((o) => (
+          <button key={o.id} className={cx('btn', o.id === 'abort' && 'danger')} disabled={sending} onClick={() => send(o.id, text)}>
+            {o.label}
+          </button>
+        ))}
+        {!ready && !sending && (
+          <span className="muted small">{!picked ? t('選一個答案，或選「其他」自己寫', 'Pick an answer, or "Other" to write your own') : t('選了「其他」：請寫下你的回答', 'You chose "Other": write your answer')}</span>
+        )}
+      </div>
+      {error && <div className="note err">{error}</div>}
+    </div>
+  );
+}
+
 function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
   const t = useT();
   const [text, setText] = useState('');
@@ -1246,7 +1324,7 @@ export function Chat({ id }: { id?: string }) {
               <WorktreeCard run={run} />
               <ContextAsk run={run} providers={providers} />
               <CompactFailedAsk run={run} providers={providers} />
-              {run.pending && <Decision key={run.pending.id} run={run} d={run.pending} />}
+              {run.pending && (run.pending.question ? <Question key={run.pending.id} run={run} d={run.pending} /> : <Decision key={run.pending.id} run={run} d={run.pending} />)}
               {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
               {run.status === 'incomplete' && (
                 <div className="note warn">
