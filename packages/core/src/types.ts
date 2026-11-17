@@ -948,6 +948,10 @@ export interface ReviewTarget {
   head: string;
   branch: string;
   dirty: boolean;
+  /** Untracked files in the working folder that git does not ignore (they too make it differ from the commit). */
+  untracked?: number;
+  /** A follow-up: the commit the previous review in this chat reviewed, when this one resolved to another. */
+  previous?: string;
   /** Files in the reviewed change (base..commit, or the working folder's changes since base / HEAD). */
   files: string[];
   /** A folder for the reviewer's repro scripts and outputs, outside the working folder. */
@@ -1225,6 +1229,16 @@ export interface Review {
    * stash), as Aivenue saw it. Any entry means the code may not be what was reviewed.
    */
   workspaceChanged?: string[];
+  /**
+   * Independent review: what Aivenue could not check in the working folder (not a git repository and too many files to
+   * fingerprint…): no change was seen there, but that is not "nothing changed".
+   */
+  workspaceUnchecked?: string;
+  /**
+   * Independent review: the report was still incomplete or contradicted itself after two refusals (what it lacks). Kept
+   * for the user to read; it is not a review result and the workflow ends as incomplete.
+   */
+  incomplete?: string[];
 }
 
 export interface ReviewReport {

@@ -1007,6 +1007,10 @@ p {
   color: var(--warn);
 }
 
+.pill.err {
+  color: var(--err);
+}
+
 .pstep {
   display: flex;
   gap: 8px;
@@ -6696,4 +6700,11 @@ textarea.code {
   border-radius: 999px;
   font-size: 11.5px;
   color: var(--muted);
+}
+.review-unchecked {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
 }

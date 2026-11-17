@@ -20,7 +20,7 @@ const issuesSchema = {
       blocking: { type: 'string', description: 'Independent review: why it blocks approval or why not, naming the criterion (data loss, duplicate run, lost confirmed operation, false pass or distorted evidence, a constraint the user set).' },
       pre_existing: {
         type: 'boolean',
-        description: 'Independent review: true only when the problem is outside the reviewed change (in code it neither adds nor modifies, and not part of what it promises). Code the change adds or modifies is never pre-existing, even when it repeats an older pattern.',
+        description: 'Independent review: true only when the problem is already there at the base, the change does not enable, widen or add a way to trigger it, and it breaks no acceptance condition the user stated. Code the change adds or modifies is never pre-existing, even when it repeats an older pattern; in a review of a whole release or of security nothing is.',
       },
     },
     required: ['id', 'severity', 'title'],

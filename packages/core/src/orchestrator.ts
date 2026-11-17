@@ -60,7 +60,7 @@ import { applyCarried, carriedState, earlierPlanBlock, earlierPlanTopic } from '
 import { batchCounts, runBatches } from './batches';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
-import { normalizeReview, resolveReviewTarget, workspaceChanges, workspaceState } from './reviewTarget';
+import { differsFromCommit, normalizeReview, resolveReviewTarget, workspaceChanges, workspaceState, workspaceUnknown } from './reviewTarget';
 import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
@@ -134,6 +134,26 @@ class Cancelled extends Error {
 
 /** Ended short of the goal: a limit was hit or the user stopped retrying. Never reported as done. */
 class Incomplete extends Error {}
+
+/**
+ * What an independent review's report lacks or contradicts (the contract its prompt states), for the reviewer
+ * (`agent`) and the user (`user`): what was checked and not, why each issue blocks or not, and a verdict that agrees
+ * with its own issues (an approval with a blocker or major issue in the change is a contradiction, not an approval).
+ */
+export function reportProblems(r: Review): { agent: string; user: string }[] {
+  const out: { agent: string; user: string }[] = [];
+  if (!r.report?.checked.length) out.push({ agent: 'Add `checked`: what you checked and how.', user: L('沒有列出查過的項目', 'what was checked is not listed') });
+  if (!r.report?.notChecked.length) out.push({ agent: 'Add `not_checked`: what you did not check and why (if nothing, say so and why).', user: L('沒有列出沒查過的項目', 'what was not checked is not listed') });
+  const noReason = r.issues.filter((i) => !i.blocking?.trim()).map((i) => i.id);
+  if (noReason.length) out.push({ agent: `Give \`blocking\` for ${noReason.join(', ')}: why it blocks approval or why not, naming the criterion.`, user: L(`${noReason.join('、')} 沒有說明為何阻擋或不阻擋`, `${noReason.join(', ')} without a reason why it blocks or not`) });
+  const against = r.issues.filter((i) => !i.preExisting && i.severity !== 'minor').map((i) => `${i.id} (${i.severity})`);
+  if (r.verdict === 'approve' && against.length)
+    out.push({
+      agent: `Your verdict is "approve", but ${against.join(', ')} ${against.length > 1 ? 'are' : 'is a'} blocker/major issue${against.length > 1 ? 's' : ''} in the change. Either change the verdict to "revise", or, if an issue is outside the change, set pre_existing: true and say why in \`blocking\`, or, if it is less severe than you said, lower its severity and say why.`,
+      user: L(`結論是建議通過，卻列了變更裡的嚴重或重要問題：${against.join('、')}`, `the verdict is approve, but it lists blocker or major issues in the change: ${against.join(', ')}`),
+    });
+  return out;
+}
 
 type Expect = 'submit_plan' | 'submit_review' | 'submit_work' | 'submit_verification' | 'submit_ruling';
 
@@ -3080,9 +3100,17 @@ export class Orchestrator {
     const cfg = run.config.implement;
     run.stages.plan.status = 'skipped';
     stage.status = 'running';
-    const t = await resolveReviewTarget(run.config.cwd, run.config.review ?? {}, path.join(this.d.dataDir, 'review-scratch', run.id));
-    run.reviewTarget = t;
+    // A review cut off and resumed goes on with the commits it resolved when it started: a branch, a tag or HEAD that
+    // moved meanwhile does not change what this review is about.
+    const pinned = run.reviewTarget;
+    const task = pinned ? { ...(run.config.review ?? {}), commit: pinned.commit, base: pinned.base } : (run.config.review ?? {});
+    const t = await resolveReviewTarget(run.config.cwd, task, path.join(this.d.dataDir, 'review-scratch', run.id));
     const short = (s?: string) => (s ?? '').slice(0, 10);
+    // A follow-up that names the commit the same way (e.g. "HEAD") while it now points elsewhere: said, never silent.
+    const prev = run.config.continueFrom ? this.runs.get(run.config.continueFrom) : undefined;
+    const earlier = prev?.config.review ? prev.reviewTarget?.commit : undefined;
+    if (!pinned && earlier && t.commit && earlier !== t.commit) t.previous = earlier;
+    run.reviewTarget = t;
     this.log(
       run,
       t.commit
@@ -3091,9 +3119,12 @@ export class Orchestrator {
       'info',
       true,
     );
+    if (pinned && pinned.commit && run.config.review?.commit && pinned.commit !== (run.config.review.commit ?? '')) this.log(run, L(`接續同一個審查：受審提交仍是開始時的 ${short(pinned.commit)}（「${run.config.review.commit}」現在可能已經指向別的提交）`, `Resuming the same review: the commit is still ${short(pinned.commit)}, as when it started ("${run.config.review.commit}" may point elsewhere now)`), 'info', true);
+    if (t.previous) this.log(run, L(`受審提交「${run.config.review?.commit}」現在是 ${short(t.commit)}；這段對話上一則審查的是 ${short(t.previous)}`, `The commit "${run.config.review?.commit}" is ${short(t.commit)} now; the previous review in this chat reviewed ${short(t.previous)}`), 'warn', true);
     if (t.note) this.log(run, t.note, 'warn', true);
-    if (t.commit && t.head && t.commit !== t.head)
-      this.log(run, L(`工作資料夾的 HEAD 是 ${short(t.head)}，不是受審提交：審查者會用 git show／git diff 讀受審的程式碼，要執行時另外建立工作樹，不切換這個資料夾`, `The working folder's HEAD is ${short(t.head)}, not the reviewed commit: the reviewer reads it with git show / git diff and runs it in a separate worktree, without switching this folder`), 'warn', true);
+    const apart = differsFromCommit(t);
+    if (apart)
+      this.log(run, L(`工作資料夾和受審提交不同（${apart.zh}）：審查者用 git show／git diff 讀受審的程式碼，要執行時另外建立乾淨的工作樹，不切換這個資料夾；在這個資料夾執行的結果不算受審提交的驗證`, `The working folder differs from the reviewed commit (${apart.en}): the reviewer reads it with git show / git diff and runs it in a clean separate worktree, without switching this folder; what runs in this folder is not evidence about the commit`), 'warn', true);
     this.touch(run);
 
     const n = stage.rounds.length + 1;
@@ -3124,15 +3155,20 @@ export class Orchestrator {
         expect: 'submit_review',
         task: L('獨立審查', 'Independent review'),
       });
-      const changed = workspaceChanges(before, await workspaceState(run.config.cwd));
+      const after = await workspaceState(run.config.cwd);
+      const changed = workspaceChanges(before, after);
+      // A state not taken whole (too many files…): no change seen is not "nothing changed".
+      const unchecked = workspaceUnknown(before, after);
       round.reviewerAgentId = r.info.id;
       if (!resume) stage.reviewerHandoff = undefined;
       if (r.info.sessionId) stage.reviewerSessionId = r.info.sessionId;
+      if (unchecked) this.log(run, L(`無法確認審查期間工作資料夾是否變動：${unchecked}`, `Could not tell whether the working folder changed during the review: ${unchecked}`), 'warn', true);
       if (changed.length) this.log(run, L(`審查期間工作資料夾有變動（可能是審查者，也可能是你或其他程式）：${changed.join('；')}`, `The working folder changed during the review (by the reviewer, or by you or another program): ${changed.join('; ')}`), 'warn', true);
       review = r.sub?.review;
       if (review) {
         review.evidence = evidenceStamp(run.config.cwd, run.plan?.goal?.data);
         if (changed.length) review.workspaceChanged = changed;
+        if (unchecked) review.workspaceUnchecked = unchecked;
         break;
       }
       if (this.redispatch.delete(r.info.id)) continue;
@@ -3158,6 +3194,11 @@ export class Orchestrator {
     }
     round.review = review;
     round.handoff = buildHandoff(run, 'implement', round);
+    // A report that stayed incomplete or contradicted itself: shown, but not a result (never an approval).
+    if (review.incomplete?.length) {
+      this.touch(run);
+      throw new Incomplete(L(`審查報告不完整（${review.incomplete.join('；')}），不能當成審查結果`, `the review report is incomplete (${review.incomplete.join('; ')}), so it is not a review result`));
+    }
     stage.status = 'approved';
     // Problems outside the reviewed change are listed apart: they do not count toward the verdict.
     const inChange = review.issues.filter((i) => !i.preExisting);
@@ -3175,18 +3216,21 @@ export class Orchestrator {
     this.touch(run);
   }
 
-  /** Independent review: a report must say what was checked and what was not. Refused twice at most, then logged. */
+  /** Independent review: a report must keep its contract (reportProblems). Refused twice; after that kept as incomplete, never as a result. */
   private reportRefused = new Map<string, number>();
   private requireReport(run: WorkflowRun, info: AgentRunInfo, r: Review) {
-    const missing = [!r.report?.checked.length && '`checked`', !r.report?.notChecked.length && '`not_checked`'].filter(Boolean);
-    if (!missing.length) return;
+    const problems = reportProblems(r);
+    if (!problems.length) return;
     const tries = (this.reportRefused.get(info.id) ?? 0) + 1;
     if (tries > 2) {
-      this.log(run, L(`審查報告沒有列出${missing.length > 1 ? '查過和沒查過' : missing[0] === '`checked`' ? '查過' : '沒查過'}的項目`, `The review report does not list what was ${missing.length > 1 ? 'checked and not checked' : missing[0] === '`checked`' ? 'checked' : 'not checked'}`), 'warn', true);
+      // Still not a valid report after two refusals: kept, so the user sees it, but marked incomplete. It is never an
+      // approval (runReview ends the workflow as incomplete).
+      r.incomplete = problems.map((p) => p.user);
+      this.log(run, L(`審查報告退回兩次後仍不完整，不算審查結果：${r.incomplete.join('；')}`, `The review report is still incomplete after two refusals, so it is not a review result: ${r.incomplete.join('; ')}`), 'warn', true);
       return;
     }
     this.reportRefused.set(info.id, tries);
-    throw new Error(`An independent review must say what rests on what. Add ${missing.join(' and ')} (and \`reproduced\` / \`trusted\`), then call submit_review again with the whole report. If you left nothing unchecked, say so in not_checked and why.`);
+    throw new Error(`Your report is not accepted yet: ${problems.map((p) => p.agent).join(' ')} Then call submit_review again with the whole report. \`reproduced\` and \`trusted\` may be empty when there is nothing to list.`);
   }
 
   private hasEvidence(run: WorkflowRun): boolean {

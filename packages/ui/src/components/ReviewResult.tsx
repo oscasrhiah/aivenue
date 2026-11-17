@@ -14,7 +14,8 @@ import { MsgTime } from './MsgTime';
  */
 export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
-  if (!run.config.review || run.status !== 'completed') return null;
+  // An incomplete report is shown too (the workflow then ended as incomplete), never as a verdict.
+  if (!run.config.review || (run.status !== 'completed' && run.status !== 'incomplete')) return null;
   const round = run.stages.implement.rounds.at(-1);
   const review = round?.review;
   if (!review) return null;
@@ -29,7 +30,7 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
     ['trusted', t('採信（未重跑）', 'Taken on trust'), report?.trusted],
   ];
   return (
-    <div className={cx('final-result', 'review-result', review.verdict !== 'approve' && 'revise')}>
+    <div className={cx('final-result', 'review-result', (review.verdict !== 'approve' || review.incomplete) && 'revise')}>
       <div className="final-head">
         <span className="final-title">{t('審查報告', 'Review report')}</span>
         {who && (
@@ -38,7 +39,11 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
             {who.model ? ` · ${modelLabel(who.model)}` : ''}
           </span>
         )}
-        <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('建議通過', 'Approve') : t('要求修改', 'Changes requested')}</span>
+        {review.incomplete?.length ? (
+          <span className="pill err">{t('報告不完整，不算審查結果', 'Incomplete report, not a result')}</span>
+        ) : (
+          <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('建議通過', 'Approve') : t('要求修改', 'Changes requested')}</span>
+        )}
         <MsgTime ts={run.endedAt} className="final-time" />
       </div>
       {target && (
@@ -69,6 +74,22 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
             {target.files.length > 0 && <span className="muted"> · {t(`${target.files.length} 個檔案`, `${target.files.length} file(s)`)}</span>}
             {target.commit && target.head && target.commit !== target.head && <span className="muted"> · {t(`工作資料夾在 ${short(target.head)}`, `working folder at ${short(target.head)}`)}</span>}
           </span>
+        </div>
+      )}
+      {!!review.incomplete?.length && (
+        <div className="review-changed">
+          <Ico i={TriangleAlert} size={14} /> {t('審查者退回兩次後，報告仍然：', 'After two refusals the report still has these problems:')}
+          <ul>
+            {review.incomplete.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {review.workspaceUnchecked && (
+        <div className="review-unchecked small">
+          <Ico i={TriangleAlert} size={14} /> {t('無法確認審查期間工作資料夾是否變動：', 'Could not tell whether the working folder changed during the review: ')}
+          {review.workspaceUnchecked}
         </div>
       )}
       {!!review.workspaceChanged?.length && (

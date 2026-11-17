@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import type { GoalSpec, IssueResponse, PlanDoc, Review, ReviewTarget, RouteDecision, SubagentConfig, Verification, WorkflowConfig, WorkflowRun } from './types';
+import { differsFromCommit } from './reviewTarget';
 import { flowModeOf } from './flowMode';
 
 const LANG = 'Write all human-readable text (plans, summaries, issue descriptions) in the same language as the GOAL.';
@@ -221,15 +222,17 @@ export function reviewTargetBlock(t: ReviewTarget): string {
   const short = (s?: string) => (s ? s.slice(0, 10) : '');
   const where = t.head ? `HEAD ${short(t.head)}${t.branch ? ` (branch ${t.branch})` : ' (detached)'}, ${t.dirty ? 'with uncommitted changes' : 'no uncommitted changes'}` : 'not a git repository';
   const files = t.files.length ? `\n- Files in the change (${t.files.length}${t.files.length >= 500 ? '+' : ''}): ${t.files.slice(0, 80).join(', ')}${t.files.length > 80 ? ', …' : ''}` : '';
-  const elsewhere = t.commit && t.head && t.commit !== t.head;
+  // Another HEAD, uncommitted changes or untracked files: the folder is not the commit, so running there tests something else.
+  const apart = differsFromCommit(t);
   return [
     'REVIEW TARGET (resolved by Aivenue):',
     t.commit ? `- Reviewed commit: ${t.commit}${t.subject ? ` "${t.subject}"` : ''}` : '- Reviewed: the working folder as it is now, uncommitted changes included.',
+    t.previous ? `- The previous review in this chat reviewed ${t.previous}; this one reviews ${t.commit}. Say in your report what changed between them.` : '',
     t.base ? `- The change: ${short(t.base)}..${t.commit ? short(t.commit) : 'the working folder'} (see it with \`git diff ${short(t.base)}${t.commit ? ` ${short(t.commit)}` : ''}\`)` : '',
-    `- Working folder: ${where}.${t.note ? ` ${t.note}` : ''}`,
+    `- Working folder: ${where}${t.untracked ? `, ${t.untracked} untracked file(s)` : ''}.${t.note ? ` ${t.note}` : ''}`,
     files,
-    elsewhere
-      ? `- The working folder is NOT at the reviewed commit. Read the reviewed code with \`git show ${short(t.commit)}:<path>\` and \`git diff ${t.base ? short(t.base) : `${short(t.commit)}^`} ${short(t.commit)}\`. To build or run it, add a separate worktree in your scratch folder (\`git worktree add --detach "${path.join(t.scratch, `at-${short(t.commit)}`)}" ${short(t.commit)}\`) and run it there. Never switch, reset or check out the working folder itself.`
+    apart && t.commit
+      ? `- The working folder is NOT the reviewed commit (${apart.en}). Read the reviewed code with \`git show ${short(t.commit)}:<path>\` and \`git diff ${t.base ? short(t.base) : `${short(t.commit)}^`} ${short(t.commit)}\`. To build, test or run it, add a clean separate worktree in your scratch folder (\`git worktree add --detach "${path.join(t.scratch, `at-${short(t.commit)}`)}" ${short(t.commit)}\`) and run it there. Whatever you build or run in the working folder is not evidence about the reviewed commit: if you report such a result, say it is about the working folder. Never switch, reset, stash or check out the working folder itself.`
       : '',
     `- Your scratch folder (outside the project): ${t.scratch}`,
   ]
@@ -267,7 +270,7 @@ export function independentReviewPrompt(cfg: WorkflowConfig, target: ReviewTarge
     '- You may write repro scripts, fixtures and test outputs: put them in your scratch folder (if writing there is refused, make a new folder under the system temp directory and say where). Run the program against temporary data folders (for example a temporary home or data-folder environment variable), never the user\'s real ones.',
     '- Do not stop at "the existing tests pass". Where the change touches a shared service, saving data, de-duplication, reconnects or how commands are classified, build the failure cases yourself: a crash or kill between the reply and the save, the same operation sent twice, a reconnect and resend, two windows at once, a command read the wrong way. Check behaviour against what the change promises.',
     '- BLOCKERS (severity "blocker", verdict "revise"): anything in the change that can lose or corrupt data; run something twice; lose an operation the user was told succeeded; make a check pass falsely or distort evidence; or break a constraint the user stated. "In the change" is what it adds or modifies and what it promises; code it adds or modifies counts even when it repeats an older pattern. "It was like this before", "only developers run it" or "it is a follow-up" does not lower these. For every issue say in `blocking` why it blocks or why not, naming the criterion.',
-    '- A problem entirely outside the change (in code it neither adds nor modifies, and not part of what it promises) is still reported, with `pre_existing: true` and its severity by impact; it does not decide this review\'s verdict.',
+    '- A problem is pre-existing only when all of these hold: it is already there at the base (say how you know, e.g. the same behaviour at the base commit); the change does not enable it, widen it or add a way to trigger it (an old function the change now calls in a way that fails is the change\'s problem); and it does not break an acceptance condition the user stated for this review. Then report it with `pre_existing: true` and its severity by impact; it does not decide this review\'s verdict. If the user asked for a review of a whole release or of security, nothing is pre-existing: report everything by impact.',
     '- Approve only when the change has no blocker or major issue left. Do not invent issues to have some; minor nits alone do not block.',
     sub,
     '',

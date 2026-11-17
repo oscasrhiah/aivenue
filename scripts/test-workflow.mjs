@@ -28,7 +28,7 @@ const bundled = await build({
       export { capture, cliEnv, consoleCodePage, decodeShellOutput } from './packages/core/src/proc';
       export { runAgent } from './packages/core/src/agentRunner';
       export { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
-      export { normalizeReview, workspaceChanges } from './packages/core/src/reviewTarget';
+      export { normalizeReview, workspaceChanges, workspaceState, workspaceUnknown } from './packages/core/src/reviewTarget';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { msgTime } from './packages/ui/src/util';
@@ -4101,18 +4101,50 @@ test('獨立審查：送出的版本先檢查（不讓 git 讀成選項）；材
   assert.equal(W.parseReview({ verdict: 'approve', summary: 's', issues: [] }).report, undefined);
 });
 
-test('獨立審查：工作資料夾前後比對——追蹤中的檔案改了又改回、HEAD、分支、新的未追蹤檔案都算；只讀不算', () => {
-  const state = (o = {}) => ({ head: 'h1', branch: 'main', tracked: new Map(o.tracked ?? []), untracked: new Set(o.untracked ?? []) });
-  assert.deepEqual(W.workspaceChanges(state({ tracked: [['a.js', ' M|1']] }), state({ tracked: [['a.js', ' M|1']] })), []);
-  const out = W.workspaceChanges(state({ tracked: [['a.js', ' M|1'], ['b.js', ' M|2']], untracked: ['old.txt'] }), { ...state({ tracked: [['a.js', ' M|9'], ['c.js', ' D|missing']], untracked: ['old.txt', 'repro.js'] }), head: 'h2', branch: '' });
-  assert.equal(out.length, 4);
+test('獨立審查：工作資料夾前後比對——追蹤中的檔案改了又改回、HEAD、分支、新的未追蹤檔案都算；原有的未追蹤檔案被改或刪也算；只讀不算', () => {
+  const state = (o = {}) => ({ git: true, head: 'h1', branch: 'main', tracked: new Map(o.tracked ?? []), untracked: new Map(o.untracked ?? []) });
+  assert.deepEqual(W.workspaceChanges(state({ tracked: [['a.js', ' M|1']], untracked: [['draft.js', 'x']] }), state({ tracked: [['a.js', ' M|1']], untracked: [['draft.js', 'x']] })), []);
+  const out = W.workspaceChanges(
+    state({ tracked: [['a.js', ' M|1'], ['b.js', ' M|2']], untracked: [['old.txt', 'o'], ['draft.js', 'd1'], ['notes.md', 'n']] }),
+    { ...state({ tracked: [['a.js', ' M|9'], ['c.js', ' D|missing']], untracked: [['old.txt', 'o'], ['draft.js', 'd2'], ['repro.js', 'r']] }), head: 'h2', branch: '' },
+  );
+  assert.equal(out.length, 6);
   assert.match(out[0], /main[\s\S]*（分離的 HEAD）|main[\s\S]*\(detached HEAD\)/);
   assert.match(out[1], /h1[\s\S]*h2/);
   assert.match(out[2], /a\.js, b\.js, c\.js/);
-  assert.match(out[3], /repro\.js/);
-  assert.doesNotMatch(out[3], /old\.txt/);
-  // Not a git repository: nothing to compare.
-  assert.deepEqual(W.workspaceChanges(undefined, undefined), []);
+  assert.match(out[3], /原有的未追蹤檔案被修改：draft\.js|were changed: draft\.js/);
+  assert.match(out[4], /原有的未追蹤檔案被刪除：notes\.md|were removed: notes\.md/);
+  assert.match(out[5], /repro\.js/);
+  assert.doesNotMatch(out.join('\n'), /old\.txt/);
+  // A state not taken whole: the comparison says it cannot tell.
+  assert.equal(W.workspaceUnknown(state(), { ...state(), unknown: 'too many' }), 'too many');
+  assert.equal(W.workspaceUnknown(state(), state()), undefined);
+});
+
+test('獨立審查：不是 git 專案的資料夾也比對每個檔案（不含 node_modules）：改、刪、新增都看得到', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-folder-'));
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.mkdirSync(path.join(dir, 'node_modules', 'x'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'src', 'a.js'), '1');
+  fs.writeFileSync(path.join(dir, 'b.js'), '2');
+  fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'i.js'), '3');
+  const before = await W.workspaceState(dir);
+  assert.equal(before.git, false);
+  assert.equal(before.unknown, undefined);
+  assert.deepEqual([...before.untracked.keys()].sort(), ['b.js', 'src/a.js']);
+  fs.writeFileSync(path.join(dir, 'src', 'a.js'), 'changed');
+  fs.rmSync(path.join(dir, 'b.js'));
+  fs.writeFileSync(path.join(dir, 'c.js'), 'new');
+  fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'i.js'), 'not compared');
+  const out = W.workspaceChanges(before, await W.workspaceState(dir));
+  assert.deepEqual(out.length, 3);
+  assert.match(out[0], /src\/a\.js/);
+  assert.match(out[1], /b\.js/);
+  assert.match(out[2], /c\.js/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('獨立審查的追問：背景裡的「上次結果」是審查報告（結論、摘要、問題），不是實作者的回覆', () => {

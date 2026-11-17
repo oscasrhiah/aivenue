@@ -41,7 +41,14 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
 
     // Independent review: nobody implements; the one item is the review and its verdict.
     if (key === 'implement' && run.config.review) {
-      const verdict = round?.review && !running(reviewerRole) ? (round.review.verdict === 'approve' ? t('建議通過', 'approve') : t(`要求修改，${round.review.issues.length} 個問題`, `changes requested, ${round.review.issues.length} issue(s)`)) : undefined;
+      const verdict =
+        round?.review && !running(reviewerRole)
+          ? round.review.incomplete?.length
+            ? t('報告不完整，不算審查結果', 'incomplete report, not a result')
+            : round.review.verdict === 'approve'
+              ? t('建議通過', 'approve')
+              : t(`要求修改，${round.review.issues.filter((i) => !i.preExisting).length} 個問題`, `changes requested, ${round.review.issues.filter((i) => !i.preExisting).length} issue(s)`)
+          : undefined;
       items.push({
         key: 'review-only',
         label: t('獨立審查（不實作）', 'Independent review (no implementation)'),
