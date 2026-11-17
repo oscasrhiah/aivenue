@@ -129,9 +129,10 @@ function IssueRow({ issue }: { issue: ReviewIssue }) {
   const t = useT();
   const sev = { blocker: t('嚴重', 'Blocker'), major: t('重要', 'Major'), minor: t('次要', 'Minor') }[issue.severity];
   return (
-    <details className={cx('review-issue', issue.severity)} open={issue.severity !== 'minor'}>
+    <details className={cx('review-issue', issue.severity, issue.preExisting && 'pre-existing')} open={issue.severity !== 'minor' && !issue.preExisting}>
       <summary>
         <span className={cx('sev', issue.severity)}>{sev}</span> <b>{issue.id}</b> {issue.title}
+        {issue.preExisting && <span className="pre-tag">{t('既有問題，不在這次的變更裡', 'Pre-existing, outside this change')}</span>}
         {issue.location && <span className="muted mono small"> {issue.location}</span>}
       </summary>
       {issue.detail && <Markdown className="prose small" text={issue.detail} />}

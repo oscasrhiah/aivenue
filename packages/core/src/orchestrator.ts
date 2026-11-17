@@ -3156,12 +3156,16 @@ export class Orchestrator {
     round.review = review;
     round.handoff = buildHandoff(run, 'implement', round);
     stage.status = 'approved';
-    const blocking = review.issues.filter((i) => i.severity !== 'minor').length;
+    // Problems outside the reviewed change are listed apart: they do not count toward the verdict.
+    const inChange = review.issues.filter((i) => !i.preExisting);
+    const blocking = inChange.filter((i) => i.severity !== 'minor').length;
+    const before = review.issues.length - inChange.length;
+    const also = before ? L(`；另有 ${before} 個既有問題（不在這次的變更裡）`, `; also ${before} pre-existing issue(s) outside the change`) : '';
     this.log(
       run,
-      review.verdict === 'approve'
-        ? L(`獨立審查完成：建議通過${review.issues.length ? `（${review.issues.length} 個小問題）` : ''}`, `Independent review done: approve${review.issues.length ? ` (${review.issues.length} minor issue(s))` : ''}`)
-        : L(`獨立審查完成：要求修改，${review.issues.length} 個問題${blocking ? `（${blocking} 個阻擋或主要）` : ''}`, `Independent review done: changes requested, ${review.issues.length} issue(s)${blocking ? ` (${blocking} blocker or major)` : ''}`),
+      (review.verdict === 'approve'
+        ? L(`獨立審查完成：建議通過${inChange.length ? `（${inChange.length} 個小問題）` : ''}`, `Independent review done: approve${inChange.length ? ` (${inChange.length} minor issue(s))` : ''}`)
+        : L(`獨立審查完成：要求修改，${inChange.length} 個問題${blocking ? `（${blocking} 個阻擋或主要）` : ''}`, `Independent review done: changes requested, ${inChange.length} issue(s)${blocking ? ` (${blocking} blocker or major)` : ''}`)) + also,
       review.verdict === 'approve' ? 'info' : 'warn',
       true,
     );

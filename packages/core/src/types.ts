@@ -1200,6 +1200,8 @@ export interface ReviewIssue {
   step?: string;
   /** Independent review: why it blocks or does not, naming the criterion (data loss, duplicate run, false pass…). */
   blocking?: string;
+  /** Independent review: outside the reviewed change (code it neither adds nor modifies); listed, not part of the verdict. */
+  preExisting?: boolean;
 }
 
 export interface Review {

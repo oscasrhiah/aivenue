@@ -4082,8 +4082,10 @@ test('獨立審查：送出的版本先檢查（不讓 git 讀成選項）；材
   assert.deepEqual(W.normalizeReview({ commit: 'HEAD~2', base: 'origin/main' }), { commit: 'HEAD~2', base: 'origin/main' });
   for (const bad of ['--output=x', '-p', 'a b', 'a;rm', 'x'.repeat(201)]) assert.throws(() => W.normalizeReview({ commit: bad }), /valid git revision|有效的 git 版本/, bad);
   assert.equal(W.normalizeReview({ material: 'y'.repeat(200000) }).material.length, 100000);
-  const r = W.parseReview({ verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'blocker', title: 't', blocking: ' data loss ' }], checked: ['a', ''], not_checked: 'b', reproduced: [], trusted: ['c'] });
+  const r = W.parseReview({ verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'blocker', title: 't', blocking: ' data loss ' }, { id: 'R2', severity: 'major', title: 'two writers', pre_existing: true }, { id: 'R3', severity: 'minor', title: 'x', pre_existing: 'no' }], checked: ['a', ''], not_checked: 'b', reproduced: [], trusted: ['c'] });
   assert.equal(r.issues[0].blocking, 'data loss');
+  // Outside the reviewed change only when said so plainly.
+  assert.deepEqual(r.issues.map((i) => !!i.preExisting), [false, true, false]);
   assert.deepEqual(r.report, { checked: ['a'], notChecked: ['b'], reproduced: [], trusted: ['c'] });
   // A plain code review has no report.
   assert.equal(W.parseReview({ verdict: 'approve', summary: 's', issues: [] }).report, undefined);

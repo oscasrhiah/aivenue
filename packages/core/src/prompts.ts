@@ -214,7 +214,7 @@ export function codeReviewPrompt(cfg: WorkflowConfig, plan: PlanDoc | undefined,
 // ---------- Independent review (flow mode "review") ----------
 
 const REVIEW_REPORT_SHAPE =
-  '{"verdict": "approve"|"revise", "summary": string, "issues": [{"id": "R1", "severity": "blocker"|"major"|"minor", "title": string, "detail": string, "location": string, "blocking": string}], "checked": [string], "not_checked": [string], "reproduced": [string], "trusted": [string], "needs_validation": [{"id": "V1", "title": string, "location": string, "missing": string, "how": string}], "findings": [string], "handoff": string}';
+  '{"verdict": "approve"|"revise", "summary": string, "issues": [{"id": "R1", "severity": "blocker"|"major"|"minor", "title": string, "detail": string, "location": string, "blocking": string, "pre_existing": boolean}], "checked": [string], "not_checked": [string], "reproduced": [string], "trusted": [string], "needs_validation": [{"id": "V1", "title": string, "location": string, "missing": string, "how": string}], "findings": [string], "handoff": string}';
 
 /** What is reviewed, as Aivenue resolved it in the working folder. */
 export function reviewTargetBlock(t: ReviewTarget): string {
@@ -266,11 +266,12 @@ export function independentReviewPrompt(cfg: WorkflowConfig, target: ReviewTarge
     '- Do not change the product: no edits to tracked files, and no commit, checkout, switch, reset, stash, rebase, merge, pull or push in the working folder. Do not touch the user\'s data (an application\'s data folder, settings, accounts, credentials). Aivenue compares the working folder before and after your turn and puts every change in your result.',
     '- You may write repro scripts, fixtures and test outputs: put them in your scratch folder (if writing there is refused, make a new folder under the system temp directory and say where). Run the program against temporary data folders (for example a temporary home or data-folder environment variable), never the user\'s real ones.',
     '- Do not stop at "the existing tests pass". Where the change touches a shared service, saving data, de-duplication, reconnects or how commands are classified, build the failure cases yourself: a crash or kill between the reply and the save, the same operation sent twice, a reconnect and resend, two windows at once, a command read the wrong way. Check behaviour against what the change promises.',
-    '- BLOCKERS (severity "blocker", verdict "revise"): anything that can lose or corrupt data; run something twice; lose an operation the user was told succeeded; make a check pass falsely or distort evidence; or break a constraint the user stated. "It was like this before", "only developers run it" or "it is a follow-up" does not lower these. For every issue say in `blocking` why it blocks or why not, naming the criterion.',
-    '- Approve only when no blocker or major issue remains. Do not invent issues to have some; minor nits alone do not block.',
+    '- BLOCKERS (severity "blocker", verdict "revise"): anything in the change that can lose or corrupt data; run something twice; lose an operation the user was told succeeded; make a check pass falsely or distort evidence; or break a constraint the user stated. "In the change" is what it adds or modifies and what it promises; code it adds or modifies counts even when it repeats an older pattern. "It was like this before", "only developers run it" or "it is a follow-up" does not lower these. For every issue say in `blocking` why it blocks or why not, naming the criterion.',
+    '- A problem entirely outside the change (in code it neither adds nor modifies, and not part of what it promises) is still reported, with `pre_existing: true` and its severity by impact; it does not decide this review\'s verdict.',
+    '- Approve only when the change has no blocker or major issue left. Do not invent issues to have some; minor nits alone do not block.',
     sub,
     '',
-    'REPORT: when done, call the Aivenue tool `submit_review` with verdict, summary, issues (ids "R1", "R2", …, each with `blocking`), and:',
+    'REPORT: when done, call the Aivenue tool `submit_review` with verdict, summary, issues (ids "R1", "R2", …, each with `blocking`, and `pre_existing: true` when outside the change), and:',
     '- `checked`: what you checked and how (commands, files, failure cases), and at which commit it ran;',
     '- `not_checked`: what you did not check, and why;',
     '- `reproduced`: what you ran or reproduced yourself, with the result;',

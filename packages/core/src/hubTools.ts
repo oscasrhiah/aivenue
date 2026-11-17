@@ -18,6 +18,10 @@ const issuesSchema = {
       location: { type: 'string', description: 'File/line or plan step the issue refers to.' },
       step: { type: 'string', description: 'Code review: the id of the plan step this issue belongs to ("1", "2"…), if any.' },
       blocking: { type: 'string', description: 'Independent review: why it blocks approval or why not, naming the criterion (data loss, duplicate run, lost confirmed operation, false pass or distorted evidence, a constraint the user set).' },
+      pre_existing: {
+        type: 'boolean',
+        description: 'Independent review: true only when the problem is outside the reviewed change (in code it neither adds nor modifies, and not part of what it promises). Code the change adds or modifies is never pre-existing, even when it repeats an older pattern.',
+      },
     },
     required: ['id', 'severity', 'title'],
   },
@@ -662,6 +666,7 @@ function parseIssues(v: unknown, prefix = 'R'): ReviewIssue[] {
         location: i?.location ? s(i.location) : undefined,
         step: i?.step ? s(i.step).replace(/^(step|s)s*/i, '').slice(0, 40) : undefined,
         ...(s(i?.blocking).trim() ? { blocking: s(i.blocking).trim().slice(0, 2000) } : {}),
+        ...(i?.pre_existing === true || i?.preExisting === true || s(i?.pre_existing).toLowerCase() === 'true' ? { preExisting: true } : {}),
       }))
     : [];
 }
