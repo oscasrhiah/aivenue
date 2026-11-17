@@ -780,6 +780,51 @@ test('背景啟動只由真的執行它的程序抵銷：命令列只是提到�
   }
 });
 
+test('另一個專案的同名 job.js：不能抵銷這次的背景啟動（不論相對或完整路徑，Aivenue 自己搜尋也一樣）；agent 可用 registered 申報它登記的程序，記成未確認', { exclusive: true }, async () => {
+  const { orch, cwd, dir } = setup();
+  const other = path.join(dir, 'other-project');
+  fs.mkdirSync(other);
+  for (const d of [cwd, other]) fs.writeFileSync(path.join(d, 'job.js'), 'setTimeout(() => {}, 60000);');
+  const kids = [];
+  const seen = {};
+  fakeAgents(orch, {
+    executor: [
+      async (o, secret, a) => {
+        a.onEvent({ seq: 1, ts: Date.now(), kind: 'tool', tool: { id: 'bg1', name: 'bash', category: 'command', title: 'nohup node job.js > j.log 2>&1 &', output: '', status: 'ok' } }, false);
+        // The other project's job, started right after: relative in its own folder, and named in full.
+        kids.push(spawn(process.execPath, ['job.js'], { cwd: other, stdio: 'ignore' }));
+        kids.push(spawn(process.execPath, [path.join(other, 'job.js')], { cwd: other, stdio: 'ignore' }));
+        seen.relative = await o.callTool(secret, 'track_process', { pid: kids[0].pid, purpose: 'other project', cleanup: 'keep', launch: 'L1' });
+        seen.full = await o.callTool(secret, 'track_process', { pid: kids[1].pid, purpose: 'other project', cleanup: 'keep', launch: 'L1' });
+        // Aivenue's own search (it looks again after 1.5 s and 5 s) does not take them either.
+        await new Promise((r) => setTimeout(r, 8000));
+        seen.left = await o.callTool(secret, 'submit_work', { summary: 'done' }).then(() => '', (e) => e.message);
+        seen.noPid = await o.callTool(secret, 'dismiss_launch', { launch: 'L1', reason: 'registered', note: 'x' }).then(() => '', (e) => e.message);
+        seen.claim = await o.callTool(secret, 'dismiss_launch', { launch: 'L1', reason: 'registered', pid: kids[1].pid, note: 'I started it there on purpose' });
+        await o.callTool(secret, 'submit_work', { summary: 'done' });
+      },
+    ],
+  });
+  try {
+    const r = await settle(orch, orch.start(config(cwd, { verify: undefined, plan: { enabled: false, author: { provider: 'fake' }, reviewer: null, maxRounds: 1, humanGate: false } })).id, 90000);
+    assert.equal(r.status, 'completed', r.error);
+    assert.match(seen.relative, /does not close launch L1/);
+    assert.match(seen.full, /does not close launch L1: process \d+ runs `[^`]*other-project[^`]*job\.js`, but Aivenue cannot tell it is the same file[\s\S]*reason: "registered"/);
+    assert.match(seen.left, /L1: started `nohup node job\.js/);
+    assert.ok(!(r.processes ?? []).some((p) => p.detected), 'not adopted by its own search');
+    assert.match(seen.noPid, /give pid/);
+    assert.match(seen.claim, /L1 closed as unconfirmed \(registered\)/);
+    assert.deepEqual(r.unconfirmedLaunches.map((u) => [u.reason, u.pid]), [['registered', kids[1].pid]]);
+    assert.ok(r.log.some((l) => /就是它登記的 PID \d+，Aivenue 無法確認/.test(l.text)));
+  } finally {
+    for (const c of kids) {
+      try {
+        process.kill(c.pid);
+      } catch {}
+    }
+  }
+});
+
 /** A job that runs `ms`, then writes `line` to `log` (in cwd) and ends. */
 function shortJob(cwd, log, line, ms) {
   const fd = fs.openSync(path.join(cwd, log), 'w');

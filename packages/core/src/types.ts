@@ -1434,7 +1434,7 @@ export interface WorkflowRun {
    * Background launches Aivenue saw but could not confirm, closed by the agent with dismiss_launch: it says the command
    * ran in the foreground (Aivenue misread it) or ended before its PID could be found. Kept as the agent's word, unconfirmed.
    */
-  unconfirmedLaunches?: { agentId: string; command: string; reason: 'foreground' | 'ended'; note: string; ts: number }[];
+  unconfirmedLaunches?: { agentId: string; command: string; reason: 'foreground' | 'ended' | 'registered'; note: string; ts: number; pid?: number }[];
   /** Independent review: the target as resolved when the review started. */
   reviewTarget?: ReviewTarget;
   plan?: PlanDoc;

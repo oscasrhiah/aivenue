@@ -342,13 +342,14 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   dismiss_launch: {
     name: 'dismiss_launch',
     description:
-      'Close a launch (L1, L2, …) that Aivenue lists as an unregistered background job when there is no process of it to register: reason "foreground" when Aivenue misread a command that ran in the foreground and finished; "ended" when it did run in the background but already ended and its PID cannot be found. The launch is kept as unconfirmed with your note, and the user sees it. Never register an unrelated process with track_process to close a launch.',
+      'Close a launch (L1, L2, …) that Aivenue lists as an unregistered background job when there is no process of it to register: reason "foreground" when Aivenue misread a command that ran in the foreground and finished; "ended" when it did run in the background but already ended and its PID cannot be found; "registered" when it runs as a process you registered with track_process (give pid) that Aivenue could not confirm is it. The launch is kept as unconfirmed with your note, and the user sees it. Never register an unrelated process with track_process to close a launch.',
     inputSchema: {
       type: 'object',
       properties: {
         launch: { type: 'string', description: 'The launch id from Aivenue\'s message, e.g. "L1".' },
-        reason: { type: 'string', enum: ['foreground', 'ended'] },
-        note: { type: 'string', description: 'How you know: what the command did and how you can tell it finished.' },
+        reason: { type: 'string', enum: ['foreground', 'ended', 'registered'] },
+        pid: { type: 'number', description: 'With reason "registered": the PID of the process you registered for it.' },
+        note: { type: 'string', description: 'How you know: what the command did and how you can tell it finished, or which process it is.' },
       },
       required: ['launch', 'reason', 'note'],
     },

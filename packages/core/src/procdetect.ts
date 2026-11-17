@@ -46,6 +46,8 @@ export interface Launch {
   pid?: number;
   /** The script it runs, as written (with its folders). */
   script?: string;
+  /** The folder the line ran in (launchFolder), when known. */
+  cwd?: string;
   command: string;
 }
 
@@ -104,40 +106,79 @@ const INTERPRETER = /^(node|nodejs|python[\d.]*|pythonw|py|bash|sh|zsh|dash|ruby
 /** Options that give the interpreter code inline: then it runs no script file. */
 const INLINE = /^(-e|-c|-p|-i|--eval|--print|-Command|-EncodedCommand|-ec)$/i;
 
-/** Path endings agree: the shorter one (by folders) is the tail of the longer one, compared without case or slash kind. */
-function sameTail(a: string, b: string): boolean {
-  const parts = (p: string) => p.toLowerCase().replace(/\\/g, '/').split('/').filter((x) => x && x !== '.');
-  const x = parts(a);
-  const y = parts(b);
-  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
-  return short.every((s, i) => s === long[long.length - short.length + i]);
+/** A path as the platform writes it (Git Bash's `/c/x` is `C:\x` on Windows). */
+function native(p: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') {
+    const m = /^\/([A-Za-z])(\/.*)?$/.exec(p);
+    if (m) return `${m[1].toUpperCase()}:${(m[2] ?? '/').replace(/\//g, '\\')}`;
+  }
+  return p;
 }
 
 /**
- * Whether a process's command line runs what a launch started (`key`, and the script path as the launch wrote it): as
- * its program, or as the script file an interpreter runs (its first argument that is not an option; `python -m mod`,
- * `pwsh -File x.ps1`). A name that only appears elsewhere (an argument, inline code given with -e / -c) does not count,
- * nor a script of the same name in another folder.
+ * The folder a launch line ran in: the tool call's own working folder (`workdir`, `cwd`), else `base` (the workflow's
+ * folder); a single `cd` / `pushd` / `Set-Location` in the line moves it. Undefined when it cannot be told (several
+ * changes of folder, `cd -`, a variable or `~`).
  */
-export function commandRuns(commandLine: string, key: string, script?: string): boolean {
+export function launchFolder(command: string, input: string | undefined, base: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  let dir = base;
+  try {
+    const i = input ? JSON.parse(input) : undefined;
+    const given = [i?.workdir, i?.cwd, i?.directory, i?.working_directory].find((x) => typeof x === 'string' && x.trim());
+    if (given) dir = P.resolve(native(base, platform), native(given.trim(), platform));
+  } catch {
+    // not JSON: the workflow's folder
+  }
+  const moves = [...command.matchAll(/(?:^|&&|;|\n|\|\|)\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s;&|]+)/gi)].map((m) => m[1].replace(/^(["'])([\s\S]*)\1$/, '$2'));
+  if (!moves.length) return dir;
+  if (moves.length > 1 || /^(-|~)|\$|%/.test(moves[0])) return undefined;
+  return P.resolve(native(dir, platform), native(moves[0], platform));
+}
+
+/**
+ * Whether a process runs the script a launch started: the script its command line runs (as its program, or the file
+ * an interpreter runs, see scriptToken) is the same file as the launch's, both resolved to full paths: the launch's
+ * against the folder it ran in, the process's against its own folder (`cwd`, readable on Linux) unless the command
+ * line names it in full. Without both, or for a module (`-m`) or a program the launch named without a script file, it
+ * cannot be told: false (the launch stays unconfirmed). Paths compare without case on Windows and macOS only.
+ */
+export function sameScript(proc: { command: string; cwd?: string }, launch: { key: string; script?: string; cwd?: string }, platform: NodeJS.Platform = process.platform): boolean {
+  const token = scriptToken(proc.command, launch.key);
+  if (!token || !launch.script) return false;
+  const P = platform === 'win32' ? path.win32 : path.posix;
+  const full = (p: string, base?: string) => {
+    const n = native(p, platform);
+    if (P.isAbsolute(n)) return P.normalize(n);
+    return base ? P.resolve(native(base, platform), n) : undefined;
+  };
+  const want = full(launch.script, launch.cwd);
+  const got = full(token, proc.cwd);
+  if (!want || !got) return false;
+  return platform === 'win32' || platform === 'darwin' ? want.toLowerCase() === got.toLowerCase() : want === got;
+}
+
+/**
+ * The script a process runs, as its command line writes it, when it is the launch's (`key`, its file name): the
+ * program itself, or the script file an interpreter runs (its first argument that is not an option; `pwsh -File`). A
+ * name only in another argument or in inline code (-e / -c) is not run as a script: undefined.
+ */
+export function scriptToken(commandLine: string, key: string): string | undefined {
   const w = words(commandLine);
-  if (!w.length || !key) return false;
+  if (!w.length || !key) return undefined;
   const base = (p: string) => p.replace(/^.*[\\/]/, '').toLowerCase();
   const plain = (p: string) => base(p).replace(/\.(exe|cmd|bat)$/i, '');
   const k = key.toLowerCase();
-  const fits = (p: string) => base(p) === k && (!script || sameTail(script, p));
-  // The program itself (`./train`, `job.exe`).
-  if (plain(w[0]) === k.replace(/\.(exe|cmd|bat)$/i, '')) return !script || sameTail(script, w[0]);
-  if (!INTERPRETER.test(plain(w[0]))) return false;
+  if (plain(w[0]) === k.replace(/\.(exe|cmd|bat)$/i, '')) return w[0];
+  if (!INTERPRETER.test(plain(w[0]))) return undefined;
   for (let i = 1; i < w.length; i++) {
     const a = w[i];
-    if (INLINE.test(a)) return false;
-    if (a === '-m') return (w[i + 1] ?? '').toLowerCase() === k;
-    if (/^-(File|f)$/i.test(a)) return fits(w[i + 1] ?? '');
+    if (INLINE.test(a) || a === '-m') return undefined;
+    if (/^-(File|f)$/i.test(a)) return base(w[i + 1] ?? '') === k ? w[i + 1] : undefined;
     if (a.startsWith('-')) continue;
-    return fits(a);
+    return base(a) === k ? a : undefined;
   }
-  return false;
+  return undefined;
 }
 
 /** A running process's command line and when it started (undefined when it is gone or cannot be read). */
@@ -191,7 +232,7 @@ export function isInside(root: string, dir: string): boolean {
 
 /**
  * Running processes whose command line contains `key` (newest PID first), with when each started, not counting
- * Aivenue's own shell. Only candidates: whether one runs a launch is for commandRuns to tell.
+ * Aivenue's own shell. Only candidates: whether one runs a launch is for sameScript to tell.
  */
 export async function findProcesses(key: string): Promise<{ pid: number; command: string; startedAt?: number }[]> {
   if (!key || key.length < 3) return [];

@@ -17,7 +17,7 @@ const bundled = await build({
       export { parseVerification, parsePlan, parseReview, parseRulings, parseWork, parseOpenDecisions, parseResponses, unclassifiedNotice, toolsForRole, TOOL_DEFS } from './packages/core/src/hubTools';
       export { parseSize, inspectProcess } from './packages/core/src/procstat';
       export { CliPool } from './packages/core/src/cliPool';
-      export { backgroundLaunch, commandRuns, pidFromOutput, scriptOf } from './packages/core/src/procdetect';
+      export { backgroundLaunch, launchFolder, pidFromOutput, sameScript, scriptOf } from './packages/core/src/procdetect';
       export { fileReadOf, POLLING, collectActivity, activityBlock, ownWorkBlock, toolCallPage, TOOL_OUTPUT_PAGE, checkRecords, verifiedChecks, checkKey, checkRun, isCheckCommand, shellParts, writesFiles } from './packages/core/src/ledger';
       export { contextBlock, conversationLog, formatTranscript, handoverOf, overview, shownElsewhere, toolInputText } from './packages/core/src/context';
       export { groupFolders } from './packages/core/src/outputs';
@@ -4159,23 +4159,38 @@ test('獨立審查的追問：背景裡的「上次結果」是審查報告（�
   assert.doesNotMatch(goal, /not this/);
 });
 
-test('背景啟動與程序的對應：程式本身或直譯器執行的腳本才算；只在參數、-e／-c 的程式碼裡提到、同名但不同資料夾的都不算', () => {
+test('背景啟動與程序的對應：比完整路徑——另一個專案的同名腳本不算；程序用相對路徑時要知道它的資料夾；Linux 分大小寫；只在參數、-e／-c 裡提到不算', () => {
+  const win = 'win32';
+  const linux = 'linux';
+  const launch = (script, cwd, key = script.replace(/^.*[\\/]/, '')) => ({ key, script, cwd });
   const cases = [
-    ['node -e "setInterval(()=>{},1000)" unrelated-aivenue-review-job.js', 'aivenue-review-job.js', undefined, false],
-    ['"C:\\Program Files\\nodejs\\node.exe" C:\\proj\\scripts\\job.js', 'job.js', 'scripts/job.js', true],
-    ['node other/job.js', 'job.js', 'scripts/job.js', false],
-    ['node unrelated/aivenue-review-job.js', 'aivenue-review-job.js', 'C:\\proj\\aivenue-review-job.js', false],
-    ['node job.js', 'job.js', 'scripts/job.js', true],
-    ['python -u train.py --epochs 3', 'train.py', 'train.py', true],
-    ['python -m pkg.train', 'pkg.train', undefined, true],
-    ['bash -c "nohup python train.py"', 'train.py', 'train.py', false],
-    ['/bin/bash ./run.sh', 'run.sh', './run.sh', true],
-    ['./train --x', 'train', undefined, true],
-    ['node --test scripts/test-orchestrator.mjs', 'aivenue-ghost-job.js', undefined, false],
-    ['pwsh -File C:\\x\\job.ps1', 'job.ps1', 'job.ps1', true],
-    ['grep aivenue-review-job.js log', 'aivenue-review-job.js', undefined, false],
+    // Another project's job.js, named in full or relative in its own folder.
+    [{ command: 'node C:\\other\\job.js' }, launch('job.js', 'C:\\proj'), win, false],
+    [{ command: 'node job.js', cwd: 'C:\\other' }, launch('job.js', 'C:\\proj'), win, false],
+    // Relative in the process, its folder unknown (Windows): cannot be told.
+    [{ command: 'node job.js' }, launch('job.js', 'C:\\proj'), win, false],
+    // The same file: in full, through its own folder, Git Bash paths, case on Windows.
+    [{ command: '"C:\\Program Files\\nodejs\\node.exe" C:\\proj\\job.js' }, launch('job.js', 'C:\\proj'), win, true],
+    [{ command: 'node job.js', cwd: '/home/u/proj' }, launch('job.js', '/home/u/proj'), linux, true],
+    [{ command: 'node C:\\Proj\\Scripts\\JOB.js' }, launch('scripts/job.js', '/c/proj'), win, true],
+    [{ command: 'python -u /home/u/proj/train.py --epochs 3' }, launch('train.py', '/home/u/proj'), linux, true],
+    // Linux paths keep their case.
+    [{ command: 'node /home/u/proj/Job.js' }, launch('job.js', '/home/u/proj', 'Job.js'), linux, false],
+    // The launch's own folder unknown, or no script file (a module): cannot be told.
+    [{ command: 'node /home/u/proj/job.js' }, launch('job.js', undefined), linux, false],
+    [{ command: 'python -m pkg.train', cwd: '/p' }, { key: 'pkg.train', cwd: '/p' }, linux, false],
+    // Not run as a script.
+    [{ command: 'node -e "setInterval(()=>{},1000)" /home/u/proj/job.js' }, launch('job.js', '/home/u/proj'), linux, false],
+    [{ command: 'bash -c "nohup python /p/train.py"' }, launch('/p/train.py', '/p', 'train.py'), linux, false],
+    [{ command: 'grep job.js /p/log' }, launch('job.js', '/p'), linux, false],
   ];
-  for (const [line, key, script, want] of cases) assert.equal(W.commandRuns(line, key, script), want, line);
+  for (const [proc, l, platform, want] of cases) assert.equal(W.sameScript(proc, l, platform), want, `${proc.command} | ${l.script} in ${l.cwd} (${platform})`);
+  // Where a launch line ran: the call's own folder, one cd in the line, or unknown.
+  assert.equal(W.launchFolder('nohup node job.js &', JSON.stringify({ command: 'x', workdir: 'sub' }), 'C:\\proj', win), 'C:\\proj\\sub');
+  assert.equal(W.launchFolder('cd /c/other && nohup node job.js &', undefined, 'C:\\proj', win), 'C:\\other');
+  assert.equal(W.launchFolder('cd tools && nohup node job.js &', undefined, '/home/u/proj', linux), '/home/u/proj/tools');
+  assert.equal(W.launchFolder('cd a && cd b && nohup node job.js &', undefined, '/p', linux), undefined);
+  assert.equal(W.launchFolder('cd $DIR && nohup node job.js &', undefined, '/p', linux), undefined);
+  assert.equal(W.launchFolder('nohup node job.js &', undefined, '/p', linux), '/p');
   assert.equal(W.scriptOf('nohup node scripts/a/job.js > x.log 2>&1 &'), 'scripts/a/job.js');
-  assert.equal(W.scriptOf('Start-Process node -ArgumentList C:\\p\\job.js'), 'C:\\p\\job.js');
 });

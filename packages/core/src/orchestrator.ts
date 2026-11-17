@@ -66,7 +66,7 @@ import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification 
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
 import { inspectProcess, parseSize } from './procstat';
-import { backgroundLaunch, commandOf, commandRuns, findProcesses, isInside, logOf, processCwd, processInfo, type Launch } from './procdetect';
+import { backgroundLaunch, commandOf, findProcesses, isInside, launchFolder, logOf, processCwd, processInfo, sameScript, scriptToken, type Launch } from './procdetect';
 import { checkRecords, collectActivity, fileReadOf, ownWorkBlock, POLLING, toolCallPage } from './ledger';
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
@@ -2079,21 +2079,29 @@ export class Orchestrator {
       }
       case 'dismiss_launch': {
         const id = String(args.launch ?? '').trim();
-        const reason = args.reason === 'foreground' || args.reason === 'ended' ? args.reason : undefined;
-        if (!reason) throw new Error('reason must be "foreground" (Aivenue misread a command that ran in the foreground and finished) or "ended" (it ran in the background and ended; its PID cannot be found)');
+        const reason = args.reason === 'foreground' || args.reason === 'ended' || args.reason === 'registered' ? args.reason : undefined;
+        if (!reason)
+          throw new Error(
+            'reason must be "foreground" (Aivenue misread a command that ran in the foreground and finished), "ended" (it ran in the background and ended; its PID cannot be found) or "registered" (it runs as a process you registered with track_process, which Aivenue could not confirm is it; give pid)',
+          );
         const note = String(args.note ?? '').trim().slice(0, 500);
-        if (!note) throw new Error('note is required: say how you know (what the command did, how you can tell it finished)');
+        if (!note) throw new Error('note is required: say how you know (what the command did, how you can tell it finished or which process it is)');
+        const pid = Math.round(Number(args.pid)) || undefined;
+        if (reason === 'registered' && !(pid && (run.processes ?? []).some((p) => p.pid === pid && p.agentId === info.id)))
+          throw new Error('With reason "registered", give pid: a process you registered with track_process (register it first).');
         const open = this.openLaunches(run, info);
         const hit = open.find((x) => x.l.id === id);
         if (!hit) throw new Error(`There is no open launch ${id || '(none given)'}; open: ${open.map((x) => x.l.id).join(', ') || 'none'}`);
         this.launches.set(hit.agentId, (this.launches.get(hit.agentId) ?? []).filter((x) => x !== hit.l));
-        (run.unconfirmedLaunches ??= []).push({ agentId: info.id, command: hit.l.cmd.slice(0, 500), reason, note, ts: now() });
+        (run.unconfirmedLaunches ??= []).push({ agentId: info.id, command: hit.l.cmd.slice(0, 500), reason, note, ts: now(), ...(reason === 'registered' ? { pid } : {}) });
         const cmd = hit.l.cmd.length > 160 ? `${hit.l.cmd.slice(0, 159)}…` : hit.l.cmd;
         this.log(
           run,
           reason === 'foreground'
             ? L(`${this.label(info)} 表示 Aivenue 把這個指令誤判為背景工作，它其實在前景執行完畢（未經確認）：\`${cmd}\`。理由：${note}`, `${this.label(info)} says Aivenue misread this command as a background job; it ran in the foreground and finished (not confirmed): \`${cmd}\`. Reason: ${note}`)
-            : L(`${this.label(info)} 表示這個背景工作已經結束、找不到它的 PID（未經確認）：\`${cmd}\`。說明：${note}`, `${this.label(info)} says this background job already ended and its PID cannot be found (not confirmed): \`${cmd}\`. Note: ${note}`),
+            : reason === 'ended'
+              ? L(`${this.label(info)} 表示這個背景工作已經結束、找不到它的 PID（未經確認）：\`${cmd}\`。說明：${note}`, `${this.label(info)} says this background job already ended and its PID cannot be found (not confirmed): \`${cmd}\`. Note: ${note}`)
+              : L(`${this.label(info)} 表示這個背景工作就是它登記的 PID ${pid}，Aivenue 無法確認（未經確認）：\`${cmd}\`。說明：${note}`, `${this.label(info)} says this background job is PID ${pid}, which it registered; Aivenue could not confirm it (not confirmed): \`${cmd}\`. Note: ${note}`),
           'warn',
           true,
         );
@@ -3807,7 +3815,7 @@ export class Orchestrator {
    * Background launches seen in an agent's commands whose process is not registered or found yet (agent id → launches).
    * `key` and `pid` are what Aivenue can confirm a process by: what the line runs, and the PID it printed.
    */
-  private launches = new Map<string, { id: string; cmd: string; ts: number; key?: string; pid?: number; script?: string }[]>();
+  private launches = new Map<string, { id: string; cmd: string; ts: number; key?: string; pid?: number; script?: string; cwd?: string }[]>();
   private launchSeq = 0;
 
   /** The open launches of this agent's conversation (its earlier turns are other agent ids). */
@@ -3829,25 +3837,30 @@ export class Orchestrator {
     const proc = alive ? await processInfo(pid) : undefined;
     // Started around the launch, not before it: an older process (or one reusing the PID of an older job) is not it.
     const recent = (l: { ts: number }) => proc?.startedAt !== undefined && proc.startedAt >= l.ts - LAUNCH_WINDOW_MS;
-    const same = (l: { key?: string; pid?: number; script?: string; ts: number }) =>
+    const same = (l: { key?: string; pid?: number; script?: string; cwd?: string; ts: number }) =>
       // The PID the launch printed: ended (nothing left to check), or running since around the launch.
       (l.pid === pid && (!alive || proc?.startedAt === undefined || recent(l))) ||
       // A running process that runs what the launch started (its program, or the script its interpreter runs).
-      (!!l.key && !!proc && recent(l) && commandRuns(proc.command, l.key, l.script));
+      (!!l.key && !!proc && recent(l) && sameScript({ command: proc.command, cwd: processCwd(pid) }, { key: l.key, script: l.script, cwd: l.cwd }));
     const named = want ? open.find((x) => x.l.id === want) : undefined;
     const hit = named ? (same(named.l) ? named : undefined) : open.find((x) => same(x.l));
     if (hit) this.launches.set(hit.agentId, (this.launches.get(hit.agentId) ?? []).filter((x) => x !== hit.l));
     if (!want || hit) return hit ? ` It is launch ${hit.l.id}.` : '';
     if (!named) return ` There is no open launch ${want}; open: ${open.map((x) => x.l.id).join(', ')}.`;
     const short = (s: string) => (s.length > 120 ? `${s.slice(0, 119)}…` : s);
+    // It runs a script of that name, but Aivenue cannot tell it is the same file (another folder, or one it cannot see).
+    const token = proc && named.l.key ? scriptToken(proc.command, named.l.key) : undefined;
     const why = !alive
       ? `process ${pid} is not running, so Aivenue cannot tell it is \`${short(named.l.cmd)}\``
       : !proc
         ? `Aivenue cannot read what process ${pid} runs, so it cannot tell it is \`${short(named.l.cmd)}\``
         : !recent(named.l)
           ? `process ${pid} started before that launch (or its start time cannot be read), so it is not \`${short(named.l.cmd)}\``
-          : `process ${pid} runs \`${short(proc.command)}\`, which does not run \`${short(named.l.cmd)}\``;
-    return ` It does not close launch ${want}: ${why}. Register the PID of that job itself; if it ran in the foreground and finished, or it ended and its PID cannot be found, call dismiss_launch {launch: "${want}", reason: "foreground" | "ended", note}. Do not register an unrelated process for it.`;
+          : token
+            ? `process ${pid} runs \`${short(token)}\`, but Aivenue cannot tell it is the same file as the launch's (it may be one of the same name in another folder, or the folder the process runs in cannot be read here)`
+            : `process ${pid} runs \`${short(proc.command)}\`, which does not run \`${short(named.l.cmd)}\``;
+    const claim = token ? ` If it is that job, call dismiss_launch {launch: "${want}", reason: "registered", pid: ${pid}, note}: it stays your word, marked unconfirmed.` : '';
+    return ` It does not close launch ${want}: ${why}.${claim} Register the PID of that job itself; if it ran in the foreground and finished, or it ended and its PID cannot be found, call dismiss_launch {launch: "${want}", reason: "foreground" | "ended", note}. Do not register an unrelated process for it.`;
   }
   /** Submissions refused for unregistered background jobs (agent id → times). */
   private registerRefused = new Map<string, number>();
@@ -4570,7 +4583,9 @@ export class Orchestrator {
     // A job started in the background, also when the same line then waits a moment ("… & sleep 10; tail log").
     const launch = backgroundLaunch(cmd, t.output, t.input);
     if (launch) {
-      const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid, script: launch.script };
+      // Where it ran: a relative script is only told apart from one of the same name elsewhere by its full path.
+      launch.cwd = launchFolder(launch.command, t.input, run.config.cwd);
+      const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid, script: launch.script, cwd: launch.cwd };
       this.launches.set(info.id, [...(this.launches.get(info.id) ?? []), entry]);
       void this.adoptProcess(run, info, launch)
         .then((pid) => pid && this.launches.set(info.id, (this.launches.get(info.id) ?? []).filter((x) => x !== entry)))
@@ -4669,7 +4684,7 @@ export class Orchestrator {
       // Only a process that runs what the line started (not one whose command line merely mentions it), started
       // around the launch.
       const since = Date.now() - LAUNCH_WINDOW_MS - wait;
-      pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid) && p.startedAt !== undefined && p.startedAt >= since && commandRuns(p.command, l.key!, l.script))?.pid;
+      pid = (await findProcesses(l.key)).find((p) => !tracked().has(p.pid) && p.startedAt !== undefined && p.startedAt >= since && sameScript({ command: p.command, cwd: processCwd(p.pid) }, { key: l.key!, script: l.script, cwd: l.cwd }))?.pid;
     }
     if (!pid || !['running', 'paused', 'waiting_human'].includes(run.status)) return undefined;
     // Already registered by the agent itself in the meantime.
