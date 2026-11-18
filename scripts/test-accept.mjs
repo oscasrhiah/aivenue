@@ -489,3 +489,35 @@ test('驗收樣本：交給審查者決定的兩個請求——資訊足夠的�
   assert.match(ASK_REQUEST, /客戶甲[\s\S]*客戶乙[\s\S]*只有我知道/);
   assert.match(ASK_ANSWER, /客戶甲/);
 });
+
+test('驗收樣本：決定不能建立在樣本明示條件的反面——用 v4 兩次真實審查的決定核對：多個寫入者、要求防斷電會被標出，只是寫出條件本身（單一寫入者、斷電不在範圍）不會；合併與否、選 A 或 B 讀得對', async () => {
+  const { againstStated, saysMerge, firstOption, DECIDE_LIST, ASK_LIST } = await import(new URL('./accept/review-samples.mjs', import.meta.url));
+  assert.deepEqual(DECIDE_LIST, ['在做法 A、B 之間選一個', '要不要合併這次的變更']);
+  assert.deepEqual(ASK_LIST, ['在做法 A、B 之間選一個']);
+  // The decisions of the two v4 runs (gpt-6-luna), as the reviewer wrote them.
+  const seen = {
+    firstDecide: [{ id: 'D1', question: '在 A 與 B 之間選擇，並決定是否合併這次變更', choice: '選 A；建議合併這次變更。', reasons: 'A 在 reply 前同步完成暫存檔寫入、fsync 與 rename；同一 Store 對重複 id 回覆 duplicate 而不重做寫入。B 會先回覆、再等待最多 500 毫秒批次寫檔，直接違反「服務程序在回覆後立刻崩潰也不能遺失已確認操作」的需求。操作量每分鐘僅數十筆，且使用者指出額外寫檔延遲可接受。', assumptions: ['每個資料檔案在同一時間確實只有一個 Store/服務 writer；程式註解也作此聲明。若服務可讓多個視窗或程序各自開啟同一資料檔，需先處理跨 Store 的 lost-update 問題，這會改變合併建議。'] }],
+    firstAsk: [{ id: 'D1', question: '依交付客戶選擇 A 或 B', choice: '選 A（先同步寫入再回覆）；不建議合併目前版本，需先補足持久化保證。', reasons: '使用者確認交付客戶甲，其合約要求確認成功的操作絕不能遺失。B 明確接受確認操作在程序崩潰時遺失最近 0.5 秒的資料，直接不符合甲的條件。A 的同步檔案寫入比 B 更符合甲的要求，但目前實作僅同步暫存檔內容，目錄重新命名未同步，仍無法保證系統崩潰/斷電後已確認資料存續。', assumptions: ['將「絕不能遺失」解讀為涵蓋系統崩潰或斷電，而不只程序崩潰；若合約只涵蓋程序崩潰，A 的目前同步寫入流程可能已足以滿足該較窄條件。'] }],
+    finalDecide: [
+      { id: 'D1', question: '在做法 A 與 B 之間選擇', choice: '選 A（先持久化再回覆）', reasons: '使用者要求回覆後即使服務程序崩潰也不能丟失操作；A 的同步寫入、fsync、rename 順序符合此要求。以每分鐘數十筆且延遲可接受的條件，A 的寫入成本可接受。B 在批次落盤前已回覆成功，無法滿足要求。', assumptions: ['本次保證只涵蓋服務程序崩潰，不涵蓋整台電腦斷電，符合使用者明示範圍。'] },
+      { id: 'D2', question: '是否合併這次變更', choice: '不要合併；先修正同一檔案的多實例併發覆寫，再重新審查。', reasons: '隔離重現證明兩個 Store 實例依序各自成功回覆，最終檔案卻只保留第二筆。', assumptions: ['同一份操作檔可能由多個視窗／服務實例同時使用；使用者要求的併發情境檢查也使此假設合理。'] },
+    ],
+    finalAsk: [{ id: 'D1', question: '這次在 A（同步寫入後回覆）與 B（先回覆，每 500 毫秒批次寫入）之間選哪一個？', choice: '選 A，建議將本次變更交付給客戶甲。', reasons: '客戶甲要求每筆確認成功的操作在服務程序崩潰後不能遺失。程式以同步方式完整寫入暫存檔、fsync、關檔並 rename 到正式檔之後才呼叫成功回覆；本地重現也確認回覆回呼執行時檔案已含該操作。B 會在回覆成功後留下最多 0.5 秒尚未寫入的已確認操作，違反甲的要求。', assumptions: ['客戶甲給出的程序崩潰保證是此部署的主要驗收條件；整台電腦斷電不在其合約範圍內。'] }],
+  };
+  // Stating the condition (one writer; power loss out of scope) is in line with the samples.
+  assert.deepEqual(againstStated(seen.firstDecide), []);
+  assert.deepEqual(againstStated(seen.finalAsk), []);
+  assert.deepEqual(againstStated(seen.finalDecide.slice(0, 1)), []);
+  // Resting on their opposite is not.
+  assert.deepEqual(againstStated(seen.finalDecide), ['D2: more than one writer of the file (the base states one Store per file)']);
+  assert.deepEqual(againstStated(seen.firstAsk), ['D1: durability across power loss (out of scope in the request)']);
+  assert.equal(saysMerge(seen.firstDecide[0].choice), true);
+  assert.equal(saysMerge(seen.finalDecide[1].choice), false);
+  assert.equal(saysMerge(seen.firstAsk[0].choice), false);
+  assert.equal(saysMerge('建議合併。'), true);
+  assert.equal(saysMerge('暫緩合併，等修正後再看'), false);
+  for (const d of [...seen.firstDecide, ...seen.firstAsk, ...seen.finalDecide.slice(0, 1), ...seen.finalAsk]) assert.equal(firstOption(d.choice), 'A', d.choice);
+  assert.equal(firstOption('選 B，不選 A'), 'B');
+  assert.equal(firstOption('Approach A'), 'A');
+  assert.equal(firstOption('ABC'), undefined);
+});

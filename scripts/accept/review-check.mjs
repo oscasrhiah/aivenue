@@ -22,7 +22,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AFTER, ASK_ANSWER, ASK_REQUEST, BEFORE, DECIDE_REQUEST, MATERIAL, REQUEST, SAMPLE_VERSION, TEST_JS } from './review-samples.mjs';
+import { AFTER, againstStated, ASK_ANSWER, ASK_LIST, ASK_REQUEST, BEFORE, DECIDE_LIST, DECIDE_REQUEST, firstOption, MATERIAL, REQUEST, SAMPLE_VERSION, saysMerge, TEST_JS } from './review-samples.mjs';
 
 const [repoArg, outArg] = process.argv.slice(2);
 if (!repoArg || !outArg) {
@@ -214,8 +214,6 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-/** The first of the two options ("A" / "B") a choice names. */
-const firstOption = (s) => /(?:^|[^A-Za-z0-9])([AB])(?![A-Za-z0-9])/.exec(s ?? '')?.[1];
 
 /** What every sample must keep: a report, the reviewer alone and read-only, its own prompt throughout, no merge. */
 function roleChecks(kind, r, review, material) {
@@ -241,21 +239,27 @@ try {
   for (const kind of SAMPLES.filter((k) => k === 'decide' || k === 'ask')) {
     const s = sample(`review-${kind}`, 'clean');
     const answer = kind === 'ask' ? () => ({ optionId: 'answer', text: ASK_ANSWER }) : undefined;
-    const r = await runOne(hub, `review-${kind}`, config(s.dir, { title: `review sample: ${kind}`, goal: kind === 'decide' ? DECIDE_REQUEST : ASK_REQUEST, review: { commit: s.commit, base: s.base } }), s.dir, answer);
+    // The decisions the user leaves to the reviewer, listed as the review panel takes them (checked by Aivenue).
+    const decide = kind === 'decide' ? DECIDE_LIST : ASK_LIST;
+    const r = await runOne(hub, `review-${kind}`, config(s.dir, { title: `review sample: ${kind}`, goal: kind === 'decide' ? DECIDE_REQUEST : ASK_REQUEST, review: { commit: s.commit, base: s.base, decide } }), s.dir, answer);
     results[`review-${kind}`] = { sample: s, ...r };
     fs.writeFileSync(path.join(OUT, `review-${kind}.json`), JSON.stringify(results[`review-${kind}`], null, 2));
     const review = r.run.stages.implement.rounds.at(-1)?.review;
     const decisions = review?.decisions ?? [];
     console.log(`review sample "${kind}": asked ${r.asked.length} question(s); verdict ${review?.verdict ?? '(none)'}; decisions: ${decisions.map((d) => `${d.id} ${d.question} → ${d.choice}`).join('; ') || '(none)'}`);
     roleChecks(kind, r, review, false);
-    const choosesA = decisions.find((d) => firstOption(d.choice) === 'A' && d.reasons && d.assumptions.length);
+    const byId = (id) => decisions.find((d) => d.id === id);
+    const d1 = byId('D1');
+    check(`${kind}: every listed decision is answered under its id (${decide.map((_, i) => `D${i + 1}`).join(', ')})`, decide.every((_, i) => byId(`D${i + 1}`)?.choice), decisions.map((d) => d.id).join(', ') || '(no decisions)');
+    check(`${kind}: D1 chooses A (B loses confirmed operations on a crash), with reasons and assumptions`, firstOption(d1?.choice) === 'A' && !!d1?.reasons && !!d1?.assumptions.length, d1?.choice ?? '(no D1)');
+    const against = againstStated(decisions);
+    check(`${kind}: no decision rests on the opposite of what the sample states (one writer per file; power loss out of scope)`, !against.length, against.join('; '));
     if (kind === 'decide') {
       check('decide: decided without asking the user (no question before the report)', r.asked.length === 0, r.asked.join(' | ').slice(0, 300));
-      check('decide: the report chooses A (B loses confirmed operations on a crash), with reasons and assumptions', !!choosesA, decisions.map((d) => d.choice).join(' | ').slice(0, 300) || '(no decisions)');
-      check('decide: the report says whether to merge, as a decision', decisions.some((d) => /合併|merge/i.test(`${d.question} ${d.choice}`)), decisions.map((d) => d.question).join(' | ').slice(0, 300));
+      // The clean change keeps every stated condition: under them, merging is the answer.
+      check('decide: D2 says to merge (the change keeps every stated condition)', saysMerge(byId('D2')?.choice), byId('D2')?.choice ?? '(no D2)');
     } else {
       check('ask: the reviewer asked the user about the fact the choice turns on, before deciding', r.asked.some((q) => /客戶|甲|乙|customer/i.test(q)), r.asked.join(' | ').slice(0, 300) || '(no question)');
-      check('ask: answered (customer 甲), the report chooses A, with reasons and assumptions', !!choosesA, decisions.map((d) => d.choice).join(' | ').slice(0, 300) || '(no decisions)');
     }
   }
   for (const kind of SAMPLES.filter((k) => k === 'defect' || k === 'clean')) {

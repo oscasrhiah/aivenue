@@ -13,8 +13,11 @@
 //   v4  v3's samples unchanged, plus the two decision requests below (DECIDE_REQUEST, ASK_REQUEST). In the first run
 //       ASK_REQUEST did not say power loss was out of scope (the others do): the reviewer read "never lost" as covering
 //       it and asked for a directory sync, as an assumption it named. Its scope now says it, like the others.
+//   v5  the decisions are also listed for Aivenue to check (DECIDE_LIST, ASK_LIST), and a decision must not rest on the
+//       opposite of what the samples state (AGAINST): in a v4 run the reviewer advised against merging the clean change
+//       on the premise that several Stores may write the file, which the base rules out.
 
-export const SAMPLE_VERSION = 'v4 (2026-11-18, revised)';
+export const SAMPLE_VERSION = 'v5 (2026-11-18, revised)';
 
 
 export const TEST_JS = [
@@ -136,3 +139,25 @@ const APPROACHES = '這次的變更是做法 A：先把操作寫進磁碟（先�
 export const DECIDE_REQUEST = `${APPROACHES}需求：確認成功的操作，在服務程序回覆後立刻崩潰也不能遺失（整台電腦斷電不在範圍）；這個服務一分鐘只有幾十筆操作，多寫一次檔的延遲不是問題。請審查這次的變更，替我在 A、B 之間選一個，並告訴我要不要合併這次的變更。`;
 export const ASK_REQUEST = `${APPROACHES}哪個對，取決於這個服務要交給哪個客戶：客戶甲的合約要求確認成功的操作在服務程序崩潰後絕不能遺失（整台電腦斷電不在範圍）；客戶乙的合約要求每筆操作在 1 毫秒內回覆，並接受程序崩潰時遺失最近 0.5 秒內確認的操作。要交給哪個客戶只有我知道，程式碼和文件裡都沒有寫。請審查這次的變更，替我在 A、B 之間選一個。`;
 export const ASK_ANSWER = '交給客戶甲：確認成功的操作在服務程序崩潰後絕不能遺失。';
+/** The same decisions, listed in the review panel's "decisions you leave to the reviewer" (D1, D2…: Aivenue checks each). */
+export const DECIDE_LIST = ['在做法 A、B 之間選一個', '要不要合併這次的變更'];
+export const ASK_LIST = ['在做法 A、B 之間選一個'];
+
+/** The first of the two options ("A" / "B") a choice names. */
+export const firstOption = (s) => /(?:^|[^A-Za-z0-9])([AB])(?![A-Za-z0-9])/.exec(s ?? '')?.[1];
+/** A merge decision that says to merge, not "do not merge" (or "merge after…"). */
+export const saysMerge = (s) => /合併|merge/i.test(s ?? '') && !/不\s*(要|建議|應|宜|該|能)?\s*合併|暫(不|緩)\s*合併|先不\s*合併|do not merge|don't merge|not (be )?merged?|hold off/i.test(s ?? '');
+/**
+ * What the samples state, that a decision must not rest on the opposite of: the base declares one Store per file and
+ * nothing else writing it; every request puts power loss out of scope. Read in what a decision says (its choice,
+ * reasons and assumptions): a premise that more writers may share the file, or a demand for durability across power
+ * loss (a directory sync), goes against them. Stating the condition itself ("one Store per file", "power loss is out
+ * of scope") does not.
+ */
+export const AGAINST = [
+  { what: 'more than one writer of the file (the base states one Store per file)', re: /(可能|會|若有|允許|may|might|can|could)[^。；;.\n]{0,24}(多個|兩個|多)\s*(Store|實例|視窗|程序|服務|writer|instance|window|process)|多實例|併發覆寫|concurrent (writ|instance)|multiple (stores|instances|writers)/i },
+  { what: 'durability across power loss (out of scope in the request)', re: /目錄[^。；;\n]{0,8}(同步|fsync)|(fsync|同步)[^。；;\n]{0,8}目錄|directory[^.;\n]{0,12}(sync|fsync)|(斷電|power loss)[^。；;\n]{0,12}(仍|也|會)?[^。；;\n]{0,6}(遺失|lost)/i },
+];
+/** Which decisions rest on the opposite of a stated condition: "D2: more than one writer…". */
+export const againstStated = (decisions) =>
+  decisions.flatMap((d) => AGAINST.filter((a) => a.re.test([d.choice, d.reasons, ...d.assumptions].join('\n'))).map((a) => `${d.id}: ${a.what}`));
