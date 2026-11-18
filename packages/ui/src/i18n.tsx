@@ -45,11 +45,6 @@ export function saveSettings(patch: Partial<AppSettings>) {
   return hub.call<AppSettings>('settings.set', { patch });
 }
 
-/** saveSettings for a convenience (a remembered layout): not kept if the hub cannot be reached, without an error. */
-export function saveSettingsQuietly(patch: Partial<AppSettings>) {
-  saveSettings(patch).catch(() => undefined);
-}
-
 export function localeName(l: Locale) {
   return l === 'en' ? 'English' : '繁體中文';
 }

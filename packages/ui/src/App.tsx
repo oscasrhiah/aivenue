@@ -4,7 +4,7 @@ import { useConnection, useHostInfo, useSettings, useThreads } from './api';
 import logo from './assets/logo.svg';
 import { AskHost } from './components/Ask';
 import { RenameInput } from './components/Rename';
-import { saveSettingsQuietly, SettingsProvider, useT } from './i18n';
+import { saveSettings, SettingsProvider, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { cx, relativeDay, wfStatus } from './util';
@@ -132,6 +132,7 @@ function Sidebar({ route, open, onHide }: { route: Route; open: boolean; onHide:
 }
 
 export function App() {
+  const t = useT();
   const [route, setRoute] = useState<Route>(parseHash);
   const [menu, setMenu] = useState(false);
   // Wide layouts: the user can put the chat list away; ☰ brings it back. Kept in the settings, for the app and VS Code
@@ -144,10 +145,20 @@ export function App() {
   useEffect(() => {
     if (saved !== undefined) setSideHidden(saved);
   }, [saved]);
+  // A change that could not be saved (e.g. another Aivenue was saving the settings) is undone and said, so the screen
+  // never shows what is not on disk.
+  const [sideNote, setSideNote] = useState<string>();
   const hideSide = (v: boolean) => {
+    const before = sideHidden;
     setSideHidden(v);
     writeHidden(v);
-    if (side) saveSettingsQuietly({ sidebarHidden: { [side]: v } });
+    if (side)
+      saveSettings({ sidebarHidden: { [side]: v } }).catch((e: Error) => {
+        setSideHidden(before);
+        writeHidden(before);
+        setSideNote(t(`側欄的收合沒有存下來，已恢復原狀（${e.message}）`, `The sidebar change was not saved and was undone (${e.message})`));
+        setTimeout(() => setSideNote(undefined), 6000);
+      });
   };
   // Where "back to the conversation" in Settings goes: the last chat page shown.
   const [lastChat, setLastChat] = useState('#/new');
@@ -182,6 +193,11 @@ export function App() {
         {menu && route.page !== 'settings' && <div className="side-scrim" onClick={() => setMenu(false)} />}
         <main className="main">
           {/* Narrow: ☰ opens the drawer. Wide with the list put away: ☰ brings it back. */}
+          {sideNote && (
+            <div className="side-note" role="status">
+              {sideNote}
+            </div>
+          )}
           <CompactBar route={route} onMenu={() => (wide() && sideHidden ? hideSide(false) : setMenu(!menu))} />
           {route.page === 'new' && <Chat key="new" />}
           {route.page === 'run' && <Chat key={route.id} id={route.id} />}
