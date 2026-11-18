@@ -211,7 +211,7 @@ function useSynced<T>(method: string, params: unknown, topic: string, initial: T
   return [value, setValue];
 }
 
-const DEFAULT_SETTINGS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#c96442' };
+const DEFAULT_SETTINGS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#3156c6' };
 
 export function useSettings(): AppSettings {
   return useSynced<AppSettings>('settings.get', undefined, 'settings', DEFAULT_SETTINGS)[0];

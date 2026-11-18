@@ -133,6 +133,60 @@ test('側欄收合存在設定裡（不是頁面自己的 localStorage）：App 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('預設強調色改成藍色：舊版存下的陶土（當時的預設）只轉換一次並記下；之後自己選回陶土會保留；其他顏色不動；第一次啟動不寫檔；設定被鎖住時啟動不失敗，下一次儲存才寫入', { exclusive: true }, async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const out = await build({ entryPoints: ['packages/core/src/settings.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const { SettingsStore } = mod.exports;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-settings-accent-'));
+  const file = path.join(dir, 'settings.json');
+  const disk = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  // A first run: the new default, and starting alone writes nothing.
+  assert.equal(new SettingsStore(dir).get().accent, '#3156c6');
+  assert.equal(fs.existsSync(file), false);
+  // A file an earlier version saved: every save wrote the defaults too, so it holds clay whether it was picked or not.
+  fs.writeFileSync(file, JSON.stringify({ locale: 'zh-TW', theme: 'dark', accent: '#c96442', cliIdleMinutes: 15 }));
+  const app = new SettingsStore(dir);
+  assert.equal(app.get().accent, '#3156c6');
+  assert.deepEqual(disk(), { locale: 'zh-TW', theme: 'dark', accent: '#3156c6', cliIdleMinutes: 15, appearanceVersion: 2 }, 'written back once, with the mark; the rest as it was');
+  // Clay picked again afterwards is the user's own choice: kept, now and at every later start.
+  app.set({ accent: '#c96442' });
+  assert.equal(disk().accent, '#c96442');
+  assert.equal(new SettingsStore(dir).get().accent, '#c96442');
+  assert.equal(app.get().accent, '#c96442');
+  // Another colour saved before the mark was picked by the user: kept; only the mark is added.
+  fs.writeFileSync(file, JSON.stringify({ locale: 'en', theme: 'system', accent: '#2F855A' }));
+  assert.equal(new SettingsStore(dir).get().accent, '#2F855A');
+  assert.deepEqual(disk(), { locale: 'en', theme: 'system', accent: '#2F855A', appearanceVersion: 2 });
+  // Another Aivenue keeps the lock while this one starts: starting does not fail, the accent is blue in memory, and the
+  // file is written (with the mark) by the next change saved once the lock is free.
+  fs.writeFileSync(file, JSON.stringify({ locale: 'zh-TW', theme: 'system', accent: '#C96442' }));
+  const lock = path.join(dir, 'settings.json.lock');
+  const holder = spawn(process.execPath, ['-e', `
+    const fs = require('fs'), os = require('os');
+    fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: process.pid, started: Math.round(Date.now() - process.uptime() * 1000), host: os.hostname(), token: 'holder' }), { flag: 'wx' });
+    process.stdout.write('held');
+    setTimeout(() => {}, 60000);`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  let blocked;
+  try {
+    await new Promise((r) => holder.stdout.once('data', r));
+    blocked = new SettingsStore(dir);
+    assert.equal(blocked.get().accent, '#3156c6');
+    assert.equal(disk().accent, '#C96442', 'nothing written while the lock is held');
+  } finally {
+    holder.kill();
+    await new Promise((r) => holder.once('exit', r));
+  }
+  blocked.set({ theme: 'dark' });
+  assert.deepEqual(disk(), { locale: 'zh-TW', theme: 'dark', accent: '#3156c6', appearanceVersion: 2 });
+  assert.equal(fs.existsSync(lock), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('App 與 VS Code 兩個 hub 各有一個設定存放，寫同一個 settings.json：一邊存的不會被另一邊較舊的副本蓋掉；讀得到對方的修改；殘留的鎖會被接手', async () => {
   const fs = await import('node:fs');
   const os = await import('node:os');

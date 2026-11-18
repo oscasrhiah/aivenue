@@ -5,7 +5,27 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AppSettings } from './types';
 
-const DEFAULTS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#c96442' };
+/**
+ * The appearance changes a settings file has been brought up to, kept in it as `appearanceVersion`.
+ *
+ * 2: the default accent changed from clay (#c96442) to blue. Every save writes the defaults along with the change, so
+ * the file of nearly every earlier install holds clay whether it was picked or not. A file without this mark that holds
+ * clay moves to blue once, and the mark is saved with it: clay picked after that is kept (the changelog says how).
+ */
+const APPEARANCE_VERSION = 2;
+const OLD_DEFAULT_ACCENT = '#c96442';
+
+const DEFAULTS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#3156c6', appearanceVersion: APPEARANCE_VERSION };
+
+/** The stored settings over the defaults, brought up to APPEARANCE_VERSION; `migrated` when the file was behind it. */
+function upgrade(stored: Partial<AppSettings>): { settings: AppSettings; migrated: boolean } {
+  const settings: AppSettings = { ...DEFAULTS, ...stored };
+  // Nothing saved yet (a first run) has the current defaults; a file with the mark is up to date.
+  if (!Object.keys(stored).length || (stored.appearanceVersion ?? 1) >= APPEARANCE_VERSION) return { settings, migrated: false };
+  if (typeof stored.accent === 'string' && stored.accent.toLowerCase() === OLD_DEFAULT_ACCENT) settings.accent = DEFAULTS.accent;
+  settings.appearanceVersion = APPEARANCE_VERSION;
+  return { settings, migrated: true };
+}
 
 /** How long a change waits for another hub's change to finish; then it is refused, never forced. */
 const LOCK_WAIT_MS = 3_000;
@@ -69,7 +89,18 @@ export class SettingsStore {
 
   constructor(dataDir: string) {
     this.file = path.join(dataDir, 'settings.json');
-    this.value = this.read();
+    const { settings, migrated } = this.load();
+    this.value = settings;
+    // A file from before an appearance change is written back once, with its mark, so the other hub and the next start
+    // read the same. If it cannot be written now (another Aivenue keeps the lock), every read brings it up to date in
+    // memory and the next saved change writes it.
+    if (migrated) {
+      try {
+        this.set({});
+      } catch {
+        // written with the next change
+      }
+    }
   }
 
   get(): AppSettings {
@@ -97,15 +128,21 @@ export class SettingsStore {
   }
 
   private read(): AppSettings {
+    return this.load().settings;
+  }
+
+  /** The settings file as it is now, over the defaults and brought up to date (see upgrade). */
+  private load(): { settings: AppSettings; migrated: boolean } {
     let stored: Partial<AppSettings> = {};
     const stamp = this.fileStamp();
     try {
-      stored = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      const parsed: unknown = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) stored = parsed as Partial<AppSettings>;
     } catch {
       // first run
     }
     this.stamp = stamp;
-    return { ...DEFAULTS, ...stored };
+    return upgrade(stored);
   }
 
   private fileStamp(): string {

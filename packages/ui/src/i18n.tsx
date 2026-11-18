@@ -5,24 +5,32 @@ import { hub, useSettings } from './api';
 export type T = (zh: string, en: string) => string;
 
 const Ctx = createContext<{ settings: AppSettings; t: T }>({
-  settings: { locale: 'zh-TW', theme: 'system', accent: '#c96442' },
+  settings: { locale: 'zh-TW', theme: 'system', accent: '#3156c6' },
   t: (zh) => zh,
 });
 
+/**
+ * The accent colours offered in Settings → 一般 (any other one through the colour picker). Blue is the default and takes
+ * the place of the former Ocean (#2f6feb, the same hue); Teal and Slate replace Forest and Rose, which read as the ok
+ * and error colours. Clay, the default before, stays selectable.
+ */
 export const ACCENTS = [
-  { id: '#c96442', zh: '陶土', en: 'Clay' },
+  { id: '#3156c6', zh: '藍', en: 'Blue' },
   { id: '#3d3d3a', zh: '墨黑', en: 'Ink' },
-  { id: '#2f6feb', zh: '海藍', en: 'Ocean' },
-  { id: '#2f855a', zh: '森綠', en: 'Forest' },
   { id: '#6e56cf', zh: '紫羅蘭', en: 'Violet' },
-  { id: '#d6336c', zh: '玫瑰', en: 'Rose' },
+  { id: '#c96442', zh: '陶土', en: 'Clay' },
+  { id: '#0f766e', zh: '青', en: 'Teal' },
+  { id: '#475569', zh: '石板', en: 'Slate' },
 ];
 
 function applyAppearance(s: AppSettings) {
   const root = document.documentElement;
   if (s.theme === 'system') delete root.dataset.theme;
   else root.dataset.theme = s.theme;
-  root.style.setProperty('--accent', s.accent);
+  // Inside VS Code the editor theme gives the accent (styles.css maps it to the theme's link and focus colours); the
+  // user's own accent is for the desktop app and the browser.
+  if (root.dataset.host === 'vscode') root.style.removeProperty('--accent');
+  else root.style.setProperty('--accent', s.accent);
   root.lang = s.locale === 'en' ? 'en' : 'zh-Hant';
 }
 

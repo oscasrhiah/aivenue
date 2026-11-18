@@ -634,6 +634,11 @@ export interface AppSettings {
   locale: Locale;
   theme: 'system' | 'light' | 'dark';
   accent: string;
+  /**
+   * The appearance changes this settings file has been brought up to (settings.ts); absent in files from before them.
+   * 2: the default accent moved from clay (#c96442) to blue (#3156c6).
+   */
+  appearanceVersion?: number;
   /** Last role configuration used for a new conversation. */
   draft?: Omit<WorkflowConfig, 'goal' | 'title'>;
   /** Minutes a CLI kept between turns may stay idle after its workflow ended (default 5; 0 = until Aivenue closes). Never closed while the workflow runs. */
