@@ -68,7 +68,8 @@ const bundled = await build({
     contents: `export { startHub, HubBusyError, WindowRegistry } from './packages/core/src/index';
 export { ensureHub, openChannel, readEndpoint, endpointFile } from './packages/vscode/src/sharedHub';
 export { holdOsLock, lockName } from './packages/core/src/osLock';
-export { OpLog } from './packages/core/src/opLog';`,
+export { OpLog } from './packages/core/src/opLog';
+export { NOT_REPLAYED, RECORDED_WITH_RUN, SAME_TWICE } from './packages/core/src/replay';`,
     resolveDir: root,
   },
 });
@@ -918,6 +919,24 @@ test('外部效果的操作：「已開始」寫不進操作紀錄時不執行�
   }
 });
 
+test('每個會改東西的 hub 方法都依實際行為歸類：外部效果不重送、和工作流一起記、做兩次結果相同，三者擇一；新增帳號、從目錄新增、測試供應商在外部效果裡', async () => {
+  const { NOT_REPLAYED, RECORDED_WITH_RUN, SAME_TWICE } = mod.exports;
+  const src = fs.readFileSync(path.join(root, 'packages/core/src/hub.ts'), 'utf8');
+  const methods = [...src.matchAll(/^ {4}'([a-zA-Z]+\.[a-zA-Z.]+)': /gm)].map((m) => m[1]);
+  const readOnly = new Set([...src.match(/const READ_ONLY = new Set\(\[([\s\S]*?)\]\);/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]));
+  assert.ok(methods.length > 100, `found ${methods.length} methods`);
+  const groups = [NOT_REPLAYED, RECORDED_WITH_RUN, SAME_TWICE];
+  for (const m of methods) {
+    if (readOnly.has(m)) {
+      assert.ok(!groups.some((g) => g.has(m)), `${m} is read-only and in a group`);
+      continue;
+    }
+    const n = groups.filter((g) => g.has(m)).length;
+    assert.equal(n, 1, `${m}: in ${n} groups (each method that changes something must be in exactly one)`);
+  }
+  for (const g of groups) for (const m of g) assert.ok(methods.includes(m), `${m} is not a hub method`);
+  for (const m of ['providers.addAccount', 'catalog.add', 'providers.test', 'skills.openFolder']) assert.ok(NOT_REPLAYED.has(m), m);
+});
 
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
