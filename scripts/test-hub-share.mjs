@@ -1019,6 +1019,56 @@ test('未確認完成的「已開始」沒有時間期限：執行超過一天�
   }
 });
 
+test('標記超過上限時寫入失敗：新操作的「已開始」寫不進去被拒絕，被它擠掉的舊標記完整還原，同一個服務重送舊操作仍不執行；操作完成時寫不進去也一樣；寫入成功後才真的清掉', async () => {
+  const { OpLog } = mod.exports;
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRename = nfs.renameSync;
+  const dir = tmp('mark-trim-failed');
+  const file = path.join(dir, 'hub-ops.json');
+  const many = {};
+  for (let i = 0; i < 1001; i++) many[`m-${i}`] = { at: Date.now() - (2000 - i) * 60_000, started: true };
+  fs.writeFileSync(file, JSON.stringify(many));
+  const writes = (ok) => {
+    nfs.renameSync = ok
+      ? realRename
+      : function (from, to) {
+          if (String(to) === file) throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+          return realRename.apply(this, arguments);
+        };
+  };
+  const unknown = /不知道有沒有完成|whether it finished is unknown/;
+  const onDisk = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  let effects = 0;
+  const log = new OpLog(file);
+  try {
+    // The review of c280ecc: the new operation's mark cannot be written. It is refused, not run...
+    writes(false);
+    await assert.rejects(log.once('new-1', () => effects++, undefined, true), /無法在操作紀錄記下這個操作（EIO|could not be recorded in the operation log/);
+    writes(true);
+    assert.equal(effects, 0);
+    // ...and the oldest mark it would have pushed out is kept, here as on disk: a resend to this same hub is not run.
+    assert.equal(onDisk()['m-0']?.started, true);
+    await assert.rejects(log.once('m-0', () => effects++, undefined, true), unknown);
+    assert.equal(effects, 0, 'the old operation did not run again');
+    // An answer whose write fails pushes out nothing either.
+    writes(false);
+    assert.equal(await log.once('plain-1', () => 'x'), 'x');
+    writes(true);
+    await assert.rejects(log.once('m-0', () => effects++, undefined, true), unknown);
+    assert.equal(effects, 0);
+    // Once the file is written without it, the oldest has gone (the limit). A resend of that one may then run again,
+    // by design; the others are still refused.
+    assert.equal(await log.once('plain-2', () => 'y'), 'y');
+    assert.equal(onDisk()['m-0'], undefined);
+    assert.equal(onDisk()['m-1']?.started, true);
+    assert.equal(await log.once('m-0', () => (effects++, 'ran'), undefined, true), 'ran');
+    await assert.rejects(log.once('m-1', () => effects++, undefined, true), unknown);
+    assert.equal(effects, 1);
+  } finally {
+    nfs.renameSync = realRename;
+  }
+});
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();
