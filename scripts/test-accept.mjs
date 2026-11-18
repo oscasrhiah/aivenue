@@ -504,6 +504,11 @@ test('驗收樣本：決定不能建立在樣本明示條件的反面——用 v
     ],
     finalAsk: [{ id: 'D1', question: '這次在 A（同步寫入後回覆）與 B（先回覆，每 500 毫秒批次寫入）之間選哪一個？', choice: '選 A，建議將本次變更交付給客戶甲。', reasons: '客戶甲要求每筆確認成功的操作在服務程序崩潰後不能遺失。程式以同步方式完整寫入暫存檔、fsync、關檔並 rename 到正式檔之後才呼叫成功回覆；本地重現也確認回覆回呼執行時檔案已含該操作。B 會在回覆成功後留下最多 0.5 秒尚未寫入的已確認操作，違反甲的要求。', assumptions: ['客戶甲給出的程序崩潰保證是此部署的主要驗收條件；整台電腦斷電不在其合約範圍內。'] }],
   };
+  // A v5 run (ask): power loss stated as excluded, then the parent directory said not to be synced — a fact, not a
+  // demand. The first version of the check named it (a false alarm).
+  seen.v5Ask = [{ id: 'D1', question: '在做法 A、B 之間選一個', choice: 'A；建議合併本變更', reasons: '使用者確認服務交付客戶甲，其合約要求程序崩潰後不得遺失已確認操作。A 在回覆前完成暫存檔寫入、檔案 fsync 和改名；B 的 500 毫秒批次回覆會留有合約不允許的遺失窗口。檢視程式順序及臨時目錄重送檢查亦符合這項承諾。', assumptions: ['客戶甲排除整台電腦斷電；本變更 fsync 資料檔，但不 fsync 其父目錄。', 'Store 文件所述每個檔案只有一個 Store 寫入者的條件成立。'] }];
+  assert.deepEqual(againstStated(seen.v5Ask), []);
+  assert.deepEqual(againstStated([{ id: 'D9', choice: 'A', reasons: '必須先同步父目錄才算持久', assumptions: [] }]), ['D9: durability across power loss (out of scope in the request)'], 'a demand for a directory sync');
   // Stating the condition (one writer; power loss out of scope) is in line with the samples.
   assert.deepEqual(againstStated(seen.firstDecide), []);
   assert.deepEqual(againstStated(seen.finalAsk), []);

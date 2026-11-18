@@ -156,7 +156,12 @@ export const saysMerge = (s) => /合併|merge/i.test(s ?? '') && !/不\s*(要|�
  */
 export const AGAINST = [
   { what: 'more than one writer of the file (the base states one Store per file)', re: /(可能|會|若有|允許|may|might|can|could)[^。；;.\n]{0,24}(多個|兩個|多)\s*(Store|實例|視窗|程序|服務|writer|instance|window|process)|多實例|併發覆寫|concurrent (writ|instance)|multiple (stores|instances|writers)/i },
-  { what: 'durability across power loss (out of scope in the request)', re: /目錄[^。；;\n]{0,8}(同步|fsync)|(fsync|同步)[^。；;\n]{0,8}目錄|directory[^.;\n]{0,12}(sync|fsync)|(斷電|power loss)[^。；;\n]{0,12}(仍|也|會)?[^。；;\n]{0,6}(遺失|lost)/i },
+  // Asked for, or held against the change: "cannot guarantee … power loss", "lost on power loss", "needs a directory
+  // sync". Saying the parent directory is not synced, next to "power loss is out of scope", is not (a v5 run).
+  {
+    what: 'durability across power loss (out of scope in the request)',
+    re: /(無法|不能|未能|沒有|不)\s*保證[^。；;\n]{0,24}(斷電|系統崩潰|power loss|power failure)|(斷電|power loss)[^。；;\n]{0,12}(仍|也|會)?[^。；;\n]{0,6}(遺失|lost)|(需要|需|應|應該|必須|先|補)\s*[^。；;\n]{0,10}(fsync|同步)\s*[^。；;\n]{0,6}目錄|(should|must|needs?( to)?)\s+[^.;\n]{0,20}(fsync|sync)[^.;\n]{0,12}directory|cannot guarantee[^.;\n]{0,30}power/i,
+  },
 ];
 /** Which decisions rest on the opposite of a stated condition: "D2: more than one writer…". */
 export const againstStated = (decisions) =>
