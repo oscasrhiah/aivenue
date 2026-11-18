@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { L } from './i18n';
+import { decideItems, decideProblemText, decideProblems } from './reviewDecide';
 import type { ReviewTarget, ReviewTask } from './types';
 import { safeGit } from './worktree';
 
@@ -20,17 +21,21 @@ function checkRev(v: unknown, what: string): string | undefined {
   return s;
 }
 
-/** The review task as the user set it, checked: revisions git can only read as revisions, the material kept in size. */
+/**
+ * The review task as the user set it, checked: revisions git can only read as revisions, the material kept in size, the
+ * listed decisions within their limits (more than 10, or one over 500 characters: refused, never dropped or cut — a
+ * dropped one would go unchecked, so a report leaving it out would pass).
+ */
 export function normalizeReview(r: ReviewTask | undefined): ReviewTask | undefined {
   if (!r || typeof r !== 'object') return undefined;
   const commit = checkRev(r.commit, L('受審提交', 'The reviewed commit'));
   const base = checkRev(r.base, L('比較起點', 'The base'));
   const material = typeof r.material === 'string' && r.material.trim() ? r.material.trim().slice(0, MATERIAL_MAX) : undefined;
-  // One decision per item (the field is edited as lines): blank ones dropped, at most 10, each kept in size.
-  const decide = (Array.isArray(r.decide) ? r.decide : typeof r.decide === 'string' ? String(r.decide).split('\n') : [])
-    .map((d) => (typeof d === 'string' ? d.trim().slice(0, 500) : ''))
-    .filter(Boolean)
-    .slice(0, 10);
+  // One decision per line (the field is edited as lines): blank ones are not decisions.
+  const field = r.decide as unknown as readonly unknown[] | string | undefined;
+  const over = decideProblems(field);
+  if (over.length) throw new Error(decideProblemText(L, over));
+  const decide = decideItems(field);
   return { ...(commit ? { commit } : {}), ...(base ? { base } : {}), ...(material ? { material } : {}), ...(decide.length ? { decide } : {}) };
 }
 

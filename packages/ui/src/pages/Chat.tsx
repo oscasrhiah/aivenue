@@ -5,6 +5,7 @@ import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDe
 import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
+import { decideProblemText, decideProblems } from '../../../core/src/reviewDecide';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
@@ -1083,6 +1084,28 @@ export function Chat({ id }: { id?: string }) {
     if (!config.cwd) {
       setRolesOpen(true);
       setError(t('請先選擇工作資料夾', 'Choose a working folder first'));
+      return false;
+    }
+    // Decisions over their limits: not sent (the hub would refuse them; nothing is cut). The settings open on the field,
+    // which names the lines.
+    const decideOver = config.review ? decideProblems(config.review.decide) : [];
+    if (decideOver.length) {
+      setRolesOpen(true);
+      setError(decideProblemText(t, decideOver));
+      // The field itself, in view and focused, once the settings are drawn, with the first line over a limit selected.
+      setTimeout(() => {
+        const field = document.getElementById('review-decide') as HTMLTextAreaElement | null;
+        if (!field) return;
+        field.scrollIntoView({ block: 'center' });
+        field.focus();
+        const lines = field.value.split('\n');
+        const n = decideOver[0].line - 1;
+        const start = lines.slice(0, n).reduce((sum, l) => sum + l.length + 1, 0);
+        field.setSelectionRange(start, start + (lines[n]?.length ?? 0));
+        // Selecting does not always scroll a textarea: the line brought to its middle.
+        const lineHeight = parseFloat(getComputedStyle(field).lineHeight) || 20;
+        field.scrollTop = Math.max(0, n * lineHeight - field.clientHeight / 2);
+      }, 50);
       return false;
     }
     setSending(true);

@@ -4034,6 +4034,37 @@ test('獨立審查：使用者列出交給審查者的決定時逐項核對—�
   }
 });
 
+test('獨立審查：列出 10 項決定照常送出，10 項都要回答；第 11 項或單項超過 500 字，在任何 agent 執行前就拒絕並指出哪一行，不會刪掉或截斷後照跑', async () => {
+  const { orch, cwd } = setup();
+  twoCommits(cwd);
+  const ten = Array.from({ length: 10 }, (_, i) => `決定 ${i + 1}：做法 A 或 B？`);
+  const seen = {};
+  const calls = fakeAgents(orch, {
+    independent: [
+      async (o, secret, a) => {
+        seen.prompt = a.prompt;
+        const base = { verdict: 'approve', summary: 's', issues: [], checked: ['ran it'], not_checked: ['Linux'] };
+        const answer = (n) => Array.from({ length: n }, (_, i) => ({ id: `D${i + 1}`, choice: 'A', reasons: 'B loses data', assumptions: ['one writer'] }));
+        seen.nine = await o.callTool(secret, 'submit_review', { ...base, decisions: answer(9) }).then(() => '', (e) => e.message);
+        await o.callTool(secret, 'submit_review', { ...base, decisions: answer(10) });
+      },
+    ],
+  });
+  // Ten: sent, all ten listed for the reviewer and checked (nine answered: refused for D10).
+  const r = await settle(orch, orch.start(config(cwd, { goal: '請審查並替我決定', review: { decide: ten } })).id);
+  assert.equal(r.status, 'completed', r.error);
+  assert.deepEqual(r.config.review.decide, ten);
+  assert.ok(seen.prompt.includes(`  D10: ${ten[9]}`));
+  assert.match(seen.nine, /does not answer it: D10 "決定 10：做法 A 或 B？"/);
+  assert.equal(r.stages.implement.rounds.at(-1).review.decisions.length, 10);
+  // Eleven, or one over 500 characters: refused at the start, naming the line; no run, no agent.
+  const before = orch.runs.size;
+  assert.throws(() => orch.start(config(cwd, { goal: '請審查', review: { decide: [...ten, '決定 11'] } })), /「要審查者決定的事」超過上限：最多 10 項，目前有 11 項；超過的是第 11 行|at most 10, there are 11; past the limit: line 11/);
+  assert.throws(() => orch.start(config(cwd, { goal: '請審查', review: { decide: ['A 或 B？', 'y'.repeat(501)] } })), /每項最多 500 字；第 2 行有 501 字|each at most 500 characters; line 2 has 501/);
+  assert.equal(orch.runs.size, before, 'no workflow was made for them');
+  assert.deepEqual(calls, ['independent'], 'no agent ran for them');
+});
+
 test('獨立審查：報告退回兩次仍不完整，第三次收下但標成不完整，工作流結束為「未完成」，不會變成建議通過', async () => {
   const { orch, cwd } = setup();
   twoCommits(cwd);

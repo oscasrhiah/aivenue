@@ -7,6 +7,7 @@ import { ModelPicker } from './ModelPicker';
 import { PermissionButton, permissionLabel, SafetySection } from './Safety';
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
+import { DECIDE_ITEM_MAX, DECIDE_MAX, decideItems, decideProblemText, decideProblems } from '../../../core/src/reviewDecide';
 import { fmtContext } from '../../../core/src/modelContext';
 import { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, STANDARD_ROUNDS } from '../../../core/src/flowMode';
 import { useT } from '../i18n';
@@ -207,6 +208,7 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
   const t = useT();
   const r = draft.review ?? {};
   const setReview = (patch: Partial<ReviewTask>) => onChange({ review: { ...r, ...patch } });
+  const decideOver = decideProblems(r.decide);
   const reviewer = draft.implement.reviewer ?? draft.implement.author;
   return (
     <section className="sect">
@@ -237,7 +239,7 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
           onChange={(e) => setReview({ material: e.target.value })}
         />
         <label className="small" htmlFor="review-decide">
-          {t('要審查者決定的事（選填，一行一項）', 'Decisions you leave to the reviewer (optional, one per line)')}
+          {t(`要審查者決定的事（選填，一行一項，最多 ${DECIDE_MAX} 項、每項 ${DECIDE_ITEM_MAX} 字）`, `Decisions you leave to the reviewer (optional, one per line, at most ${DECIDE_MAX}, each up to ${DECIDE_ITEM_MAX} characters)`)}
         </label>
         <textarea
           id="review-decide"
@@ -245,8 +247,14 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
           disabled={disabled}
           value={(r.decide ?? []).join('\n')}
           placeholder={t('例如：\n在做法 A、B 之間選一個\n要不要合併這次的變更', 'For example:\nPick approach A or B\nShould this change be merged?')}
+          aria-invalid={decideOver.length > 0}
+          aria-describedby="review-decide-state"
           onChange={(e) => setReview({ decide: e.target.value.split('\n') })}
         />
+        {/* Over a limit: said here, line by line, before sending (nothing is cut; the hub refuses it too). */}
+        <div id="review-decide-state" className={decideOver.length ? 'err-text small' : 'muted tiny'} role={decideOver.length ? 'alert' : undefined}>
+          {decideOver.length ? decideProblemText(t, decideOver) : t(`${decideItems(r.decide).length}／${DECIDE_MAX} 項`, `${decideItems(r.decide).length} of ${DECIDE_MAX}`)}
+        </div>
         <div className="muted tiny">
           {t(
             '列在這裡的，審查者要在報告裡逐項給出選擇、理由和前提，漏答的報告會被退回。只寫在要求裡的選擇，審查者也會回答，但 Aivenue 只能逐項核對列在這裡的。',

@@ -29,6 +29,7 @@ const bundled = await build({
       export { runAgent } from './packages/core/src/agentRunner';
       export { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, matchesStandard, STANDARD_ROUNDS } from './packages/core/src/flowMode';
       export { normalizeReview, workspaceChanges, workspaceState, workspaceUnknown } from './packages/core/src/reviewTarget';
+      export { DECIDE_ITEM_MAX, DECIDE_MAX, decideItems, decideProblemText, decideProblems } from './packages/core/src/reviewDecide';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { reviewMarkdown } from './packages/ui/src/reviewText';
@@ -4170,10 +4171,9 @@ test('獨立審查：使用者交給審查者的決定（選擇、理由、前�
     { id: 'D1', question: 'A or B?', choice: '', reasons: '', assumptions: [] },
     { id: 'D2', question: '', choice: 'A', reasons: '', assumptions: [] },
   ]);
-  // The listed decisions, as the user typed them (one per line): blank lines dropped, trimmed, at most 10.
+  // The listed decisions, as the user typed them (one per line): blank lines dropped, trimmed (limits: the next test).
   assert.deepEqual(W.normalizeReview({ decide: ['  A or B?  ', '', 'merge?'] }).decide, ['A or B?', 'merge?']);
   assert.deepEqual(W.normalizeReview({ decide: 'A or B?\n\nmerge?' }).decide, ['A or B?', 'merge?']);
-  assert.equal(W.normalizeReview({ decide: Array.from({ length: 12 }, (_, i) => `q${i}`) }).decide.length, 10);
   assert.equal('decide' in W.normalizeReview({ decide: ['', '  '] }), false);
   const run = { status: 'completed', id: 'r', config: { cwd: '.', goal: 'pick A or B', review: {} }, agents: {}, notes: [], steps: [], stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, review: { verdict: 'approve', summary: 'A is right', issues: [], decisions: [decision] } }] }, verify: { rounds: [] } } };
   assert.match(W.followUpGoal('then do it', run), /Its outcome: review verdict "approve": A is right Decisions left to the reviewer: D1 A or B\? → A/);
@@ -4183,6 +4183,33 @@ test('獨立審查：使用者交給審查者的決定（選擇、理由、前�
   assert.ok(W.TOOL_DEFS.submit_review.inputSchema.properties.decisions.items.required.includes('assumptions'));
   // The JSON shape a reviewer without tools writes names it too.
   assert.match(W.P.independentReviewPrompt({ goal: 'g', title: 't', cwd: '.' }, { files: [], scratch: '/s' }), /"decisions": \[\{"id": "D1", "question": string, "choice": string, "reasons": string, "assumptions": \[string\]\}\]/);
+});
+
+test('要審查者決定的事有上限（10 項、每項 500 字）：超過的不刪不截，頁面送出前逐行指出，hub 也拒絕；10 項、剛好 500 字照收；空白行不算一項，但行號照實算', () => {
+  assert.equal(W.DECIDE_MAX, 10);
+  assert.equal(W.DECIDE_ITEM_MAX, 500);
+  const ten = Array.from({ length: 10 }, (_, i) => `決定 ${i + 1}`);
+  // Ten, one of them exactly 500 characters, blank lines between: accepted whole.
+  const full = [...ten.slice(0, 9), 'x'.repeat(500)];
+  assert.deepEqual(W.decideProblems(full), []);
+  assert.deepEqual(W.normalizeReview({ decide: full }).decide, full);
+  assert.deepEqual(W.normalizeReview({ decide: ['', ...ten, '  '] }).decide, ten, 'blank lines are not decisions');
+  // Eleven: refused, naming the line past the limit (blank lines counted as lines, as the user sees them).
+  const eleven = [...ten.slice(0, 5), '', ...ten.slice(5), '決定 11'];
+  assert.deepEqual(W.decideProblems(eleven), [{ line: 12, why: 'count', item: 11, length: 5 }]);
+  assert.throws(() => W.normalizeReview({ decide: eleven }), /「要審查者決定的事」超過上限：最多 10 項，目前有 11 項；超過的是第 12 行。請修改後再送出，Aivenue 不會自動刪減。|"Decisions you leave to the reviewer" is over its limits: at most 10, there are 11; past the limit: line 12\. Edit it and send again; Aivenue does not cut it for you\./);
+  // One over 500 characters: refused, naming its line and length; nothing cut.
+  const long = ['A 或 B？', 'y'.repeat(501)];
+  assert.deepEqual(W.decideProblems(long), [{ line: 2, why: 'length', item: 2, length: 501 }]);
+  assert.throws(() => W.normalizeReview({ decide: long }), /每項最多 500 字；第 2 行有 501 字|each at most 500 characters; line 2 has 501/);
+  assert.throws(() => W.normalizeReview({ decide: long.join('\n') }), /第 2 行有 501 字|line 2 has 501/, 'the same as one text');
+  // Both at once, in the page's words (zh and en): every line named.
+  const both = [...ten, 'z'.repeat(600), '決定 12'];
+  const zh = (z) => z;
+  const en = (_z, e) => e;
+  assert.equal(W.decideProblemText(zh, W.decideProblems(both)), '「要審查者決定的事」超過上限：最多 10 項，目前有 12 項；超過的是第 11、12 行；每項最多 500 字；第 11 行有 600 字。請修改後再送出，Aivenue 不會自動刪減。');
+  assert.equal(W.decideProblemText(en, W.decideProblems(both)), '"Decisions you leave to the reviewer" is over its limits: at most 10, there are 12; past the limit: lines 11, 12; each at most 500 characters; line 11 has 600. Edit it and send again; Aivenue does not cut it for you.');
+  assert.deepEqual(W.decideItems(both).length, 12, 'items as typed: none dropped or cut');
 });
 
 test('背景啟動與程序的對應：比完整路徑——另一個專案的同名腳本不算；程序用相對路徑時要知道它的資料夾；Linux 分大小寫；只在參數、-e／-c 裡提到不算；啟動的資料夾依 shell 規則（可能沒執行的 cd 算不知道）', () => {
