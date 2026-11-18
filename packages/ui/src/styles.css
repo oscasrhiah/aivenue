@@ -6710,6 +6710,9 @@ textarea.code {
   min-height: 90px;
   resize: vertical;
 }
+.review-target-fields textarea.review-decide {
+  min-height: 56px;
+}
 /* A problem outside the reviewed change: listed, not part of the verdict. */
 .review-issue.pre-existing {
   border-left-style: dashed;

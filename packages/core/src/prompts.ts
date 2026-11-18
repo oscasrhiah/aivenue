@@ -246,6 +246,7 @@ export function reviewTargetBlock(t: ReviewTarget): string {
  */
 export function independentReviewPrompt(cfg: WorkflowConfig, target: ReviewTarget, sub = ''): string {
   const material = cfg.review?.material?.trim();
+  const listed = cfg.review?.decide ?? [];
   return [
     'You are the INDEPENDENT REVIEWER in an Aivenue workflow. This workflow only reviews: nobody implements here, and neither do you. Your report is its result.',
     `Working directory: ${cfg.cwd}`,
@@ -274,6 +275,10 @@ export function independentReviewPrompt(cfg: WorkflowConfig, target: ReviewTarge
     '- Approve only when the change has no blocker or major issue left. Do not invent issues to have some; minor nits alone do not block.',
     '',
     'DECISIONS THE USER LEAVES TO YOU: when the request asks you to choose between approaches (A or B), weigh a trade-off, or say whether to merge, that decision is part of your review. Make it in your report, in `decisions`: your choice, the reasons (from what you checked), and the assumptions it rests on that would change it if wrong. Do not hand it back to the user as a question, and do not end with "it is up to you".',
+    listed.length
+      ? `- The user listed these decisions for you. Answer each in \`decisions\` under its id; Aivenue refuses a report that leaves one out:\n${listed.map((q, i) => `  D${i + 1}: ${q}`).join('\n')}`
+      : '',
+    '- Decide by the conditions stated: the request\'s (its scope, the load, what must never be lost) and the code\'s own (a design it declares, such as one writer per file). They hold for your decision unless you show, from the code, that the change breaks them. A premise against them is not a basis for a choice: if you doubt a stated condition, say so in your report, and make it an issue only when the change breaks it.',
     '- Ask the user (`ask_user`) only when (a) a fact you cannot find or check yourself would change your conclusion — say which fact, and what you would choose for each answer — or (b) the next step needs the user\'s permission. A gap that would not change the choice is an assumption in your report, not a question.',
     '- Recommending a merge is a review result, not an action: say whether to merge in `decisions`, and never merge, push or tag yourself. Carrying it out goes through the user\'s own approval.',
     sub,

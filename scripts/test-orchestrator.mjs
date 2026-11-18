@@ -3943,7 +3943,7 @@ test('獨立審查：使用者把 A／B 的選擇交給審查者、資訊足夠�
     assert.match(seen.prompt, /Recommending a merge is a review result, not an action[\s\S]*never merge, push or tag yourself/);
     // The general rule on questions, which every agent gets, says the same.
     assert.match(seen.prompt, /QUESTIONS FOR THE USER:[^\n]*A choice the user's request leaves to you \(choose, weigh, recommend\) is yours: make it and say why; ask only when a fact you cannot find or check would change it\./);
-    assert.match(seen.refused, /Decision D1 \("A or B\?"\) lacks `reasons`, `assumptions`: make the choice yourself/);
+    assert.match(seen.refused, /Decision D1 \("A or B\?"\) lacks `reasons`, `assumptions`: say what it answers, make the choice yourself/);
     const review = r.stages.implement.rounds.at(-1).review;
     assert.deepEqual(review.decisions, [decided]);
     assert.ok(r.log.some((l) => /獨立審查完成：建議通過；你交給審查者的決定：D1 A, and merge it/.test(l.text)));
@@ -3981,6 +3981,56 @@ test('獨立審查：使用者把 A／B 的選擇交給審查者、資訊足夠�
     assert.match(prompts[1], /THE USER ANSWERED[\s\S]*Their answer: X/);
     assert.doesNotMatch(prompts[1], /You are the IMPLEMENTER|submit_work/);
     assert.equal(r.stages.implement.rounds.at(-1).review.decisions[0].choice, 'A, and merge it');
+  }
+});
+
+test('獨立審查：使用者列出交給審查者的決定時逐項核對——整個漏答、空的 decisions、缺問題又對不上的項目都退回；只給編號的回答補上列出的問題；一般審查沒有列出就不要求，但給了的項目也要完整', async () => {
+  const base = { verdict: 'approve', summary: 's', issues: [], checked: ['ran test.js at the commit'], not_checked: ['Linux'] };
+  const whole = (id, extra = {}) => ({ id, choice: 'A', reasons: 'B loses confirmed operations on a crash', assumptions: ['one Store per file, as the base states'], ...extra });
+  const run = async (review, script) => {
+    const { orch, cwd } = setup();
+    twoCommits(cwd);
+    const said = [];
+    const seen = {};
+    fakeAgents(orch, {
+      independent: [
+        async (o, secret, a) => {
+          seen.prompt = a.prompt;
+          for (const args of script) said.push(await o.callTool(secret, 'submit_review', { ...base, ...args }).then(() => '', (e) => e.message));
+        },
+      ],
+    });
+    const r = await settle(orch, orch.start(config(cwd, { goal: '請審查，並替我在 A、B 之間選一個', review })).id);
+    return { r, said, prompt: seen.prompt, review: r.stages.implement.rounds.at(-1).review };
+  };
+  // Two listed: left out entirely, then an empty list — both refused; answered by id alone — the listed questions filled in.
+  {
+    const { r, said, prompt, review } = await run({ decide: ['在做法 A、B 之間選一個', '', '  要不要合併這次的變更  '] }, [{}, { decisions: [] }, { decisions: [whole('D1'), whole('d2', { choice: 'merge it' })] }]);
+    assert.equal(r.status, 'completed', r.error);
+    assert.deepEqual(r.config.review.decide, ['在做法 A、B 之間選一個', '要不要合併這次的變更'], 'blank lines dropped, trimmed');
+    assert.ok(prompt.includes('- The user listed these decisions for you. Answer each in `decisions` under its id; Aivenue refuses a report that leaves one out:\n  D1: 在做法 A、B 之間選一個\n  D2: 要不要合併這次的變更'));
+    assert.match(prompt, /Decide by the conditions stated: the request's \(its scope, the load, what must never be lost\) and the code's own \(a design it declares, such as one writer per file\)[\s\S]*A premise against them is not a basis for a choice/);
+    for (const refused of said.slice(0, 2)) assert.match(refused, /The user left these decisions to you, and your report does not answer them: D1 "在做法 A、B 之間選一個", D2 "要不要合併這次的變更"\. Add each to `decisions` under its id/);
+    assert.equal(said[2], '');
+    assert.deepEqual(review.decisions.map((d) => [d.id, d.question, d.choice]), [['D1', '在做法 A、B 之間選一個', 'A'], ['D2', '要不要合併這次的變更', 'merge it']]);
+    assert.equal(review.incomplete, undefined);
+  }
+  // One listed: an entry with no question that answers nothing listed — refused for both; then a valid answer.
+  {
+    const { r, said, review } = await run({ decide: ['在做法 A、B 之間選一個'] }, [{ decisions: [whole('X9')] }, { decisions: [whole('D1', { question: 'A or B?' })] }]);
+    assert.equal(r.status, 'completed', r.error);
+    assert.match(said[0], /does not answer it: D1 "在做法 A、B 之間選一個"[\s\S]*Decision X9 lacks `question`/);
+    assert.equal(said[1], '');
+    assert.deepEqual(review.decisions.map((d) => [d.id, d.question]), [['D1', 'A or B?']], "the reviewer's own wording kept");
+  }
+  // A plain review (nothing listed): no decision needed; one given without its question is still refused.
+  {
+    const { r, said, review } = await run({}, [{ decisions: [whole('D1')] }, {}]);
+    assert.equal(r.status, 'completed', r.error);
+    assert.match(said[0], /Decision D1 lacks `question`/);
+    assert.equal(said[1], '');
+    assert.equal(review.decisions, undefined);
+    assert.doesNotMatch(r.log.map((l) => l.text).join('\n'), /交給審查者的決定/);
   }
 });
 

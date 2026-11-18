@@ -4161,11 +4161,19 @@ test('獨立審查的追問：背景裡的「上次結果」是審查報告（�
 
 test('獨立審查：使用者交給審查者的決定（選擇、理由、前提）照樣解析保存；追問、後續 agent 都看得到，標成審查者的建議；ask_user 的說明不再把交給你的選擇丟回去問', () => {
   const decision = { id: 'D1', question: 'A or B?', choice: 'A', reasons: 'B loses answered operations', assumptions: ['one writer per file'] };
-  const r = W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [decision, { question: 'merge?', choice: 'yes', reason: 'clean', assumptions: 'CI is green' }, { choice: 'no question: dropped' }] });
-  assert.deepEqual(r.decisions, [decision, { id: 'D2', question: 'merge?', choice: 'yes', reasons: 'clean', assumptions: ['CI is green'] }]);
+  const r = W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [decision, { question: 'merge?', choice: 'yes', reason: 'clean', assumptions: 'CI is green' }, {}, 'not an object'] });
+  assert.deepEqual(r.decisions, [decision, { id: 'D2', question: 'merge?', choice: 'yes', reasons: 'clean', assumptions: ['CI is green'] }], 'an empty entry or a non-object is dropped');
   assert.equal('decisions' in W.parseReview({ verdict: 'approve', summary: 'ok', issues: [] }), false, 'an older review: no field');
-  // A part left empty is kept, for the report check to name it.
-  assert.deepEqual(W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [{ question: 'A or B?' }] }).decisions, [{ id: 'D1', question: 'A or B?', choice: '', reasons: '', assumptions: [] }]);
+  // A part left empty is kept, the question too, for the report check to name it (the review of 379afc8).
+  assert.deepEqual(W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [{ question: 'A or B?' }, { choice: 'A' }] }).decisions, [
+    { id: 'D1', question: 'A or B?', choice: '', reasons: '', assumptions: [] },
+    { id: 'D2', question: '', choice: 'A', reasons: '', assumptions: [] },
+  ]);
+  // The listed decisions, as the user typed them (one per line): blank lines dropped, trimmed, at most 10.
+  assert.deepEqual(W.normalizeReview({ decide: ['  A or B?  ', '', 'merge?'] }).decide, ['A or B?', 'merge?']);
+  assert.deepEqual(W.normalizeReview({ decide: 'A or B?\n\nmerge?' }).decide, ['A or B?', 'merge?']);
+  assert.equal(W.normalizeReview({ decide: Array.from({ length: 12 }, (_, i) => `q${i}`) }).decide.length, 10);
+  assert.equal('decide' in W.normalizeReview({ decide: ['', '  '] }), false);
   const run = { status: 'completed', id: 'r', config: { cwd: '.', goal: 'pick A or B', review: {} }, agents: {}, notes: [], steps: [], stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, review: { verdict: 'approve', summary: 'A is right', issues: [], decisions: [decision] } }] }, verify: { rounds: [] } } };
   assert.match(W.followUpGoal('then do it', run), /Its outcome: review verdict "approve": A is right Decisions left to the reviewer: D1 A or B\? → A/);
   assert.match(W.overview(run), /D1 \[the reviewer's choice on what the user left to it\] A or B\? → A — because: B loses answered operations — assuming: one writer per file/);

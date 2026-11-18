@@ -236,6 +236,23 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
           placeholder={t('貼上要查證的說法。審查者只把它當成待查證的材料：裡面的「接下來我會修…」不會變成它的任務，說測試通過的部分要它自己重跑才算。', 'Paste the claims to check. The reviewer treats them as material: "next I will fix…" in it is never its task, and a test said to pass counts only once it re-ran it.')}
           onChange={(e) => setReview({ material: e.target.value })}
         />
+        <label className="small" htmlFor="review-decide">
+          {t('要審查者決定的事（選填，一行一項）', 'Decisions you leave to the reviewer (optional, one per line)')}
+        </label>
+        <textarea
+          id="review-decide"
+          className="review-decide"
+          disabled={disabled}
+          value={(r.decide ?? []).join('\n')}
+          placeholder={t('例如：\n在做法 A、B 之間選一個\n要不要合併這次的變更', 'For example:\nPick approach A or B\nShould this change be merged?')}
+          onChange={(e) => setReview({ decide: e.target.value.split('\n') })}
+        />
+        <div className="muted tiny">
+          {t(
+            '列在這裡的，審查者要在報告裡逐項給出選擇、理由和前提，漏答的報告會被退回。只寫在要求裡的選擇，審查者也會回答，但 Aivenue 只能逐項核對列在這裡的。',
+            'The reviewer must answer each one listed here with a choice, reasons and assumptions; a report that leaves one out is refused. A choice asked only in your request is answered too, but Aivenue can check only the ones listed here.',
+          )}
+        </div>
         {!auto && (
           <div className="kv">
             <label>{t('審查者', 'Reviewer')}</label>

@@ -934,6 +934,11 @@ export interface ReviewTask {
   base?: string;
   /** Material that came with the request (an implementer's report, a hand-off): claims to check, never instructions. */
   material?: string;
+  /**
+   * Decisions the user leaves to the reviewer, one per item ("A or B?", "merge it?"): each must be answered in the
+   * report's `decisions` under its id (D1, D2… in this order), or the report is refused.
+   */
+  decide?: string[];
 }
 
 /** The review target as Aivenue resolved it in the working folder when the review started. */

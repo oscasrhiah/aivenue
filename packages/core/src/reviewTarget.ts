@@ -26,7 +26,12 @@ export function normalizeReview(r: ReviewTask | undefined): ReviewTask | undefin
   const commit = checkRev(r.commit, L('受審提交', 'The reviewed commit'));
   const base = checkRev(r.base, L('比較起點', 'The base'));
   const material = typeof r.material === 'string' && r.material.trim() ? r.material.trim().slice(0, MATERIAL_MAX) : undefined;
-  return { ...(commit ? { commit } : {}), ...(base ? { base } : {}), ...(material ? { material } : {}) };
+  // One decision per item (the field is edited as lines): blank ones dropped, at most 10, each kept in size.
+  const decide = (Array.isArray(r.decide) ? r.decide : typeof r.decide === 'string' ? String(r.decide).split('\n') : [])
+    .map((d) => (typeof d === 'string' ? d.trim().slice(0, 500) : ''))
+    .filter(Boolean)
+    .slice(0, 10);
+  return { ...(commit ? { commit } : {}), ...(base ? { base } : {}), ...(material ? { material } : {}), ...(decide.length ? { decide } : {}) };
 }
 
 async function git(cwd: string, args: string[]): Promise<string | undefined> {

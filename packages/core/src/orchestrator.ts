@@ -139,8 +139,10 @@ class Incomplete extends Error {}
  * What an independent review's report lacks or contradicts (the contract its prompt states), for the reviewer
  * (`agent`) and the user (`user`): what was checked and not, why each issue blocks or not, and a verdict that agrees
  * with its own issues (an approval with a blocker or major issue in the change is a contradiction, not an approval).
+ * `decide`: the decisions the user listed for the reviewer (the review task): each must be answered under its id (D1…),
+ * whole. Without a list, decisions are optional, but one given must be whole too, its question included.
  */
-export function reportProblems(r: Review): { agent: string; user: string }[] {
+export function reportProblems(r: Review, decide: string[] = []): { agent: string; user: string }[] {
   const out: { agent: string; user: string }[] = [];
   if (!r.report?.checked.length) out.push({ agent: 'Add `checked`: what you checked and how.', user: L('沒有列出查過的項目', 'what was checked is not listed') });
   if (!r.report?.notChecked.length) out.push({ agent: 'Add `not_checked`: what you did not check and why (if nothing, say so and why).', user: L('沒有列出沒查過的項目', 'what was not checked is not listed') });
@@ -152,16 +154,34 @@ export function reportProblems(r: Review): { agent: string; user: string }[] {
       agent: `Your verdict is "approve", but ${against.join(', ')} ${against.length > 1 ? 'are' : 'is a'} blocker/major issue${against.length > 1 ? 's' : ''} in the change. Either change the verdict to "revise", or, if an issue is outside the change, set pre_existing: true and say why in \`blocking\`, or, if it is less severe than you said, lower its severity and say why.`,
       user: L(`結論是建議通過，卻列了變更裡的嚴重或重要問題：${against.join('、')}`, `the verdict is approve, but it lists blocker or major issues in the change: ${against.join(', ')}`),
     });
-  // A decision the user left to the reviewer is made, with why and on what it rests.
+  // Every decision the user listed is answered, under its id.
+  const listed = decide.map((q, i) => ({ id: `D${i + 1}`, q }));
+  const given = new Set((r.decisions ?? []).map((d) => d.id.toUpperCase()));
+  const unanswered = listed.filter((l) => !given.has(l.id));
+  if (unanswered.length)
+    out.push({
+      agent: `The user left ${unanswered.length > 1 ? 'these decisions' : 'this decision'} to you, and your report does not answer ${unanswered.length > 1 ? 'them' : 'it'}: ${unanswered.map((l) => `${l.id} "${l.q.slice(0, 120)}"`).join(', ')}. Add each to \`decisions\` under its id, with your choice, reasons and assumptions.`,
+      user: L(`沒有回答你交給審查者的決定：${unanswered.map((l) => `${l.id}「${l.q.slice(0, 60)}」`).join('、')}`, `the decisions you left to the reviewer are not answered: ${unanswered.map((l) => `${l.id} "${l.q.slice(0, 60)}"`).join(', ')}`),
+    });
+  // A decision is made whole: what it answers, the choice, why, and on what it rests.
   for (const d of r.decisions ?? []) {
-    const missing = [!d.choice && 'choice', !d.reasons && 'reasons', !d.assumptions.length && 'assumptions'].filter(Boolean) as string[];
+    const missing = [!d.question && 'question', !d.choice && 'choice', !d.reasons && 'reasons', !d.assumptions.length && 'assumptions'].filter(Boolean) as string[];
     if (missing.length)
       out.push({
-        agent: `Decision ${d.id} ("${d.question.slice(0, 80)}") lacks ${missing.map((m) => `\`${m}\``).join(', ')}: make the choice yourself, say why, and name the assumptions that would change it (if none would, say so and why).`,
-        user: L(`決定 ${d.id} 缺少${missing.map((m) => ({ choice: '選擇', reasons: '理由', assumptions: '假設' })[m]).join('、')}`, `decision ${d.id} lacks its ${missing.join(', ')}`),
+        agent: `Decision ${d.id}${d.question ? ` ("${d.question.slice(0, 80)}")` : ''} lacks ${missing.map((m) => `\`${m}\``).join(', ')}: say what it answers, make the choice yourself, say why, and name the assumptions that would change it (if none would, say so and why).`,
+        user: L(`決定 ${d.id} 缺少${missing.map((m) => ({ question: '問題', choice: '選擇', reasons: '理由', assumptions: '假設' })[m]).join('、')}`, `decision ${d.id} lacks its ${missing.join(', ')}`),
       });
   }
   return out;
+}
+
+/** A decision answering one the user listed (by its id) and leaving out the question: it is that listed question. */
+export function fillListedQuestions(r: Review, decide: string[] = []): void {
+  for (const d of r.decisions ?? []) {
+    const n = /^D(\d+)$/i.exec(d.id)?.[1];
+    if (!d.question && n && decide[Number(n) - 1]) d.question = decide[Number(n) - 1];
+    if (/^d\d+$/.test(d.id)) d.id = d.id.toUpperCase();
+  }
 }
 
 type Expect = 'submit_plan' | 'submit_review' | 'submit_work' | 'submit_verification' | 'submit_ruling';
@@ -3239,7 +3259,9 @@ export class Orchestrator {
   /** Independent review: a report must keep its contract (reportProblems). Refused twice; after that kept as incomplete, never as a result. */
   private reportRefused = new Map<string, number>();
   private requireReport(run: WorkflowRun, info: AgentRunInfo, r: Review) {
-    const problems = reportProblems(r);
+    const decide = run.config.review?.decide ?? [];
+    fillListedQuestions(r, decide);
+    const problems = reportProblems(r, decide);
     if (!problems.length) return;
     const tries = (this.reportRefused.get(info.id) ?? 0) + 1;
     if (tries > 2) {

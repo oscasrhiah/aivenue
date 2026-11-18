@@ -752,12 +752,16 @@ export function parseReview(v: any): Review | undefined {
   };
 }
 
-/** The decisions a review made for the user: one kept even when a part is missing, for the report check to name it. */
+/**
+ * The decisions a review made for the user. One is kept even when a part is missing — its question too (an answer to a
+ * listed decision may give only its id) — for the report check to name what is missing; only an entry with nothing in
+ * it is dropped.
+ */
 export function parseReviewDecisions(v: unknown): ReviewDecision[] {
   if (!Array.isArray(v)) return [];
   const cut = (x: unknown, n = 2000) => s(x).trim().slice(0, n);
   return v
-    .filter((d: any) => d && typeof d === 'object' && cut(d.question))
+    .filter((d: any) => d && typeof d === 'object' && (cut(d.id) || cut(d.question) || cut(d.choice) || cut(d.reasons ?? d.reason)))
     .slice(0, 20)
     .map((d: any, i: number) => ({
       id: cut(d.id, 20) || `D${i + 1}`,
