@@ -25,6 +25,7 @@ import { CheckRows } from '../components/Checks';
 import { ReviewResult } from '../components/ReviewResult';
 import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
+import { CopyButton } from '../components/CopyButton';
 import { ask } from '../components/Ask';
 import { RememberButton } from '../components/Memory';
 import { MsgTime } from '../components/MsgTime';
@@ -799,6 +800,8 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         )}
         {review && <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}</span>}
         <MsgTime ts={run.endedAt} className="final-time" />
+        {/* The result as written (Markdown), as shown below. */}
+        <CopyButton text={text} label={exec ? t('複製結果', 'Copy result') : t('複製計畫', 'Copy plan')} className="final-copy" />
       </div>
       {/* What was delivered, from the workflow's file list (not an agent's account): each file with where it came from. */}
       {rows.length > 0 && (

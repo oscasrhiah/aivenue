@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import { defaultDataDir } from '@aivenue/core';
+import { listenCopy } from './copy';
 import { ensureHub, newWindowId, type Channel, type Endpoint } from './sharedHub';
 
 /**
@@ -228,7 +229,8 @@ class ChatViewProvider implements vscode.WebviewViewProvider {
   async resolveWebviewView(view: vscode.WebviewView) {
     view.webview.options = webviewOptions(this.ctx);
     view.webview.html = '<body style="font-family:sans-serif;opacity:.6;padding:12px">Aivenue 啟動中…</body>';
-    view.onDidDispose(() => views.delete(view.webview));
+    const copy = listenCopy(view.webview);
+    view.onDidDispose(() => (views.delete(view.webview), copy.dispose()));
     await show(view.webview, this.ctx);
   }
 }
@@ -242,7 +244,8 @@ async function openPanel(ctx: vscode.ExtensionContext) {
   panel = vscode.window.createWebviewPanel('aivenue', 'Aivenue', vscode.ViewColumn.Active, { ...webviewOptions(ctx), retainContextWhenHidden: true });
   panel.iconPath = vscode.Uri.joinPath(ctx.extensionUri, 'dist', 'ui', 'icon.svg');
   const webview = panel.webview;
-  panel.onDidDispose(() => ((panel = undefined), views.delete(webview)), null, ctx.subscriptions);
+  const copy = listenCopy(webview);
+  panel.onDidDispose(() => ((panel = undefined), views.delete(webview), copy.dispose()), null, ctx.subscriptions);
   if (!(await show(webview, ctx))) panel?.dispose();
 }
 

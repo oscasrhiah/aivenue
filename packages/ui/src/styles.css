@@ -741,7 +741,8 @@ p {
 .md pre {
   background: var(--sunken);
   border-radius: 8px;
-  padding: 10px 12px;
+  /* Room on the right for the copy button. */
+  padding: 10px 40px 10px 12px;
   overflow-x: auto;
   font-size: 12.5px;
   margin: 6px 0 10px;
@@ -780,12 +781,85 @@ p {
   font-size: inherit;
 }
 
-.md li > pre,
+.md li > .md-code > pre,
 .md li > p,
 .md li > ul,
 .md li > ol,
 .md li > .md-table {
   margin-top: 4px;
+}
+
+/* A code block with its copy button in the top corner (shown in full on hover or keyboard focus). */
+.md .md-code {
+  position: relative;
+}
+.md .md-code .code-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0.55;
+  background: var(--surface);
+}
+.md .md-code:hover .code-copy,
+.md .md-code .code-copy:focus-visible,
+.md .md-code .code-copy.copied,
+.md .md-code .code-copy.failed {
+  opacity: 1;
+}
+
+/* Copy buttons (components/CopyButton.tsx). */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.copy-btn.icon-only {
+  padding: 2px 5px;
+}
+.copy-btn:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.copy-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.copy-btn.copied {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 50%, var(--line));
+}
+.copy-btn.failed {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 50%, var(--line));
+}
+.copy-btn:disabled {
+  cursor: progress;
+}
+.copy-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .md hr {

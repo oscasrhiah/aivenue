@@ -11,6 +11,8 @@ import { LiveFeed, Transcript, visible } from './Transcript';
 import { Approvals } from './Safety';
 import { batchCounts, batchesOf, isInternal, liveLine, readableError, reworkLine, roundOf, turnSummary, type Batch, type BatchState } from '../timeline';
 import { Markdown } from './Markdown';
+import { CopyButton } from './CopyButton';
+import { reviewMarkdown } from '../reviewText';
 import { CheckRows } from './Checks';
 import { extensionSummary } from '../extensionUse';
 import { outcomeText } from './Progress';
@@ -177,6 +179,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             {showPlan ? t('收起完整計畫', 'Hide full plan') : t('查看完整計畫', 'View full plan')}
           </button>
           {showPlan && <Markdown className="doc" text={plan.markdown} />}
+          <CopyRow text={plan.markdown?.trim() || plan.summary} label={t('複製計畫', 'Copy plan')} />
         </div>
       </>
     );
@@ -190,6 +193,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
           {round.route?.to === 'done' ? <><Ico i={CircleCheck} size={14} /> {t('目標達成', 'Goal met')}</> : <><Ico i={RotateCcw} size={14} /> {outcomeText(t, v)}</>} · {v.metrics.filter((m) => m.met).length}/{v.metrics.length} <Stale stale={v.stale} evidence={v.evidence} />
         </div>
         {v.summary && <Markdown className="prose" text={v.summary} />}
+        {v.summary && <CopyRow text={v.summary} label={t('複製回覆', 'Copy reply')} />}
         <div className="metrics">
           {v.metrics.map((m) => (
             <div key={m.id} className={cx('metric', m.met ? 'ok' : 'no')}>
@@ -281,6 +285,8 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
           </div>
         )}
         {round.route && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
+        {/* The whole review: verdict, summary, issues with why they block, decisions left to it, what it rests on. */}
+        <CopyRow text={() => reviewMarkdown(t, r, run.config.review ? run.reviewTarget : undefined)} label={t('複製審查報告', 'Copy review report')} />
       </div>
     );
   }
@@ -299,6 +305,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             <Clamp height={160}>
               <Markdown className="prose" text={round.submission.summary} />
             </Clamp>
+            <CopyRow text={round.submission.summary} label={t('複製回覆', 'Copy reply')} />
           </div>
         )}
         {done && isAuthor && !final && <ObservedChecks run={run} checks={round?.submission?.checks} />}
@@ -315,12 +322,22 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             <Clamp height={140}>
               <Markdown className="prose" text={agent.finalText} />
             </Clamp>
+            <CopyRow text={agent.finalText} label={t('複製回覆', 'Copy reply')} />
           </div>
         )}
       </>
     );
   }
   return null;
+}
+
+/** A copy button under an agent's text: the text as written (Markdown), even when it is folded above. */
+function CopyRow({ text, label }: { text: string | (() => string); label: string }) {
+  return (
+    <div className="copy-row">
+      <CopyButton text={text} label={label} />
+    </div>
+  );
 }
 
 /**

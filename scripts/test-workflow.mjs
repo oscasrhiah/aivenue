@@ -31,6 +31,7 @@ const bundled = await build({
       export { normalizeReview, workspaceChanges, workspaceState, workspaceUnknown } from './packages/core/src/reviewTarget';
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
+      export { reviewMarkdown } from './packages/ui/src/reviewText';
       export { msgTime } from './packages/ui/src/util';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
@@ -4347,4 +4348,77 @@ test('獨立審查：讀不到的檔案不能當成「沒變」：前後都讀�
   assert.match(W.workspaceChanges(gone, after).join('\n'), /draft\.js/);
   assert.equal(W.workspaceUnknown(gone, after), undefined);
   for (const d of [plain, repo]) fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('複製審查報告：結論、受審範圍、摘要（表格、清單、換行照原文）、每個問題與阻擋理由、交給審查者的決定（選擇、理由、前提）、查過與沒查過，都在；多行內容留在自己的項目裡；英文介面用英文標題', () => {
+  const review = {
+    verdict: 'revise',
+    summary: '結論：A 正確。\n\n| 項目 | 結果 |\n|---|---|\n| 崩潰 | 不遺失 |\n\n- 第一點\n- 第二點',
+    issues: [
+      { id: 'R1', severity: 'blocker', title: '回覆早於存檔', location: 'store.js:12', detail: '第一行\n第二行', blocking: '資料遺失' },
+      { id: 'R2', severity: 'minor', title: '舊問題', preExisting: true, blocking: '基準版就有' },
+    ],
+    decisions: [{ id: 'D1', question: '在做法 A、B 之間選一個', choice: 'A', reasons: 'B 會遺失', assumptions: ['一個檔案只有一個寫入者', '斷電不在範圍'] }],
+    report: { checked: ['跑了 test.js'], notChecked: ['Linux'], reproduced: [], trusted: ['材料說測試通過'] },
+  };
+  const target = { commit: '0123456789abcdef', subject: 'Save first', base: 'fedcba9876543210', files: [], scratch: '' };
+  const zh = (z) => z;
+  const text = W.reviewMarkdown(zh, review, target);
+  assert.equal(
+    text,
+    [
+      '## 審查報告：要求修改',
+      '',
+      '受審：`0123456789` Save first · 差異 `fedcba9876..0123456789`',
+      '',
+      '結論：A 正確。',
+      '',
+      '| 項目 | 結果 |',
+      '|---|---|',
+      '| 崩潰 | 不遺失 |',
+      '',
+      '- 第一點',
+      '- 第二點',
+      '',
+      '### 問題',
+      '- **R1** [嚴重] 回覆早於存檔 (store.js:12)',
+      '  第一行',
+      '  第二行',
+      '  為何阻擋或不阻擋：資料遺失',
+      '- **R2** [次要] 舊問題 — 既有問題，不在這次的變更裡',
+      '  為何阻擋或不阻擋：基準版就有',
+      '',
+      '### 你交給審查者決定的事',
+      '- **D1** 在做法 A、B 之間選一個',
+      '  選擇：A',
+      '  理由：B 會遺失',
+      '  前提（不成立時結論可能改變）：',
+      '  - 一個檔案只有一個寫入者',
+      '  - 斷電不在範圍',
+      '',
+      '這是審查者的建議；要不要照做、是否合併，仍由你決定。',
+      '',
+      '### 查過',
+      '- 跑了 test.js',
+      '',
+      '### 沒查過',
+      '- Linux',
+      '',
+      '### 採信（未重跑）',
+      '- 材料說測試通過',
+      '',
+    ].join('\n'),
+  );
+  // It reads back as Markdown: the summary's table and the issues' list.
+  const blocks = W.parseMarkdown(text);
+  assert.ok(blocks.some((b) => b.t === 'table' && b.rows[0].length === 2));
+  assert.ok(blocks.some((b) => b.t === 'list' && b.items.length === 2 && b.items[0].c.length >= 1));
+  // The working folder, an incomplete report, English.
+  const en = (_z, e) => e;
+  const other = W.reviewMarkdown(en, { verdict: 'approve', summary: 'ok', issues: [], incomplete: ['what was checked is not listed'] }, { files: [], scratch: '' });
+  assert.match(other, /^## Review report: Incomplete report, not a result\n\nReviewed: The working folder as it is\n\n### Incomplete \(still so after two refusals\)\n- what was checked is not listed\n\nok\n$/);
+  // A code block's copy is its body only: no fence, no language, indentation kept.
+  const code = W.parseMarkdown('說明\n\n```js\nconst a = 1;\n  b();\n```\n\n- 項目\n\n  ```\n  巢狀\n  ```').filter((b) => b.t === 'code' || b.t === 'list');
+  assert.equal(code[0].v, 'const a = 1;\n  b();');
+  assert.equal(code[1].items[0].c.find((b) => b.t === 'code').v, '巢狀');
 });

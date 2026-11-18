@@ -3,6 +3,8 @@ import type { ProviderInfo, ReviewIssue, WorkflowRun } from '../../../core/src/t
 import { Ico } from '../icons';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName } from '../util';
+import { reviewMarkdown } from '../reviewText';
+import { CopyButton } from './CopyButton';
 import { InlineMarkdown, Markdown } from './Markdown';
 import { MsgTime } from './MsgTime';
 
@@ -45,6 +47,9 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
           <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('建議通過', 'Approve') : t('要求修改', 'Changes requested')}</span>
         )}
         <MsgTime ts={run.endedAt} className="final-time" />
+        {/* The whole report: verdict, what was reviewed, issues with why they block, the decisions left to the reviewer
+            with their reasons, and what it rests on. */}
+        <CopyButton text={() => reviewMarkdown(t, review, target)} label={t('複製審查報告', 'Copy review report')} className="final-copy" />
       </div>
       {target && (
         <div className="final-row">

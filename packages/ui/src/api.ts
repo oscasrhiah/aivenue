@@ -157,7 +157,7 @@ export const hub = new HubClient();
 
 /** VS Code's webview API: there only, and to be taken once per page. */
 declare const acquireVsCodeApi: undefined | (() => { postMessage(message: unknown): void });
-const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
+export const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
 // VS Code: the extension says where the shared hub is after it came back (another port). The page connects there and
 // answers, so the extension does not load it anew (which would lose what is being written and the chat shown). Only an

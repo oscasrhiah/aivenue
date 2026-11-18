@@ -1,5 +1,13 @@
 import { Fragment, useMemo, type ReactNode } from 'react';
+import { useT } from '../i18n';
 import { inline, parseMarkdown, type Block, type Inline } from '../markdown';
+import { CopyButton } from './CopyButton';
+
+/** A code block's copy button: the block's text only, as written (no fence, no language line). */
+function CodeCopy({ code }: { code: string }) {
+  const t = useT();
+  return <CopyButton text={code} label={t('複製程式碼', 'Copy code')} icon className="code-copy" />;
+}
 
 /** Inline content as React elements (never innerHTML: an agent's text cannot inject markup). */
 function renderInline(c: Inline[], key: string): ReactNode[] {
@@ -48,9 +56,12 @@ function renderBlocks(blocks: Block[], key: string, tight = false): ReactNode[] 
         );
       case 'code':
         return (
-          <pre key={k} data-lang={b.lang}>
-            <code>{b.v}</code>
-          </pre>
+          <div key={k} className="md-code">
+            <pre data-lang={b.lang}>
+              <code>{b.v}</code>
+            </pre>
+            <CodeCopy code={b.v} />
+          </div>
         );
       case 'hr':
         return <hr key={k} />;

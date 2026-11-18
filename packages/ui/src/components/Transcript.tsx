@@ -8,6 +8,7 @@ import { actKind, errorPreview, feed, groupLabel, groupNames, isInternal, isSubm
 import { Markdown } from './Markdown';
 import { MsgTime } from './MsgTime';
 import { Clamp } from './Clamp';
+import { CopyButton } from './CopyButton';
 import { Replies, type Reply } from './Replies';
 import { extensionUse } from '../extensionUse';
 
@@ -136,6 +137,12 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
             </Clamp>
           ) : (
             <Markdown className="tx-text" text={e.text ?? ''} />
+          )}
+          {/* What it said, as written (Markdown: tables, lists, line breaks), even when folded above. */}
+          {!!e.text?.trim() && (
+            <div className="copy-row">
+              <CopyButton text={e.text} label={t('複製回覆', 'Copy reply')} />
+            </div>
           )}
         </div>
       );

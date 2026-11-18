@@ -405,3 +405,129 @@ test('設定鎖：儲存後釋放時讀鎖檔短暫失敗（EPERM）會再試並
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The copy buttons' clipboard (packages/ui/src/clipboard.ts) and the extension's side of it (packages/vscode/src/copy.ts),
+ * bundled with stand-ins: the page's VS Code API (`globalThis.__vscodeApi`) and VS Code's clipboard (`__clipWrite`).
+ */
+async function loadCopy(entry) {
+  const out = await build({
+    entryPoints: [entry],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    write: false,
+    logLevel: 'silent',
+    plugins: [
+      {
+        name: 'stand-ins',
+        setup(b) {
+          b.onResolve({ filter: /^(\.\/api|vscode)$/ }, (a) => ({ path: a.path, namespace: 'copy-stand-in' }));
+          b.onLoad({ filter: /.*/, namespace: 'copy-stand-in' }, (a) => ({
+            contents: a.path === 'vscode' ? 'export const env = { clipboard: { writeText: (t) => globalThis.__clipWrite(t) } };' : 'export const vscodeApi = globalThis.__vscodeApi;',
+          }));
+        },
+      },
+    ],
+  });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  return mod.exports;
+}
+
+const COPIED_TEXT = '## 結論\n\n| 項目 | 結果 |\n|---|---|\n| 崩潰後 | 不遺失 |\n\n- 第一點\n  - 巢狀\n\n```js\nconst a = 1;\n  b();\n```\n';
+
+test('複製（VS Code）：頁面請擴充端寫入剪貼簿，收到成功才算複製；擴充端回報失敗或 5 秒沒回應，都帶著原因失敗；別的回覆不算', async () => {
+  const { mock } = await import('node:test');
+  const posted = [];
+  const onMessage = [];
+  globalThis.window = { addEventListener: (type, fn) => type === 'message' && onMessage.push(fn) };
+  globalThis.__vscodeApi = { postMessage: (m) => posted.push(m) };
+  const fromExtension = (data) => onMessage.forEach((fn) => fn({ data }));
+  try {
+    const C = await loadCopy('packages/ui/src/clipboard.ts');
+    const first = C.copyText(COPIED_TEXT);
+    assert.deepEqual(posted[0], { type: 'aivenue.copy', id: 1, text: COPIED_TEXT }, 'the text as given (Markdown, line breaks)');
+    let done = false;
+    first.then(() => (done = true));
+    fromExtension({ type: 'aivenue.copied', id: 99, ok: true });
+    fromExtension({ type: 'aivenue.hub', wsUrl: 'ws://x' });
+    await tick();
+    assert.equal(done, false, 'not copied until the extension answers this request');
+    fromExtension({ type: 'aivenue.copied', id: 1, ok: true });
+    await first;
+    const failed = C.copyText('x');
+    fromExtension({ type: 'aivenue.copied', id: 2, ok: false, error: 'the clipboard is busy' });
+    await assert.rejects(failed, /the clipboard is busy/);
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      const silent = C.copyText('y');
+      mock.timers.tick(5000);
+      await assert.rejects(silent, /VS Code did not answer/);
+    } finally {
+      mock.timers.reset();
+    }
+  } finally {
+    delete globalThis.__vscodeApi;
+  }
+});
+
+test('複製（VS Code 擴充端）：用 vscode.env.clipboard.writeText 寫入原文，寫好才回覆成功；寫入失敗、不是文字、太長都回覆失敗與原因；其他訊息不理', async () => {
+  const X = await loadCopy('packages/vscode/src/copy.ts');
+  const clip = [];
+  globalThis.__clipWrite = async (t) => {
+    if (t === 'FAIL') throw new Error('access denied');
+    clip.push(t);
+  };
+  let handler;
+  const sent = [];
+  let disposed = false;
+  const webview = { onDidReceiveMessage: (fn) => ((handler = fn), { dispose: () => (disposed = true) }), postMessage: async (m) => (sent.push(m), true) };
+  const sub = X.listenCopy(webview);
+  await handler({ type: 'aivenue.copy', id: 7, text: COPIED_TEXT });
+  assert.deepEqual(clip, [COPIED_TEXT]);
+  assert.deepEqual(sent, [{ type: 'aivenue.copied', id: 7, ok: true }]);
+  await handler({ type: 'aivenue.copy', id: 8, text: 'FAIL' });
+  await handler({ type: 'aivenue.copy', id: 9, text: 42 });
+  await handler({ type: 'aivenue.copy', id: 10, text: 'x'.repeat(X.COPY_MAX + 1) });
+  assert.deepEqual(sent.slice(1), [
+    { type: 'aivenue.copied', id: 8, ok: false, error: 'access denied' },
+    { type: 'aivenue.copied', id: 9, ok: false, error: 'nothing to copy' },
+    { type: 'aivenue.copied', id: 10, ok: false, error: `too long to copy (${X.COPY_MAX + 1} characters)` },
+  ]);
+  await handler({ type: 'aivenue.hub.moved', wsUrl: 'ws://x' });
+  assert.equal(sent.length, 4, 'other messages: no answer');
+  assert.deepEqual(clip, [COPIED_TEXT], 'nothing else written');
+  sub.dispose();
+  assert.equal(disposed, true);
+});
+
+test('複製（桌面版與瀏覽器）：用瀏覽器剪貼簿寫入原文；不允許時改用複製指令；兩者都失敗才報錯並帶原因', async () => {
+  delete globalThis.__vscodeApi;
+  const realNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const wrote = [];
+  let allowed = true;
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: { clipboard: { writeText: async (t) => (allowed ? wrote.push(t) : Promise.reject(new Error('Document is not focused'))) } } });
+  let commandWorks = false;
+  const commanded = [];
+  globalThis.document = {
+    activeElement: null,
+    body: { appendChild: () => undefined },
+    createElement: () => ({ value: '', style: {}, setAttribute: () => undefined, select() {}, remove() {} }),
+    execCommand: (c) => (commanded.push(c), commandWorks),
+  };
+  try {
+    const B = await loadCopy('packages/ui/src/clipboard.ts');
+    await B.copyText(COPIED_TEXT);
+    assert.deepEqual(wrote, [COPIED_TEXT]);
+    assert.deepEqual(commanded, [], 'the clipboard worked: no copy command');
+    allowed = false;
+    await assert.rejects(B.copyText('y'), /Document is not focused/);
+    commandWorks = true;
+    await B.copyText('z');
+    assert.deepEqual(commanded, ['copy', 'copy']);
+  } finally {
+    if (realNavigator) Object.defineProperty(globalThis, 'navigator', realNavigator);
+    delete globalThis.document;
+  }
+});
