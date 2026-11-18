@@ -884,6 +884,41 @@ test('外部效果的操作（上傳附件）：執行前先在操作紀錄記�
   }
 });
 
+test('外部效果的操作：「已開始」寫不進操作紀錄時不執行（附件不會多一份），並回報原因；磁碟恢復後重送會正常執行一次', async () => {
+  const dir = tmp('mark-fails');
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRename = nfs.renameSync;
+  const uploads = () => {
+    const root = path.join(dir, 'uploads-vscode');
+    return fs.existsSync(root) ? fs.readdirSync(root).length : 0;
+  };
+  const h = await sharedHub(dir);
+  try {
+    const w = await windowOf(h.ep, 'win-a', path.join(dir, 'projA'));
+    const v = new View(h.ep, w.id);
+    const args = { name: 'a.txt', mime: 'text/plain', data: Buffer.from('one').toString('base64') };
+    // The very first write (the mark) fails.
+    nfs.renameSync = function (from, to) {
+      if (String(to).endsWith('hub-ops-vscode.json')) throw Object.assign(new Error('EIO: i/o error, rename'), { code: 'EIO' });
+      return realRename.apply(this, arguments);
+    };
+    await assert.rejects(v.call('attachments.upload', args, 'up-unmarked'), /無法在操作紀錄記下這個操作（EIO[^）]*），為了避免重複執行，沒有執行它|could not be recorded in the operation log/);
+    assert.equal(uploads(), 0, 'nothing uploaded');
+    nfs.renameSync = realRename;
+    // The disk works again: the same operation runs, once.
+    await v.call('attachments.upload', args, 'up-unmarked');
+    assert.equal(uploads(), 1);
+    await v.call('attachments.upload', args, 'up-unmarked');
+    assert.equal(uploads(), 1, 'and only once');
+    v.close();
+    w.ch.close();
+  } finally {
+    nfs.renameSync = realRename;
+    await h.hub.close();
+  }
+});
+
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();

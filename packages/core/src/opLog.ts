@@ -11,6 +11,9 @@ const MAX = 2000;
 /** Answers larger than this are not written to the file; a repeat after a restart is then refused, not run. */
 const MAX_STORED = 32 * 1024;
 
+const NOT_MARKED = (why: string) =>
+  L(`無法在操作紀錄記下這個操作（${why}），為了避免重複執行，沒有執行它。請確認 Aivenue 的資料資料夾可以寫入後再試`, `This operation could not be recorded in the operation log (${why}), so it was not run, to never run it twice. Make sure Aivenue's data folder can be written to, then try again.`);
+
 const UNKNOWN = () =>
   L('這個操作在 Aivenue 中斷時已經開始執行，不知道有沒有完成；為了不重複，不會再執行一次。請確認目前的狀態後再試', 'This operation had started when Aivenue stopped, and whether it finished is unknown; it is not run again, so nothing happens twice. Check the current state, then try again.');
 
@@ -61,9 +64,18 @@ export class OpLog {
       return Promise.reject(new Error(r.done ? L('這個操作已經執行過了', 'This operation was already done') : UNKNOWN()));
     }
     // An effect outside Aivenue's records (an upload, an install, a sign-in): that it started is on disk before it runs.
-    if (outside) {
+    // The mark must be on disk before it runs: if it cannot be written, the operation does not run (and is not marked),
+    // so a hub that stops can never leave it done and unrecorded. The user sees the error and may try again.
+    if (outside && this.file) {
+      const before = this.done.get(op);
       this.done.set(op, { at: Date.now(), started: true });
-      this.save();
+      try {
+        this.save(true);
+      } catch (e) {
+        if (before) this.done.set(op, before);
+        else this.done.delete(op);
+        return Promise.reject(new Error(NOT_MARKED((e as Error).message)));
+      }
     }
     const p = Promise.resolve()
       .then(fn)
@@ -96,7 +108,8 @@ export class OpLog {
     this.save();
   }
 
-  private save() {
+  /** `strict`: a failed write throws (the mark before an outside effect); otherwise it is not kept, as before. */
+  private save(strict = false) {
     if (!this.file) return;
     const out: Record<string, Done> = {};
     // In memory a large answer is kept whole (a repeat now gets it); in the file only that it was done.
@@ -104,8 +117,10 @@ export class OpLog {
     try {
       fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(out));
       fs.renameSync(`${this.file}.tmp`, this.file);
-    } catch {
-      // not kept: a repeat after a restart would run again, as before this existed
+    } catch (e) {
+      // Not kept. A result not written leaves the "started" mark on disk: a resend after a restart is then answered
+      // "result unknown". Only the mark before an outside effect must be written.
+      if (strict) throw e;
     }
   }
 }
