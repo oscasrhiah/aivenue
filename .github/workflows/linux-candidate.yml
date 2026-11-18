@@ -81,7 +81,8 @@ jobs:
       - name: Whole test suite, both entry points, compared
         shell: bash
         run: |
-          set -u
+          # shell: bash runs with -e; turned off so both runs and the comparison always happen, each checked below.
+          set +e -u
           xvfb-run -a env AIVENUE_TEST_VERBOSE=1 npm test > out/logs/test-npm.log 2>&1; npm_exit=$?
           xvfb-run -a node --test --test-reporter=spec scripts/test-*.mjs > out/logs/test-direct.log 2>&1; direct_exit=$?
           node scripts/accept/compare-runs.mjs out/logs/test-direct.log out/logs/test-npm.log > out/logs/test-compare.log 2>&1; compare_exit=$?
@@ -119,7 +120,8 @@ jobs:
           VERSION: ${{ steps.c.outputs.version }}
           SHA: ${{ steps.c.outputs.sha }}
         run: |
-          set -uo pipefail
+          # shell: bash runs with -e; turned off because the control is meant to fail, and every check is judged below.
+          set +e -uo pipefail
           S="$RUNNER_TEMP/smoke"
           L="$PWD/out/logs"
           mkdir -p "$S/home" "$S/unpack"
