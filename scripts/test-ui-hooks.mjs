@@ -359,3 +359,49 @@ test('設定鎖讀不到時（例如 EACCES）：在時限內回報錯誤、不�
   }
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('設定鎖：儲存後釋放時讀鎖檔短暫失敗（EPERM）會再試並釋放；一直失敗而留下的鎖，同一個服務下一次儲存會收回，不會逾時', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const out = await build({ entryPoints: ['packages/core/src/settings.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-settings-release-'));
+  const lock = path.join(dir, 'settings.json.lock');
+  const disk = () => JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+  const store = new mod.exports.SettingsStore(dir);
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRead = nfs.readFileSync;
+  const failLockReads = (until) => {
+    nfs.readFileSync = function (p, ...rest) {
+      if (String(p).endsWith('settings.json.lock') && until()) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return realRead.call(this, p, ...rest);
+    };
+  };
+  try {
+    // Once (the read when releasing): tried again, released.
+    let failed = 0;
+    failLockReads(() => failed++ < 1);
+    store.set({ theme: 'dark' });
+    assert.equal(failed, 2, 'read again after the failure');
+    assert.equal(disk().theme, 'dark');
+    assert.equal(fs.existsSync(lock), false, 'released');
+    // For longer than releasing waits: the lock is left behind...
+    const until = Date.now() + 1500;
+    failLockReads(() => Date.now() < until);
+    store.set({ theme: 'light' });
+    assert.equal(disk().theme, 'light', 'the change itself was saved');
+    assert.equal(fs.existsSync(lock), true, 'left behind');
+    nfs.readFileSync = realRead;
+    // ...and this process's next change takes it back at once.
+    const t0 = Date.now();
+    store.set({ accent: '#abcdef' });
+    assert.ok(Date.now() - t0 < 1000, 'not waiting for its own leftover lock');
+    assert.equal(disk().accent, '#abcdef');
+    assert.equal(fs.existsSync(lock), false);
+  } finally {
+    nfs.readFileSync = realRead;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

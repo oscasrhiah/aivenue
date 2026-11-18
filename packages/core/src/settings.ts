@@ -11,6 +11,8 @@ const DEFAULTS: AppSettings = { locale: 'zh-TW', theme: 'system', accent: '#c964
 const LOCK_WAIT_MS = 3_000;
 /** An empty lock (its owner stopped between making it and writing its name) older than this is left over. */
 const EMPTY_LOCK_MS = 10_000;
+/** How long releasing the lock tries again after a failed read. */
+const RELEASE_WAIT_MS = 1_000;
 
 const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -156,9 +158,31 @@ export class SettingsStore {
     try {
       fn();
     } finally {
-      // Removed only when it is known to be this one (unreadable: left as it is).
+      this.release(lock, mine);
+    }
+  }
+
+  /**
+   * Removes the lock when it is known to be this one. A read that fails for a moment (EPERM on Windows) is tried again
+   * for a second; one that keeps failing, or a removal that fails, leaves it: this process's next change finds a lock
+   * that names it and takes it back (see ownerGone), so the settings are never stuck behind it.
+   */
+  private release(lock: string, mine: string) {
+    const until = Date.now() + RELEASE_WAIT_MS;
+    for (;;) {
       const held = readLock(lock);
-      if (!('error' in held) && held.text === mine) fs.rmSync(lock, { force: true });
+      if ('error' in held) {
+        if (Date.now() > until) return;
+        pause(20);
+        continue;
+      }
+      if (held.text !== mine) return;
+      try {
+        fs.rmSync(lock, { force: true });
+      } catch {
+        // left: taken back by this process's next change
+      }
+      return;
     }
   }
 }
@@ -190,8 +214,10 @@ function ownerGone(text: string, age: number, timeLeft: number): boolean {
   }
   if (!owner || typeof owner.pid !== 'number' || owner.host !== os.hostname()) return false;
   if (!alive(owner.pid)) return true;
+  // This process: never holding it now (a change runs to its end without anything else in between), so it is a lock
+  // left by an earlier change whose release failed; or, with another start time, an earlier process with this PID.
+  if (owner.pid === process.pid) return true;
   // The PID runs: the owner itself, or another process that got the same PID after the owner ended.
-  if (owner.pid === process.pid) return owner.started !== STARTED;
   const started = startedAt(owner.pid, Math.min(2_000, timeLeft));
   return started !== undefined && Math.abs(started - owner.started) > 5_000;
 }
