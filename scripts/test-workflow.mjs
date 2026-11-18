@@ -4225,6 +4225,64 @@ test('背景啟動與程序的對應：比完整路徑——另一個專案的�
   assert.equal(W.scriptOf('nohup node scripts/a/job.js > x.log 2>&1 &'), 'scripts/a/job.js');
 });
 
+test('背景啟動自己指定的啟動資料夾（Start-Process -WorkingDirectory、cmd 的 start /D、env -C）會採用；相對的從啟動前的資料夾算起，讀不出來的參數算不知道', () => {
+  const win = 'win32';
+  const linux = 'linux';
+  const wl = (cmd, base = 'C:/base') => W.launchFolder(cmd, undefined, base, win, 'job.js');
+  const lf = (cmd, base = '/p') => W.launchFolder(cmd, undefined, base, linux, 'job.js');
+  // The review of 27989c4: the folder it gives, not the workflow's.
+  const given = wl('Start-Process node -ArgumentList job.js -WorkingDirectory C:/other');
+  assert.equal(given, 'C:\\other');
+  assert.equal(W.sameScript({ command: 'node C:\\base\\job.js' }, { key: 'job.js', script: 'job.js', cwd: given }, win), false, 'the workflow folder\'s job.js is not it');
+  assert.equal(W.sameScript({ command: 'node C:\\other\\job.js' }, { key: 'job.js', script: 'job.js', cwd: given }, win), true);
+  // PowerShell's ways of writing it: a prefix that fits only it, name:value, quotes, in any place among the others.
+  assert.equal(wl('Start-Process node job.js -Wo C:\\other'), 'C:\\other');
+  assert.equal(wl("Start-Process -WorkingDirectory:'C:\\my dir' -FilePath node -ArgumentList job.js"), 'C:\\my dir');
+  assert.equal(wl('saps node -ArgumentList "job.js --port 80" -WindowStyle Hidden -Wait -WorkingDirectory D:\\w'), 'D:\\w');
+  assert.equal(wl("Start-Process node -ArgumentList 'job.js', '--port', '80' -wo D:\\w -PassThru"), 'D:\\w');
+  assert.equal(wl('start node -ArgumentList job.js -WorkingDirectory D:\\w'), 'D:\\w', 'start is its alias');
+  // Relative: from the folder before the step. A full path: whatever came before.
+  assert.equal(wl('Start-Process node -ArgumentList job.js -WorkingDirectory sub'), 'C:\\base\\sub');
+  assert.equal(wl('Set-Location C:\\x && Start-Process node -ArgumentList job.js -WorkingDirectory ..\\y'), 'C:\\y');
+  assert.equal(wl('Set-Location $env:TEMP; Start-Process node -ArgumentList job.js -WorkingDirectory C:\\abs'), 'C:\\abs');
+  assert.equal(wl('Set-Location $env:TEMP; Start-Process node -ArgumentList job.js -WorkingDirectory sub'), undefined);
+  assert.equal(wl('Start-Process node -ArgumentList job.js -WorkingDirectory \\top'), 'C:\\top', 'from the root of the current drive');
+  assert.equal(wl('Start-Process node -ArgumentList job.js -WorkingDirectory "C:\\Program Files (x86)\\app" *> out.txt'), 'C:\\Program Files (x86)\\app', 'quoted parentheses; a redirect after it');
+  assert.equal(wl('Start-Process node -ArgumentList job.js -Wo D:\\w 2>&1 > $null'), 'D:\\w');
+  // Git Bash on Windows: /c/… is a drive; another /x is Git Bash's own (its /tmp is not C:\tmp): unknown, for a cd too.
+  assert.equal(wl('env -C /c/jobs nohup node job.js &'), 'C:\\jobs');
+  assert.equal(wl('env -C /tmp/jobs nohup node job.js &'), undefined);
+  assert.equal(wl('cd /tmp/jobs && nohup node job.js &'), undefined);
+  // Cannot be read: unknown, never the workflow's folder.
+  for (const cmd of [
+    'Start-Process node -ArgumentList job.js -WorkingDirectory $env:TEMP',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory "$HOME\\jobs"',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory (Get-Location)',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory ~\\jobs',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory D:jobs',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory %TEMP%',
+    'Start-Process node -ArgumentList job.js -W C:\\other',
+    'Start-Process node -ArgumentList job.js -Folder C:\\other',
+    'Start-Process node -ArgumentList job.js @opts',
+    'Start-Process node -ArgumentList job.js -WorkingDirectory',
+  ]) assert.equal(wl(cmd), undefined, cmd);
+  // cmd's start: /D (title, other switches, attached or quoted).
+  assert.equal(wl('start "" /D C:\\other /B node job.js'), 'C:\\other');
+  assert.equal(wl('start "jobs" /D "C:\\my dir" /MIN node job.js'), 'C:\\my dir');
+  assert.equal(wl('start /Dsub /B node job.js'), 'C:\\base\\sub');
+  assert.equal(wl('start /b node job.js', 'C:\\base'), 'C:\\base', 'no folder of its own: the one before');
+  assert.equal(wl('start /D %TEMP% /B node job.js'), undefined);
+  assert.equal(wl('start /X /B node job.js'), undefined, 'a switch it does not know');
+  // GNU env -C / --chdir, among its other options, after other wrappers or a cd.
+  assert.equal(lf('env -C /x node job.js &'), '/x');
+  assert.equal(lf('nohup env --chdir=sub node job.js &'), '/p/sub');
+  assert.equal(lf('cd /a && env -u FOO -C b nohup node job.js &'), '/a/b');
+  assert.equal(lf('env DEBUG=1 nohup node job.js &'), '/p');
+  assert.equal(lf('env -C "$HOME/jobs" node job.js &'), undefined);
+  assert.equal(lf('env -C ~/jobs node job.js &'), undefined);
+  assert.equal(W.sameScript({ command: 'node /p/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('env -C /x node job.js &') }, linux), false);
+});
+
 test('獨立審查：讀不到的檔案不能當成「沒變」：前後都讀不到時，比對不說有變也不說沒變，而是寫明無法確認並列出檔案（git 專案與一般資料夾）', async () => {
   const { execFileSync } = await import('node:child_process');
   const nfs = createRequire(import.meta.url)('node:fs');

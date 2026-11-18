@@ -154,22 +154,136 @@ function steps(command: string): { text: string; sep: string }[] {
 /** A step that is only a change of folder (`cd x`, `pushd x`, `Set-Location -Path x`): its target, as written. */
 const CD_STEP = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s&]+)\s*$/i;
 
-/** Wrappers that run the command after them: `nohup`, `setsid`, `exec`, `time`, `nice -n 5`, `env A=1`, `stdbuf -oL`. */
-const WRAPPER = /^\s*(?:(?:nohup|setsid|exec|time|nice(?:\s+-n\s*-?\d+)?|stdbuf(?:\s+-\w+)*|env(?:\s+-\w+)*(?:\s+\w+=\S*)*)\s+)+/i;
+/** Wrappers that run the command after them: `nohup`, `setsid`, `exec`, `time`, `nice -n 5`, `stdbuf -oL` (`env`: unwrap). */
+const WRAPPER = /^\s*(?:nohup|setsid(?:\s+-\w+)*|exec|time|nice(?:\s+-n\s*-?\d+)?|stdbuf(?:\s+-\w+)*)\s+/i;
+/** One of GNU env's options or a `NAME=value` before its command; group 1: the folder of `-C x` / `--chdir=x`. */
+const ENV_ARG = /^\s+(?:-[iv0]+|--ignore-environment|--null|--debug|--?|(?:-u\s*|--unset[=\s]\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)|(?:-C\s*|--chdir[=\s]\s*)("[^"]*"|'[^']*'|[^\s"']+)|\w+=(?:"[^"]*"|'[^']*'|[^\s"'])*)(?=\s)/;
+
+/** A step without its wrappers (`nohup`, `env A=1`, …), and the folders its `env -C` gives, as written. */
+function unwrap(step: string): { text: string; dirs: string[] } {
+  let text = step;
+  const dirs: string[] = [];
+  for (;;) {
+    const w = WRAPPER.exec(text);
+    if (w) {
+      text = text.slice(w[0].length);
+      continue;
+    }
+    const e = /^\s*env(?=\s)/.exec(text);
+    if (!e) break;
+    text = text.slice(e[0].length);
+    for (let a = ENV_ARG.exec(text); a; a = ENV_ARG.exec(text)) {
+      if (a[1] !== undefined) dirs.push(a[1]);
+      text = text.slice(a[0].length);
+    }
+  }
+  return { text: text.replace(/&\s*$/, ''), dirs };
+}
+
+/** A line's words, quotes kept (`-WorkingDirectory:'C:\my dir'` is one word). */
+const rawWords = (s: string) => s.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? [];
+const unquote = (w: string) => w.replace(/"([^"]*)"|'([^']*)'/g, '$1$2');
+
+/**
+ * Start-Process's parameters (pwsh 7 and Windows PowerShell 5.1, common ones included) and their aliases. PowerShell
+ * also takes any prefix of a name that fits only one (`-Wo` is -WorkingDirectory; `-W` fits several and fails).
+ */
+const SP_PARAMS = ['FilePath', 'ArgumentList', 'Credential', 'WorkingDirectory', 'LoadUserProfile', 'NoNewWindow', 'PassThru', 'RedirectStandardError', 'RedirectStandardInput', 'RedirectStandardOutput', 'Verb', 'WindowStyle', 'Wait', 'UseNewEnvironment', 'Environment', 'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction', 'ProgressAction', 'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable', 'OutBuffer', 'PipelineVariable', 'WhatIf', 'Confirm'].map((p) => p.toLowerCase());
+const SP_ALIAS: Record<string, string> = { pspath: 'filepath', path: 'filepath', args: 'argumentlist', runas: 'credential', lup: 'loaduserprofile', nnw: 'nonewwindow', rse: 'redirectstandarderror', rsi: 'redirectstandardinput', rso: 'redirectstandardoutput', vb: 'verbose', db: 'debug', ea: 'erroraction', wa: 'warningaction', infa: 'informationaction', proga: 'progressaction', ev: 'errorvariable', wv: 'warningvariable', iv: 'informationvariable', ov: 'outvariable', ob: 'outbuffer', pv: 'pipelinevariable', wi: 'whatif', cf: 'confirm' };
+/** The ones that take no value. */
+const SP_SWITCH = new Set(['loaduserprofile', 'nonewwindow', 'passthru', 'wait', 'usenewenvironment', 'verbose', 'debug', 'whatif', 'confirm']);
+
+/**
+ * What `Start-Process` (or `saps`, or `start`: PowerShell's alias, or cmd's own) runs, as a command line, and the folder
+ * it gives the process (-WorkingDirectory, or cmd's `start /D`), as written. `unsure`: its parameters cannot be read (a
+ * name that fits none or several, a splat, more than two positional values): which folder it starts in is unknown.
+ * Undefined: not such a step.
+ */
+function startOf(text: string): { run: string; dir?: string; unsure?: boolean } | undefined {
+  const m = /^\s*(Start-Process|saps|start)\s+/i.exec(text);
+  if (!m) return undefined;
+  const ws = rawWords(text.slice(m[0].length));
+  if (/^start$/i.test(m[1])) {
+    const c = cmdStart(ws);
+    if (c) return c;
+  }
+  // PowerShell: `a, b` and `a ,b` are one list (one value).
+  const vs: string[] = [];
+  for (const w of ws) {
+    const last = vs[vs.length - 1];
+    if (last !== undefined && (last.endsWith(',') || w.startsWith(','))) vs[vs.length - 1] = last + w;
+    else vs.push(w);
+  }
+  const named: Record<string, string> = {};
+  const positional: string[] = [];
+  let unsure = false;
+  for (let i = 0; i < vs.length; i++) {
+    const w = vs[i];
+    if (w.startsWith('@')) unsure = true;
+    // A redirect of the cmdlet's own output (`2>&1`, `*> out.txt`, `> $null`): not one of its parameters.
+    if (/^[\d*]?>>?/.test(w)) {
+      if (/^[\d*]?>>?$/.test(w)) i++;
+      continue;
+    }
+    const p = /^-([A-Za-z]+)(?::([\s\S]*))?$/.exec(w);
+    if (!p) {
+      positional.push(w);
+      continue;
+    }
+    const n = p[1].toLowerCase();
+    const fits = SP_PARAMS.includes(n) ? [n] : SP_ALIAS[n] ? [SP_ALIAS[n]] : SP_PARAMS.filter((x) => x.startsWith(n));
+    if (fits.length !== 1) {
+      unsure = true;
+      continue;
+    }
+    if (SP_SWITCH.has(fits[0])) continue;
+    const v = p[2] !== undefined ? p[2] : vs[++i];
+    if (v === undefined) unsure = true;
+    else named[fits[0]] = v;
+  }
+  // FilePath and ArgumentList may be given by position (0 and 1).
+  for (const n of ['filepath', 'argumentlist']) if (named[n] === undefined && positional.length) named[n] = positional.shift()!;
+  if (positional.length || named.filepath === undefined) unsure = true;
+  const args = unquote((named.argumentlist ?? '').replace(/\s*,\s*/g, ' '));
+  return { run: `"${unquote(named.filepath ?? '')}" ${args}`, dir: named.workingdirectory, unsure };
+}
+
+/** cmd's `start ["title"] [/D folder] [/B /MIN /WAIT …] program args`: undefined when the words do not read as one. */
+function cmdStart(ws: string[]): { run: string; dir?: string; unsure?: boolean } | undefined {
+  let i = 0;
+  // A quoted first word is cmd's window title (PowerShell's `start "C:\x y\node.exe"` is its program).
+  if (ws[0] === '""' || (/^["']/.test(ws[0] ?? '') && (ws[1] ?? '').startsWith('/'))) i = 1;
+  else if (!(ws[0] ?? '').startsWith('/')) return undefined;
+  let dir: string | undefined;
+  let unsure = false;
+  for (; i < ws.length && ws[i].startsWith('/'); i++) {
+    const d = /^\/d([\s\S]*)$/i.exec(ws[i]);
+    if (d) dir = d[1] || ws[++i];
+    else if (/^\/(node|affinity)$/i.test(ws[i])) i++;
+    else if (!/^\/(b|i|min|max|wait|low|normal|high|realtime|abovenormal|belownormal|separate|shared|machine(:\w+)?)$/i.test(ws[i])) unsure = true;
+  }
+  if (i >= ws.length) unsure = true;
+  return { run: `"${unquote(ws[i] ?? '')}" ${ws.slice(i + 1).map(unquote).join(' ')}`, dir, unsure };
+}
 
 /**
  * Whether a step runs `key` (a script's or program's file name): the step without its wrappers, or what `Start-Process`
  * / `start` would run, has it as its program or as the script its interpreter runs (scriptToken).
  */
 function runsScript(step: string, key: string): boolean {
-  const text = step.replace(WRAPPER, '').replace(/&\s*$/, '');
-  const sp = /^\s*(?:Start-Process|saps|start(?:\s+"")?)\s+(?:-FilePath\s+)?("[^"]*"|'[^']*'|[^\s,]+)(?:[\s\S]*?\s-ArgumentList\s+("[^"]*"|'[^']*'|[^\s]+(?:\s*,\s*[^\s]+)*))?/i.exec(text);
-  if (sp) {
-    const prog = sp[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
-    const args = (sp[2] ?? '').replace(/^(["'])([\s\S]*)\1$/, '$2').replace(/\s*,\s*/g, ' ');
-    return scriptToken(`"${prog}" ${args}`, key) !== undefined;
-  }
-  return scriptToken(text, key) !== undefined;
+  const { text } = unwrap(step);
+  return scriptToken(startOf(text)?.run ?? text, key) !== undefined;
+}
+
+/**
+ * The folders a launch step itself gives what it starts, in order, as written: `env -C x` / `--chdir=x`,
+ * Start-Process's -WorkingDirectory, cmd's `start /D x`. Undefined: its own options cannot be read (startOf).
+ */
+function ownFolders(step: string): string[] | undefined {
+  const { text, dirs } = unwrap(step);
+  const s = startOf(text);
+  if (s?.unsure) return undefined;
+  return s?.dir !== undefined ? [...dirs, s.dir] : dirs;
 }
 
 /**
@@ -179,7 +293,11 @@ function runsScript(step: string, key: string): boolean {
  * and only `&&` lies between it and the launch (`cd x && nohup … &`). A cd that may have been skipped or have failed
  * while the launch still ran (`true || cd x && …`, `cd x; nohup …`), one in a pipeline or sent to the background,
  * `popd`, a cd to `-`, `~` or a variable, or a line that groups commands (`( … )`, `{ … }`) leaves the folder unknown.
- * A cd after the launch does not matter. `launched`: what the launch runs (its script or program), to find its step.
+ * A cd after the launch does not matter. The folder the launch step itself gives what it starts comes last and wins
+ * (Start-Process -WorkingDirectory, cmd's `start /D`, `env -C`): a full path whatever came before, a relative one
+ * from the folder before the step. One that cannot be read (a variable, `~`, `%X%`, an expression, a Start-Process
+ * parameter that fits none or several) leaves it unknown. `launched`: what the launch runs (its script or program), to
+ * find its step.
  */
 export function launchFolder(command: string, input: string | undefined, base: string, platform: NodeJS.Platform = process.platform, launched?: string): string | undefined {
   const P = platform === 'win32' ? path.win32 : path.posix;
@@ -204,12 +322,38 @@ export function launchFolder(command: string, input: string | undefined, base: s
   const candidates = bg.length ? bg : runs;
   if (!candidates.length) return undefined;
   // Several steps run it: one folder only when they all start in the same one.
-  const folders = candidates.map((c) => folderBefore(c.i));
+  const folders = candidates.map((c) => folderOf(c.i));
   return folders.every((f) => f !== undefined && f === folders[0]) ? folders[0] : undefined;
+
+  /** The folder what the step at `k` starts runs in: the one before it, then the step's own (ownFolders). */
+  function folderOf(k: number): string | undefined {
+    const own = ownFolders(parts[k].text);
+    if (!own || /[(){}]/.test(blank(parts[k].text))) return undefined;
+    let dir = folderBefore(k);
+    for (const raw of own) dir = moveTo(dir, raw);
+    return dir;
+  }
+
+  /**
+   * `dir` moved to `raw` (a folder as written): a full path whatever `dir` was, a relative one from `dir`. Undefined when
+   * it cannot be read: a variable, `%X%`, `~`, `-`, an expression or splat, and on Windows `D:x` (relative to that
+   * drive's own folder) or `/x` that is not Git Bash's `/c/…` (Git Bash and PowerShell read it differently).
+   */
+  function moveTo(dir: string | undefined, raw: string): string | undefined {
+    const to = native(unquote(raw), platform);
+    if (!to || /[$`%]/.test(raw) || /[()@]/.test(raw.replace(/"[^"]*"|'[^']*'/g, '')) || /^[~-]/.test(to)) return undefined;
+    if (platform === 'win32') {
+      if (/^[A-Za-z]:(?![\\/])/.test(to) || /^\/(?!\/)/.test(to)) return undefined;
+      // `\x`: from the root of the current drive.
+      if (/^\\(?!\\)/.test(to)) return dir ? P.resolve(native(dir, platform), to) : undefined;
+    }
+    if (P.isAbsolute(to)) return P.resolve(to);
+    return dir ? P.resolve(native(dir, platform), to) : undefined;
+  }
 
   /** The folder the step at `k` starts in. */
   function folderBefore(k: number): string | undefined {
-    let dir = start;
+    let dir: string | undefined = start;
     if (parts.slice(0, k + 1).some((p) => /[(){}]/.test(blank(p.text)))) return undefined;
     for (let j = 0; j < k; j++) {
       const before = j > 0 ? parts[j - 1].sep : '';
@@ -224,9 +368,8 @@ export function launchFolder(command: string, input: string | undefined, base: s
       // if it worked (only && after it).
       const certain = ['', ';', '\n', '&', '&&'].includes(before) && parts.slice(j, k).every((p) => p.sep === '&&');
       if (!certain) return undefined;
-      const to = cd[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
-      if (/^(-|~)|\$|%/.test(to) || !dir) return undefined;
-      dir = P.resolve(native(dir, platform), native(to, platform));
+      dir = moveTo(dir, cd[1]);
+      if (!dir) return undefined;
     }
     return dir;
   }
