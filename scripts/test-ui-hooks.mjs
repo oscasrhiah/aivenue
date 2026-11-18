@@ -266,3 +266,96 @@ test('連線中斷後：已送出的外部效果操作（上傳、安裝、登�
   assert.equal(await say, null);
   assert.equal(await install, null);
 });
+
+test('設定鎖讀不到時（例如 EACCES）：在時限內回報錯誤、不接手、不忙等卡住；鎖在等待中被釋放時照常儲存；活的擁有者也在時限內拒絕', { exclusive: true }, async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { spawn, spawnSync } = await import('node:child_process');
+  const out = await build({ entryPoints: ['packages/core/src/settings.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-settings-lock2-'));
+  const bundle = path.join(dir, 'settings.cjs');
+  fs.writeFileSync(bundle, out.outputFiles[0].text);
+  const lock = path.join(dir, 'settings.json.lock');
+  const disk = () => (fs.existsSync(path.join(dir, 'settings.json')) ? JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')) : {});
+  // In a process of its own (a hub), with reading the lock failing: it must answer, and soon.
+  fs.writeFileSync(lock, JSON.stringify({ pid: 1, started: 1, host: os.hostname(), token: 'unreadable' }));
+  const child = spawnSync(
+    process.execPath,
+    [
+      '-e',
+      `const fs = require('fs');
+       const real = fs.readFileSync;
+       fs.readFileSync = function (p, ...rest) {
+         if (String(p).endsWith('settings.json.lock')) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+         return real.call(this, p, ...rest);
+       };
+       const { SettingsStore } = require(${JSON.stringify(bundle)});
+       const t0 = Date.now();
+       try { new SettingsStore(${JSON.stringify(dir)}).set({ theme: 'dark' }); console.log(JSON.stringify({ saved: true })); }
+       catch (e) { console.log(JSON.stringify({ error: e.message, ms: Date.now() - t0 })); }`,
+    ],
+    { encoding: 'utf8', timeout: 6500 },
+  );
+  assert.equal(child.error, undefined, 'it answered in time (no busy loop)');
+  const said = JSON.parse(child.stdout.trim());
+  assert.match(said.error ?? '', /settings lock .* cannot be read \(EACCES\): settings not saved/);
+  assert.ok(said.ms < 5000, `answered by the deadline (${said.ms} ms)`);
+  assert.match(fs.readFileSync(lock, 'utf8'), /"token":"unreadable"/, 'not taken over');
+  assert.equal(disk().theme, undefined);
+  fs.rmSync(lock);
+
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const store = new mod.exports.SettingsStore(dir);
+  // Windows: a lock being removed reads as EPERM for a moment, then it is gone. That is waited out, not an error.
+  const nfs = createRequire(import.meta.url)('node:fs');
+  const realRead = nfs.readFileSync;
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, started: 1, host: os.hostname(), token: 'being removed' }));
+  let reads = 0;
+  let removed = false;
+  nfs.readFileSync = function (p, ...rest) {
+    if (!removed && String(p).endsWith('settings.json.lock')) {
+      if (++reads === 3) {
+        fs.rmSync(lock);
+        removed = true;
+      }
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    }
+    return realRead.call(this, p, ...rest);
+  };
+  try {
+    store.set({ accent: '#123456' });
+  } finally {
+    nfs.readFileSync = realRead;
+  }
+  assert.equal(disk().accent, '#123456');
+  assert.equal(fs.existsSync(lock), false);
+  // A live holder that releases after a second: the change waits for it and goes through.
+  const holder = (ms) =>
+    spawn(process.execPath, ['-e', `
+      const fs = require('fs'), os = require('os');
+      fs.writeFileSync(${JSON.stringify(lock)}, JSON.stringify({ pid: process.pid, started: Math.round(Date.now() - process.uptime() * 1000), host: os.hostname(), token: 'holder' }), { flag: 'wx' });
+      process.stdout.write('held');
+      setTimeout(() => { fs.rmSync(${JSON.stringify(lock)}); process.exit(0); }, ${ms});`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const brief = holder(1000);
+  await new Promise((r) => brief.stdout.once('data', r));
+  store.set({ theme: 'dark' });
+  assert.equal(disk().theme, 'dark');
+  assert.equal(fs.existsSync(lock), false);
+  // A live holder that keeps it: refused within the limit, its process check included.
+  const long = holder(30000);
+  try {
+    await new Promise((r) => long.stdout.once('data', r));
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const t0 = Date.now();
+    assert.throws(() => store.set({ theme: 'light' }), /being saved by another Aivenue/);
+    const ms = Date.now() - t0;
+    assert.ok(ms >= 2900 && ms < 5000, `refused after the 3 s wait (${ms} ms)`);
+    assert.equal(disk().theme, 'dark');
+  } finally {
+    long.kill();
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});

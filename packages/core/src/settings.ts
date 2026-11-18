@@ -34,12 +34,13 @@ const alive = (pid: number) => {
 };
 
 /** When a running process started (undefined when it cannot be read). Synchronous: only asked about an old lock's owner. */
-function startedAt(pid: number): number | undefined {
+function startedAt(pid: number, timeout: number): number | undefined {
+  if (timeout <= 0) return undefined;
   try {
     const out =
       process.platform === 'win32'
-        ? execFileSync('powershell', ['-NoProfile', '-Command', `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Math.round(pid)}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString('o') }`], { encoding: 'utf8', timeout: 15000, windowsHide: true })
-        : execFileSync('ps', ['-o', 'lstart=', '-p', String(Math.round(pid))], { encoding: 'utf8', timeout: 15000 });
+        ? execFileSync('powershell', ['-NoProfile', '-Command', `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Math.round(pid)}"; if ($p) { $p.CreationDate.ToUniversalTime().ToString('o') }`], { encoding: 'utf8', timeout, windowsHide: true })
+        : execFileSync('ps', ['-o', 'lstart=', '-p', String(Math.round(pid))], { encoding: 'utf8', timeout });
     return Date.parse(out.trim()) || undefined;
   } catch {
     return undefined;
@@ -118,7 +119,11 @@ export class SettingsStore {
   private locked(fn: () => void) {
     const lock = `${this.file}.lock`;
     const mine = JSON.stringify({ pid: process.pid, started: STARTED, host: os.hostname(), token: randomUUID() } satisfies Owner);
+    // The whole wait, the check of the owner's process included, ends at `until`.
     const until = Date.now() + LOCK_WAIT_MS;
+    const timedOut = () => new Error('settings are being saved by another Aivenue: try again');
+    // A lock judged held by a live owner is not checked again (that check runs a process query).
+    const living = new Set<string>();
     for (;;) {
       try {
         const fd = fs.openSync(lock, 'wx');
@@ -131,35 +136,51 @@ export class SettingsStore {
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
         const seen = readLock(lock);
-        if (seen === undefined) continue; // released meanwhile
-        if (ownerGone(seen.text, seen.age)) {
-          // Removed only if it is still the lock that was judged (another waiter may have taken it over meanwhile).
-          if (readLock(lock)?.text === seen.text) fs.rmSync(lock, { force: true });
+        if ('error' in seen) {
+          // Could not be read. On Windows a lock being removed reads as EPERM for a moment: tried again until the
+          // deadline; still unreadable then, the change is refused with why. Never taken over.
+          if (Date.now() > until) throw new Error(`the settings lock ${lock} cannot be read (${seen.error}): settings not saved. If no Aivenue is running, remove that file.`);
+          pause(20);
           continue;
         }
-        if (Date.now() > until) throw new Error('settings are being saved by another Aivenue: try again');
-        pause(20);
+        // Not there: released meanwhile (try again).
+        if (seen.text !== undefined && !living.has(seen.text) && ownerGone(seen.text, seen.age, until - Date.now())) {
+          // Removed only if it is still the lock that was judged (another waiter may have taken it over meanwhile).
+          const now = readLock(lock);
+          if (!('error' in now) && now.text === seen.text) fs.rmSync(lock, { force: true });
+        } else if (seen.text !== undefined) living.add(seen.text);
+        if (Date.now() > until) throw timedOut();
+        pause(seen.text !== undefined ? 20 : 5);
       }
     }
     try {
       fn();
     } finally {
-      if (readLock(lock)?.text === mine) fs.rmSync(lock, { force: true });
+      // Removed only when it is known to be this one (unreadable: left as it is).
+      const held = readLock(lock);
+      if (!('error' in held) && held.text === mine) fs.rmSync(lock, { force: true });
     }
   }
 }
 
-function readLock(lock: string): { text: string; age: number } | undefined {
+/**
+ * The lock as it is: `text` undefined when it is not there (released), `error` when it is there but cannot be read
+ * (no permission, held open, or being removed on Windows). Such a lock is neither waited on past the deadline nor
+ * taken over.
+ */
+function readLock(lock: string): { text?: string; age: number } | { error: string } {
   try {
     const age = Date.now() - fs.statSync(lock).mtimeMs;
     return { text: fs.readFileSync(lock, 'utf8'), age };
-  } catch {
-    return undefined;
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return { age: 0 };
+    return { error: code ?? (e as Error).message };
   }
 }
 
 /** Whether a lock's owner is provably gone. Anything that cannot be checked counts as alive. */
-function ownerGone(text: string, age: number): boolean {
+function ownerGone(text: string, age: number, timeLeft: number): boolean {
   let owner: Owner | undefined;
   try {
     owner = JSON.parse(text) as Owner;
@@ -171,6 +192,6 @@ function ownerGone(text: string, age: number): boolean {
   if (!alive(owner.pid)) return true;
   // The PID runs: the owner itself, or another process that got the same PID after the owner ended.
   if (owner.pid === process.pid) return owner.started !== STARTED;
-  const started = startedAt(owner.pid);
+  const started = startedAt(owner.pid, Math.min(2_000, timeLeft));
   return started !== undefined && Math.abs(started - owner.started) > 5_000;
 }
