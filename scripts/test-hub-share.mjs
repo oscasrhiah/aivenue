@@ -938,6 +938,32 @@ test('每個會改東西的 hub 方法都依實際行為歸類：外部效果不
   for (const m of ['providers.addAccount', 'catalog.add', 'providers.test', 'skills.openFolder']) assert.ok(NOT_REPLAYED.has(m), m);
 });
 
+test('外部效果的操作還在執行時，之後再完成 2,000 多筆操作也不會把它的「已開始」擠掉；重啟後重送不再執行；超過 10 分鐘的「已開始」仍擋住重送', async () => {
+  const { OpLog } = mod.exports;
+  const dir = tmp('mark-kept');
+  const file = path.join(dir, 'hub-ops.json');
+  const log = new OpLog(file);
+  let release;
+  let effects = 0;
+  const slow = log.once('install-1', () => (effects++, new Promise((r) => (release = r))), undefined, true);
+  // Many other operations finish while it runs (more than the log keeps).
+  for (let i = 0; i < 2100; i++) await log.once(`other-${i}`, () => i);
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(onDisk['install-1']?.started, true, 'its mark is still on disk');
+  assert.ok(Object.keys(onDisk).length <= 2001);
+  // The hub restarts while it still runs: a resend of it is not run.
+  await assert.rejects(new OpLog(file).once('install-1', () => effects++, undefined, true), /不知道有沒有完成|whether it finished is unknown/);
+  assert.equal(effects, 1);
+  release('done');
+  assert.equal(await slow, 'done');
+  // A mark from a hub that stopped long ago (older than the 10 minutes answers are kept): still not run again.
+  const old = JSON.parse(fs.readFileSync(file, 'utf8'));
+  old['install-2'] = { at: Date.now() - 2 * 60 * 60_000, started: true };
+  fs.writeFileSync(file, JSON.stringify(old));
+  await assert.rejects(new OpLog(file).once('install-2', () => effects++, undefined, true), /不知道有沒有完成|whether it finished is unknown/);
+  assert.equal(effects, 1);
+});
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();
