@@ -3,6 +3,9 @@
 DIR="$(dirname "$(readlink -f "$0")")"
 APP="$DIR/aivenue"
 SANDBOX="$DIR/chrome-sandbox"
+# Started from a process that runs Electron as plain Node (VS Code extensions, Claude Code, etc.)?
+# Electron would then reject every Chromium option ("bad option"), so drop those variables.
+unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ATTACH_CONSOLE
 
 # 1. chrome-sandbox set up by install.sh (owned by root, setuid): full sandbox.
 if [ "$(stat -c %u "$SANDBOX" 2>/dev/null)" = "0" ] && [ -u "$SANDBOX" ]; then

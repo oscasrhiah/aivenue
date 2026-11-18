@@ -5,8 +5,10 @@
 #      and the install-fault tests must have run, not been skipped;
 #   3. the Linux x64 package and its SHA-256;
 #   4. that same .tar.gz installed by its own install.sh into an isolated HOME, started on a virtual display (Xvfb)
-#      with an empty AIVENUE_HOME, and its version, build and data folder read back from it (capabilities-check.mjs);
-#      then closed and uninstalled;
+#      through its own launcher (the installed command, a link to aivenue.sh) with an empty AIVENUE_HOME, and its
+#      version, build and data folder read back from it (capabilities-check.mjs); twice: in a plain environment, and
+#      with ELECTRON_RUN_AS_NODE=1 inherited by the launcher (as from a terminal VS Code or Claude Code opened), next
+#      to a control showing that variable stops the app binary itself; then closed and uninstalled;
 #   5. the fixed conversations and expected texts for the Ubuntu desktop check of the copy buttons (copy-fixtures.mjs:
 #      no model is called).
 # Uploads, as this run's artifacts only: the package with its SHA-256, the quick-check kit, and the logs.
@@ -111,7 +113,7 @@ jobs:
           (cd out && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
           ls -l "out/$name"
 
-      - name: Install in an isolated HOME, start on a virtual display, read back version and build
+      - name: Install in an isolated HOME; start it through its own launcher on a virtual display, plainly and with ELECTRON_RUN_AS_NODE=1 inherited; read back version and build
         shell: bash
         env:
           VERSION: ${{ steps.c.outputs.version }}
@@ -119,24 +121,55 @@ jobs:
         run: |
           set -uo pipefail
           S="$RUNNER_TEMP/smoke"
-          mkdir -p "$S/home" "$S/unpack" "$S/data"
+          L="$PWD/out/logs"
+          mkdir -p "$S/home" "$S/unpack"
           tar -xzf "out/Aivenue-$VERSION-linux-x64.tar.gz" -C "$S/unpack"
-          HOME="$S/home" sh "$S/unpack/Aivenue-$VERSION-linux-x64/install.sh" > out/logs/install.log 2>&1 || { cat out/logs/install.log; exit 1; }
+          HOME="$S/home" sh "$S/unpack/Aivenue-$VERSION-linux-x64/install.sh" > "$L/install.log" 2>&1 || { cat "$L/install.log"; exit 1; }
           APP="$S/home/.local/share/aivenue/aivenue"
-          test -L "$S/home/.local/bin/aivenue" && test -x "$APP" || { echo "::error::install.sh did not put the command and the app in place"; exit 1; }
-          (HOME="$S/home" AIVENUE_HOME="$S/data" xvfb-run -a -s '-screen 0 1600x1000x24' "$S/home/.local/bin/aivenue" --remote-debugging-port=9232 > out/logs/app.log 2>&1 &)
-          WANT_DATA_DIR="$S/data" WANT_VERSION="$VERSION" node scripts/accept/capabilities-check.mjs 9232 "$SHA" out/smoke linux 2>&1 | tee out/logs/capabilities.log
-          check=${PIPESTATUS[0]}
+          CMD="$S/home/.local/bin/aivenue"
+          test -L "$CMD" && test -x "$APP" || { echo "::error::install.sh did not put the command and the app in place"; exit 1; }
+          echo "The installed command: $CMD -> $(readlink "$CMD")" | tee "$L/smoke.txt"
+          ok=1
+          # Control: the same Electron binary started directly with the variable, as aivenue.sh without the fix did.
+          # It must run as plain Node and refuse the Chromium option; otherwise the second start below proves nothing.
+          ELECTRON_RUN_AS_NODE=1 timeout 60 "$APP" --remote-debugging-port=9234 > "$L/control-run-as-node.log" 2>&1; control=$?
+          echo "control (app binary started directly with ELECTRON_RUN_AS_NODE=1): exit $control; $(head -n 1 "$L/control-run-as-node.log")" | tee -a "$L/smoke.txt"
+          { [ "$control" != 0 ] && grep -q 'bad option: --remote-debugging-port=9234' "$L/control-run-as-node.log"; } || { echo "::error::the control did not show the variable breaking the app"; ok=0; }
           # The main process only (no --type=): it ends its own helpers.
-          main="$(pgrep -af "^$APP" | grep -v -- ' --type=' | cut -d' ' -f1 || true)"
-          [ -n "$main" ] && kill -TERM $main 2>/dev/null
-          for _ in $(seq 1 20); do pgrep -f "^$APP" > /dev/null || break; sleep 1; done
-          left="$(pgrep -fc "^$APP" || true)"
-          pkill -KILL -f "^$APP" 2>/dev/null || true
-          HOME="$S/home" sh "$S/home/.local/share/aivenue/uninstall.sh" > out/logs/uninstall.log 2>&1; un=$?
-          echo "capabilities-check exit $check; processes left after closing: ${left:-0}; uninstall exit $un; command left: $(test -e "$S/home/.local/bin/aivenue" && echo yes || echo no)" | tee out/logs/smoke.txt
-          if grep -q FATAL out/logs/app.log; then echo "::error::app.log has a FATAL line"; exit 1; fi
-          [ "$check" = 0 ] && [ "${left:-0}" = 0 ] && [ "$un" = 0 ] && [ ! -e "$S/home/.local/bin/aivenue" ]
+          main_pid() { pgrep -af "^$APP" | grep -v -- ' --type=' | cut -d' ' -f1 || true; }
+          # Each start goes through the installed command (the link to aivenue.sh) with the given environment changes.
+          # A small sh writes down the environment it was given and then becomes the launcher (exec keeps the
+          # environment), so the file shows what the launcher itself started with.
+          launch() { # <name> <port> <env arguments…>
+            local name="$1" port="$2"; shift 2
+            mkdir -p "$S/data-$name"
+            (env "$@" HOME="$S/home" AIVENUE_HOME="$S/data-$name" xvfb-run -a -s '-screen 0 1600x1000x24' \
+              sh -c 'echo "ELECTRON_RUN_AS_NODE=${ELECTRON_RUN_AS_NODE-unset} ELECTRON_NO_ATTACH_CONSOLE=${ELECTRON_NO_ATTACH_CONSOLE-unset}" > "$1"; shift; exec "$@"' \
+              launch-env "$L/launch-env-$name.txt" "$CMD" --remote-debugging-port="$port" > "$L/app-$name.log" 2>&1 &)
+            WANT_DATA_DIR="$S/data-$name" WANT_VERSION="$VERSION" node scripts/accept/capabilities-check.mjs "$port" "$SHA" out/smoke "linux-$name" 2>&1 | tee "$L/capabilities-$name.log"
+            local check=${PIPESTATUS[0]}
+            local main first; main="$(main_pid)"; first="$(echo "$main" | head -n 1)"
+            # What the app process itself was started with (the launcher exec-ed it): the variable must be gone.
+            local inherited="(no app process)"
+            [ -n "$first" ] && [ -r "/proc/$first/environ" ] && inherited="$(tr '\0' '\n' < "/proc/$first/environ" | grep -c '^ELECTRON_RUN_AS_NODE=' || true)"
+            [ -n "$main" ] && kill -TERM $main 2>/dev/null
+            for _ in $(seq 1 20); do pgrep -f "^$APP" > /dev/null || break; sleep 1; done
+            local left; left="$(pgrep -fc "^$APP" || true)"
+            pkill -KILL -f "^$APP" 2>/dev/null || true
+            echo "$name: launcher started with $(cat "$L/launch-env-$name.txt" 2>/dev/null || echo '(nothing written)'); capabilities-check exit $check; ELECTRON_RUN_AS_NODE in the app process's environment: $inherited; processes left after closing: ${left:-0}" | tee -a "$L/smoke.txt"
+            if grep -q FATAL "$L/app-$name.log"; then echo "::error::app-$name.log has a FATAL line"; ok=0; fi
+            [ "$check" = 0 ] && [ "$inherited" = 0 ] && [ "${left:-0}" = 0 ] || { echo "::error::start $name failed"; ok=0; }
+          }
+          # 1. A plain environment.
+          launch plain 9232 -u ELECTRON_RUN_AS_NODE -u ELECTRON_NO_ATTACH_CONSOLE
+          grep -qx 'ELECTRON_RUN_AS_NODE=unset ELECTRON_NO_ATTACH_CONSOLE=unset' "$L/launch-env-plain.txt" || { echo "::error::the plain start had the variables set"; ok=0; }
+          # 2. Started from a process that runs Electron as Node (VS Code extensions, Claude Code): the variables are
+          #    inherited, and must reach the launcher.
+          launch run-as-node 9233 ELECTRON_RUN_AS_NODE=1 ELECTRON_NO_ATTACH_CONSOLE=1
+          grep -qx 'ELECTRON_RUN_AS_NODE=1 ELECTRON_NO_ATTACH_CONSOLE=1' "$L/launch-env-run-as-node.txt" || { echo "::error::the variables did not reach the launcher"; ok=0; }
+          HOME="$S/home" sh "$S/home/.local/share/aivenue/uninstall.sh" > "$L/uninstall.log" 2>&1; un=$?
+          echo "uninstall exit $un; command left: $(test -e "$CMD" && echo yes || echo no)" | tee -a "$L/smoke.txt"
+          [ "$ok" = 1 ] && [ "$un" = 0 ] && [ ! -e "$CMD" ]
 
       - name: Quick-check kit for the Ubuntu desktop (fixed conversations and the texts a copy must give)
         shell: bash

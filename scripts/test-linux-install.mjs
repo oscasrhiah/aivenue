@@ -1174,3 +1174,23 @@ test('回歸 7b：結尾校驗相符、但內有格式錯誤紀錄的計畫（�
     }
   }
 });
+
+test('啟動腳本：從 ELECTRON_RUN_AS_NODE=1 的環境（VS Code 擴充、Claude Code 開的終端機）啟動，先清掉這個變數再啟動 App；其他變數和參數原樣傳入', { skip }, () => {
+  const w = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-launch-'));
+  const dir = path.join(w, 'app');
+  fs.mkdirSync(dir);
+  fs.copyFileSync(path.join(linux, 'aivenue.sh'), path.join(dir, 'aivenue.sh'));
+  // A stand-in for Electron: prints what it was started with.
+  fs.writeFileSync(path.join(dir, 'aivenue'), '#!/bin/sh\necho "node=${ELECTRON_RUN_AS_NODE-unset} console=${ELECTRON_NO_ATTACH_CONSOLE-unset} home=${AIVENUE_HOME-unset} args=$*"\n');
+  for (const f of ['aivenue', 'aivenue.sh']) fs.chmodSync(path.join(dir, f), 0o755);
+  // Started the way the installed command is: through ~/.local/bin/aivenue, a link to aivenue.sh.
+  const link = path.join(w, 'aivenue');
+  fs.symlinkSync(path.join(dir, 'aivenue.sh'), link);
+  const start = (env) => spawnSync(link, ['--user-data-dir=/tmp/x', '--remote-debugging-port=9333'], { env: { PATH: process.env.PATH, HOME: w, AIVENUE_HOME: '/data/av', ...env }, encoding: 'utf8' });
+  for (const env of [{ ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ATTACH_CONSOLE: '1' }, { ELECTRON_RUN_AS_NODE: '1' }, {}]) {
+    const r = start(env);
+    assert.equal(r.status, 0, `${JSON.stringify(env)}: ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /^node=unset console=unset home=\/data\/av args=(--no-sandbox )?--user-data-dir=\/tmp\/x --remote-debugging-port=9333\n$/, JSON.stringify(env));
+  }
+  fs.rmSync(w, { recursive: true, force: true });
+});
