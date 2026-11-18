@@ -9,10 +9,13 @@ import { L } from './i18n';
 const KEEP_MS = 10 * 60_000;
 const MAX = 2000;
 /**
- * A "started" mark (an operation with an outside effect, see replay.ts): never dropped to make room, and kept while its
- * operation runs and a day after, so a resend of it is never run again however many others came meanwhile.
+ * "Started" marks (operations with an outside effect, see replay.ts) are kept apart from answers: a mark stays until its
+ * operation finishes (then its answer replaces it), with no time limit, so a resend of an operation whose end was never
+ * seen (the hub stopped) is never run again, however long ago it started. The one limit: at most this many unfinished
+ * marks of operations no longer running are kept; past it the oldest goes, and a resend of that one would run again.
+ * (Marks are left only by a hub that stopped while such an operation ran, a few each time.)
  */
-const MARK_KEEP_MS = 24 * 60 * 60_000;
+const MAX_MARKS = 1000;
 /** Answers larger than this are not written to the file; a repeat after a restart is then refused, not run. */
 const MAX_STORED = 32 * 1024;
 
@@ -35,12 +38,17 @@ interface Done {
 export class OpLog {
   private running = new Map<string, Promise<unknown>>();
   private done = new Map<string, Done>();
+  /** Unfinished operations with an outside effect: when each started (see MAX_MARKS). */
+  private marks = new Map<string, number>();
 
   constructor(private file?: string) {
     if (!file) return;
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, Done>;
-      for (const [op, d] of Object.entries(saved)) if (Date.now() - d.at < (d.started ? MARK_KEEP_MS : KEEP_MS)) this.done.set(op, d);
+      for (const [op, d] of Object.entries(saved)) {
+        if (d.started) this.marks.set(op, d.at);
+        else if (Date.now() - d.at < KEEP_MS) this.done.set(op, d);
+      }
     } catch {
       // none yet
     }
@@ -54,10 +62,10 @@ export class OpLog {
   once<T>(op: string, fn: () => T | Promise<T>, recorded?: () => { done?: boolean; result?: unknown; error?: string } | undefined, outside = false): Promise<T> {
     const running = this.running.get(op);
     if (running) return running as Promise<T>;
+    // Started and never seen to finish (the hub stopped meanwhile): it may have happened. Not run again.
+    if (this.marks.has(op)) return Promise.reject(new Error(UNKNOWN()));
     const d = this.done.get(op);
-    if (d && Date.now() - d.at < (d.started ? MARK_KEEP_MS : KEEP_MS)) {
-      // Started before the hub stopped, its result never written: it may have happened. Not run again.
-      if (d.started) return Promise.reject(new Error(UNKNOWN()));
+    if (d && Date.now() - d.at < KEEP_MS) {
       if (d.error) return Promise.reject(new Error(d.error));
       if (d.big && !('result' in d)) return Promise.reject(new Error(L('這個操作已經執行過了', 'This operation was already done')));
       return Promise.resolve(d.result as T);
@@ -72,13 +80,12 @@ export class OpLog {
     // The mark must be on disk before it runs: if it cannot be written, the operation does not run (and is not marked),
     // so a hub that stops can never leave it done and unrecorded. The user sees the error and may try again.
     if (outside && this.file) {
-      const before = this.done.get(op);
-      this.done.set(op, { at: Date.now(), started: true });
+      this.marks.set(op, Date.now());
+      this.trimMarks(op);
       try {
         this.save(true);
       } catch (e) {
-        if (before) this.done.set(op, before);
-        else this.done.delete(op);
+        this.marks.delete(op);
         return Promise.reject(new Error(NOT_MARKED((e as Error).message)));
       }
     }
@@ -97,6 +104,8 @@ export class OpLog {
 
   private finish(op: string, d: Done) {
     this.running.delete(op);
+    // Finished: its answer replaces its mark.
+    this.marks.delete(op);
     if (d.result !== undefined) {
       let size = Infinity;
       try {
@@ -108,14 +117,18 @@ export class OpLog {
     }
     this.done.set(op, d);
     const now = Date.now();
-    // Old answers go, oldest first when there are too many; a "started" mark only once its operation is no longer
-    // running and a day has passed, never to make room.
-    for (const [k, v] of this.done) if (v.started ? !this.running.has(k) && now - v.at >= MARK_KEEP_MS : now - v.at >= KEEP_MS) this.done.delete(k);
-    for (const [k, v] of this.done) {
-      if (this.done.size <= MAX) break;
-      if (!v.started) this.done.delete(k);
-    }
+    // Old answers go, oldest first when there are too many. Marks are apart (MAX_MARKS): one of a running operation
+    // always stays.
+    for (const [k, v] of this.done) if (now - v.at >= KEEP_MS) this.done.delete(k);
+    while (this.done.size > MAX) this.done.delete(this.done.keys().next().value as string);
+    this.trimMarks();
     this.save();
+  }
+
+  /** At most MAX_MARKS marks of operations not running (`starting`: about to run), the oldest going first. */
+  private trimMarks(starting?: string) {
+    const idle = [...this.marks].filter(([k]) => k !== starting && !this.running.has(k)).sort((a, b) => a[1] - b[1]);
+    for (let i = 0; i < idle.length - MAX_MARKS; i++) this.marks.delete(idle[i][0]);
   }
 
   /** `strict`: a failed write throws (the mark before an outside effect); otherwise it is not kept, as before. */
@@ -124,6 +137,7 @@ export class OpLog {
     const out: Record<string, Done> = {};
     // In memory a large answer is kept whole (a repeat now gets it); in the file only that it was done.
     for (const [k, v] of this.done) out[k] = v.big ? { at: v.at, big: true } : v;
+    for (const [k, at] of this.marks) out[k] = { at, started: true };
     try {
       fs.writeFileSync(`${this.file}.tmp`, JSON.stringify(out));
       fs.renameSync(`${this.file}.tmp`, this.file);

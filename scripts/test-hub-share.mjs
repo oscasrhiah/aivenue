@@ -964,6 +964,61 @@ test('外部效果的操作還在執行時，之後再完成 2,000 多筆操作�
   assert.equal(effects, 1);
 });
 
+test('未確認完成的「已開始」沒有時間期限：執行超過一天、重啟後重送仍不再執行；和回覆分開保留，只有超過 1,000 筆時才先清最舊、不在執行中的', async () => {
+  const { OpLog } = mod.exports;
+  const dir = tmp('mark-no-expiry');
+  const file = path.join(dir, 'hub-ops.json');
+  const realNow = Date.now;
+  let shift = 0;
+  Date.now = () => realNow() + shift;
+  try {
+    // The reported case: it still runs when the clock passes a day; other operations finish meanwhile.
+    const log = new OpLog(file);
+    let effects = 0;
+    let release;
+    const slow = log.once('long-1', () => (effects++, new Promise((r) => (release = r))), undefined, true);
+    shift = 25 * 60 * 60_000;
+    for (let i = 0; i < 50; i++) await log.once(`later-${i}`, () => i);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8'))['long-1']?.started, true, 'its mark is still on disk after a day');
+    // The hub restarts (its end never seen): a resend is not run, a day or a week later.
+    await assert.rejects(new OpLog(file).once('long-1', () => effects++, undefined, true), /不知道有沒有完成|whether it finished is unknown/);
+    shift = 8 * 24 * 60 * 60_000;
+    const reloaded = new OpLog(file);
+    for (let i = 0; i < 50; i++) await reloaded.once(`week-${i}`, () => i);
+    await assert.rejects(reloaded.once('long-1', () => effects++, undefined, true), /不知道有沒有完成|whether it finished is unknown/);
+    assert.equal(effects, 1);
+    // Answers still go after 10 minutes; the mark does not.
+    const kept = Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')));
+    assert.ok(!kept.some((k) => k.startsWith('later-')), 'answers of a week ago are gone');
+    assert.ok(kept.includes('long-1'));
+    // It finishes in the first hub: its answer replaces its mark there.
+    release('done');
+    assert.equal(await slow, 'done');
+    assert.equal(await log.once('long-1', () => effects++, undefined, true), 'done');
+    assert.equal(effects, 1);
+
+    // The one limit: more than 1,000 marks of operations no longer running. The oldest go first; a running one stays.
+    shift = 0;
+    const many = {};
+    for (let i = 0; i < 1003; i++) many[`m-${i}`] = { at: Date.now() - (2000 - i) * 60_000, started: true };
+    fs.writeFileSync(file, JSON.stringify(many));
+    const capped = new OpLog(file);
+    let releaseLive;
+    const live = capped.once('live', () => new Promise((r) => (releaseLive = r)), undefined, true);
+    await capped.once('plain', () => 'x');
+    const marks = Object.entries(JSON.parse(fs.readFileSync(file, 'utf8'))).filter(([, d]) => d.started).map(([k]) => k);
+    assert.ok(marks.includes('live'), 'the running one stays');
+    assert.equal(marks.length, 1001, '1,000 not running, plus the running one');
+    for (const k of ['m-0', 'm-1', 'm-2']) assert.ok(!marks.includes(k), `${k} (oldest) went`);
+    for (const k of ['m-3', 'm-1002']) assert.ok(marks.includes(k), `${k} stays`);
+    await assert.rejects(new OpLog(file).once('m-3', () => effects++, undefined, true), /不知道有沒有完成|whether it finished is unknown/);
+    releaseLive('ok');
+    await live;
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test('操作紀錄的備援：資料裡記著做完（有回覆、錯誤）就照答；記著開始卻沒做完的，拒絕再執行', async () => {
   const { OpLog } = mod.exports;
   const log = new OpLog();
