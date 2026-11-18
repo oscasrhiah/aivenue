@@ -4159,7 +4159,7 @@ test('獨立審查的追問：背景裡的「上次結果」是審查報告（�
   assert.doesNotMatch(goal, /not this/);
 });
 
-test('背景啟動與程序的對應：比完整路徑——另一個專案的同名腳本不算；程序用相對路徑時要知道它的資料夾；Linux 分大小寫；只在參數、-e／-c 裡提到不算', () => {
+test('背景啟動與程序的對應：比完整路徑——另一個專案的同名腳本不算；程序用相對路徑時要知道它的資料夾；Linux 分大小寫；只在參數、-e／-c 裡提到不算；啟動的資料夾依 shell 規則（可能沒執行的 cd 算不知道）', () => {
   const win = 'win32';
   const linux = 'linux';
   const launch = (script, cwd, key = script.replace(/^.*[\\/]/, '')) => ({ key, script, cwd });
@@ -4185,13 +4185,31 @@ test('背景啟動與程序的對應：比完整路徑——另一個專案的�
     [{ command: 'grep job.js /p/log' }, launch('job.js', '/p'), linux, false],
   ];
   for (const [proc, l, platform, want] of cases) assert.equal(W.sameScript(proc, l, platform), want, `${proc.command} | ${l.script} in ${l.cwd} (${platform})`);
-  // Where a launch line ran: the call's own folder, one cd in the line, or unknown.
-  assert.equal(W.launchFolder('nohup node job.js &', JSON.stringify({ command: 'x', workdir: 'sub' }), 'C:\\proj', win), 'C:\\proj\\sub');
-  assert.equal(W.launchFolder('cd /c/other && nohup node job.js &', undefined, 'C:\\proj', win), 'C:\\other');
-  assert.equal(W.launchFolder('cd tools && nohup node job.js &', undefined, '/home/u/proj', linux), '/home/u/proj/tools');
-  assert.equal(W.launchFolder('cd a && cd b && nohup node job.js &', undefined, '/p', linux), undefined);
-  assert.equal(W.launchFolder('cd $DIR && nohup node job.js &', undefined, '/p', linux), undefined);
-  assert.equal(W.launchFolder('nohup node job.js &', undefined, '/p', linux), '/p');
+  // Where a launch line ran, by the shell's rules: the call's own folder; a cd the launch depends on (only && after it).
+  const lf = (cmd, base = '/p', input) => W.launchFolder(cmd, input, base, linux, 'job.js');
+  assert.equal(W.launchFolder('nohup node job.js &', JSON.stringify({ command: 'x', workdir: 'sub' }), 'C:\\proj', win, 'job.js'), 'C:\\proj\\sub');
+  assert.equal(W.launchFolder('cd /c/other && nohup node job.js &', undefined, 'C:\\proj', win, 'job.js'), 'C:\\other');
+  assert.equal(lf('cd tools && nohup node job.js &', '/home/u/proj'), '/home/u/proj/tools');
+  assert.equal(lf('cd a && cd b && nohup node job.js &'), '/p/a/b');
+  assert.equal(lf('make && cd /x && nohup node job.js &'), '/x');
+  assert.equal(lf('nohup node job.js &'), '/p');
+  // A cd that may be skipped or fail while the launch still runs: unknown, not the cd's folder.
+  assert.equal(lf('true || cd /other-project && nohup node job.js &', '/this-project'), undefined, 'the review of f6c79ad');
+  assert.equal(lf('cd /other; nohup node job.js &'), undefined);
+  assert.equal(lf('cd /other\nnohup node job.js &'), undefined);
+  assert.equal(lf('cd /x && make || nohup node job.js &'), undefined);
+  assert.equal(lf('cd $DIR && nohup node job.js &'), undefined);
+  assert.equal(lf('cd - && nohup node job.js &'), undefined);
+  assert.equal(lf('pushd /x && popd && nohup node job.js &'), undefined);
+  assert.equal(lf('(cd /x && nohup node job.js &)'), undefined);
+  // A cd that changes no folder of the launch: piped, sent to the background, or after the launch.
+  assert.equal(lf('cd /x | cat && nohup node job.js &'), '/p');
+  assert.equal(lf('cd /x & nohup node job.js &'), '/p');
+  assert.equal(lf('nohup node job.js & cd /x'), '/p');
+  assert.equal(lf('nohup node job.js &\ncd /x && ls'), '/p');
+  // So the other project's job.js is not taken for this launch.
+  assert.equal(W.sameScript({ command: 'node /other-project/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('true || cd /other-project && nohup node job.js &', '/this-project') }, linux), false);
+  assert.equal(W.sameScript({ command: 'node /this-project/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('nohup node job.js &', '/this-project') }, linux), true);
   assert.equal(W.scriptOf('nohup node scripts/a/job.js > x.log 2>&1 &'), 'scripts/a/job.js');
 });
 

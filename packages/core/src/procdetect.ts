@@ -115,14 +115,53 @@ function native(p: string, platform: NodeJS.Platform): string {
   return p;
 }
 
+/** A command line's steps and the separator after each (`&&`, `||`, `;`, `|`, a new line, or '' at the end), quotes kept. */
+function steps(command: string): { text: string; sep: string }[] {
+  const out: { text: string; sep: string }[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      cur += ch;
+      if (ch === '\\' && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    const two = command.slice(i, i + 2);
+    if (two === '&&' || two === '||') {
+      out.push({ text: cur, sep: two });
+      cur = '';
+      i++;
+    } else if (ch === ';' || ch === '|' || ch === '\n') {
+      out.push({ text: cur, sep: ch });
+      cur = '';
+    } else cur += ch;
+  }
+  out.push({ text: cur, sep: '' });
+  return out;
+}
+
+/** A step that is only a change of folder (`cd x`, `pushd x`, `Set-Location -Path x`): its target, as written. */
+const CD_STEP = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s&]+)\s*$/i;
+
 /**
- * The folder a launch line ran in: the tool call's own working folder (`workdir`, `cwd`), else `base` (the workflow's
- * folder); a single `cd` / `pushd` / `Set-Location` in the line moves it. Undefined when it cannot be told (several
- * changes of folder, `cd -`, a variable or `~`).
+ * The folder a launch line ran in, by the shell's own rules, or undefined when that cannot be shown. It starts from
+ * the tool call's own working folder (`workdir`, `cwd`), else `base` (the workflow's folder). A `cd` before the launch
+ * moves it only when the launch runs only if that cd did: the cd starts the line or follows `;`, a new line or `&&`,
+ * and only `&&` lies between it and the launch (`cd x && nohup … &`). A cd that may have been skipped or have failed
+ * while the launch still ran (`true || cd x && …`, `cd x; nohup …`), one in a pipeline or sent to the background,
+ * `popd`, a cd to `-`, `~` or a variable, or a line that groups commands (`( … )`, `{ … }`) leaves the folder unknown.
+ * A cd after the launch does not matter. `launched`: what the launch runs (its script or program), to find its step.
  */
-export function launchFolder(command: string, input: string | undefined, base: string, platform: NodeJS.Platform = process.platform): string | undefined {
+export function launchFolder(command: string, input: string | undefined, base: string, platform: NodeJS.Platform = process.platform, launched?: string): string | undefined {
   const P = platform === 'win32' ? path.win32 : path.posix;
-  let dir = base;
+  let dir: string | undefined = base;
   try {
     const i = input ? JSON.parse(input) : undefined;
     const given = [i?.workdir, i?.cwd, i?.directory, i?.working_directory].find((x) => typeof x === 'string' && x.trim());
@@ -130,10 +169,32 @@ export function launchFolder(command: string, input: string | undefined, base: s
   } catch {
     // not JSON: the workflow's folder
   }
-  const moves = [...command.matchAll(/(?:^|&&|;|\n|\|\|)\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s;&|]+)/gi)].map((m) => m[1].replace(/^(["'])([\s\S]*)\1$/, '$2'));
-  if (!moves.length) return dir;
-  if (moves.length > 1 || /^(-|~)|\$|%/.test(moves[0])) return undefined;
-  return P.resolve(native(dir, platform), native(moves[0], platform));
+  const parts = steps(command);
+  const blank = (t: string) => t.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+  // The step that launches: the one that names what it runs (else the first that starts something in the background).
+  const name = launched?.replace(/^.*[\\/]/, '').toLowerCase();
+  let k = name ? parts.findIndex((p) => p.text.toLowerCase().includes(name)) : -1;
+  if (k < 0) k = parts.findIndex((p) => LAUNCH.test(p.text));
+  if (k < 0) k = parts.length - 1;
+  if (parts.slice(0, k + 1).some((p) => /[(){}]/.test(blank(p.text)))) return undefined;
+  for (let j = 0; j < k; j++) {
+    const before = j > 0 ? parts[j - 1].sep : '';
+    const text = parts[j].text;
+    if (/^\s*popd\b/i.test(text)) return undefined;
+    const cd = CD_STEP.exec(text);
+    if (!cd) {
+      // A cd hidden in a step that does more (`cd x & …` runs it in the background): no effect on later steps.
+      continue;
+    }
+    // Piped: a subshell of its own, no effect on the steps after it.
+    if (parts[j].sep === '|') continue;
+    const certain = (before === '' || before === ';' || before === '\n' || before === '&&') && parts.slice(j, k).every((p) => p.sep === '&&');
+    if (!certain) return undefined;
+    const to = cd[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
+    if (/^(-|~)|\$|%/.test(to) || !dir) return undefined;
+    dir = P.resolve(native(dir, platform), native(to, platform));
+  }
+  return dir;
 }
 
 /**

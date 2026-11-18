@@ -4584,7 +4584,7 @@ export class Orchestrator {
     const launch = backgroundLaunch(cmd, t.output, t.input);
     if (launch) {
       // Where it ran: a relative script is only told apart from one of the same name elsewhere by its full path.
-      launch.cwd = launchFolder(launch.command, t.input, run.config.cwd);
+      launch.cwd = launchFolder(launch.command, t.input, run.config.cwd, process.platform, launch.script ?? launch.key);
       const entry = { id: `L${++this.launchSeq}`, cmd: launch.command, ts: e.ts, key: launch.key, pid: launch.pid, script: launch.script, cwd: launch.cwd };
       this.launches.set(info.id, [...(this.launches.get(info.id) ?? []), entry]);
       void this.adoptProcess(run, info, launch)
