@@ -160,7 +160,8 @@ export const AGAINST = [
   // sync". Saying the parent directory is not synced, next to "power loss is out of scope", is not (a v5 run).
   {
     what: 'durability across power loss (out of scope in the request)',
-    re: /(無法|不能|未能|沒有|不)\s*保證[^。；;\n]{0,24}(斷電|系統崩潰|power loss|power failure)|(斷電|power loss)[^。；;\n]{0,12}(仍|也|會)?[^。；;\n]{0,6}(遺失|lost)|(需要|需|應|應該|必須|先|補)\s*[^。；;\n]{0,10}(fsync|同步)\s*[^。；;\n]{0,6}目錄|(should|must|needs?( to)?)\s+[^.;\n]{0,20}(fsync|sync)[^.;\n]{0,12}directory|cannot guarantee[^.;\n]{0,30}power/i,
+    // A requirement said not to be one ("本次不需…fsync 父目錄", "does not need to sync the directory") is not.
+    re: /(無法|不能|未能|沒有|不)\s*保證[^。；;\n]{0,24}(斷電|系統崩潰|power loss|power failure)|(斷電|power loss)[^。；;\n]{0,12}(仍|也|會)?[^。；;\n]{0,6}(遺失|lost)|(?<![不無毋免])(需要|需|應|應該|必須|先|補)\s*[^。；;\n]{0,10}(fsync|同步)\s*[^。；;\n]{0,6}目錄|(?<!(not|n't|no) )(should|must|needs?( to)?)\s+[^.;\n]{0,20}(fsync|sync)[^.;\n]{0,12}directory|cannot guarantee[^.;\n]{0,30}power/i,
   },
 ];
 /** Which decisions rest on the opposite of a stated condition: "D2: more than one writer…". */

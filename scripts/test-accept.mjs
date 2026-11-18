@@ -508,6 +508,11 @@ test('驗收樣本：決定不能建立在樣本明示條件的反面——用 v
   // demand. The first version of the check named it (a false alarm).
   seen.v5Ask = [{ id: 'D1', question: '在做法 A、B 之間選一個', choice: 'A；建議合併本變更', reasons: '使用者確認服務交付客戶甲，其合約要求程序崩潰後不得遺失已確認操作。A 在回覆前完成暫存檔寫入、檔案 fsync 和改名；B 的 500 毫秒批次回覆會留有合約不允許的遺失窗口。檢視程式順序及臨時目錄重送檢查亦符合這項承諾。', assumptions: ['客戶甲排除整台電腦斷電；本變更 fsync 資料檔，但不 fsync 其父目錄。', 'Store 文件所述每個檔案只有一個 Store 寫入者的條件成立。'] }];
   assert.deepEqual(againstStated(seen.v5Ask), []);
+  // Another (at 04ce20a): "power loss excluded; no need this time to fsync the parent directory" — a need denied.
+  seen.v5AskFinal = [{ id: 'D1', question: '在做法 A、B 之間選一個', choice: 'A（建議合併此變更）', reasons: '使用者確認交付給客戶甲，其契約要求已確認操作在服務程序崩潰後絕不能遺失。變更在回覆前同步寫完暫存檔、fsync 並改名；符合這個耐久性條件。B 的批次寫入會留下約 500 毫秒已回覆但未保存的操作，違反要求。', assumptions: ['此 Store 對每個檔案維持單一寫入者，符合程式註解所述的服務設計。', '要求排除整台電腦斷電；本次不需在 POSIX 上 fsync 父目錄以涵蓋斷電時的目錄項目耐久性。'] }];
+  assert.deepEqual(againstStated(seen.v5AskFinal), []);
+  assert.deepEqual(againstStated([{ id: 'D8', choice: 'A', reasons: 'It does not need to fsync the parent directory: power loss is out of scope.', assumptions: [] }]), []);
+  assert.deepEqual(againstStated([{ id: 'D7', choice: 'A', reasons: 'It must fsync the parent directory before replying.', assumptions: [] }]), ['D7: durability across power loss (out of scope in the request)']);
   assert.deepEqual(againstStated([{ id: 'D9', choice: 'A', reasons: '必須先同步父目錄才算持久', assumptions: [] }]), ['D9: durability across power loss (out of scope in the request)'], 'a demand for a directory sync');
   // Stating the condition (one writer; power loss out of scope) is in line with the samples.
   assert.deepEqual(againstStated(seen.firstDecide), []);

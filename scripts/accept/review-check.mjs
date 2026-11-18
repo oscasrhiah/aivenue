@@ -254,6 +254,10 @@ try {
     check(`${kind}: D1 chooses A (B loses confirmed operations on a crash), with reasons and assumptions`, firstOption(d1?.choice) === 'A' && !!d1?.reasons && !!d1?.assumptions.length, d1?.choice ?? '(no D1)');
     const against = againstStated(decisions);
     check(`${kind}: no decision rests on the opposite of what the sample states (one writer per file; power loss out of scope)`, !against.length, against.join('; '));
+    // The same, by the conclusion: under the stated conditions the clean change has no defect, so a review that blocks
+    // it or advises against merging it rests on something else (in v4: several writers, power loss).
+    const againstMerge = decisions.filter((d) => /合併|merge/i.test(d.choice) && !saysMerge(d.choice));
+    check(`${kind}: the conclusion follows the stated conditions: the clean change approved, no decision against merging it`, review?.verdict === 'approve' && !againstMerge.length, `verdict ${review?.verdict}${againstMerge.length ? `; ${againstMerge.map((d) => `${d.id}: ${d.choice}`).join('; ')}` : ''}`);
     if (kind === 'decide') {
       check('decide: decided without asking the user (no question before the report)', r.asked.length === 0, r.asked.join(' | ').slice(0, 300));
       // The clean change keeps every stated condition: under them, merging is the answer.
