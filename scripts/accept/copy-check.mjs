@@ -5,11 +5,12 @@
 //    Chinese, a table, a nested list, a multi-line code block), the code block alone, the final result and the review
 //    report. Then, on selected text, whether Ctrl+C and the context menu's Copy put it on the clipboard (the reported
 //    problem), recorded as found.
-//  - The desktop app (Electron, from this checkout): the same buttons, the system clipboard compared; Ctrl+C recorded.
+//  - The desktop app (Electron, from this checkout; or a packaged Aivenue.exe given as DESK_EXE, e.g. the portable or
+//    the unpacked app of a candidate): the same buttons, the system clipboard compared; Ctrl+C recorded.
 // A throwaway VS Code profile, Electron profile and AIVENUE_HOME: the user's own are never touched. The system clipboard
 // is used: its text is kept first and put back at the end (anything else on it, such as an image, is not).
-//   node copy-check.mjs <aivenue.vsix> <out dir> [<VS Code folder>]
-// Run `npm run build` first (the desktop app runs from packages/desktop/dist). PASS / FAIL lines, JSON, screenshots
+//   [DESK_EXE=<packaged Aivenue.exe>] node copy-check.mjs <aivenue.vsix> <out dir> [<VS Code folder>]
+// Without DESK_EXE, run `npm run build` first (the desktop app then runs from packages/desktop/dist). PASS / FAIL lines, JSON, screenshots
 // and the pasted files in <out dir>.
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -396,9 +397,11 @@ if (!vscodeRan) check('VS Code started', false);
 // ---------- the desktop app ----------
 let desk;
 try {
-  log('the desktop app');
-  const electron = path.join(REPO, 'node_modules', 'electron', 'dist', 'electron.exe');
-  desk = spawn(electron, [path.join(REPO, 'packages', 'desktop'), `--remote-debugging-port=${DESK_PORT}`, `--user-data-dir=${deskUser}`], { env: { ...env, AIVENUE_HOME: deskHome }, detached: true, stdio: 'ignore', cwd: REPO });
+  const deskExe = process.env.DESK_EXE ? path.resolve(process.env.DESK_EXE) : undefined;
+  log(`the desktop app${deskExe ? `: ${deskExe}` : ' (from this checkout)'}`);
+  note('desktop app started', deskExe ? { packaged: deskExe } : { fromCheckout: path.join(REPO, 'packages', 'desktop') });
+  const app = deskExe ? [deskExe, []] : [path.join(REPO, 'node_modules', 'electron', 'dist', 'electron.exe'), [path.join(REPO, 'packages', 'desktop')]];
+  desk = spawn(app[0], [...app[1], `--remote-debugging-port=${DESK_PORT}`, `--user-data-dir=${deskUser}`], { env: { ...env, AIVENUE_HOME: deskHome }, detached: true, stdio: 'ignore', cwd: REPO });
   desk.unref();
   const page = await until(async () => (await targets(DESK_PORT)).find((t) => t.type === 'page' && /^http:\/\/127\.0\.0\.1:\d+\//.test(t.url)), 'the desktop window', 90_000);
   const d = cdp(page.webSocketDebuggerUrl);
