@@ -176,12 +176,36 @@ for (const [view, width] of [['wide', null], ['narrow', 420]]) {
 // Every Settings tab at the width of the VS Code side bar (Aivenue in the secondary side bar is about 290px wide): no
 // sideways scrolling, nothing sticking out of the pane, and a setting's own text not squeezed beside its control (it
 // used to wrap one or two characters a line, the control pushing the row past the edge).
+// A tab is measured only once it is the one shown: the tab link Settings marks as selected and the pane's own heading
+// must both be that tab's. Every tab has a pane, so waiting for "a pane" could measure the previous tab again.
 const SIDE_WIDTH = 290;
-const SIDE = (tab) => `(async () => {
+const SIDE_TABS = {
+  general: ['一般', 'General'],
+  providers: ['供應商與帳號', 'Providers & accounts'],
+  capabilities: ['能力', 'Capabilities'],
+  usage: ['用量', 'Usage'],
+  memory: ['記憶', 'Memory'],
+};
+// go = false: do not switch to the tab (the control below).
+const SIDE = (tab, go = true) => `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  location.hash = '#/settings/${tab}';
-  for (let i = 0; i < 40 && !document.querySelector('.settings-body .pane'); i++) await sleep(250);
+  const want = ${JSON.stringify(SIDE_TABS[tab])};
+  const shown = () => {
+    const link = document.querySelector('.settings-nav a.active')?.getAttribute('href') ?? null;
+    const heading = document.querySelector('.settings-body .pane .pane-head h2')?.innerText.trim() ?? null;
+    return { link, heading, ok: link === '#/settings/${tab}' && want.includes(heading) };
+  };
+  if (${go}) location.hash = '#/settings/${tab}';
+  let s = shown();
+  for (let i = 0; i < 40 && !s.ok; i++) {
+    await sleep(250);
+    s = shown();
+  }
+  if (!s.ok) return { notShown: s };
   await sleep(1500);
+  // Still that tab once it has settled.
+  s = shown();
+  if (!s.ok) return { notShown: s };
   const se = document.scrollingElement;
   const body = document.querySelector('.settings-body');
   if (!body) return { missing: true };
@@ -196,12 +220,12 @@ const SIDE = (tab) => `(async () => {
     const text = s.firstElementChild;
     return { title: s.querySelector('.setting-title')?.innerText.trim() ?? '', textWidth: Math.round(text?.getBoundingClientRect().width ?? 0), overflow: s.scrollWidth - s.clientWidth };
   });
-  return { width: innerWidth, pageOverflow: se.scrollWidth - se.clientWidth, bodyOverflow: body.scrollWidth - body.clientWidth, out: out.slice(0, 8).map((e) => name(e) + ' → ' + Math.round(e.getBoundingClientRect().right - right) + 'px'), outCount: out.length, settings };
+  return { shown: s, width: innerWidth, pageOverflow: se.scrollWidth - se.clientWidth, bodyOverflow: body.scrollWidth - body.clientWidth, out: out.slice(0, 8).map((e) => name(e) + ' → ' + Math.round(e.getBoundingClientRect().right - right) + 'px'), outCount: out.length, settings };
 })()`;
 await send('Emulation.setDeviceMetricsOverride', { width: SIDE_WIDTH, height: 900, deviceScaleFactor: 1, mobile: false });
 await sleep(800);
 result.sideBar = {};
-for (const tab of ['general', 'providers', 'capabilities', 'usage', 'memory']) {
+for (const tab of Object.keys(SIDE_TABS)) {
   const at = `side bar (${SIDE_WIDTH}px), Settings → ${tab}`;
   let v;
   try {
@@ -218,16 +242,33 @@ for (const tab of ['general', 'providers', 'capabilities', 'usage', 'memory']) {
   } catch (e) {
     v.screenshotError = String(e);
   }
+  if (v.notShown) {
+    bad(`${at}: that tab is the one shown before measuring (selected tab ${v.notShown.link}, heading "${v.notShown.heading}"); not measured`);
+    continue;
+  }
   if (v.missing) {
     bad(`${at}: the settings pane is there`);
     continue;
   }
+  ok(`${at}: that tab is the one shown (selected tab ${v.shown.link}, heading "${v.shown.heading}")`);
   chk(`${at}: no sideways scrolling (page, pane)`, [v.pageOverflow <= 0, v.bodyOverflow <= 0], [true, true]);
   chk(`${at}: nothing sticks out of the pane`, v.out, []);
   if (v.settings.length) {
     chk(`${at}: every setting fits (no row wider than the pane)`, v.settings.filter((x) => x.overflow > 0).map((x) => x.title), []);
     chk(`${at}: each setting's text has room (at least 160px wide, not squeezed beside its control)`, v.settings.filter((x) => x.textWidth < 160).map((x) => `${x.title}: ${x.textWidth}px`), []);
   }
+}
+// Control: the check itself. Ask for a tab that is not the one shown, without switching to it, as when a switch fails:
+// it must come back as not shown and never be measured. If a stale page passed here, the results above could not be
+// trusted either.
+try {
+  const current = await evaluate(`document.querySelector('.settings-nav a.active')?.getAttribute('href') ?? null`);
+  const other = Object.keys(SIDE_TABS).find((t) => `#/settings/${t}` !== current);
+  const c = await evaluate(SIDE(other, false));
+  result.sideBar.control = { asked: other, current, ...c };
+  chk(`side bar (${SIDE_WIDTH}px), control: ${other} asked for while ${current} stays shown (a failed switch) is reported as not shown, not measured`, [Boolean(c.notShown), 'pageOverflow' in c], [true, false]);
+} catch (e) {
+  bad(`side bar (${SIDE_WIDTH}px), control: ran (${e.message})`);
 }
 await send('Emulation.clearDeviceMetricsOverride');
 fs.writeFileSync(path.join(outDir, `${name}-capabilities.json`), JSON.stringify(result, null, 1));
