@@ -1,6 +1,7 @@
 // Acceptance of one running Aivenue window (started with --remote-debugging-port, a fresh AIVENUE_HOME): reads the
 // version and build from its own hub, opens Settings → Capabilities, and checks the sections this build adds, at the
-// window's own width and at a narrow one. Saves a screenshot of each and the read-back JSON.
+// window's own width and at a narrow one; then every Settings tab at the width of the VS Code side bar (290px), which
+// must fit without scrolling sideways. Saves a screenshot of each and the read-back JSON.
 //   WANT_VERSION=<expected version> [WANT_DATA_DIR=<AIVENUE_HOME>] node capabilities-check.mjs <port> <expected commit (7+)> <out dir> [<name>]
 // Prints one PASS / FAIL line per check; exits 1 when any check fails.
 import * as fs from 'node:fs';
@@ -171,6 +172,62 @@ for (const [view, width] of [['wide', null], ['narrow', 420]]) {
   chk(`${at}: "設計參考（不會載入）", three names, no switches`, pack ? [REFS(pack.labels[0] ?? ''), pack.lists[1]] : null, [true, ['impeccable', 'frontend-testing-debugging', 'accessibility-inspect']]);
   chk(`${at}: "共用 Skills" still there`, Boolean(find(SHARED)), true);
   chk(`${at}: no sideways scrolling (page, pane)`, [pane.pageOverflow <= 0, (pane.bodyOverflow ?? 0) <= 0], [true, true]);
+}
+// Every Settings tab at the width of the VS Code side bar (Aivenue in the secondary side bar is about 290px wide): no
+// sideways scrolling, nothing sticking out of the pane, and a setting's own text not squeezed beside its control (it
+// used to wrap one or two characters a line, the control pushing the row past the edge).
+const SIDE_WIDTH = 290;
+const SIDE = (tab) => `(async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  location.hash = '#/settings/${tab}';
+  for (let i = 0; i < 40 && !document.querySelector('.settings-body .pane'); i++) await sleep(250);
+  await sleep(1500);
+  const se = document.scrollingElement;
+  const body = document.querySelector('.settings-body');
+  if (!body) return { missing: true };
+  const right = body.getBoundingClientRect().left + body.clientWidth;
+  // A box inside something the user can scroll sideways (a table, a code block) may be wider than the pane; one cut
+  // off by overflow: hidden is not (the list cards clip their rows, so a button pushed past the edge just disappears).
+  // Boxes nobody sees do not count (the custom colour's own picker is transparent inside its swatch).
+  const clipped = (e) => { for (let p = e.parentElement; p && p !== body; p = p.parentElement) if (/auto|scroll/.test(getComputedStyle(p).overflowX)) return true; return false; };
+  const name = (e) => e.tagName.toLowerCase() + (e.className && typeof e.className === 'string' ? '.' + e.className.trim().split(/\\s+/).join('.') : '');
+  const out = [...body.querySelectorAll('*')].filter((e) => { const r = e.getBoundingClientRect(); const cs = getComputedStyle(e); return r.width > 0 && r.height > 0 && r.right > right + 1 && cs.visibility !== 'hidden' && cs.opacity !== '0' && !clipped(e); });
+  const settings = [...body.querySelectorAll('section.setting')].map((s) => {
+    const text = s.firstElementChild;
+    return { title: s.querySelector('.setting-title')?.innerText.trim() ?? '', textWidth: Math.round(text?.getBoundingClientRect().width ?? 0), overflow: s.scrollWidth - s.clientWidth };
+  });
+  return { width: innerWidth, pageOverflow: se.scrollWidth - se.clientWidth, bodyOverflow: body.scrollWidth - body.clientWidth, out: out.slice(0, 8).map((e) => name(e) + ' → ' + Math.round(e.getBoundingClientRect().right - right) + 'px'), outCount: out.length, settings };
+})()`;
+await send('Emulation.setDeviceMetricsOverride', { width: SIDE_WIDTH, height: 900, deviceScaleFactor: 1, mobile: false });
+await sleep(800);
+result.sideBar = {};
+for (const tab of ['general', 'providers', 'capabilities', 'usage', 'memory']) {
+  const at = `side bar (${SIDE_WIDTH}px), Settings → ${tab}`;
+  let v;
+  try {
+    v = await evaluate(SIDE(tab));
+  } catch (e) {
+    bad(`${at}: read the page (${e.message})`);
+    continue;
+  }
+  result.sideBar[tab] = v;
+  try {
+    await evaluate(`(async () => { document.querySelector('.settings-body')?.scrollTo(0, 0); await new Promise((r) => setTimeout(r, 300)); })()`);
+    const s = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+    fs.writeFileSync(path.join(outDir, `${name}-sidebar-${tab}.png`), Buffer.from(s.result.data, 'base64'));
+  } catch (e) {
+    v.screenshotError = String(e);
+  }
+  if (v.missing) {
+    bad(`${at}: the settings pane is there`);
+    continue;
+  }
+  chk(`${at}: no sideways scrolling (page, pane)`, [v.pageOverflow <= 0, v.bodyOverflow <= 0], [true, true]);
+  chk(`${at}: nothing sticks out of the pane`, v.out, []);
+  if (v.settings.length) {
+    chk(`${at}: every setting fits (no row wider than the pane)`, v.settings.filter((x) => x.overflow > 0).map((x) => x.title), []);
+    chk(`${at}: each setting's text has room (at least 160px wide, not squeezed beside its control)`, v.settings.filter((x) => x.textWidth < 160).map((x) => `${x.title}: ${x.textWidth}px`), []);
+  }
 }
 await send('Emulation.clearDeviceMetricsOverride');
 fs.writeFileSync(path.join(outDir, `${name}-capabilities.json`), JSON.stringify(result, null, 1));

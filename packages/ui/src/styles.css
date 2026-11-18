@@ -1826,7 +1826,7 @@ p {
 /* One-click browser tools on the Capabilities page. */
 .presets-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -1857,7 +1857,7 @@ p {
 }
 
 .ext-grid {
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   /* One card per row: each card keeps its own height. */
   grid-auto-rows: auto;
   align-items: stretch;
@@ -3035,7 +3035,7 @@ textarea.code {
 
 .ugrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr));
   gap: 14px;
 }
 
@@ -4606,6 +4606,7 @@ textarea.code {
 
 .settings-body {
   min-width: 0;
+  container: settings / inline-size;
 }
 
 .pane-head {
@@ -4645,6 +4646,78 @@ textarea.code {
     margin-left: auto;
     border-top: none;
     padding-top: 6px;
+  }
+}
+
+/* A narrow settings column (Aivenue in the VS Code side bar is about 290px wide; a narrow window): a setting's text
+   above its control instead of beside it, where the control used to squeeze the text to a character or two a line and
+   push the row past the edge; section headings above their buttons; the GitHub steps' buttons on their own line.
+   The column's own width decides, not the window's. */
+@container settings (max-width: 480px) {
+  .setting {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .setting > :first-child {
+    max-width: none;
+  }
+
+  .setting > :not(:first-child) {
+    align-self: flex-start;
+    max-width: 100%;
+  }
+
+  .setting > code {
+    overflow-wrap: anywhere;
+  }
+
+  .swatches {
+    flex-wrap: wrap;
+  }
+
+  .cap-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .cap-head > :not(:first-child) {
+    align-self: flex-start;
+  }
+
+  /* A heading's buttons (Skills: open, import and add) and a list row's buttons (test, edit, delete) wrap; a row's own
+     text keeps at least 140px beside its switch before the buttons go to the next line. */
+  .cap-head > .row,
+  .crow-head > .row {
+    flex-wrap: wrap;
+  }
+
+  .crow-head {
+    flex-wrap: wrap;
+  }
+
+  .crow-head > .grow {
+    flex: 1 1 140px;
+  }
+
+  .gh-row {
+    flex-wrap: wrap;
+  }
+
+  .gh-row > .grow {
+    flex: 1 1 160px;
+    min-width: 0;
+  }
+
+  /* Under the step's text: past the 22px step mark and the row's 12px gap. */
+  .gh-row > .btn {
+    margin-left: 34px;
+  }
+
+  .ustats {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
