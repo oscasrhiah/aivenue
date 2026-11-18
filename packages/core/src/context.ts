@@ -534,6 +534,8 @@ export function overview(run: WorkflowRun, eventsOf?: (agentId: string) => Agent
         for (const i of r.review.issues) rows.push(`  ${i.id} [${i.severity}] ${i.title}${i.location ? ` (${i.location})` : ''}${i.detail ? `: ${i.detail}` : ''}`);
         // Not confirmed and without severity: kept apart so no one passes them on as facts.
         for (const n of r.review.needsValidation ?? []) rows.push(`  ${n.id} [needs validation, not confirmed] ${n.title}${n.location ? ` (${n.location})` : ''} — missing: ${n.missing}${n.how ? ` — to confirm: ${n.how}` : ''}`);
+        // A recommendation the user asked for, not a decision taken: what happens is still the user's call.
+        for (const d of r.review.decisions ?? []) rows.push(`  ${d.id} [the reviewer's choice on what the user left to it] ${d.question} → ${d.choice}${d.reasons ? ` — because: ${d.reasons}` : ''}${d.assumptions.length ? ` — assuming: ${d.assumptions.join('; ')}` : ''}`);
       }
       if (r.route) rows.push(`Routed to ${r.route.to}: ${r.route.reason}`);
       if (rows.length) parts.push(`${key.toUpperCase()} STAGE, ROUND ${r.n}:\n${rows.join('\n')}`);

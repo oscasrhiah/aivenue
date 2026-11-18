@@ -1,4 +1,4 @@
-import type { AgentRole, GoalSpec, IssueResponse, NeedsValidation, OpenDecision, PlanDoc, Review, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
+import type { AgentRole, GoalSpec, IssueResponse, NeedsValidation, OpenDecision, PlanDoc, Review, ReviewDecision, ReviewIssue, SkillUse, Verification, VerifyOutcome } from './types';
 
 export interface ToolDef {
   name: string;
@@ -181,6 +181,26 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
         not_checked: reportSchema('Independent review (required there): what you did not check, and why.'),
         reproduced: reportSchema('Independent review: what you ran or reproduced yourself, with the result and the commit it ran at.'),
         trusted: reportSchema('Independent review: what you took from the material or another agent without running it yourself.'),
+        decisions: {
+          type: 'array',
+          description:
+            "Independent review: each decision the user's request leaves to you — choose between approaches, weigh a trade-off, say whether to merge — made here, not handed back as a question. A merge recommendation is a review result; carrying it out is not yours.",
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: '"D1", "D2", ...' },
+              question: { type: 'string', description: 'What the user left to you.' },
+              choice: { type: 'string', description: 'Your choice: one of the options, or whether to merge.' },
+              reasons: { type: 'string', description: 'Why, from what you checked.' },
+              assumptions: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'What your choice rests on that, if it is wrong, would change it. If nothing would, say so and why.',
+              },
+            },
+            required: ['question', 'choice', 'reasons', 'assumptions'],
+          },
+        },
         findings: findingsSchema,
         handoff: handoffSchema,
       },
@@ -357,7 +377,7 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
   ask_user: {
     name: 'ask_user',
     description:
-      'Ask the user for a decision or for something only they can give (a permission, a missing input, a choice between approaches). The question is shown to them as a decision with your options and "Other": they may pick an option and add conditions to it, or answer in their own words instead (the answer then says none of your options was chosen). After calling it, stop and end your turn: the answer comes in your next message. Never only write a question in your reply or report — the user is not asked it and the workflow goes on without an answer. Do not ask about things you can decide or check yourself.',
+      'Ask the user for a decision or for something only they can give (a permission, a missing input, a choice between approaches the user has not left to you). When the user\'s request leaves a choice to you (choose, weigh a trade-off, recommend), make it yourself and give your reasons instead; ask only when a fact you cannot find or check would change your answer, or the next step needs their permission. The question is shown to them as a decision with your options and "Other": they may pick an option and add conditions to it, or answer in their own words instead (the answer then says none of your options was chosen). After calling it, stop and end your turn: the answer comes in your next message. Never only write a question in your reply or report — the user is not asked it and the workflow goes on without an answer. Do not ask about things you can decide or check yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -720,7 +740,32 @@ export function parseReview(v: any): Review | undefined {
   const needsValidation = parseNeedsValidation(v.needs_validation ?? v.needsValidation);
   const report = { checked: texts(v.checked), notChecked: texts(v.not_checked ?? v.notChecked), reproduced: texts(v.reproduced), trusted: texts(v.trusted) };
   const hasReport = Object.values(report).some((x) => x.length);
-  return { verdict: verdict.startsWith('approve') ? 'approve' : 'revise', summary: s(v.summary), issues, ...(goal.length ? { goal } : {}), ...(needsValidation.length ? { needsValidation } : {}), ...(hasReport ? { report } : {}) };
+  const decisions = parseReviewDecisions(v.decisions);
+  return {
+    verdict: verdict.startsWith('approve') ? 'approve' : 'revise',
+    summary: s(v.summary),
+    issues,
+    ...(goal.length ? { goal } : {}),
+    ...(needsValidation.length ? { needsValidation } : {}),
+    ...(hasReport ? { report } : {}),
+    ...(decisions.length ? { decisions } : {}),
+  };
+}
+
+/** The decisions a review made for the user: one kept even when a part is missing, for the report check to name it. */
+export function parseReviewDecisions(v: unknown): ReviewDecision[] {
+  if (!Array.isArray(v)) return [];
+  const cut = (x: unknown, n = 2000) => s(x).trim().slice(0, n);
+  return v
+    .filter((d: any) => d && typeof d === 'object' && cut(d.question))
+    .slice(0, 20)
+    .map((d: any, i: number) => ({
+      id: cut(d.id, 20) || `D${i + 1}`,
+      question: cut(d.question),
+      choice: cut(d.choice),
+      reasons: cut(d.reasons ?? d.reason),
+      assumptions: texts(d.assumptions).map((x) => x.slice(0, 1000)).slice(0, 20),
+    }));
 }
 
 /** A review's "needs validation" list: kept apart from its issues (no severity, never routed). */

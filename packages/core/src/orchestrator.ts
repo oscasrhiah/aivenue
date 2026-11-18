@@ -152,6 +152,15 @@ export function reportProblems(r: Review): { agent: string; user: string }[] {
       agent: `Your verdict is "approve", but ${against.join(', ')} ${against.length > 1 ? 'are' : 'is a'} blocker/major issue${against.length > 1 ? 's' : ''} in the change. Either change the verdict to "revise", or, if an issue is outside the change, set pre_existing: true and say why in \`blocking\`, or, if it is less severe than you said, lower its severity and say why.`,
       user: L(`結論是建議通過，卻列了變更裡的嚴重或重要問題：${against.join('、')}`, `the verdict is approve, but it lists blocker or major issues in the change: ${against.join(', ')}`),
     });
+  // A decision the user left to the reviewer is made, with why and on what it rests.
+  for (const d of r.decisions ?? []) {
+    const missing = [!d.choice && 'choice', !d.reasons && 'reasons', !d.assumptions.length && 'assumptions'].filter(Boolean) as string[];
+    if (missing.length)
+      out.push({
+        agent: `Decision ${d.id} ("${d.question.slice(0, 80)}") lacks ${missing.map((m) => `\`${m}\``).join(', ')}: make the choice yourself, say why, and name the assumptions that would change it (if none would, say so and why).`,
+        user: L(`決定 ${d.id} 缺少${missing.map((m) => ({ choice: '選擇', reasons: '理由', assumptions: '假設' })[m]).join('、')}`, `decision ${d.id} lacks its ${missing.join(', ')}`),
+      });
+  }
   return out;
 }
 
@@ -3212,7 +3221,10 @@ export class Orchestrator {
     const inChange = review.issues.filter((i) => !i.preExisting);
     const blocking = inChange.filter((i) => i.severity !== 'minor').length;
     const before = review.issues.length - inChange.length;
-    const also = before ? L(`；另有 ${before} 個既有問題（不在這次的變更裡）`, `; also ${before} pre-existing issue(s) outside the change`) : '';
+    const decided = review.decisions?.length
+      ? L(`；你交給審查者的決定：${review.decisions.map((d) => `${d.id} ${d.choice.slice(0, 60)}`).join('；')}`, `; the decisions you left to the reviewer: ${review.decisions.map((d) => `${d.id} ${d.choice.slice(0, 60)}`).join('; ')}`)
+      : '';
+    const also = (before ? L(`；另有 ${before} 個既有問題（不在這次的變更裡）`, `; also ${before} pre-existing issue(s) outside the change`) : '') + decided;
     this.log(
       run,
       (review.verdict === 'approve'

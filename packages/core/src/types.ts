@@ -1225,6 +1225,11 @@ export interface Review {
   /** Independent review: what the reviewer checked, did not check, reproduced itself, and took on trust. */
   report?: ReviewReport;
   /**
+   * Independent review: the decisions the user's request left to the reviewer (choose between approaches, weigh a
+   * trade-off, say whether to merge), each made in the report.
+   */
+  decisions?: ReviewDecision[];
+  /**
    * Independent review: what changed in the working folder during the reviewer's turn (tracked files, HEAD, branch,
    * stash), as Aivenue saw it. Any entry means the code may not be what was reviewed.
    */
@@ -1246,6 +1251,22 @@ export interface ReviewReport {
   notChecked: string[];
   reproduced: string[];
   trusted: string[];
+}
+
+/**
+ * A decision the user left to an independent reviewer, made by it: a recommendation (to merge or not, which approach),
+ * never an action. The user still decides what happens.
+ */
+export interface ReviewDecision {
+  id: string;
+  /** What the user left to the reviewer. */
+  question: string;
+  /** The reviewer's choice. */
+  choice: string;
+  /** Why. */
+  reasons: string;
+  /** What the choice rests on that, if wrong, would change it (or that nothing does, and why). */
+  assumptions: string[];
 }
 
 /** One suspicion a review could not confirm from the source. */

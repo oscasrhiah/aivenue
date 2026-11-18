@@ -11,7 +11,7 @@ export function followUpGoal(goal: string, run: Pick<WorkflowRun, 'status' | 'co
   // An independent review's outcome is its report (verdict, summary, issues), not an implementer's reply.
   const review = run.config.review ? run.stages?.implement.rounds.at(-1)?.review : undefined;
   const last = review
-    ? `review verdict "${review.verdict}": ${review.summary}${review.issues.length ? ` Issues: ${review.issues.map((i) => `${i.id} [${i.severity}] ${i.title}`).join('; ')}` : ''}`
+    ? `review verdict "${review.verdict}": ${review.summary}${review.issues.length ? ` Issues: ${review.issues.map((i) => `${i.id} [${i.severity}] ${i.title}`).join('; ')}` : ''}${review.decisions?.length ? ` Decisions left to the reviewer: ${review.decisions.map((d) => `${d.id} ${d.question} → ${d.choice}`).join('; ')}` : ''}`
     : Object.values(run.agents)
         .filter((a) => (a.role === 'executor' || a.role === 'planner') && a.finalText)
         .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0]?.finalText;

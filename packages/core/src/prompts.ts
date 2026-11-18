@@ -215,7 +215,7 @@ export function codeReviewPrompt(cfg: WorkflowConfig, plan: PlanDoc | undefined,
 // ---------- Independent review (flow mode "review") ----------
 
 const REVIEW_REPORT_SHAPE =
-  '{"verdict": "approve"|"revise", "summary": string, "issues": [{"id": "R1", "severity": "blocker"|"major"|"minor", "title": string, "detail": string, "location": string, "blocking": string, "pre_existing": boolean}], "checked": [string], "not_checked": [string], "reproduced": [string], "trusted": [string], "needs_validation": [{"id": "V1", "title": string, "location": string, "missing": string, "how": string}], "findings": [string], "handoff": string}';
+  '{"verdict": "approve"|"revise", "summary": string, "issues": [{"id": "R1", "severity": "blocker"|"major"|"minor", "title": string, "detail": string, "location": string, "blocking": string, "pre_existing": boolean}], "checked": [string], "not_checked": [string], "reproduced": [string], "trusted": [string], "needs_validation": [{"id": "V1", "title": string, "location": string, "missing": string, "how": string}], "decisions": [{"id": "D1", "question": string, "choice": string, "reasons": string, "assumptions": [string]}], "findings": [string], "handoff": string}';
 
 /** What is reviewed, as Aivenue resolved it in the working folder. */
 export function reviewTargetBlock(t: ReviewTarget): string {
@@ -272,9 +272,13 @@ export function independentReviewPrompt(cfg: WorkflowConfig, target: ReviewTarge
     '- BLOCKERS (severity "blocker", verdict "revise"): anything in the change that can lose or corrupt data; run something twice; lose an operation the user was told succeeded; make a check pass falsely or distort evidence; or break a constraint the user stated. "In the change" is what it adds or modifies and what it promises; code it adds or modifies counts even when it repeats an older pattern. "It was like this before", "only developers run it" or "it is a follow-up" does not lower these. For every issue say in `blocking` why it blocks or why not, naming the criterion.',
     '- A problem is pre-existing only when all of these hold: it is already there at the base (say how you know, e.g. the same behaviour at the base commit); the change does not enable it, widen it or add a way to trigger it (an old function the change now calls in a way that fails is the change\'s problem); and it does not break an acceptance condition the user stated for this review. Then report it with `pre_existing: true` and its severity by impact; it does not decide this review\'s verdict. If the user asked for a review of a whole release or of security, nothing is pre-existing: report everything by impact.',
     '- Approve only when the change has no blocker or major issue left. Do not invent issues to have some; minor nits alone do not block.',
+    '',
+    'DECISIONS THE USER LEAVES TO YOU: when the request asks you to choose between approaches (A or B), weigh a trade-off, or say whether to merge, that decision is part of your review. Make it in your report, in `decisions`: your choice, the reasons (from what you checked), and the assumptions it rests on that would change it if wrong. Do not hand it back to the user as a question, and do not end with "it is up to you".',
+    '- Ask the user (`ask_user`) only when (a) a fact you cannot find or check yourself would change your conclusion — say which fact, and what you would choose for each answer — or (b) the next step needs the user\'s permission. A gap that would not change the choice is an assumption in your report, not a question.',
+    '- Recommending a merge is a review result, not an action: say whether to merge in `decisions`, and never merge, push or tag yourself. Carrying it out goes through the user\'s own approval.',
     sub,
     '',
-    'REPORT: when done, call the Aivenue tool `submit_review` with verdict, summary, issues (ids "R1", "R2", …, each with `blocking`, and `pre_existing: true` when outside the change), and:',
+    'REPORT: when done, call the Aivenue tool `submit_review` with verdict, summary, issues (ids "R1", "R2", …, each with `blocking`, and `pre_existing: true` when outside the change), `decisions` when the request left you any (see above), and:',
     '- `checked`: what you checked and how (commands, files, failure cases), and at which commit it ran;',
     '- `not_checked`: what you did not check, and why;',
     '- `reproduced`: what you ran or reproduced yourself, with the result;',
@@ -531,7 +535,7 @@ export function fullAccessRule(cwd: string): string {
 export function externalRule(github?: { gh: boolean; user?: string; mcp: boolean }): string {
   const lines = [
     '',
-    'QUESTIONS FOR THE USER: when you need the user to decide something or give something only they have (a permission such as deleting caches, missing data, a rule only they can set), call the Aivenue tool `ask_user` {question, options} and then end your turn; the answer comes in your next message. A question written only in your reply or report is never shown to the user as a question, and the workflow goes on as if they had said nothing. Do not ask again what the user already answered (see the decisions in the shared notes).',
+    'QUESTIONS FOR THE USER: when you need the user to decide something or give something only they have (a permission such as deleting caches, missing data, a rule only they can set), call the Aivenue tool `ask_user` {question, options} and then end your turn; the answer comes in your next message. A question written only in your reply or report is never shown to the user as a question, and the workflow goes on as if they had said nothing. Do not ask again what the user already answered (see the decisions in the shared notes). A choice the user\'s request leaves to you (choose, weigh, recommend) is yours: make it and say why; ask only when a fact you cannot find or check would change it.',
     'EXTERNAL ACTIONS: before anything that changes something outside this computer — git push, creating/merging/closing a pull request, commenting on or creating/closing an issue, publishing a release, triggering a deployment or workflow, any other write to GitHub or another service — call the Aivenue tool `confirm_external_action` {kind, target, details} and wait for the answer. Only do it if it is approved, exactly as described; if it is denied, do not do it and say so in your report. Reading (git fetch/pull/status/log, viewing PRs, issues or CI) needs no approval. Local commits need no approval either.',
   ];
   if (github?.user && github.gh)

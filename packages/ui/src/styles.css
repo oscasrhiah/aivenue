@@ -6658,6 +6658,27 @@ textarea.code {
   cursor: pointer;
   overflow-wrap: anywhere;
 }
+.review-decisions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+.review-decision {
+  padding: 6px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  overflow-wrap: anywhere;
+}
+.review-decision ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+}
+.review-decision .review-choice {
+  font-weight: 600;
+}
 .review-basis {
   display: flex;
   flex-direction: column;

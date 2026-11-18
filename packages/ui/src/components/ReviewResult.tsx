@@ -105,6 +105,38 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
       <div className="final-text">
         <Markdown className="prose" text={review.summary} />
       </div>
+      {!!review.decisions?.length && (
+        <div className="review-decisions">
+          {review.decisions.map((d) => (
+            <div key={d.id} className="review-decision">
+              <div className="muted small">
+                {t('你交給審查者決定', 'You left to the reviewer')} · <b>{d.id}</b> <InlineMarkdown text={d.question} />
+              </div>
+              <div className="review-choice">
+                <InlineMarkdown text={d.choice} />
+              </div>
+              {d.reasons && (
+                <div>
+                  <span className="final-label">{t('理由', 'Why')}</span> <InlineMarkdown text={d.reasons} />
+                </div>
+              )}
+              {d.assumptions.length > 0 && (
+                <div>
+                  <span className="final-label">{t('前提（不成立時結論可能改變）', 'Assumes (the choice may change if not)')}</span>
+                  <ul>
+                    {d.assumptions.map((a, n) => (
+                      <li key={n}>
+                        <InlineMarkdown text={a} />
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ))}
+          <div className="muted tiny">{t('這是審查者的建議；要不要照做、是否合併，仍由你決定。', "This is the reviewer's recommendation; whether to act on it, or merge, is still yours to decide.")}</div>
+        </div>
+      )}
       {review.issues.length > 0 && (
         <div className="review-issues">
           {review.issues.map((i) => (

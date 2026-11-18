@@ -3917,6 +3917,73 @@ test('獨立審查：建議通過卻列了變更裡的嚴重問題、問題沒�
   assert.ok(r.log.some((l) => /獨立審查完成：建議通過；另有 1 個既有問題/.test(l.text)));
 });
 
+test('獨立審查：使用者把 A／B 的選擇交給審查者、資訊足夠時，審查者在報告裡直接選並寫理由與前提（缺一就退回），不提問、仍只有審查者；缺少會改變結論的事實時才提問，回答後照答案決定', async () => {
+  const report = { verdict: 'approve', summary: 'A keeps every answered operation', issues: [], checked: ['ran test.js at the commit'], not_checked: ['Linux'] };
+  const decided = { id: 'D1', question: 'A (save before answering) or B (answer first, save in batches)?', choice: 'A, and merge it', reasons: 'B loses answered operations on a crash, which the request rules out', assumptions: ['one Store per file, as the base states'] };
+  // Enough information: the choice is in the report.
+  {
+    const { orch, cwd } = setup();
+    twoCommits(cwd);
+    const seen = {};
+    const calls = fakeAgents(orch, {
+      independent: [
+        async (o, secret, a) => {
+          seen.prompt = a.prompt;
+          seen.refused = await o.callTool(secret, 'submit_review', { ...report, decisions: [{ id: 'D1', question: 'A or B?', choice: 'A', reasons: '', assumptions: [] }] }).then(() => '', (e) => e.message);
+          await o.callTool(secret, 'submit_review', { ...report, decisions: [decided] });
+        },
+      ],
+    });
+    const r = await settle(orch, orch.start(config(cwd, { goal: '這個變更是做法 A；做法 B 是先回覆、再批次寫檔。已回覆的操作當機後不能遺失。請替我在 A、B 之間選一個，並告訴我要不要合併。', review: {} })).id);
+    assert.equal(r.status, 'completed', r.error);
+    assert.deepEqual(calls, ['independent'], 'one reviewer turn, no question in between');
+    assert.deepEqual(Object.values(r.agents).map((x) => x.role), ['code_reviewer']);
+    assert.match(seen.prompt, /DECISIONS THE USER LEAVES TO YOU: when the request asks you to choose between approaches \(A or B\), weigh a trade-off, or say whether to merge, that decision is part of your review\. Make it in your report, in `decisions`[\s\S]*Do not hand it back to the user as a question/);
+    assert.match(seen.prompt, /Ask the user \(`ask_user`\) only when \(a\) a fact you cannot find or check yourself would change your conclusion[\s\S]*\(b\) the next step needs the user's permission\. A gap that would not change the choice is an assumption/);
+    assert.match(seen.prompt, /Recommending a merge is a review result, not an action[\s\S]*never merge, push or tag yourself/);
+    // The general rule on questions, which every agent gets, says the same.
+    assert.match(seen.prompt, /QUESTIONS FOR THE USER:[^\n]*A choice the user's request leaves to you \(choose, weigh, recommend\) is yours: make it and say why; ask only when a fact you cannot find or check would change it\./);
+    assert.match(seen.refused, /Decision D1 \("A or B\?"\) lacks `reasons`, `assumptions`: make the choice yourself/);
+    const review = r.stages.implement.rounds.at(-1).review;
+    assert.deepEqual(review.decisions, [decided]);
+    assert.ok(r.log.some((l) => /獨立審查完成：建議通過；你交給審查者的決定：D1 A, and merge it/.test(l.text)));
+  }
+  // A fact only the user has, that decides it: asked, and the answer decides; still the reviewer throughout.
+  {
+    const { orch, cwd } = setup();
+    twoCommits(cwd);
+    const prompts = [];
+    const calls = fakeAgents(orch, {
+      independent: [
+        async (o, secret, a) => {
+          prompts.push(a.prompt);
+          await o.callTool(secret, 'ask_user', { question: '這個服務給哪個客戶用？合約 X 要求已回覆的操作不能遺失（就選 A）；合約 Y 要求每筆寫入低於 1 毫秒（就選 B）。', options: ['X', 'Y'] });
+          await new Promise((res) => a.signal?.addEventListener('abort', res));
+          return { lastSeq: 1, exitCode: 1, resumed: false, finalText: '', error: 'Cancelled' };
+        },
+        async (o, secret, a) => {
+          prompts.push(a.prompt);
+          await o.callTool(secret, 'submit_review', { ...report, decisions: [{ ...decided, assumptions: ['the customer is X, as the user answered'] }] });
+        },
+      ],
+    });
+    const id = orch.start(config(cwd, { goal: '請替我在 A、B 之間選一個。哪個對，要看這個服務給哪個客戶用，只有我知道。', review: {} })).id;
+    let r = orch.runs.get(id);
+    for (let i = 0; i < 200 && !r.pending; i++) await new Promise((res) => setTimeout(res, 25));
+    assert.equal(r.status, 'waiting_human');
+    assert.match(r.pending.message, /哪個客戶/);
+    assert.equal(r.pending.question, true);
+    orch.decide(id, r.pending.id, 'answer:0');
+    r = await settle(orch, id);
+    assert.equal(r.status, 'completed', r.error);
+    assert.deepEqual(calls, ['independent', 'independent']);
+    assert.ok(Object.values(r.agents).every((x) => x.role === 'code_reviewer'), 'no implementer after the answer');
+    assert.match(prompts[1], /THE USER ANSWERED[\s\S]*Their answer: X/);
+    assert.doesNotMatch(prompts[1], /You are the IMPLEMENTER|submit_work/);
+    assert.equal(r.stages.implement.rounds.at(-1).review.decisions[0].choice, 'A, and merge it');
+  }
+});
+
 test('獨立審查：報告退回兩次仍不完整，第三次收下但標成不完整，工作流結束為「未完成」，不會變成建議通過', async () => {
   const { orch, cwd } = setup();
   twoCommits(cwd);

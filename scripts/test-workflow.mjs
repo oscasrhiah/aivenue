@@ -4159,6 +4159,23 @@ test('獨立審查的追問：背景裡的「上次結果」是審查報告（�
   assert.doesNotMatch(goal, /not this/);
 });
 
+test('獨立審查：使用者交給審查者的決定（選擇、理由、前提）照樣解析保存；追問、後續 agent 都看得到，標成審查者的建議；ask_user 的說明不再把交給你的選擇丟回去問', () => {
+  const decision = { id: 'D1', question: 'A or B?', choice: 'A', reasons: 'B loses answered operations', assumptions: ['one writer per file'] };
+  const r = W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [decision, { question: 'merge?', choice: 'yes', reason: 'clean', assumptions: 'CI is green' }, { choice: 'no question: dropped' }] });
+  assert.deepEqual(r.decisions, [decision, { id: 'D2', question: 'merge?', choice: 'yes', reasons: 'clean', assumptions: ['CI is green'] }]);
+  assert.equal('decisions' in W.parseReview({ verdict: 'approve', summary: 'ok', issues: [] }), false, 'an older review: no field');
+  // A part left empty is kept, for the report check to name it.
+  assert.deepEqual(W.parseReview({ verdict: 'approve', summary: 'ok', issues: [], decisions: [{ question: 'A or B?' }] }).decisions, [{ id: 'D1', question: 'A or B?', choice: '', reasons: '', assumptions: [] }]);
+  const run = { status: 'completed', id: 'r', config: { cwd: '.', goal: 'pick A or B', review: {} }, agents: {}, notes: [], steps: [], stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, review: { verdict: 'approve', summary: 'A is right', issues: [], decisions: [decision] } }] }, verify: { rounds: [] } } };
+  assert.match(W.followUpGoal('then do it', run), /Its outcome: review verdict "approve": A is right Decisions left to the reviewer: D1 A or B\? → A/);
+  assert.match(W.overview(run), /D1 \[the reviewer's choice on what the user left to it\] A or B\? → A — because: B loses answered operations — assuming: one writer per file/);
+  const ask = W.TOOL_DEFS.ask_user.description;
+  assert.match(ask, /a choice between approaches the user has not left to you\)\. When the user's request leaves a choice to you \(choose, weigh a trade-off, recommend\), make it yourself and give your reasons instead; ask only when a fact you cannot find or check would change your answer, or the next step needs their permission/);
+  assert.ok(W.TOOL_DEFS.submit_review.inputSchema.properties.decisions.items.required.includes('assumptions'));
+  // The JSON shape a reviewer without tools writes names it too.
+  assert.match(W.P.independentReviewPrompt({ goal: 'g', title: 't', cwd: '.' }, { files: [], scratch: '/s' }), /"decisions": \[\{"id": "D1", "question": string, "choice": string, "reasons": string, "assumptions": \[string\]\}\]/);
+});
+
 test('背景啟動與程序的對應：比完整路徑——另一個專案的同名腳本不算；程序用相對路徑時要知道它的資料夾；Linux 分大小寫；只在參數、-e／-c 裡提到不算；啟動的資料夾依 shell 規則（可能沒執行的 cd 算不知道）', () => {
   const win = 'win32';
   const linux = 'linux';
