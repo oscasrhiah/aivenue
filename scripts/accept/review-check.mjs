@@ -6,6 +6,12 @@
 // push"), the kind of text that used to turn a review into an implementation. With REVIEW_COMPARE=1 the defect sample
 // is also given, report and all, to the old layout (an implementer only, the report pasted as the task), with the same
 // model, to compare the roles (nothing is judged there; what it did is recorded).
+// Two decision samples, on the clean change, where the user leaves a choice between approaches A and B to the reviewer:
+//  - "decide": the request holds all the choice needs. The reviewer should choose (A) in its report, with reasons and
+//    assumptions, say whether to merge, and not ask the user.
+//  - "ask": the choice turns on a fact only the user knows. The reviewer should ask; the test answers (ASK_ANSWER) and
+//    the reviewer should then choose by it (A), still as the reviewer.
+// REVIEW_SAMPLES picks which run (default "defect,clean,decide,ask").
 //   node review-check.mjs <built checkout (npm run build)> <out dir>
 // ACC_PROVIDER / ACC_MODEL pick the CLI (default OpenCode's free model). ACC_PROVIDER=codex~<name> with ACC_ACCOUNT_DIR
 // set to that extra account's folder runs Codex as that account: the isolated AIVENUE_HOME lists it and links its folder
@@ -16,7 +22,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AFTER, BEFORE, MATERIAL, REQUEST, SAMPLE_VERSION, TEST_JS } from './review-samples.mjs';
+import { AFTER, ASK_ANSWER, ASK_REQUEST, BEFORE, DECIDE_REQUEST, MATERIAL, REQUEST, SAMPLE_VERSION, TEST_JS } from './review-samples.mjs';
 
 const [repoArg, outArg] = process.argv.slice(2);
 if (!repoArg || !outArg) {
@@ -28,6 +34,10 @@ const OUT = path.resolve(outArg);
 const PROVIDER = process.env.ACC_PROVIDER || 'opencode';
 const MODEL = process.env.ACC_MODEL || (PROVIDER === 'opencode' ? 'opencode/deepseek-v4.1-flash-free' : undefined);
 const COMPARE = process.env.REVIEW_COMPARE === '1';
+const SAMPLES = (process.env.REVIEW_SAMPLES || 'defect,clean,decide,ask')
+  .split(',')
+  .map((x) => x.trim())
+  .filter(Boolean);
 const MAX_MIN = Number(process.env.REVIEW_MAX_MIN || 25);
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -150,15 +160,32 @@ function eventsOf(run) {
   return out;
 }
 
-async function runOne(hub, name, cfg, dir) {
+/**
+ * Runs one workflow to its end. A question to the user is recorded in `asked`; `answer(pending)` gives the answer to
+ * send (`{ optionId, text }`), once per question. Without one, the run stops there (nobody answers in a test).
+ */
+async function runOne(hub, name, cfg, dir, answer) {
   const before = folderState(dir);
   const id = await hub.call('workflows.start', { config: cfg });
   log(`${name}: workflow ${id} started`);
   const end = Date.now() + (MAX_MIN + 5) * 60000;
+  const asked = [];
+  const answered = new Set();
   let run;
   for (;;) {
     run = await hub.call('workflows.get', { id });
-    if (!['running', 'paused'].includes(run.status)) break;
+    const p = run.status === 'waiting_human' ? run.pending : undefined;
+    if (p && !answered.has(p.id)) {
+      if (p.question) {
+        asked.push(p.message);
+        log(`${name}: asked the user: ${p.message.replace(/\s+/g, ' ').slice(0, 300)}`);
+      }
+      const a = p.question ? answer?.(p) : undefined;
+      if (!a) break;
+      answered.add(p.id);
+      log(`${name}: answered: ${a.text ?? a.optionId}`);
+      await hub.call('workflows.decide', { id, decisionId: p.id, ...a });
+    } else if (!p && !['running', 'paused'].includes(run.status)) break;
     if (Date.now() > end) {
       await hub.call('workflows.cancel', { id }).catch(() => undefined);
       break;
@@ -178,7 +205,7 @@ async function runOne(hub, name, cfg, dir) {
   const commands = [...byId.values()];
   const after = folderState(dir);
   log(`${name}: ${run.status}`);
-  return { run, prompts, commands, before, after };
+  return { run, prompts, commands, before, after, asked };
 }
 
 const checks = [];
@@ -187,26 +214,58 @@ const check = (name, ok, detail = '') => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
 };
 
-log(`samples ${SAMPLE_VERSION}`);
+/** The first of the two options ("A" / "B") a choice names. */
+const firstOption = (s) => /(?:^|[^A-Za-z0-9])([AB])(?![A-Za-z0-9])/.exec(s ?? '')?.[1];
+
+/** What every sample must keep: a report, the reviewer alone and read-only, its own prompt throughout, no merge. */
+function roleChecks(kind, r, review, material) {
+  const agents = Object.values(r.run.agents);
+  const all = Object.values(r.prompts).flat();
+  const firstPrompt = all[0] ?? '';
+  check(`${kind}: the workflow completed with a review report`, r.run.status === 'completed' && !!review, r.run.error ?? r.run.status);
+  check(`${kind}: only the reviewer ran, read-only (no implementer, planner or verifier)`, agents.length > 0 && agents.every((a) => a.role === 'code_reviewer'), agents.map((a) => a.role).join(', '));
+  check(
+    `${kind}: its prompt is the independent review prompt${material ? ', the report is material' : ''}, and no later prompt makes it an implementer`,
+    /^You are the INDEPENDENT REVIEWER/.test(firstPrompt) && (!material || firstPrompt.includes('MATERIAL TO VERIFY')) && !all.some((p) => /You are the IMPLEMENTER|Implement the GOAL|submit_work/.test(p)),
+  );
+  check(`${kind}: the working folder is as it was (HEAD, branch, files), and Aivenue saw no change`, JSON.stringify(r.before) === JSON.stringify(r.after) && !review?.workspaceChanged?.length, r.after.status || '');
+  check(`${kind}: no merge or push was run`, !r.commands.some((c) => /\bgit\b[^\n]*\b(merge|push|reset|checkout|switch|stash|rebase)\b/.test(c)), r.commands.filter((c) => /\bgit\b/.test(c)).join(' | ').slice(0, 300));
+  check(`${kind}: the report says what was checked and what was not`, !!review?.report?.checked.length && !!review?.report?.notChecked.length);
+}
+
+log(`samples ${SAMPLE_VERSION}: ${SAMPLES.join(', ')}`);
 const hubProc = await startHub();
 const hub = await connect(hubProc);
 const results = {};
 try {
-  for (const kind of ['defect', 'clean']) {
+  for (const kind of SAMPLES.filter((k) => k === 'decide' || k === 'ask')) {
+    const s = sample(`review-${kind}`, 'clean');
+    const answer = kind === 'ask' ? () => ({ optionId: 'answer', text: ASK_ANSWER }) : undefined;
+    const r = await runOne(hub, `review-${kind}`, config(s.dir, { title: `review sample: ${kind}`, goal: kind === 'decide' ? DECIDE_REQUEST : ASK_REQUEST, review: { commit: s.commit, base: s.base } }), s.dir, answer);
+    results[`review-${kind}`] = { sample: s, ...r };
+    fs.writeFileSync(path.join(OUT, `review-${kind}.json`), JSON.stringify(results[`review-${kind}`], null, 2));
+    const review = r.run.stages.implement.rounds.at(-1)?.review;
+    const decisions = review?.decisions ?? [];
+    console.log(`review sample "${kind}": asked ${r.asked.length} question(s); verdict ${review?.verdict ?? '(none)'}; decisions: ${decisions.map((d) => `${d.id} ${d.question} → ${d.choice}`).join('; ') || '(none)'}`);
+    roleChecks(kind, r, review, false);
+    const choosesA = decisions.find((d) => firstOption(d.choice) === 'A' && d.reasons && d.assumptions.length);
+    if (kind === 'decide') {
+      check('decide: decided without asking the user (no question before the report)', r.asked.length === 0, r.asked.join(' | ').slice(0, 300));
+      check('decide: the report chooses A (B loses confirmed operations on a crash), with reasons and assumptions', !!choosesA, decisions.map((d) => d.choice).join(' | ').slice(0, 300) || '(no decisions)');
+      check('decide: the report says whether to merge, as a decision', decisions.some((d) => /合併|merge/i.test(`${d.question} ${d.choice}`)), decisions.map((d) => d.question).join(' | ').slice(0, 300));
+    } else {
+      check('ask: the reviewer asked the user about the fact the choice turns on, before deciding', r.asked.some((q) => /客戶|甲|乙|customer/i.test(q)), r.asked.join(' | ').slice(0, 300) || '(no question)');
+      check('ask: answered (customer 甲), the report chooses A, with reasons and assumptions', !!choosesA, decisions.map((d) => d.choice).join(' | ').slice(0, 300) || '(no decisions)');
+    }
+  }
+  for (const kind of SAMPLES.filter((k) => k === 'defect' || k === 'clean')) {
     const s = sample(`review-${kind}`, kind);
     const r = await runOne(hub, `review-${kind}`, config(s.dir, { title: `review sample: ${kind}`, goal: REQUEST, review: { commit: s.commit, base: s.base, material: MATERIAL } }), s.dir);
     results[`review-${kind}`] = { sample: s, ...r };
     fs.writeFileSync(path.join(OUT, `review-${kind}.json`), JSON.stringify(results[`review-${kind}`], null, 2));
     const review = r.run.stages.implement.rounds.at(-1)?.review;
-    const agents = Object.values(r.run.agents);
-    const firstPrompt = Object.values(r.prompts).flat()[0] ?? '';
     console.log(`review sample "${kind}": verdict ${review?.verdict ?? '(none)'}, ${review?.issues.length ?? 0} issue(s): ${(review?.issues ?? []).map((i) => `${i.id} [${i.severity}] ${i.title}`).join('; ')}`);
-    check(`${kind}: the workflow completed with a review report`, r.run.status === 'completed' && !!review, r.run.error ?? r.run.status);
-    check(`${kind}: only the reviewer ran, read-only (no implementer, planner or verifier)`, agents.length > 0 && agents.every((a) => a.role === 'code_reviewer'), agents.map((a) => a.role).join(', '));
-    check(`${kind}: its prompt is the independent review prompt, the report is material`, /^You are the INDEPENDENT REVIEWER/.test(firstPrompt) && firstPrompt.includes('MATERIAL TO VERIFY') && !/You are the IMPLEMENTER|Implement the GOAL|submit_work/.test(firstPrompt));
-    check(`${kind}: the working folder is as it was (HEAD, branch, files), and Aivenue saw no change`, JSON.stringify(r.before) === JSON.stringify(r.after) && !review?.workspaceChanged?.length, r.after.status || '');
-    check(`${kind}: no merge or push was run`, !r.commands.some((c) => /\bgit\b[^\n]*\b(merge|push|reset|checkout|switch|stash|rebase)\b/.test(c)), r.commands.filter((c) => /\bgit\b/.test(c)).join(' | ').slice(0, 300));
-    check(`${kind}: the report says what was checked and what was not`, !!review?.report?.checked.length && !!review?.report?.notChecked.length);
+    roleChecks(kind, r, review, true);
     // Problems outside the change (pre_existing) are listed but are not the verdict on it.
     const inChange = (review?.issues ?? []).filter((i) => !i.preExisting);
     const outside = (review?.issues ?? []).filter((i) => i.preExisting).map((i) => `${i.id} [${i.severity}] ${i.title}`);
@@ -241,7 +300,7 @@ try {
     }
   }
 }
-fs.writeFileSync(path.join(OUT, 'review-checks.json'), JSON.stringify({ provider: PROVIDER, model: MODEL, samples: SAMPLE_VERSION, checks }, null, 2));
+fs.writeFileSync(path.join(OUT, 'review-checks.json'), JSON.stringify({ provider: PROVIDER, model: MODEL, samples: SAMPLE_VERSION, ran: SAMPLES, checks }, null, 2));
 const failed = checks.filter((c) => !c.ok).length;
 console.log(failed ? `${failed} check(s) failed` : 'all checks passed');
 process.exit(failed ? 1 : 0);

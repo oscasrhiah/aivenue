@@ -476,3 +476,16 @@ test('驗收樣本：有缺陷的版本確實先回覆、後存檔（樣本本�
   clearTimeout(s.timer);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('驗收樣本：交給審查者決定的兩個請求——資訊足夠的寫明需求與量、也要說要不要合併；資訊不足的寫明決定性的事實只有使用者知道，回答指向 A；兩者都沒寫「不用問我」', async () => {
+  const { ASK_ANSWER, ASK_REQUEST, DECIDE_REQUEST } = await import(new URL('./accept/review-samples.mjs', import.meta.url));
+  for (const r of [DECIDE_REQUEST, ASK_REQUEST]) {
+    assert.match(r, /做法 A：先把操作寫進磁碟[\s\S]*做法 B 是先回覆/);
+    assert.match(r, /替我在 A、B 之間選一個/);
+    // Whether to ask is what is checked: the request must not settle it.
+    assert.doesNotMatch(r, /不用問|不要問|別問|不必問|直接決定/);
+  }
+  assert.match(DECIDE_REQUEST, /崩潰也不能遺失[\s\S]*延遲不是問題[\s\S]*要不要合併/);
+  assert.match(ASK_REQUEST, /客戶甲[\s\S]*客戶乙[\s\S]*只有我知道/);
+  assert.match(ASK_ANSWER, /客戶甲/);
+});
