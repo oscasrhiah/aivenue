@@ -1,0 +1,177 @@
+# Acceptance of one release candidate on Linux, kept apart from the release workflow (nothing is published here: no
+# tag, no release). From the candidate commit:
+#   1. the type check;
+#   2. the whole test suite through both entry points (npm test and node --test), compared; the Linux install tests
+#      and the install-fault tests must have run, not been skipped;
+#   3. the Linux x64 package and its SHA-256;
+#   4. that same .tar.gz installed by its own install.sh into an isolated HOME, started on a virtual display (Xvfb)
+#      with an empty AIVENUE_HOME, and its version, build and data folder read back from it (capabilities-check.mjs);
+#      then closed and uninstalled;
+#   5. the fixed conversations and expected texts for the Ubuntu desktop check of the copy buttons (copy-fixtures.mjs:
+#      no model is called).
+# Uploads, as this run's artifacts only: the package with its SHA-256, the quick-check kit, and the logs.
+# Runs on a push to a candidate/** branch (its head is the candidate), or by hand for a given commit.
+name: Linux candidate
+
+on:
+  push:
+    branches:
+      - 'candidate/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'The candidate commit (full SHA)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-candidate-${{ inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      CANDIDATE: ${{ inputs.ref || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: The candidate commit and its version
+        id: c
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          want="$(git rev-parse --verify "$CANDIDATE^{commit}")"
+          if [ "$sha" != "$want" ]; then echo "::error::Checked out $sha, not the candidate $CANDIDATE"; exit 1; fi
+          version="$(node -p "require('./packages/desktop/package.json').version")"
+          mkdir -p out/logs
+          echo "Candidate $sha, version $version, $(date -u +%Y-%m-%dT%H:%M:%SZ), $(lsb_release -ds) $(uname -m)" | tee out/logs/candidate.txt
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=${sha:0:7}" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: A virtual display and Electron's libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libnss3 libgtk-3-0t64 libgbm1 libasound2t64 libxss1 libxtst6
+
+      - run: npm ci
+
+      - name: Type check
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee out/logs/typecheck.log
+
+      - name: Whole test suite, both entry points, compared
+        shell: bash
+        run: |
+          set -u
+          xvfb-run -a env AIVENUE_TEST_VERBOSE=1 npm test > out/logs/test-npm.log 2>&1; npm_exit=$?
+          xvfb-run -a node --test --test-reporter=spec scripts/test-*.mjs > out/logs/test-direct.log 2>&1; direct_exit=$?
+          node scripts/accept/compare-runs.mjs out/logs/test-direct.log out/logs/test-npm.log > out/logs/test-compare.log 2>&1; compare_exit=$?
+          echo "npm test exit $npm_exit; node --test exit $direct_exit; compare exit $compare_exit" | tee out/logs/test-exits.txt
+          tail -n 4 out/logs/test-compare.log
+          grep -E '^ℹ (tests|pass|fail|skipped|todo) ' out/logs/test-direct.log | tail -n 5
+          [ "$npm_exit" = 0 ] && [ "$direct_exit" = 0 ] && [ "$compare_exit" = 0 ]
+
+      - name: The Linux install and install-fault tests ran (not skipped)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in test-linux-install test-linux-install-faults; do
+            line="$(grep -E "scripts/$f\.mjs +[0-9]+ tests" out/logs/test-npm.log | tail -n 1)"
+            echo "$line" | tee -a out/logs/linux-install-tests.txt
+            echo "$line" | grep -Eq ' 0 fail +0 skipped ' || { echo "::error::$f did not run in full: $line"; exit 1; }
+          done
+
+      - name: Package Linux x64, and its SHA-256
+        shell: bash
+        env:
+          VERSION: ${{ steps.c.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          npm run package:linux > out/logs/package.log 2>&1
+          name="Aivenue-$VERSION-linux-x64.tar.gz"
+          cp "release/$name" out/
+          (cd out && sha256sum "$name" > "$name.sha256" && cat "$name.sha256")
+          ls -l "out/$name"
+
+      - name: Install in an isolated HOME, start on a virtual display, read back version and build
+        shell: bash
+        env:
+          VERSION: ${{ steps.c.outputs.version }}
+          SHA: ${{ steps.c.outputs.sha }}
+        run: |
+          set -uo pipefail
+          S="$RUNNER_TEMP/smoke"
+          mkdir -p "$S/home" "$S/unpack" "$S/data"
+          tar -xzf "out/Aivenue-$VERSION-linux-x64.tar.gz" -C "$S/unpack"
+          HOME="$S/home" sh "$S/unpack/Aivenue-$VERSION-linux-x64/install.sh" > out/logs/install.log 2>&1 || { cat out/logs/install.log; exit 1; }
+          APP="$S/home/.local/share/aivenue/aivenue"
+          test -L "$S/home/.local/bin/aivenue" && test -x "$APP" || { echo "::error::install.sh did not put the command and the app in place"; exit 1; }
+          (HOME="$S/home" AIVENUE_HOME="$S/data" xvfb-run -a -s '-screen 0 1600x1000x24' "$S/home/.local/bin/aivenue" --remote-debugging-port=9232 > out/logs/app.log 2>&1 &)
+          WANT_DATA_DIR="$S/data" WANT_VERSION="$VERSION" node scripts/accept/capabilities-check.mjs 9232 "$SHA" out/smoke linux 2>&1 | tee out/logs/capabilities.log
+          check=${PIPESTATUS[0]}
+          # The main process only (no --type=): it ends its own helpers.
+          main="$(pgrep -af "^$APP" | grep -v -- ' --type=' | cut -d' ' -f1 || true)"
+          [ -n "$main" ] && kill -TERM $main 2>/dev/null
+          for _ in $(seq 1 20); do pgrep -f "^$APP" > /dev/null || break; sleep 1; done
+          left="$(pgrep -fc "^$APP" || true)"
+          pkill -KILL -f "^$APP" 2>/dev/null || true
+          HOME="$S/home" sh "$S/home/.local/share/aivenue/uninstall.sh" > out/logs/uninstall.log 2>&1; un=$?
+          echo "capabilities-check exit $check; processes left after closing: ${left:-0}; uninstall exit $un; command left: $(test -e "$S/home/.local/bin/aivenue" && echo yes || echo no)" | tee out/logs/smoke.txt
+          if grep -q FATAL out/logs/app.log; then echo "::error::app.log has a FATAL line"; exit 1; fi
+          [ "$check" = 0 ] && [ "${left:-0}" = 0 ] && [ "$un" = 0 ] && [ ! -e "$S/home/.local/bin/aivenue" ]
+
+      - name: Quick-check kit for the Ubuntu desktop (fixed conversations and the texts a copy must give)
+        shell: bash
+        env:
+          VERSION: ${{ steps.c.outputs.version }}
+        run: |
+          set -euo pipefail
+          K="out/kit/aivenue-$VERSION-quick-check"
+          node scripts/accept/copy-fixtures.mjs "$K/app-home" "$K/app-proj" app "$K/expected" | tee -a out/logs/kit.log
+          node scripts/accept/copy-fixtures.mjs "$K/vscode-home" "$K/vscode-proj" vscode | tee -a out/logs/kit.log
+          tar -czf "out/aivenue-$VERSION-quick-check.tar.gz" -C out/kit "aivenue-$VERSION-quick-check"
+          (cd out && sha256sum "aivenue-$VERSION-quick-check.tar.gz" > "aivenue-$VERSION-quick-check.tar.gz.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-${{ steps.c.outputs.short }}
+          path: |
+            out/Aivenue-${{ steps.c.outputs.version }}-linux-x64.tar.gz
+            out/Aivenue-${{ steps.c.outputs.version }}-linux-x64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quick-check-${{ steps.c.outputs.short }}
+          path: |
+            out/aivenue-${{ steps.c.outputs.version }}-quick-check.tar.gz
+            out/aivenue-${{ steps.c.outputs.version }}-quick-check.tar.gz.sha256
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ steps.c.outputs.short || github.run_id }}
+          path: |
+            out/logs
+            out/smoke
+          if-no-files-found: warn

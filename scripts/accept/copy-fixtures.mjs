@@ -5,7 +5,7 @@
 //  - "審查" (independent review): a report with a blocker, a pre-existing issue, two decisions the user listed (choices,
 //    reasons, assumptions) and what was checked and not.
 // The texts are exported for the checks to compare a paste with, character by character.
-//   node copy-fixtures.mjs <AIVENUE_HOME> <project folder> <vscode|app>
+//   node copy-fixtures.mjs <AIVENUE_HOME> <project folder> <vscode|app> [<folder for the expected texts>]
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
@@ -147,13 +147,33 @@ export async function writeFixtures(home, proj, host) {
   return { reply, review };
 }
 
+/**
+ * What each copy button must put on the clipboard, as files to compare a paste with (the Ubuntu desktop check): the
+ * reply, its code block alone, and the review report as the page's Traditional Chinese text makes it.
+ */
+export async function writeExpected(dir, review) {
+  const { build } = createRequire(path.join(REPO, 'package.json'))('esbuild');
+  const out = await build({ entryPoints: [path.join(REPO, 'packages/ui/src/reviewText.ts')], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(path.join(REPO, 'package.json')), mod, mod.exports);
+  const report = mod.exports.reviewMarkdown((zh) => zh, review.stages.implement.rounds.at(-1).review, review.reviewTarget);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '複製回覆-複製結果.md'), REPLY);
+  fs.writeFileSync(path.join(dir, '複製程式碼.txt'), CODE);
+  fs.writeFileSync(path.join(dir, '複製審查報告.md'), report);
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [home, proj, host] = process.argv.slice(2);
+  const [home, proj, host, expectedDir] = process.argv.slice(2);
   if (!home || !proj || !['vscode', 'app'].includes(host)) {
-    console.error('usage: node copy-fixtures.mjs <AIVENUE_HOME> <project folder> <vscode|app>');
+    console.error('usage: node copy-fixtures.mjs <AIVENUE_HOME> <project folder> <vscode|app> [<folder for the expected texts>]');
     process.exit(2);
   }
   const { reply, review } = await writeFixtures(path.resolve(home), path.resolve(proj), host);
   console.log(`written: ${reply.id} (${reply.config.title}), ${review.id} (${review.config.title})`);
+  if (expectedDir) {
+    await writeExpected(path.resolve(expectedDir), review);
+    console.log(`expected texts: ${path.resolve(expectedDir)}`);
+  }
   process.exit(0);
 }
