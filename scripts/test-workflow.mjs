@@ -4207,6 +4207,18 @@ test('背景啟動與程序的對應：比完整路徑——另一個專案的�
   assert.equal(lf('cd /x & nohup node job.js &'), '/p');
   assert.equal(lf('nohup node job.js & cd /x'), '/p');
   assert.equal(lf('nohup node job.js &\ncd /x && ls'), '/p');
+  // The launch is the step that runs the script, not one that only names it (the review of 151859a).
+  assert.equal(lf('echo job.js && cd /other && nohup node job.js &', '/base'), '/other');
+  assert.equal(W.sameScript({ command: 'node /base/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('echo job.js && cd /other && nohup node job.js &', '/base') }, linux), false);
+  assert.equal(lf('cat job.js && cd /x && env DEBUG=1 nohup node job.js &'), '/x');
+  assert.equal(lf('echo job.js && nohup node other.js &'), undefined, 'nothing runs it: unknown');
+  assert.equal(lf('node job.js --check && cd /x && nohup node job.js &'), '/x', 'the one sent to the background');
+  assert.equal(lf('nohup node job.js & nohup node job.js &'), '/p');
+  assert.equal(lf('cd /x && nohup node job.js & cd /y && nohup node job.js &'), undefined, 'two launches of it in different folders');
+  assert.equal(lf('sleep 1 & cd /x && nohup node job.js &'), '/x', 'after a lone &, the cd runs for sure');
+  assert.equal(W.launchFolder('Start-Process node -ArgumentList job.js', undefined, 'C:\\proj', win, 'job.js'), 'C:\\proj');
+  assert.equal(W.launchFolder('Set-Location C:\\x && Start-Process node -ArgumentList job.js -WindowStyle Hidden', undefined, 'C:\\proj', win, 'job.js'), 'C:\\x');
+  assert.equal(W.launchFolder('Set-Location C:\\x; Start-Process node -ArgumentList job.js', undefined, 'C:\\proj', win, 'job.js'), undefined);
   // So the other project's job.js is not taken for this launch.
   assert.equal(W.sameScript({ command: 'node /other-project/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('true || cd /other-project && nohup node job.js &', '/this-project') }, linux), false);
   assert.equal(W.sameScript({ command: 'node /this-project/job.js' }, { key: 'job.js', script: 'job.js', cwd: lf('nohup node job.js &', '/this-project') }, linux), true);

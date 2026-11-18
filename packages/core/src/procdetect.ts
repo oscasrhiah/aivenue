@@ -138,6 +138,10 @@ function steps(command: string): { text: string; sep: string }[] {
       out.push({ text: cur, sep: two });
       cur = '';
       i++;
+    } else if (ch === '&' && !/[<>]$/.test(cur) && command[i + 1] !== '>') {
+      // A lone & (not && or a redirect like 2>&1, &>): what is before it runs in the background.
+      out.push({ text: cur, sep: '&' });
+      cur = '';
     } else if (ch === ';' || ch === '|' || ch === '\n') {
       out.push({ text: cur, sep: ch });
       cur = '';
@@ -149,6 +153,24 @@ function steps(command: string): { text: string; sep: string }[] {
 
 /** A step that is only a change of folder (`cd x`, `pushd x`, `Set-Location -Path x`): its target, as written. */
 const CD_STEP = /^\s*(?:cd|chdir|pushd|Set-Location|sl)\s+(?:-(?:Path|LiteralPath)\s+)?("[^"]*"|'[^']*'|[^\s&]+)\s*$/i;
+
+/** Wrappers that run the command after them: `nohup`, `setsid`, `exec`, `time`, `nice -n 5`, `env A=1`, `stdbuf -oL`. */
+const WRAPPER = /^\s*(?:(?:nohup|setsid|exec|time|nice(?:\s+-n\s*-?\d+)?|stdbuf(?:\s+-\w+)*|env(?:\s+-\w+)*(?:\s+\w+=\S*)*)\s+)+/i;
+
+/**
+ * Whether a step runs `key` (a script's or program's file name): the step without its wrappers, or what `Start-Process`
+ * / `start` would run, has it as its program or as the script its interpreter runs (scriptToken).
+ */
+function runsScript(step: string, key: string): boolean {
+  const text = step.replace(WRAPPER, '').replace(/&\s*$/, '');
+  const sp = /^\s*(?:Start-Process|saps|start(?:\s+"")?)\s+(?:-FilePath\s+)?("[^"]*"|'[^']*'|[^\s,]+)(?:[\s\S]*?\s-ArgumentList\s+("[^"]*"|'[^']*'|[^\s]+(?:\s*,\s*[^\s]+)*))?/i.exec(text);
+  if (sp) {
+    const prog = sp[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
+    const args = (sp[2] ?? '').replace(/^(["'])([\s\S]*)\1$/, '$2').replace(/\s*,\s*/g, ' ');
+    return scriptToken(`"${prog}" ${args}`, key) !== undefined;
+  }
+  return scriptToken(text, key) !== undefined;
+}
 
 /**
  * The folder a launch line ran in, by the shell's own rules, or undefined when that cannot be shown. It starts from
@@ -169,32 +191,45 @@ export function launchFolder(command: string, input: string | undefined, base: s
   } catch {
     // not JSON: the workflow's folder
   }
+  const start = dir;
   const parts = steps(command);
   const blank = (t: string) => t.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
-  // The step that launches: the one that names what it runs (else the first that starts something in the background).
-  const name = launched?.replace(/^.*[\\/]/, '').toLowerCase();
-  let k = name ? parts.findIndex((p) => p.text.toLowerCase().includes(name)) : -1;
-  if (k < 0) k = parts.findIndex((p) => LAUNCH.test(p.text));
-  if (k < 0) k = parts.length - 1;
-  if (parts.slice(0, k + 1).some((p) => /[(){}]/.test(blank(p.text)))) return undefined;
-  for (let j = 0; j < k; j++) {
-    const before = j > 0 ? parts[j - 1].sep : '';
-    const text = parts[j].text;
-    if (/^\s*popd\b/i.test(text)) return undefined;
-    const cd = CD_STEP.exec(text);
-    if (!cd) {
-      // A cd hidden in a step that does more (`cd x & …` runs it in the background): no effect on later steps.
-      continue;
+  // The step that launches: the one that runs it (as its program, or the script its interpreter runs, after nohup,
+  // setsid, env…, or through Start-Process), not one that only names it (`echo job.js`). One that also goes to the
+  // background wins over a foreground run of the same; none, or two that cannot be told apart: unknown.
+  const name = launched?.replace(/^.*[\\/]/, '');
+  if (!name) return undefined;
+  const runs = parts.map((p, i) => ({ i, bg: p.sep === '&' || LAUNCH.test(p.text) })).filter((x) => runsScript(parts[x.i].text, name));
+  const bg = runs.filter((x) => x.bg);
+  const candidates = bg.length ? bg : runs;
+  if (!candidates.length) return undefined;
+  // Several steps run it: one folder only when they all start in the same one.
+  const folders = candidates.map((c) => folderBefore(c.i));
+  return folders.every((f) => f !== undefined && f === folders[0]) ? folders[0] : undefined;
+
+  /** The folder the step at `k` starts in. */
+  function folderBefore(k: number): string | undefined {
+    let dir = start;
+    if (parts.slice(0, k + 1).some((p) => /[(){}]/.test(blank(p.text)))) return undefined;
+    for (let j = 0; j < k; j++) {
+      const before = j > 0 ? parts[j - 1].sep : '';
+      const text = parts[j].text;
+      if (/^\s*popd\b/i.test(text)) return undefined;
+      // Not a step that is only a cd: no effect on the folder.
+      const cd = CD_STEP.exec(text);
+      if (!cd) continue;
+      // Piped or sent to the background: a subshell of its own, no effect on the steps after it.
+      if (parts[j].sep === '|' || parts[j].sep === '&') continue;
+      // It runs for sure when reached (it starts the line or follows ;, a new line, & or &&), and the launch runs only
+      // if it worked (only && after it).
+      const certain = ['', ';', '\n', '&', '&&'].includes(before) && parts.slice(j, k).every((p) => p.sep === '&&');
+      if (!certain) return undefined;
+      const to = cd[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
+      if (/^(-|~)|\$|%/.test(to) || !dir) return undefined;
+      dir = P.resolve(native(dir, platform), native(to, platform));
     }
-    // Piped: a subshell of its own, no effect on the steps after it.
-    if (parts[j].sep === '|') continue;
-    const certain = (before === '' || before === ';' || before === '\n' || before === '&&') && parts.slice(j, k).every((p) => p.sep === '&&');
-    if (!certain) return undefined;
-    const to = cd[1].replace(/^(["'])([\s\S]*)\1$/, '$2');
-    if (/^(-|~)|\$|%/.test(to) || !dir) return undefined;
-    dir = P.resolve(native(dir, platform), native(to, platform));
+    return dir;
   }
-  return dir;
 }
 
 /**
