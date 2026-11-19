@@ -3,7 +3,7 @@ import { ChevronRight, Circle, CircleDot, X, type LucideIcon } from 'lucide-reac
 import { Ico } from '../icons';
 import { useT } from '../i18n';
 import { cx } from '../util';
-import { splitHint, visibleItems } from '../settingsView';
+import { splitHint, tabStep, visibleItems } from '../settingsView';
 
 /*
  * The parts Settings, the workflow settings window, the agent map and the detail windows are built from (round C): a
@@ -12,7 +12,35 @@ import { splitHint, visibleItems } from '../settingsView';
  * named switch; a state as an icon and a word.
  */
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const CANDIDATES = 'button, a[href], area[href], input, select, textarea, summary, [tabindex], [contenteditable]';
+
+/**
+ * The elements Tab stops at inside `root`, in document order: shown, not disabled, not inert, with a tab index of 0 or
+ * more (a control with tabIndex -1, such as an option of a group the arrow keys move through, is reached otherwise);
+ * of a group of radio inputs only the checked one, or the first when none is.
+ */
+export function tabStops(root: HTMLElement): HTMLElement[] {
+  const radios = new Map<string, HTMLInputElement[]>();
+  const stops: HTMLElement[] = [];
+  for (const el of root.querySelectorAll<HTMLElement>(CANDIDATES)) {
+    if (el.tabIndex < 0 || el.matches(':disabled') || el.closest('[inert]')) continue;
+    if (el instanceof HTMLInputElement && el.type === 'hidden') continue;
+    if (!el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') continue;
+    if (el instanceof HTMLInputElement && el.type === 'radio' && el.name) {
+      const group = radios.get(el.name) ?? [];
+      if (!group.length) radios.set(el.name, group);
+      group.push(el);
+    }
+    stops.push(el);
+  }
+  // A radio group is one stop: drop every radio but the checked one (or the first).
+  const skip = new Set<HTMLElement>();
+  for (const group of radios.values()) {
+    const keep = group.find((r) => r.checked) ?? group[0];
+    for (const r of group) if (r !== keep) skip.add(r);
+  }
+  return skip.size ? stops.filter((el) => !skip.has(el)) : stops;
+}
 
 /**
  * A dialog's keyboard: the focus moves into it (onto the dialog itself, which a screen reader announces by its title,
@@ -30,43 +58,45 @@ export function useDialogKeys(box: React.RefObject<HTMLElement | null>, onEscape
   if (openerRef.current === undefined) openerRef.current = document.activeElement as HTMLElement | null;
   useEffect(() => {
     const opener = openerRef.current;
-    const items = () => [...(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.offsetParent !== null || el === document.activeElement);
-    if (!box.current?.contains(document.activeElement)) {
-      const list = items();
+    if (box.current && !box.current.contains(document.activeElement)) {
+      const list = tabStops(box.current);
       (focus === 'first' ? list[1] ?? list[0] ?? box.current : box.current)?.focus();
     }
-    const onKey = (e: KeyboardEvent) => {
-      const el = box.current;
-      if (!el) return;
-      // Only the dialog drawn last answers (a window opened from this one comes after it).
+    // Only the dialog drawn last answers (a window opened from this one comes after it).
+    const onTop = () => {
       const all = [...document.querySelectorAll('.modal')];
-      if (all[all.length - 1] !== el) return;
-      if (e.key === 'Escape') {
-        const a = document.activeElement as HTMLElement | null;
-        // A menu or a list open inside it closes first (its own keys handle that).
-        if (a?.closest('[role="menu"], [role="listbox"], .perm-menu, .adv-menu')) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        esc.current();
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const list = items();
-      if (!list.length) return e.preventDefault();
-      const first = list[0];
-      const last = list[list.length - 1];
-      const inside = el.contains(document.activeElement);
-      if (e.shiftKey && (document.activeElement === first || !inside)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
-        e.preventDefault();
-        first.focus();
-      }
+      return !!box.current && all[all.length - 1] === box.current;
     };
-    document.addEventListener('keydown', onKey, true);
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || !onTop()) return;
+      const a = document.activeElement as HTMLElement | null;
+      // A menu or a list open inside it closes first (its own keys handle that).
+      if (a?.closest('[role="menu"], [role="listbox"], .perm-menu, .adv-menu')) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      esc.current();
+    };
+    // Tab is handled last (on the window, after the page's own handlers): a menu that closes on Tab has put the focus
+    // back on its button by then, and a part that keeps Tab for itself (an enlarged screenshot) has prevented it. The
+    // dialog then moves the focus itself, among the stops Tab really reaches, so it never leaves the dialog (a control
+    // the browser skips is never taken for the last one).
+    const onTab = (e: KeyboardEvent) => {
+      const el = box.current;
+      if (e.key !== 'Tab' || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || !el || !onTop()) return;
+      e.preventDefault();
+      const list = tabStops(el);
+      const a = document.activeElement;
+      const inside = !!a && el.contains(a);
+      const at = a ? list.indexOf(a as HTMLElement) : -1;
+      const before = inside && at < 0 ? list.filter((s) => s.compareDocumentPosition(a!) & Node.DOCUMENT_POSITION_FOLLOWING).length : 0;
+      const next = tabStep(list.length, at, before, e.shiftKey, inside);
+      (next >= 0 ? list[next] : el).focus();
+    };
+    document.addEventListener('keydown', onEsc, true);
+    window.addEventListener('keydown', onTab);
     return () => {
-      document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('keydown', onEsc, true);
+      window.removeEventListener('keydown', onTab);
       // What opened it may be gone (a popover that closed as the dialog opened): then the fallback the caller names.
       const back = opener?.isConnected ? opener : fallback.current?.();
       if (back?.isConnected) back.focus();

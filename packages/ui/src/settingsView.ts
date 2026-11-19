@@ -101,3 +101,17 @@ export function folderExample(platform: string): string {
   if (/^win|windows/.test(p)) return 'D:\\code\\my-app';
   return '/home/me/code/my-app';
 }
+
+/**
+ * Where Tab (or Shift+Tab) moves the focus inside a dialog, as an index into its tab stops (`count` of them, in document
+ * order): `at` is the focused stop's index, or -1 when the focus is on something Tab skips (the dialog itself, an option
+ * the arrow keys moved to); `before` is how many stops come before the focus then; `inside` is false when the focus is
+ * outside the dialog. It always lands on a stop of the dialog, wrapping at both ends. -1 when there is none.
+ */
+export function tabStep(count: number, at: number, before: number, shift: boolean, inside: boolean): number {
+  if (count <= 0) return -1;
+  if (!inside) return shift ? count - 1 : 0;
+  if (at >= 0) return shift ? (at - 1 + count) % count : (at + 1) % count;
+  const b = Math.max(0, Math.min(before, count));
+  return shift ? (b === 0 ? count - 1 : b - 1) : b === count ? 0 : b;
+}

@@ -652,3 +652,30 @@ test('設定頁與對話框的呈現規則（settingsView）：說明切成第�
   assert.equal(folderExample('Mozilla/5.0 (Windows NT 10.0; Win64; x64)'), String.raw`D:\code\my-app`);
   assert.equal(folderExample('Linux x86_64'), '/home/me/code/my-app');
 });
+
+test('對話框的 Tab：只在 Tab 真的會停的地方之間移動，兩端繞回，焦點不會離開對話框；焦點在對話框本身或方向鍵選到的選項（tabIndex -1）時，從它所在的位置算下一個', async () => {
+  const out = await build({ entryPoints: ['packages/ui/src/settingsView.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const { tabStep } = mod.exports;
+  // On a stop: the next or the previous, wrapping at both ends.
+  assert.equal(tabStep(3, 0, 0, false, true), 1);
+  assert.equal(tabStep(3, 2, 0, false, true), 0);
+  assert.equal(tabStep(3, 0, 0, true, true), 2);
+  assert.equal(tabStep(3, 1, 0, true, true), 0);
+  // Inside but not on a stop (the dialog itself before every stop; an option the arrow keys moved to between stops;
+  // a skipped control after the last stop): Tab goes to the first stop after it, Shift+Tab to the last one before it.
+  assert.equal(tabStep(3, -1, 0, false, true), 0);
+  assert.equal(tabStep(3, -1, 0, true, true), 2);
+  assert.equal(tabStep(3, -1, 2, false, true), 2);
+  assert.equal(tabStep(3, -1, 2, true, true), 1);
+  assert.equal(tabStep(3, -1, 3, false, true), 0, 'a tabIndex -1 control after the last stop: Tab wraps to the first, not out of the dialog');
+  assert.equal(tabStep(3, -1, 3, true, true), 2);
+  // Outside the dialog: back to its first (Tab) or last (Shift+Tab) stop.
+  assert.equal(tabStep(3, -1, 0, false, false), 0);
+  assert.equal(tabStep(3, -1, 0, true, false), 2);
+  // One stop: it stays there. None: nowhere (the dialog keeps the focus itself).
+  assert.equal(tabStep(1, 0, 0, false, true), 0);
+  assert.equal(tabStep(1, 0, 0, true, true), 0);
+  assert.equal(tabStep(0, -1, 0, false, true), -1);
+});

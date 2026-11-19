@@ -8,7 +8,7 @@ import { cx, providerName } from '../util';
 import { ask } from './Ask';
 import { useMenuKeys } from './RunTools';
 import { byFolder } from '../timeline';
-import { RadioList } from './Kit';
+import { RadioList, useDialogKeys } from './Kit';
 
 export const PERMISSION_ICON: Record<PermissionLevel, LucideIcon> = { plan: ClipboardList, ask: Hand, edit: Pencil, auto: Zap, full: ShieldAlert };
 
@@ -80,14 +80,12 @@ function useGuardedPermission(current: PermissionLevel, onChange?: (v: { permiss
 export function FullAccessConfirm({ onConfirm, onCancel }: { onConfirm: () => void; onCancel: () => void }) {
   const t = useT();
   const [ok, setOk] = useState(false);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onCancel();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  const box = useRef<HTMLDivElement>(null);
+  // Esc cancels, Tab and Shift+Tab stay in it, and the focus goes back to the option that asked (the shared dialog keys).
+  useDialogKeys(box, onCancel);
   return (
     <div className="modal-back" onMouseDown={onCancel}>
-      <div className="modal full-confirm" role="alertdialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={box} tabIndex={-1} className="modal full-confirm" role="alertdialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
         <h3><Ico i={ShieldAlert} size={18} /> {t('開啟完整電腦存取？', 'Allow whole-computer access?')}</h3>
         <p>{t('這段對話中的 AI 將可以：', 'In this conversation the AI will be able to:')}</p>
         <ul>

@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useT } from '../i18n';
 import { cx } from '../util';
+import { useDialogKeys } from './Kit';
 
 /**
  * Aivenue's own yes/no question. The browser's confirm() cannot be used: VS Code webviews block dialogs, so it
@@ -44,16 +45,18 @@ export function AskHost() {
     opener.current = null;
     if (back?.isConnected) back.focus();
   };
-  useEffect(() => {
-    if (!q) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && answer(false);
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  });
   if (!q) return null;
+  return <AskDialog q={q} id={id} answer={answer} />;
+}
+
+/** The open question: Esc answers no, Tab and Shift+Tab stay in it (the shared dialog keys). */
+function AskDialog({ q, id, answer }: { q: Question; id: string; answer: (yes: boolean) => void }) {
+  const t = useT();
+  const box = useRef<HTMLDivElement>(null);
+  useDialogKeys(box, () => answer(false));
   return (
     <div className="modal-back" onMouseDown={() => answer(false)}>
-      <div className="modal ask" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-q`} aria-describedby={q.detail ? `${id}-d` : undefined} onMouseDown={(e) => e.stopPropagation()}>
+      <div ref={box} tabIndex={-1} className="modal ask" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-q`} aria-describedby={q.detail ? `${id}-d` : undefined} onMouseDown={(e) => e.stopPropagation()}>
         <p className="ask-text" id={`${id}-q`}>
           {q.message}
         </p>
