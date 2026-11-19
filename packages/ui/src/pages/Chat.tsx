@@ -1218,7 +1218,14 @@ export function Chat({ id }: { id?: string }) {
   // a finished one uses them for the follow-up message.
   const [runDraft, setRunDraft] = useState<RoleDraft | null>(null);
   useEffect(() => setRunDraft(null), [id]);
-  const shown: RoleDraft | null = run ? (runDraft ?? run.config) : draft;
+  const runShown: RoleDraft | null = run ? (runDraft ?? run.config) : draft;
+  // An isolated run's config points at its temporary copy; follow-ups start from the user's project (see send), so
+  // the composer and the settings show that folder too, unless another one was picked.
+  const origCwd = run?.worktree?.origCwd;
+  const shown: RoleDraft | null = useMemo(
+    () => (run && runShown && origCwd && runShown.cwd === run.config.cwd ? { ...runShown, cwd: origCwd } : runShown),
+    [run, runShown, origCwd],
+  );
   const changeSettings = (d: RoleDraft) => {
     if (!run) return updateDraft(d);
     setRunDraft(d);
