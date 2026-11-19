@@ -4,6 +4,9 @@ import { hub } from '../api';
 import { useT } from '../i18n';
 import { cx } from '../util';
 import { ask } from './Ask';
+import { CircleCheck, CircleDashed, CircleX, ExternalLink, LoaderCircle, TriangleAlert } from 'lucide-react';
+import { Ico } from '../icons';
+import { Fold, StateWord } from './Kit';
 
 type Line = [zh: string, en: string];
 
@@ -94,7 +97,6 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
   const shown = PROVIDERS.filter((p) => p.recommended || more);
   return (
     <div className="omni-providers">
-      <div className="block-label">{t('連接免費供應商', 'Connect free providers')}</div>
       <div className="muted tiny">
         {t(
           '按「取得金鑰」到該家的官方網站自己註冊、登入並建立 API 金鑰，貼回這裡按「連接」。Aivenue 會交給 OmniRoute（加密保存在它的資料庫），再實際測試一次能不能跑 agent。',
@@ -104,9 +106,9 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
       {shown.map((p) => (
         <ProviderRow key={p.id} p={p} conns={connected.filter((c) => c.provider === p.id)} />
       ))}
-      <button className="link tiny" onClick={() => setMore(!more)}>
-        {more ? t('收起', 'Show less') : t(`更多（${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length} 家，不推薦）`, `More (${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length}, not recommended)`)} {more ? '▴' : '▾'}
-      </button>
+      <Fold open={more} onToggle={() => setMore(!more)}>
+        {more ? t('收起', 'Show less') : t(`另外 ${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length} 家，不推薦`, `${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length} more, not recommended`)}
+      </Fold>
       {connected.some((c) => !PROVIDERS.some((p) => p.id === c.provider)) && (
         <div className="muted tiny">
           {t('在 OmniRoute 管理頁接上的其他供應商：', 'Other providers connected in the OmniRoute dashboard: ')}
@@ -147,19 +149,28 @@ function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNull
         <span className="muted small">{tl(p.free)}</span>
       </div>
       {p.note && <div className="muted tiny">{tl(p.note)}</div>}
-      {p.warn && <div className="warn-text tiny">⚠ {tl(p.warn)}</div>}
+      {p.warn && (
+        <div className="warn-text tiny">
+          <Ico i={TriangleAlert} size={14} /> {tl(p.warn)}
+        </div>
+      )}
       {conns.map((c) => (
         <div key={c.id} className="omni-conn">
-          <span className={cx('tiny', c.test?.state === 'ok' ? 'ok-text' : c.test?.state === 'fail' ? 'err-text' : 'muted')}>
+          <StateWord
+            className="tiny"
+            icon={c.test?.state === 'ok' ? CircleCheck : c.test?.state === 'fail' ? CircleX : c.test?.state === 'testing' ? LoaderCircle : CircleDashed}
+            spin={c.test?.state === 'testing'}
+            tone={c.test?.state === 'ok' ? 'ok' : c.test?.state === 'fail' ? 'err' : c.test?.state === 'testing' ? 'run' : undefined}
+          >
             {c.test?.state === 'ok'
-              ? `✓ ${t('已連接，可以跑 agent', 'Connected, can run agents')}`
+              ? t('已連接，可以跑 agent', 'Connected, can run agents')
               : c.test?.state === 'fail'
-                ? `✕ ${t('已連接，但測試沒通過', 'Connected, but the check failed')}`
+                ? t('已連接，但測試沒通過', 'Connected, but the check failed')
                 : c.test?.state === 'testing'
                   ? t('測試中…', 'Checking…')
-                  : t('已連接（尚未測試）', 'Connected (not checked yet)')}
+                  : t('已連接，尚未測試', 'Connected, not checked yet')}
             {c.test?.model ? ` · ${c.test.model}` : ''}
-          </span>
+          </StateWord>
           <span className="grow" />
           <button className="btn small ghost" disabled={busy || c.test?.state === 'testing'} onClick={() => run(() => hub.call('extensions.omniTest', { id: c.id }))}>
             {t('重新測試', 'Check again')}
@@ -171,10 +182,10 @@ function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNull
         </div>
       ))}
       <div className="row gap omni-prov-key">
-        <button className="btn small" onClick={() => hub.call('host.openExternal', { url: p.keyUrl })}>
-          {t('取得金鑰', 'Get a key')} ↗
+        <button className="btn small link-icon" onClick={() => hub.call('host.openExternal', { url: p.keyUrl })}>
+          <Ico i={ExternalLink} size={14} /> {t('取得金鑰', 'Get a key')}
         </button>
-        <input type="password" className="grow" autoComplete="off" placeholder={conns.length ? t('貼上另一把金鑰（多一個帳號）', 'Paste another key (one more account)') : t('貼上 API 金鑰', 'Paste the API key')} value={key} onChange={(e) => setKey(e.target.value)} />
+        <input type="password" className="grow" autoComplete="off" aria-label={t(`${p.name} 的 API 金鑰`, `${p.name} API key`)} placeholder={conns.length ? t('貼上另一把金鑰（多一個帳號）', 'Paste another key (one more account)') : t('貼上 API 金鑰', 'Paste the API key')} value={key} onChange={(e) => setKey(e.target.value)} />
         <button className="btn small primary" disabled={busy || !key.trim()} onClick={() => run(() => hub.call('extensions.omniConnect', { provider: p.id, apiKey: key })).then((ok) => ok && setKey(''))}>
           {busy ? t('連接並測試中…', 'Connecting and checking…') : t('連接', 'Connect')}
         </button>

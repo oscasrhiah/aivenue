@@ -4,13 +4,16 @@ import { hub, useModels } from '../api';
 import { cx } from '../util';
 import { useT, type T } from '../i18n';
 import { fmtContext } from '../../../core/src/modelContext';
+import { RotateCw } from 'lucide-react';
+import { Ico } from '../icons';
+import { Fold } from './Kit';
 
 const CUSTOM = '__custom__';
 
 /** "Claude Opus (claude-opus-5-5) · 1M · 免費" */
 export function modelOptionLabel(t: T, m: ModelInfo): string {
   const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
-  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('⚠ 不能呼叫工具', '⚠ no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('不能呼叫工具', 'no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
 }
 
 /** What a model reads besides text ("圖片、影片"), or "只有文字"; empty when unknown. */
@@ -91,6 +94,7 @@ export function ModelPicker({
         />
       ) : (
         <select
+          aria-label={t('模型', 'Model')}
           disabled={disabled}
           value={model ?? ''}
           onChange={(e) => {
@@ -109,7 +113,7 @@ export function ModelPicker({
       )}
       {!showCustom && <ContextBadge model={current} />}
       {efforts.length > 0 && (
-        <select disabled={disabled} value={effort ?? ''} onChange={(e) => onChange({ model, effort: e.target.value || undefined })} title={t('推理強度', 'Reasoning effort')}>
+        <select aria-label={t('推理強度', 'Reasoning effort')} disabled={disabled} value={effort ?? ''} onChange={(e) => onChange({ model, effort: e.target.value || undefined })} title={t('推理強度', 'Reasoning effort')}>
           <option value="">
             {t('預設推理', 'Default effort')}
             {inheritEffort ?? current?.defaultEffort ? ` (${inheritEffort ?? current?.defaultEffort})` : ''}
@@ -121,8 +125,8 @@ export function ModelPicker({
           ))}
         </select>
       )}
-      <button className="icon-btn" disabled={disabled} title={t('重新讀取模型清單', 'Reload model list')} onClick={refresh}>
-        ↻
+      <button type="button" className="icon-btn" disabled={disabled} title={t('重新讀取模型清單', 'Reload model list')} aria-label={t('重新讀取模型清單', 'Reload model list')} onClick={refresh}>
+        <Ico i={RotateCw} size={16} />
       </button>
     </div>
     {poolId && !showCustom && (
@@ -159,9 +163,9 @@ function OmniPool({ pool, disabled, onPick }: { pool: string; disabled?: boolean
   const label = (s: OmniCandidate['state']) => (s === 'ok' ? t('可用', 'ready') : s === 'cooldown' ? t('冷卻中', 'cooling down') : s === 'limited' ? t('免登入，長度太短不能跑 agent', 'no sign-in, too short for agents') : t('無法使用', 'unavailable'));
   return (
     <div className="omni-pool">
-      <button className="link tiny" onClick={() => setOpen(!open)}>
-        {t(`這個組合會依序從 ${list.length} 個模型挑（${ok} 個可用）`, `This pool picks from ${list.length} models in order (${ok} ready)`)} {open ? '▴' : '▾'}
-      </button>
+      <Fold open={open} onToggle={() => setOpen(!open)}>
+        {t(`這個組合會依序從 ${list.length} 個模型挑，${ok} 個可用`, `This pool picks from ${list.length} models in order, ${ok} ready`)}
+      </Fold>
       {open && (
         <div className="omni-pool-list">
           <div className="muted tiny">{t('點一個模型就只用它，不再自動切換。', 'Click a model to use only that one, without automatic switching.')}</div>

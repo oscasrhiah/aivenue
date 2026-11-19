@@ -1,5 +1,6 @@
 import type { ExtensionId } from '../../../core/src/types';
 import { useT } from '../i18n';
+import { Dialog } from './Kit';
 
 type Line = [zh: string, en: string];
 
@@ -112,14 +113,7 @@ export function ExtensionGuide({ id, onClose }: { id: ExtensionId; onClose: () =
   const g = GUIDES[id];
   const tl = (l: Line) => t(l[0], l[1]);
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal ext-guide" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{g.title}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
+    <Dialog title={g.title} onClose={onClose} size="lg" className="ext-guide">
         {g.intro.map((l, i) => (
           <p key={i} className="small">
             {tl(l)}
@@ -146,7 +140,6 @@ export function ExtensionGuide({ id, onClose }: { id: ExtensionId; onClose: () =
             {tl(l)}
           </div>
         ))}
-      </div>
-    </div>
+    </Dialog>
   );
 }

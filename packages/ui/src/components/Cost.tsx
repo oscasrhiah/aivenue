@@ -4,6 +4,7 @@ import type { AgentRole, CostBreakdown, ObservedTotals, WorkflowRun } from '../.
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { fmtTokens, roleLabel } from '../util';
+import { Dialog, Hint } from './Kit';
 
 const BLOCK_LABEL = (t: T, key: string) =>
   ({
@@ -69,34 +70,30 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
     key === 'librarian' ? t('整理共用筆記（Aivenue 自動）', 'Organizing notes (Aivenue)') : key === 'compaction' ? t('壓縮對話（Aivenue 自動）', 'Compaction (Aivenue)') : `${roleLabel(t, role as AgentRole)}${stage ? ` · ${stage}` : ''}`;
   const promptTotal = data?.blocks.reduce((n, b) => n + b.tokens, 0) ?? 0;
   return createPortal(
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal wf-modal mem-window" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head wf-modal-head">
-          <h3>{t('成本分解', 'Cost breakdown')}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="close">
-            ✕
-          </button>
-        </div>
+    <Dialog title={t('成本分解', 'Cost breakdown')} onClose={onClose} size="xl" className="mem-window cost-window" back="detail-back">
         <div className="mem-body">
           {error && <div className="err-text small">{error}</div>}
           {data && (
             <>
               <section className="mem-section">
-                <div className="mem-row small">
-                  <span>
-                    {t('工作流實際耗時', 'Wall-clock time')}：<b>{ms(data.wallMs)}</b>
-                  </span>
-                  <span>
-                    {t('各 agent 耗時總和', 'Sum of agent time')}：<b>{ms(data.agentMs)}</b>
-                  </span>
-                  <span>
-                    {t('等待你的時間', 'Waiting on you')}：<b>{ms(data.waitingMs)}</b>
-                  </span>
-                </div>
+                <dl className="dw-stats">
+                  <div>
+                    <dt>{t('工作流實際耗時', 'Wall-clock time')}</dt>
+                    <dd className="num">{ms(data.wallMs)}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('各 agent 耗時總和', 'Sum of agent time')}</dt>
+                    <dd className="num">{ms(data.agentMs)}</dd>
+                  </div>
+                  <div>
+                    <dt>{t('等待你的時間', 'Waiting on you')}</dt>
+                    <dd className="num">{ms(data.waitingMs)}</dd>
+                  </div>
+                </dl>
                 <p className="muted tiny">{t('agent 平行工作時耗時會重疊，所以總和可能大於實際耗時。', 'Agents working in parallel overlap, so the sum can exceed the wall-clock time.')}</p>
               </section>
               <section className="mem-section">
-                <b>{t('依角色與階段', 'By role and stage')}</b>
+                <h4 className="dw-heading">{t('依角色與階段', 'By role and stage')}</h4>
                 <div className="cost-table-wrap">
                   <table className="cost-table small">
                     <thead>
@@ -146,22 +143,27 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                     </tbody>
                   </table>
                 </div>
-                <p className="muted tiny">
-                  {t(
+                <Hint
+                  className="muted tiny"
+                  text={t(
                     '拆分已知的供應商：未快取輸入＋快取輸入＋輸出＝它回報的總量；推理是輸出的一部分，不另外相加。「拆分未知的輸入」來自看不出輸入是否已含快取的供應商（例如 Gemini、Antigravity），只列它們回報的數字，不能和前兩欄相加，括號內的快取也可能已包含在內。花費「未知」是供應商沒有回報價格，不是 0；價格為 0 也不代表沒有耗用額度（請看「設定 → 用量」）。',
                     'Providers with a known split: uncached + cached input + output = what they reported; reasoning is part of output, not added again. "Input, split unknown" comes from providers whose numbers do not say whether input includes the cache (e.g. Gemini, Antigravity): their reported numbers only, not to be added to the two columns before, and the cache in brackets may already be inside. "Unknown" cost means no price was reported, not zero; a price of 0 does not mean no quota was used (see Settings → Usage).',
                   )}
-                </p>
+                />
               </section>
               {!!data.blocks.length && (
                 <section className="mem-section">
-                  <b>{t('prompt 中佔最多的部分（Aivenue 組裝的估算）', 'What took the most of the prompts (Aivenue’s estimate)')}</b>
-                  <ul className="mem-list">
+                  <h4 className="dw-heading">{t('prompt 中佔最多的部分', 'What took the most of the prompts')}</h4>
+                  <div className="muted tiny">{t('Aivenue 組裝的估算', 'Aivenue’s estimate of what it assembled')}</div>
+                  <ul className="mem-list cost-blocks">
                     {data.blocks.slice(0, 12).map((b) => (
                       <li key={b.key}>
-                        <span className="cost-bar" style={{ width: `${Math.max(2, Math.round((b.tokens / Math.max(1, promptTotal)) * 120))}px` }} />
+                        {/* The bars in a column of their own, so every label starts at the same place. */}
+                        <span className="cost-track" aria-hidden="true">
+                          <span className="cost-bar" style={{ width: `${Math.max(2, Math.round((b.tokens / Math.max(1, promptTotal)) * 100))}%` }} />
+                        </span>
                         <span>{BLOCK_LABEL(t, b.key)}</span>
-                        <span className="muted small">
+                        <span className="muted small num">
                           {fmtTokens(b.tokens)} tokens · {Math.round((b.tokens / Math.max(1, promptTotal)) * 100)}% · {t(`${b.turns} 次`, `${b.turns} turn(s)`)}
                         </span>
                       </li>
@@ -173,19 +175,19 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                       {data.cut.map((c) => `${BLOCK_LABEL(t, c.key)} ${c.chars.toLocaleString()} ${t('字元', 'chars')}`).join('；')}
                     </p>
                   )}
-                  <p className="muted tiny">
-                    {t(
+                  <Hint
+                    className="muted tiny"
+                    text={t(
                       `這是 Aivenue 每次實際送出的 prompt 各部分的大小（每部分各自估算 token，全程 ${data.turns} 輪；每個 agent 只保留最近 40 輪的逐輪明細，但這裡的統計涵蓋全程）。它不等於供應商實際計費的輸入：對話歷史、工具輸出、快取都不在這裡。`,
                       `The sizes of the parts of each prompt Aivenue actually sent (tokens estimated per part, ${data.turns} turns over the whole run; each agent keeps per-turn detail for its latest 40 turns only, but these totals cover the whole run). Not what the provider billed: conversation history, tool output and caching are not here.`,
                     )}
-                  </p>
+                  />
                 </section>
               )}
             </>
           )}
         </div>
-      </div>
-    </div>,
+    </Dialog>,
     document.body,
   );
 }

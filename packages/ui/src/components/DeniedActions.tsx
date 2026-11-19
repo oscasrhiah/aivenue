@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Ban } from 'lucide-react';
 import { Ico } from '../icons';
 import type { DeniedAction, ProviderInfo, WorkflowRun } from '../../../core/src/types';
@@ -6,6 +6,7 @@ import { hub } from '../api';
 import { navigate } from '../App';
 import { useT } from '../i18n';
 import { providerName } from '../util';
+import { Fold } from './Kit';
 
 const KIND: Record<string, [string, string]> = {
   push: ['推送', 'Push'],
@@ -16,6 +17,21 @@ const KIND: Record<string, [string, string]> = {
   release: ['發布版本', 'Publish a release'],
   deploy: ['部署', 'Deploy'],
 };
+
+/** What a denied action would have done: a fold button (its state said, Tab and Enter), the text under it. */
+function DeniedDetails({ details }: { details: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div className="denied-details">
+      <Fold open={open} onToggle={() => setOpen(!open)} controls={id}>
+        {t('要執行的內容', 'What it would do')}
+      </Fold>
+      {open && <pre id={id}>{details}</pre>}
+    </div>
+  );
+}
 
 /**
  * External actions the user denied in this run. Once it has finished, each can be allowed after all: a follow-up
@@ -40,7 +56,9 @@ export function DeniedActions({ run, providers }: { run: WorkflowRun; providers:
   return (
     <div className="denied-card">
       <div className="denied-head">
-        <span className="denied-title"><Ico i={Ban} /> {t(`被你拒絕的對外動作（${list.length}）`, `External actions you denied (${list.length})`)}</span>
+        <span className="denied-title">
+          <Ico i={Ban} /> {t(`被你拒絕的對外動作 · ${list.length}`, `External actions you denied · ${list.length}`)}
+        </span>
         <span className="muted small">{t('agent 沒有執行這些動作，也沒有改用其他方式繞過。', 'The agents did not do these, nor work around them.')}</span>
       </div>
       {list.map((d) => {
@@ -56,14 +74,11 @@ export function DeniedActions({ run, providers }: { run: WorkflowRun; providers:
                 {agent ? providerName(providers, agent.provider) : ''}
                 {d.note ? ` · ${t('你的說明', 'Your note')}：${d.note}` : ''}
               </div>
-              <details className="denied-details">
-                <summary className="small">{t('要執行的內容', 'What it would do')}</summary>
-                <pre>{d.details}</pre>
-              </details>
+              <DeniedDetails details={d.details} />
             </div>
             {d.continuedIn ? (
               <a className="btn small" href={`#/run/${d.continuedIn}`}>
-                {t('已改成允許 → 查看', 'Allowed → view')}
+                {t('已允許，查看', 'Allowed, view')}
               </a>
             ) : (
               <button

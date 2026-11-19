@@ -50,6 +50,10 @@
   /* Pointing at a row or button, and the row that is open: a neutral overlay, so it works on any background. */
   --hover-bg: color-mix(in srgb, var(--text) 6%, transparent);
   --selected-bg: color-mix(in srgb, var(--text) 9%, transparent);
+  /* A dialog's surface and its edge: in dark one step above every page surface, with an edge that shows, so a window
+     stands apart from the dimmed page behind it (not only by a shadow, which a dark page swallows). */
+  --raised: #ffffff;
+  --dialog-line: var(--line);
   /* Behind dialogs and the chat list drawer; behind an enlarged image. */
   --scrim: rgba(29, 28, 26, 0.32);
   --scrim-strong: rgba(13, 13, 12, 0.78);
@@ -129,7 +133,9 @@
     --accent-text: oklch(from color-mix(in oklab, var(--accent) 60%, white) max(l, 0.72) c h);
     --accent-soft: color-mix(in oklab, var(--accent-text) 14%, transparent);
     --logo-edge: var(--line);
-    --scrim: rgba(0, 0, 0, 0.5);
+    --raised: #2e2e2c;
+    --dialog-line: #4d4c47;
+    --scrim: rgba(0, 0, 0, 0.7);
     --scrim-strong: rgba(0, 0, 0, 0.8);
     --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
     --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -165,7 +171,9 @@
   --accent-text: oklch(from color-mix(in oklab, var(--accent) 60%, white) max(l, 0.72) c h);
   --accent-soft: color-mix(in oklab, var(--accent-text) 14%, transparent);
   --logo-edge: var(--line);
-  --scrim: rgba(0, 0, 0, 0.5);
+  --raised: #2e2e2c;
+  --dialog-line: #4d4c47;
+  --scrim: rgba(0, 0, 0, 0.7);
   --scrim-strong: rgba(0, 0, 0, 0.8);
   --shadow-menu: 0 4px 16px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
   --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
@@ -214,6 +222,9 @@
   --shadow-menu: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
   --shadow-dialog: 0 4px 16px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
   --shadow-raise: none;
+  /* A dialog takes the editor widget colour and its border (the find widget, the quick pick). */
+  --raised: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --dialog-line: var(--vscode-editorWidget-border, var(--vscode-widget-border, var(--line)));
   --sans: var(--vscode-font-family, system-ui), 'Microsoft JhengHei UI', 'PingFang TC', 'Noto Sans CJK TC', sans-serif;
   --mono: var(--vscode-editor-font-family, monospace), 'Microsoft JhengHei UI', 'PingFang TC', 'Noto Sans CJK TC', monospace;
 }
@@ -2270,54 +2281,7 @@ details[open] > summary .fold-chev {
   border-radius: var(--r-md);
 }
 
-/* One-click browser tools on the Capabilities page. */
-.presets-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
-  gap: var(--sp-2);
-  margin-bottom: var(--sp-4);
-}
-
-.preset-card {
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
-  background: var(--surface);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  align-items: flex-start;
-}
-
-.preset-card.on {
-  border-color: var(--ok-line);
-}
-
-.preset-note {
-  grid-column: 1 / -1;
-}
-
-/* Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute). */
-/* The cards' own width decides the layout, not the window's (the settings sidebar comes and goes). */
-.ext-grid-wrap {
-  container-type: inline-size;
-}
-
-.ext-grid {
-  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
-  /* One card per row: each card keeps its own height. */
-  grid-auto-rows: auto;
-  align-items: stretch;
-}
-
-/* Two or more cards per row (two 320px columns and the 8px gap fit in 650px): every card is the same size, each row
-   as tall as the tallest card. Keep 650 in step with the column minimum above and the gap of .presets-grid. */
-@container (min-width: 650px) {
-  .ext-grid {
-    grid-auto-rows: 1fr;
-  }
-}
-
+/* Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): rows since UI round C (see the end of the file). */
 .ext-card {
   align-items: stretch;
 }
@@ -3108,20 +3072,14 @@ textarea.code {
   animation: slide var(--dur-2) ease-out;
 }
 
-.drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .modal-back {
   display: grid;
   place-items: center;
 }
 
 .modal {
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--raised);
+  border: 1px solid var(--dialog-line);
   border-radius: var(--r-lg);
   padding: var(--sp-4);
   width: min(780px, 94vw);
@@ -3145,24 +3103,10 @@ textarea.code {
   padding-bottom: 0;
 }
 
-.wf-modal-head,
 .wf-modal-foot {
   position: sticky;
   z-index: 2;
   background: var(--surface);
-}
-
-.wf-modal-head {
-  top: 0;
-  padding: var(--sp-4) 0 var(--sp-3);
-  border-bottom: 1px solid var(--line);
-}
-
-.wf-modal-head h3 {
-  margin: 0;
-}
-
-.wf-modal-foot {
   bottom: 0;
   display: flex;
   justify-content: flex-end;
@@ -3687,44 +3631,63 @@ textarea.code {
 }
 
 /* ============ settings ============ */
+/* A quiet list on the left: the way back on top, the title, the pages (the open one a neutral tint and the text colour,
+   no accent fill), the build at the bottom. Narrow (760px and less): one row of tabs, the build line under it. */
 .settings {
   display: flex;
   height: 100%;
 }
 
 .settings-nav {
-  width: 200px;
+  width: 208px;
   flex-shrink: 0;
-  padding: var(--sp-6) var(--sp-3);
+  padding: var(--sp-4) var(--sp-3) var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: 2px;
   border-right: 1px solid var(--line);
+  background: var(--side);
 }
 
-/* "設定" heads the list at the size of the pane's own title beside it (20): a Settings page then uses at most five
-   sizes, its section headings (16) included. */
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .settings-title {
   font-size: var(--fs-20);
   font-weight: 600;
-  padding: 0 var(--sp-3) var(--sp-3);
+  line-height: var(--lh-ui);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
 }
 
 .settings-nav a {
-  padding: 6px var(--sp-3);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--ctl-sm);
+  padding: var(--sp-1) var(--sp-3);
   border-radius: var(--r-md);
   color: var(--text-2);
   font-size: var(--fs-14);
   line-height: var(--lh-ui);
+  text-decoration: none;
 }
 
 .settings-nav a:hover {
   background: var(--hover-bg);
+  color: var(--text);
 }
 
 .settings-nav a.active {
-  background: var(--accent-soft);
+  background: var(--selected-bg);
   color: var(--text);
+}
+
+.settings-nav a.settings-back {
+  color: var(--muted);
+  font-size: var(--fs-13);
 }
 
 .settings-body {
@@ -4109,17 +4072,6 @@ textarea.code {
 }
 
 /* ============ auto assignment ============ */
-.seg.wide {
-  align-self: stretch;
-  display: flex;
-}
-
-.seg.wide button {
-  flex: 1;
-  padding: 6px var(--sp-2);
-  font-size: var(--fs-13);
-}
-
 .assign-preview {
   background: var(--sunken);
   border-radius: var(--r-md);
@@ -4251,22 +4203,6 @@ textarea.code {
   padding-left: calc(34px + var(--sp-3));
 }
 
-.mini-chip {
-  border: 1px solid var(--line);
-  background: transparent;
-  border-radius: var(--r-md);
-  padding: 0 var(--sp-2);
-  font-size: var(--fs-12);
-  color: var(--muted);
-  cursor: pointer;
-}
-
-/* A filter that is on: a strong edge and the text colour (≥3:1 from one that is off, not only a tint). */
-.mini-chip.on {
-  color: var(--text);
-  border-color: var(--text-2);
-  background: var(--sunken);
-}
 
 .kvlist {
   display: flex;
@@ -4444,7 +4380,8 @@ textarea.code {
     padding-bottom: var(--sp-2);
   }
 
-  /* Settings: the section list turns into a scrollable row of tabs. */
+  /* Settings: the way back (its icon), then the pages as one row of tabs (scrolling sideways only when a language's
+     names do not fit), the build as one quiet line under them. */
   .settings {
     flex-direction: column;
   }
@@ -4452,15 +4389,39 @@ textarea.code {
   .settings-nav {
     width: auto;
     flex-direction: row;
-    padding: var(--sp-1) var(--sp-2);
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 2px;
+    padding: var(--sp-1) 6px 2px;
     border-right: none;
     border-bottom: 1px solid var(--line);
-    overflow-x: auto;
-    white-space: nowrap;
   }
 
-  .settings-title {
+  .settings-title,
+  .settings-back-text {
     display: none;
+  }
+
+  .settings-nav a.settings-back {
+    flex-shrink: 0;
+    justify-content: center;
+    width: var(--ctl-sm);
+    padding: 0;
+  }
+
+  .settings-tabs {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .settings-nav .settings-tabs a {
+    flex-shrink: 0;
+    padding: var(--sp-1);
+    font-size: var(--fs-13);
+    white-space: nowrap;
   }
 
   .pane {
@@ -4470,10 +4431,6 @@ textarea.code {
   .catalog-body {
     grid-template-columns: 1fr;
   }
-
-  .ustats {
-    grid-template-columns: repeat(2, 1fr);
-  }
 }
 
 /* ---- agent map ---- */
@@ -4482,17 +4439,6 @@ textarea.code {
   max-height: 88vh;
 }
 
-.am-head {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
-
-.am-head h3 {
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-}
 
 .am-detail-title {
   overflow: hidden;
@@ -5312,6 +5258,7 @@ textarea.code {
   margin-top: 2px;
   background: var(--line);
   border-radius: var(--r-sm);
+  overflow: hidden;
 }
 
 .umodel-bar span {
@@ -5375,15 +5322,6 @@ textarea.code {
   white-space: nowrap;
 }
 
-/* Settings: a way back to the chat at the bottom of its own column (the chat list is hidden here). */
-.settings-nav a.settings-back {
-  margin-top: auto;
-  border-top: 1px solid var(--line);
-  border-radius: 0;
-  padding-top: var(--sp-3);
-  color: var(--muted);
-}
-
 .settings-body {
   min-width: 0;
   container: settings / inline-size;
@@ -5397,36 +5335,6 @@ textarea.code {
 .pane-head > div:first-child {
   flex: 1 1 320px;
   min-width: 0;
-}
-
-@media (max-width: 760px) {
-  .settings {
-    flex-direction: column;
-  }
-
-  .settings-nav {
-    width: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--sp-1);
-    padding: var(--sp-2) var(--sp-3);
-    border-right: none;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .settings-title {
-    width: 100%;
-    font-size: var(--fs-20);
-    margin-bottom: var(--sp-1);
-  }
-
-  .settings-nav a.settings-back {
-    margin-top: 0;
-    margin-left: auto;
-    border-top: none;
-    padding-top: 6px;
-  }
 }
 
 /* A narrow settings column (Aivenue in the VS Code side bar is about 290px wide; a narrow window): a setting's text
@@ -5494,10 +5402,6 @@ textarea.code {
   /* Under the step's text: past the 22px step mark and the row's 12px gap. */
   .gh-row > .btn {
     margin-left: calc(22px + var(--sp-3));
-  }
-
-  .ustats {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 
@@ -5972,9 +5876,6 @@ textarea.code {
   margin: var(--sp-1) var(--sp-2);
   background: var(--line);
 }
-.small-modal {
-  max-width: 520px;
-}
 .search-hits {
   display: flex;
   flex-direction: column;
@@ -5982,10 +5883,10 @@ textarea.code {
   max-height: 55vh;
   overflow-y: auto;
 }
+/* A hit: a row with a line under it (no box around each one). */
 .search-hit {
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--line);
 }
 
 /* preflight */
@@ -6711,9 +6612,6 @@ textarea.code {
   background: var(--surface);
 }
 
-.mem-card.candidate {
-  border-style: dashed;
-}
 
 /* Superseded or archived (its badge says which): no card fill and the secondary text colour, nothing faded below 4.5:1. */
 .mem-card.superseded,
@@ -7852,7 +7750,1281 @@ textarea.code {
  * state with a fill or an inset ring (a switch, a status dot, the open chat, the option in use) would vanish: each gets a
  * system-colour outline or keeps its own colours.
  */
+/* ============ round C: Settings, the workflow settings window, the agent map, the detail windows ============ */
+/*
+ * The way Claude Code's and Codex's settings read, in Aivenue's own look: a page title, sections that are a heading and
+ * rows, a row is a name and one line of what it does with its control at the right end, quiet lines between rows, no
+ * card around a section and no card inside a card. States are an icon and a coloured word; only what can be clicked has
+ * a frame. A dialog: its title and close button, what scrolls, a footer under it (never over it).
+ */
+
+/* ---- shared parts (Kit.tsx) ---- */
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.fold-chev.open {
+  transform: rotate(90deg);
+}
+
+.hint {
+  overflow-wrap: anywhere;
+}
+
+/* 說明 / 收起 / 詳情: a quiet text button at the end of a hint (24px tall, keyboard reachable, never hover-only). */
+.hint-more {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 var(--sp-1);
+  margin: -4px 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.hint-more:hover {
+  background: var(--hover-bg);
+}
+
+.show-all {
+  margin: var(--sp-1) 0 0;
+}
+
+.link-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.state-word.small,
+.small .state-word {
+  font-size: var(--fs-12);
+}
+
+.state-word.small .ico,
+.small .state-word .ico {
+  width: 14px;
+  height: 14px;
+}
+
+.state-word.muted {
+  color: var(--muted);
+}
+
+/* Segments: the chosen one keeps a clear mark in every theme (the text colour, weight and a 1px line), and a long row
+   of them wraps whole words instead of breaking inside one. */
+.seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.seg button {
+  white-space: nowrap;
+  word-break: keep-all;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
+}
+
+.seg button.on {
+  font-weight: 600;
+}
+
+.seg.small button.on {
+  font-weight: 400;
+}
+
+.seg button:disabled:not(.on) {
+  opacity: 1;
+  color: var(--faint);
+}
+
+.seg.wrap {
+  align-self: flex-start;
+}
+
+/* A radio list (the permission levels, the flow mode): one choice a row, its icon, name and what it does. */
+.radio-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A row: the radio (its mark, icon and name) and, under the name, its line; the whole row can be clicked. */
+.radio-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: var(--ctl-md);
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-md);
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* A lighter tint than other selections: a risk-coloured name (VS Code's own warning colour in its light themes) stays at
+   4.5:1 on it; the filled radio and the heavier name say which one is chosen. */
+.radio-item:hover:not(.disabled) {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+
+.radio-item.on {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.radio-item.disabled {
+  cursor: default;
+}
+
+.radio-btn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  width: 100%;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
+}
+
+/* The ring goes round the whole row (the radio is only its first line). */
+.radio-btn:focus-visible {
+  outline: none;
+}
+
+.radio-item:has(> .radio-btn:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.radio-mark {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.radio-item.on .radio-mark {
+  color: var(--accent-text);
+}
+
+.radio-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.radio-name {
+  font-size: var(--fs-14);
+  line-height: var(--lh-ui);
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.radio-item.on .radio-name {
+  font-weight: 600;
+}
+
+/* The permission levels take the composer's risk colours: whole-computer red, full auto without isolation amber. */
+.radio-name.err,
+.radio-icon.err {
+  color: var(--err);
+}
+
+.radio-name.warn,
+.radio-icon.warn {
+  color: var(--warn);
+}
+
+/* Under the name: past the radio's mark, and past the icon where there is one. */
+.radio-hint {
+  padding-left: calc(16px + var(--sp-2));
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.radio-item:has(.radio-icon) .radio-hint {
+  padding-left: calc(2 * (16px + var(--sp-2)));
+}
+
+/* On the chosen row's tint the secondary grey and the accent would fall under 4.5:1 in dark: its line and its 說明
+   take the second text colour (說明 keeps an underline, so it still reads as a button). */
+.radio-item.on .radio-hint,
+.radio-item.on .radio-hint .hint-more {
+  color: var(--text-2);
+}
+
+.radio-item.on .radio-hint .hint-more {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.iso-check {
+  align-items: flex-start;
+  margin-left: var(--sp-2);
+}
+
+.iso-check input {
+  margin-top: 3px;
+}
+
+/* ---- dialogs ---- */
+.modal.dialog:focus {
+  outline: none;
+}
+
+.modal.dialog {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  max-height: min(92vh, 960px);
+}
+
+.modal.dialog-sm {
+  width: min(440px, 94vw);
+}
+
+.modal.dialog-md {
+  width: min(600px, 94vw);
+}
+
+.modal.dialog-lg {
+  width: min(760px, 94vw);
+}
+
+.modal.dialog-xl {
+  width: min(980px, 96vw);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--dialog-line);
+}
+
+.dialog-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  line-height: var(--lh-ui);
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  overscroll-behavior: contain;
+}
+
+/* The footer sits under what scrolls, so it never covers a field. */
+.modal.dialog .dialog-foot {
+  position: static;
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--dialog-line);
+  background: var(--raised);
+}
+
+/* ---- the workflow settings window: sections with a heading and quiet dividers, no card per section ---- */
+.modal.dialog.wf-modal {
+  width: min(600px, 94vw);
+  padding: 0;
+}
+
+.dialog .sect {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  padding: var(--sp-4) 0 0;
+  gap: var(--sp-2);
+}
+
+.dialog .sect-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: var(--lh-ui);
+}
+
+.dialog .sub-switch {
+  border: 0;
+  border-top: 1px solid var(--line);
+  padding: var(--sp-2) 0 0;
+}
+
+.dialog .extra-dirs li {
+  border: 0;
+  border-radius: 0;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* What auto assignment would pick: a sub-heading and its lines, no tinted box. */
+.dialog .assign-preview {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.sub-title {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 500;
+  line-height: var(--lh-ui);
+}
+
+.dialog .kv {
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+
+/* ---- the agent map and the detail windows ---- */
+.am-detail-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* No colour bar on a card's edge: the role is said in its title, the state in a word. */
+.am-node {
+  box-shadow: none;
+}
+
+.am-node.live {
+  border-color: var(--accent-text);
+}
+
+.am-node-meta .state-word {
+  font-size: var(--fs-12);
+}
+
+.am-node-result {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.am-node-result .ico {
+  flex-shrink: 0;
+}
+
+.am-task,
+.am-answer {
+  border: 0;
+  background: var(--sunken);
+}
+
+.am-kid {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 6px var(--sp-1);
+}
+
+.am-kid:hover {
+  background: var(--hover-bg);
+}
+
+.am-proc.live,
+.am-proc.warn {
+  box-shadow: none;
+}
+
+.am-proc.live {
+  border-color: var(--ok-line);
+}
+
+.am-proc.warn {
+  border-color: var(--warn-line);
+}
+
+.am-facts {
+  font-size: var(--fs-13);
+}
+
+.am-facts .state-word {
+  vertical-align: bottom;
+}
+
+/* A section heading inside a window: the same as a section in the workflow settings window (14/600, the text colour). */
+.dw-heading {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+  line-height: var(--lh-ui);
+  color: var(--text);
+}
+
+/* The shared context: one scroll area (the window's), no box of its own inside it. */
+.dialog .shared-view {
+  max-height: none;
+  overflow: visible;
+  border: 0;
+  flex-shrink: 0;
+}
+
+/* What took the most of the prompts: the bars in a column of their own, so every label starts at the same place. */
+.cost-blocks li {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.cost-track {
+  flex: 0 0 96px;
+  display: flex;
+  align-items: center;
+}
+
+.cost-blocks .cost-bar {
+  max-width: 100%;
+}
+
+.cost-blocks li > :nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+.cost-blocks li > :last-child {
+  margin-left: auto;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.dw-card {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: var(--sp-2) 0 0;
+  margin: 0;
+}
+
+.dw-card:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.dw-card-head {
+  margin: 0 0 var(--sp-1);
+}
+
+.dw-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A few numbers as rows: the name at the left, the figure at the right in even digits. */
+.dw-stats,
+.ustats,
+.ext-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+  gap: 0 var(--sp-6);
+}
+
+.dw-stats > div,
+.ustats > div,
+.ext-stats > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-1) 0;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+
+.dw-stats dt,
+.ustats dt,
+.ext-stats dt {
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.dw-stats dd,
+.ustats dd {
+  margin: 0;
+  text-align: right;
+  font-size: var(--fs-14);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ext-stats dd {
+  margin: 0;
+  text-align: right;
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A provider's four usage numbers: four across, two by two in a narrower column, one a line in the side bar (never
+   three and one left alone). */
+.ustats {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@container settings (max-width: 720px) {
+  .ustats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container settings (max-width: 340px) {
+  .ustats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Usage by model: its own sideways scroll in a very narrow column, never the page's. */
+.umodels-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cost-table td,
+.umodels td,
+.umodels th {
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog .mem-body {
+  max-height: none;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+.dialog .mem-row h4 {
+  margin: 0;
+}
+
+/* ---- Settings: the page, its sections and rows ---- */
+.build-info span {
+  white-space: nowrap;
+}
+
+/* Wide, the build sits quietly at the bottom of the side list; narrow (see below), at the end of the page. */
+.settings-body > .body-build {
+  display: none;
+}
+
+@media (min-width: 761px) {
+  .settings-nav .build-info {
+    margin-top: auto;
+    padding: var(--sp-3) var(--sp-3) 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .settings-nav .build-info {
+    display: none;
+  }
+
+  .settings-body > .body-build {
+    display: block;
+    padding: 0 var(--sp-3) var(--sp-4);
+  }
+
+  /* The tabs scroll sideways: an edge fades where more are hidden. */
+  .settings-tabs.more-right {
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+
+  .settings-tabs.more-left {
+    mask-image: linear-gradient(to left, #000 calc(100% - 24px), transparent);
+  }
+
+  .settings-tabs.more-left.more-right {
+    mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+  }
+}
+
+/* The page: its title, a line on what it is for, then sections with room between them (no card marks where one ends);
+   text and controls keep a readable width. */
+.pane {
+  max-width: 920px;
+  gap: var(--sp-8);
+}
+
+.pane-head h2 {
+  margin: 0;
+  font-size: var(--fs-20);
+  font-weight: 600;
+  line-height: var(--lh-ui);
+}
+
+.pane-desc,
+.cap-desc,
+.setting-desc {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+  margin-top: 2px;
+  max-width: 72ch;
+}
+
+.cap-overview {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-14);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A group of rows (General): one line between rows, none around them. */
+.settings-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.setting {
+  padding: var(--sp-3) 0;
+  gap: var(--sp-6);
+}
+
+.setting:last-child {
+  border-bottom: 0;
+}
+
+.setting-title {
+  font-weight: 400;
+  font-size: var(--fs-14);
+  line-height: var(--lh-ui);
+}
+
+.setting > :not(:first-child) {
+  flex-shrink: 0;
+}
+
+.setting select {
+  min-width: 160px;
+}
+
+/* A path under its setting's name, left-aligned over the row's width. */
+.setting-code {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: var(--fs-12);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+/* A section: a heading, a line under it, its rows. No card, and no line of its own under it (its list ends in one). */
+.cap {
+  gap: var(--sp-3);
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+/* A section's heading is a step above its rows' names (16/600 over 14/500), so a long page still shows where a section
+   starts. */
+.cap h3,
+.ucard h3 {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  line-height: var(--lh-ui);
+}
+
+.crow-name,
+.ext-head b,
+.prow-name {
+  font-weight: 500;
+}
+
+.cap-sub {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-14);
+  font-weight: 600;
+}
+
+/* A list: rows with a line between them, the first one with a line above, no frame around them. */
+.clist {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  overflow: visible;
+}
+
+.crow {
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.crow + .crow {
+  border-top: 0;
+}
+
+.crow-head {
+  align-items: flex-start;
+}
+
+.crow-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.crow-meta {
+  row-gap: 2px;
+}
+
+.empty-row {
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.role-filter {
+  padding-left: 0;
+}
+
+/* Tags: quiet metadata (a version, a kind, a role), text on a faint tint, never an outline. */
+.tag {
+  border: 0;
+  background: var(--sunken);
+  color: var(--muted);
+  margin-left: var(--sp-1);
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+}
+
+.crow-meta .tag,
+.mem-card-head .tag,
+.mem-list .tag {
+  margin-left: 0;
+}
+
+/* Inside Settings and the dialogs a badge is a quiet word (its icon where it has one), not a box. */
+:is(.settings-body, .modal) .badge {
+  border: 0;
+  padding: 0;
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-family: inherit;
+}
+
+:is(.settings-body, .modal) .badge.ok {
+  color: var(--ok);
+}
+
+.mem-card-head,
+.mem-states > div,
+.mem-list li {
+  column-gap: var(--sp-3);
+}
+
+/* Built-in extensions as rows (no grid, so no card left alone on a line). */
+.ext-list .ext-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.ext-head {
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.ext-head b {
+  font-size: var(--fs-14);
+}
+
+.ext-foot {
+  margin-top: 0;
+}
+
+.preset-note {
+  margin-top: calc(-1 * var(--sp-2));
+}
+
+/* The roles whose instructions the box shows: quiet segments (a radio group), the chosen one on a tint. */
+.seg.tabs-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.seg.tabs-mini button {
+  border: 0;
+  min-height: 24px;
+  box-shadow: none;
+  background: none;
+  color: var(--text-2);
+}
+
+.seg.tabs-mini button:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.seg.tabs-mini button.on {
+  box-shadow: none;
+  background: var(--selected-bg);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Which roles a skill is offered to: a check and the role's name, no outline; on reads in the text colour. */
+.role-check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  cursor: pointer;
+}
+
+.role-check:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.role-check.on {
+  color: var(--text);
+}
+
+/* GitHub: the steps as rows, a check or an empty circle as the mark; done, the steps fold into one line. */
+.gh-step {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 0;
+  margin-top: 2px;
+  background: none;
+  color: var(--muted);
+}
+
+.gh-step.done {
+  background: none;
+  color: var(--ok);
+}
+
+.gh-steps {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.gh-row {
+  padding: var(--sp-3) 0;
+  border-top: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.gh-row .muted.small {
+  margin-top: 2px;
+}
+
+.gh-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.gh-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-1);
+}
+
+.gh-note .ico {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Providers: a row a provider, its name a button that opens it, its state, the next step and ⋯ at the right. */
+.plist {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  overflow: visible;
+}
+
+.prow {
+  border-bottom: 1px solid var(--line);
+}
+
+.prow + .prow {
+  border-top: 0;
+}
+
+/* The open panel, the Antigravity warning and (narrow) the state line start under the name: past the grip, the
+   chevron and their gaps. */
+.prow {
+  --prow-indent: calc(var(--sp-1) + 14px + var(--sp-2));
+}
+
+.prow:has(.prow-grip) {
+  --prow-indent: calc(14px + var(--sp-2) + var(--sp-1) + 14px + var(--sp-2));
+}
+
+.prow-head {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3) 0;
+  cursor: default;
+}
+
+.prow-head > .prow-grip {
+  margin-right: calc(var(--sp-2) - var(--sp-3));
+}
+
+.prow-head:hover {
+  background: none;
+}
+
+.prow-grip {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 24px;
+  letter-spacing: 0;
+  padding: 0;
+}
+
+.prow-name > .mark {
+  margin-right: var(--sp-1);
+  vertical-align: 1px;
+}
+
+.prow-toggle {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-1);
+  margin: -2px 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.prow-toggle:hover {
+  background: var(--hover-bg);
+}
+
+.prow-toggle > .fold-chev {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.prow-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prow-name {
+  font-size: var(--fs-14);
+  font-weight: 500;
+  line-height: var(--lh-ui);
+}
+
+.prow-desc {
+  font-size: var(--fs-12);
+  color: var(--muted);
+  line-height: var(--lh-body);
+  overflow-wrap: anywhere;
+}
+
+.prow-side {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+  min-height: var(--ctl-sm);
+}
+
+.prow-state {
+  font-size: var(--fs-13);
+}
+
+.prow-body {
+  padding: 0 0 var(--sp-4) var(--prow-indent);
+  gap: var(--sp-3);
+}
+
+/* A path or a version line is one long word: it wraps instead of pushing the page sideways. */
+.prow-body .mono,
+.prow-body code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.prow-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.prow-label {
+  font-size: var(--fs-12);
+  color: var(--muted);
+}
+
+/* The open panel's labels share one column. */
+.prow-field > .prow-label {
+  flex: 0 0 72px;
+}
+
+.agy-warning {
+  margin: -4px 0 var(--sp-3) var(--prow-indent);
+  line-height: var(--lh-body);
+}
+
+.agy-warning > .ico {
+  vertical-align: -3px;
+}
+
+.agy-full {
+  margin-top: var(--sp-1);
+}
+
+.prow-error {
+  margin: 0 0 var(--sp-3);
+}
+
+.account-add {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: var(--sp-3) 0 0;
+}
+
+.test {
+  border: 0;
+  background: var(--sunken);
+}
+
+/* Usage: a section a provider, no card; its numbers as rows. */
+.ugrid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.ucard {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  padding: var(--sp-4) 0;
+}
+
+.ucard-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.ucard-head .tag {
+  margin-left: 0;
+}
+
+.meter-head {
+  font-size: var(--fs-13);
+}
+
+.umodels td:not(:first-child),
+.umodels th:not(:first-child) {
+  text-align: right;
+}
+
+/* Memory: the cards become rows of one list; a candidate is told apart by its word, not a dashed box. */
+.mem-cards {
+  gap: 0;
+  border-top: 1px solid var(--line);
+}
+
+.mem-card {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  padding: var(--sp-3) 0;
+}
+
+
+.mem-sources > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
+  cursor: pointer;
+}
+
+.mem-sources > summary::-webkit-details-marker {
+  display: none;
+}
+
+.mem-filter {
+  align-self: flex-start;
+}
+
+.empty-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+/* Denied actions: what it would do opens under a fold button. */
+.denied-details .fold-btn {
+  margin-top: 2px;
+}
+
+/* Narrow (the VS Code side bar, a phone): every dialog is a full-height sheet, the footer at the bottom; a name above its
+   control (a select beside a 96px label would cut its value), a field above its button. */
+@media (max-width: 520px) {
+  .dialog .kv,
+  .wf-modal .kv {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .dialog .stack-narrow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dialog .stack-narrow > .btn {
+    align-self: flex-start;
+  }
+
+  .modal-back:has(> .modal.dialog) {
+    place-items: stretch;
+  }
+
+  .modal-back > .modal.dialog {
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    border-width: 0;
+  }
+
+  .dialog-body {
+    padding: var(--sp-3);
+  }
+
+  .modal.dialog .dialog-foot {
+    padding: var(--sp-2) var(--sp-3);
+  }
+}
+
+/* A narrow Settings column (the VS Code side bar): a provider's state and actions go under its name; no drag grip
+   (⋯ moves a provider up or down); a setting's text above its control, close to it. */
+@container settings (max-width: 480px) {
+  .prow-grip {
+    display: none;
+  }
+
+  .prow,
+  .prow:has(.prow-grip) {
+    --prow-indent: calc(var(--sp-1) + 14px + var(--sp-2));
+  }
+
+  .prow-side {
+    margin-left: var(--prow-indent);
+  }
+
+  .prow-body,
+  .agy-warning {
+    padding-left: 0;
+    margin-left: 0;
+  }
+
+  /* The open panel: a label above its control, which keeps the column's width. */
+  .prow-field > .prow-label {
+    flex-basis: 100%;
+  }
+
+  .setting {
+    gap: var(--sp-2);
+  }
+
+  .umodels th,
+  .umodels td {
+    padding: var(--sp-1);
+  }
+
+  .umodels th:first-child {
+    white-space: normal;
+  }
+
+  .crow-actions {
+    justify-content: flex-start;
+  }
+
+  .ucard-head h3 {
+    min-width: 0;
+  }
+}
+
 @media (forced-colors: active) {
+  .radio-item.on,
+  .seg.tabs-mini button.on {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
   .switch span {
     border: 1px solid CanvasText;
   }
@@ -7892,8 +9064,7 @@ textarea.code {
   .perm-item.on,
   .cat-item.on,
   .chip-check.on,
-  .seg button.on,
-  .mini-chip.on {
+  .seg button.on {
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }

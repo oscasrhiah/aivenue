@@ -585,3 +585,70 @@ test('複製（桌面版與瀏覽器）：用瀏覽器剪貼簿寫入原文；�
     delete globalThis.document;
   }
 });
+
+test('設定頁與對話框的呈現規則（settingsView）：說明切成第一句與其餘、長清單先顯示前幾個、供應商狀態一個詞與下一步、能力頁總覽先列開啟的、選單不留多餘分隔線、資料夾範例照平台寫', async () => {
+  const out = await build({ entryPoints: ['packages/ui/src/settingsView.ts'], bundle: true, platform: 'node', format: 'cjs', write: false, logLevel: 'silent' });
+  const mod = { exports: {} };
+  new Function('require', 'module', 'exports', out.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
+  const { splitHint, visibleItems, providerState, capabilityCounts, overviewParts, folderExample, menuEntries } = mod.exports;
+
+  // A hint: its first sentence shown, the rest behind 說明; nothing dropped, brackets and quotes not split.
+  assert.deepEqual(splitHint('第一句。第二句。'), ['第一句。', '第二句。']);
+  assert.deepEqual(splitHint('只有一句。'), ['只有一句。', '']);
+  assert.deepEqual(splitHint('括號裡（不是。結尾）還在同一句。下一句'), ['括號裡（不是。結尾）還在同一句。', '下一句']);
+  assert.deepEqual(splitHint('引號「不切。這裡」也一樣。後面'), ['引號「不切。這裡」也一樣。', '後面']);
+  assert.deepEqual(splitHint('One sentence. Another one.'), ['One sentence.', 'Another one.']);
+  assert.deepEqual(splitHint('e.g. this stays whole'), ['e.g. this stays whole', '']);
+  for (const s of ['甲。乙；丙。丁', 'A. B c. D']) assert.equal(splitHint(s).join(' ').replace(/\s+/g, ''), s.replace(/\s+/g, ''), 'the two parts hold the whole text');
+
+  // A long list: the first rows and how many are left; one more than the limit is shown whole (no "show 1 more").
+  assert.deepEqual(visibleItems([1, 2, 3, 4, 5, 6, 7, 8], 5, false), { shown: [1, 2, 3, 4, 5], hidden: 3 });
+  assert.deepEqual(visibleItems([1, 2, 3, 4, 5, 6], 5, false), { shown: [1, 2, 3, 4, 5, 6], hidden: 0 });
+  assert.deepEqual(visibleItems([1, 2, 3, 4, 5, 6, 7, 8], 5, true), { shown: [1, 2, 3, 4, 5, 6, 7, 8], hidden: 0 });
+
+  // A provider: one word, its tone (an unused provider is not a problem: muted, not red) and the next step.
+  const base = { installed: true, managed: false, authState: 'logged_in', authMode: 'subscription', canInstall: true };
+  assert.deepEqual(providerState(base), { key: 'ready', tone: 'ok', action: null });
+  assert.deepEqual(providerState({ ...base, authMode: 'api' }), { key: 'api', tone: 'ok', action: null });
+  assert.deepEqual(providerState({ ...base, signedIn: false }), { key: 'usable', tone: 'ok', action: null });
+  assert.deepEqual(providerState({ ...base, authState: 'logged_out' }), { key: 'signedOut', tone: 'muted', action: 'login' });
+  assert.deepEqual(providerState({ ...base, authState: 'logged_out', authMode: 'api' }), { key: 'signedOut', tone: 'muted', action: null });
+  assert.deepEqual(providerState({ ...base, authState: 'checking' }), { key: 'checking', tone: 'run', action: null });
+  assert.deepEqual(providerState({ ...base, authState: 'unknown' }), { key: 'unknown', tone: 'muted', action: null });
+  assert.deepEqual(providerState({ ...base, installed: false }), { key: 'notInstalled', tone: 'muted', action: 'install' });
+  assert.deepEqual(providerState({ ...base, installed: false, canInstall: false }), { key: 'notInstalled', tone: 'muted', action: null });
+  assert.deepEqual(providerState({ ...base, managed: true }), { key: 'ready', tone: 'ok', action: null });
+  assert.deepEqual(providerState({ ...base, managed: true, authState: 'logged_out' }), { key: 'notReady', tone: 'muted', action: null });
+  assert.deepEqual(providerState({ ...base, managed: true, installed: false }), { key: 'notInstalled', tone: 'muted', action: null });
+
+  // Capabilities: what is on; a skill counts once it is on and approved; GitHub's state in one word.
+  assert.deepEqual(
+    capabilityCounts({
+      extensions: [{ enabled: true }, { enabled: false }],
+      packSkills: [{ enabled: true }, { enabled: true }],
+      skills: [{ enabled: true, approved: true }, { enabled: true, approved: false }, { enabled: false, approved: true }],
+      projectSkills: [{ approved: true }, { approved: false }],
+      mcp: [{ enabled: true }, { enabled: false }],
+      github: { installed: true, signedIn: false },
+    }),
+    { extensions: 1, builtinSkills: 2, skills: 2, mcp: 1, github: 'signedOut' },
+  );
+  assert.equal(capabilityCounts({ extensions: [], packSkills: [], skills: [], projectSkills: [], mcp: [], github: { installed: false, signedIn: false } }).github, 'notInstalled');
+  // The overview: what is on first in the page's order, the kinds with nothing on after it (no line of zeros).
+  assert.deepEqual(overviewParts({ extensions: 0, builtinSkills: 2, skills: 0, mcp: 1 }), { on: [{ kind: 'builtinSkills', n: 2 }, { kind: 'mcp', n: 1 }], off: ['extensions', 'skills'] });
+  assert.deepEqual(overviewParts({ extensions: 0, builtinSkills: 0, skills: 0, mcp: 0 }), { on: [], off: ['extensions', 'builtinSkills', 'skills', 'mcp'] });
+
+  // The folder example: single backslashes on Windows (the JSX attribute string used to show them doubled).
+  assert.equal(folderExample('Win32'), String.raw`D:\code\my-app`);
+  assert.equal(folderExample('Win32').includes(String.raw`\\`), false);
+  assert.equal(folderExample('MacIntel'), '/Users/me/code/my-app');
+  assert.equal(folderExample('darwin'), '/Users/me/code/my-app', 'darwin holds "win" but is a Mac');
+
+  // A ⋯ menu: no separator first, last or doubled, whichever entries are left out.
+  assert.deepEqual(menuEntries(['sep', 'a', false, 'sep', 'sep', 'b', 'sep', undefined, 'sep']), ['a', 'sep', 'b']);
+  assert.deepEqual(menuEntries(['a', 'sep', false]), ['a']);
+  assert.deepEqual(menuEntries([false, 'sep']), []);
+  assert.equal(folderExample('win32'), String.raw`D:\code\my-app`);
+  assert.equal(folderExample('Mozilla/5.0 (Windows NT 10.0; Win64; x64)'), String.raw`D:\code\my-app`);
+  assert.equal(folderExample('Linux x86_64'), '/home/me/code/my-app');
+});

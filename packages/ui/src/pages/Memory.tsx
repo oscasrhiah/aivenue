@@ -5,6 +5,9 @@ import { useT } from '../i18n';
 import { cx } from '../util';
 import { ask } from '../components/Ask';
 import { KIND_LABEL, STATE_CLASS, STATE_LABEL } from '../components/Memory';
+import { ChevronRight, Lock } from 'lucide-react';
+import { Ico } from '../icons';
+import { Hint, Seg } from '../components/Kit';
 
 type Filter = 'candidate' | 'active' | 'recheck' | 'past';
 
@@ -66,23 +69,27 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
   return (
     <div className={cx('mem-card', m.lifecycle)}>
       <div className="mem-card-head">
-        <span className="pill">{KIND_LABEL(t, m.kind)}</span>
+        <span className="tag">{KIND_LABEL(t, m.kind)}</span>
         {m.lifecycle === 'candidate' && <span className="badge warn">{t('候選：核准後才帶入', 'Candidate: given to agents once approved')}</span>}
         {m.lifecycle === 'superseded' && <span className="badge">{t('已被取代', 'Superseded')}</span>}
         {m.lifecycle === 'archived' && <span className="badge">{t('已封存', 'Archived')}</span>}
-        {m.locked && <span className="badge">🔒 {t('已鎖定', 'Locked')}</span>}
+        {m.locked && (
+          <span className="badge">
+            <Ico i={Lock} size={14} /> {t('已鎖定', 'Locked')}
+          </span>
+        )}
         {m.suspectSecret && <span className="badge warn">{t('可能含機密，請檢查', 'May contain a secret: check it')}</span>}
-        {m.approvedBy === 'user' && <span className="badge muted">{t('你核准的', 'approved by you')}</span>}
+        {m.approvedBy === 'user' && <span className="badge">{t('你核准的', 'approved by you')}</span>}
       </div>
       {editing ? (
         <div className="mem-edit">
           <label className="small">{t('內容', 'Text')}</label>
           <textarea value={draft.text} rows={3} onChange={(e) => setDraft({ ...draft, text: e.target.value })} />
-          <label className="small">{t('適用條件（什麼情況下）', 'When it applies')}</label>
+          <label className="small">{t('適用條件：什麼情況下', 'When it applies')}</label>
           <input value={draft.conditions} onChange={(e) => setDraft({ ...draft, conditions: e.target.value })} />
-          <label className="small">{t('環境（例如 Windows、Node 22）', 'Environment (e.g. Windows, Node 22)')}</label>
+          <label className="small">{t('環境，例如 Windows、Node 22', 'Environment, e.g. Windows, Node 22')}</label>
           <input value={draft.environment} onChange={(e) => setDraft({ ...draft, environment: e.target.value })} />
-          <label className="small">{t('驗證指令（結束碼 0 代表仍成立；留空表示沒有）', 'Check command (exit 0 means it still holds; empty for none)')}</label>
+          <label className="small">{t('驗證指令：結束碼 0 代表仍成立，留空表示沒有', 'Check command: exit 0 means it still holds; empty for none')}</label>
           <input value={draft.check} onChange={(e) => setDraft({ ...draft, check: e.target.value })} className="mono" />
           <div className="row gap">
             <button className="btn" onClick={() => setEditing(false)}>
@@ -122,7 +129,7 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
       )}
       <details className="mem-sources small">
         <summary className="muted">
-          {t(`來源 ${m.sources.length} · 證據 ${m.evidence.length} · 帶入 ${m.injectedCount} 次`, `${m.sources.length} source(s) · ${m.evidence.length} evidence · given ${m.injectedCount} time(s)`)}
+          <Ico i={ChevronRight} size={14} className="fold-chev" /> {t(`來源 ${m.sources.length} · 證據 ${m.evidence.length} · 帶入 ${m.injectedCount} 次`, `${m.sources.length} source(s) · ${m.evidence.length} evidence · given ${m.injectedCount} time(s)`)}
         </summary>
         <ul>
           {m.sources.map((s, i) => (
@@ -133,7 +140,7 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
           {m.evidence.map((e) => (
             <li key={e.eventRef} className="muted">
               {e.kind}：{e.summary}
-              {e.files?.length ? ` (${e.files.map((f) => f.path).join(', ')})` : ''}
+              {e.files?.length ? ` · ${e.files.map((f) => f.path).join(', ')}` : ''}
             </li>
           ))}
         </ul>
@@ -161,10 +168,11 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
               {t('恢復為有效', 'Make active again')}
             </button>
           )}
-          <button className="btn small danger" disabled={busy} onClick={() => void remove()}>
+          {workflows.length > 0 && <span className="muted tiny">{t(`出自 ${workflows.length} 個工作流`, `from ${workflows.length} workflow(s)`)}</span>}
+          <span className="grow" />
+          <button className="btn small ghost danger" disabled={busy} onClick={() => void remove()}>
             {t('刪除', 'Delete')}
           </button>
-          {workflows.length > 0 && <span className="muted tiny">{t(`出自 ${workflows.length} 個工作流`, `from ${workflows.length} workflow(s)`)}</span>}
         </div>
       )}
     </div>
@@ -222,34 +230,42 @@ export function MemoryPane() {
     }
   };
   const tabs: { id: Filter; label: string }[] = [
-    { id: 'candidate', label: t(`候選（${groups.candidate.length}）`, `Candidates (${groups.candidate.length})`) },
-    { id: 'active', label: t(`有效（${groups.active.length}）`, `Active (${groups.active.length})`) },
-    { id: 'recheck', label: t(`需要重驗（${groups.recheck.length}）`, `Re-check (${groups.recheck.length})`) },
-    { id: 'past', label: t(`已取代／封存（${groups.past.length}）`, `Superseded / archived (${groups.past.length})`) },
+    { id: 'candidate', label: t(`候選 ${groups.candidate.length}`, `Candidates ${groups.candidate.length}`) },
+    { id: 'active', label: t(`有效 ${groups.active.length}`, `Active ${groups.active.length}`) },
+    { id: 'recheck', label: t(`需要重驗 ${groups.recheck.length}`, `Re-check ${groups.recheck.length}`) },
+    { id: 'past', label: t(`已取代／封存 ${groups.past.length}`, `Superseded / archived ${groups.past.length}`) },
   ];
   return (
     <div className="pane">
       <div className="pane-head">
         <div>
           <h2>{t('記憶', 'Memory')}</h2>
-          <p className="muted">
-            {t(
-              '過去的工作流為每個專案留下的記憶。「有效」的會依角色帶給之後的 agent，當作參考資料；「候選」要你核准才會帶入。遮蔽只能辨識已知格式的金鑰，請檢查候選是否含機密。',
-              "What earlier workflows left for each project. Active memories go to later agents by role, as reference material; candidates go only once you approve them. Masking only catches known key formats: check candidates for secrets.",
+          <Hint
+            className="pane-desc"
+            text={t(
+              '過去的工作流為每個專案留下的記憶。「有效」的會依角色帶給之後的 agent，當作參考資料；「候選」要你核准才會帶入。',
+              'What earlier workflows left for each project. Active memories go to later agents by role, as reference material; candidates go only once you approve them.',
             )}
-          </p>
+          />
         </div>
       </div>
       {error && <div className="err-text small">{error}</div>}
-      {projects && !projects.length && <p className="muted">{t('還沒有任何專案的記憶。在工作流的訊息裡寫「記住：…」，或按訊息旁的「記住」，就會開始累積。', 'No project has memories yet. Write "remember: …" in a message, or use Remember next to a message, to start.')}</p>}
+      {projects && !projects.length && (
+        <div className="empty-line">
+          <span className="muted">{t('還沒有任何專案的記憶。在工作流的訊息裡寫「記住：…」，或按訊息旁的「記住」，就會開始累積。', 'No project has memories yet. Write "remember: …" in a message, or use Remember next to a message, to start.')}</span>
+          <a className="btn small" href="#/new">
+            {t('開新對話', 'New chat')}
+          </a>
+        </div>
+      )}
       {!!projects?.length && (
         <section className="cap">
           <div className="mem-row">
             <label className="small">{t('專案', 'Project')}</label>
-            <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <select aria-label={t('專案', 'Project')} value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               {projects.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.label} — {t(`有效 ${p.counts.active}、候選 ${p.counts.candidate}`, `${p.counts.active} active, ${p.counts.candidate} candidates`)}
+                  {p.label} · {t(`有效 ${p.counts.active}、候選 ${p.counts.candidate}`, `${p.counts.active} active, ${p.counts.candidate} candidates`)}
                 </option>
               ))}
             </select>
@@ -262,13 +278,8 @@ export function MemoryPane() {
               {project.kind === 'git' ? t('Git 儲存庫', 'Git repository') : t('資料夾', 'Folder')}：{shortPath(project.key)}
             </div>
           )}
-          <div className="seg">
-            {tabs.map((x) => (
-              <button key={x.id} className={cx(filter === x.id && 'on')} onClick={() => setFilter(x.id)}>
-                {x.label}
-              </button>
-            ))}
-          </div>
+          <Seg className="mem-filter" label={t('記憶分類', 'Memory filter')} value={filter} onChange={setFilter} choices={tabs.map((x) => ({ value: x.id, label: x.label }))} />
+          {filter === 'candidate' && groups.candidate.length > 0 && <div className="muted small">{t('遮蔽只能辨識已知格式的金鑰，請檢查候選是否含機密。', 'Masking only catches known key formats: check candidates for secrets.')}</div>}
           {!shown.length && <p className="muted small">{t('這一類目前沒有記憶。', 'Nothing here right now.')}</p>}
           <div className="mem-cards">
             {shown.map((m) => (

@@ -1,40 +1,23 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { CircleCheck, CircleX, LoaderCircle, Lock } from 'lucide-react';
+import { Ico } from '../icons';
+import { Dialog, StateWord } from './Kit';
+import { Status } from './AgentMap';
 import type { GpuDetail, ProcessDetail, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
-import { agentStatus, cx, elapsed, modelLabel, providerColor, providerName, roleLabel, subTitle } from '../util';
+import { cx, elapsed, modelLabel, providerColor, providerName, roleLabel, subTitle } from '../util';
 import { Transcript } from './Transcript';
 
-/** A small window over the conversation (Esc or a click outside closes it). */
-export function Window({ title, onClose, children }: { title: ReactNode; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    // Esc closes only this window, not one it was opened from (e.g. the agent map).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.stopImmediatePropagation();
-      onClose();
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [onClose]);
+/**
+ * A small window over the conversation: Esc or a click outside closes it (only this one, not a window it was opened
+ * from, such as the agent map), and the focus goes back to what opened it. `foot`: its buttons, under what scrolls.
+ */
+export function Window({ title, onClose, children, foot }: { title: ReactNode; onClose: () => void; children: ReactNode; foot?: ReactNode }) {
   return (
-    <div
-      className="modal-back detail-back"
-      onClick={(e) => {
-        e.stopPropagation();
-        onClose();
-      }}
-    >
-      <div className="modal detail-window" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head wf-modal-head">
-          <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="close">
-            ✕
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
+    <Dialog title={title} onClose={onClose} className="detail-window" back="detail-back" foot={foot}>
+      {children}
+    </Dialog>
   );
 }
 
@@ -101,7 +84,6 @@ export function AgentWindow({ run, agentId, providers, onClose }: { run: Workflo
     return () => clearInterval(id);
   }, []);
   if (!a) return null;
-  const st = agentStatus(t, a.status);
   return (
     <Window
       onClose={onClose}
@@ -110,23 +92,7 @@ export function AgentWindow({ run, agentId, providers, onClose }: { run: Workflo
           <span className="mark" style={{ background: providerColor(a.provider) }} /> {providerName(providers, a.provider)} · {a.role === 'subagent' ? subTitle(a) : roleLabel(t, a.role)}
         </>
       }
-    >
-      <Row label={t('狀態', 'Status')}>
-        <span className={cx('status', st.cls)}>{st.label}</span> · {elapsed(a.startedAt, a.endedAt)}
-      </Row>
-      <Row label={t('模型', 'Model')}>
-        {a.model ? modelLabel(a.model) : t('預設模型', 'default model')}
-        {a.effort ? ` · ${t('推理', 'effort')} ${a.effort}` : ''}
-      </Row>
-      <Row label={t('任務', 'Task')}>{a.task}</Row>
-      {(a.waiting || a.activity) && <Row label={t('現在', 'Now')}>{a.waiting ?? a.activity?.replace(/^\S+\s/, '')}</Row>}
-      {a.failure && <Row label={t('狀況', 'Issue')}>{a.failure.action}</Row>}
-      <Row label={t('統計', 'Stats')}>
-        {a.stats.tools} {t('個動作', 'actions')} · {a.stats.commands} {t('個指令', 'commands')} · {a.stats.filesChanged.length} {t('個檔案', 'files')}
-      </Row>
-      <div className="dw-section">{t('最近的步驟', 'Latest steps')}</div>
-      <div className="dw-steps">{events.length ? <Transcript events={events} limit={8} /> : <span className="muted small">{t('載入中…', 'Loading…')}</span>}</div>
-      <div className="wf-modal-foot">
+      foot={
         <button
           className="btn"
           onClick={() => {
@@ -136,7 +102,25 @@ export function AgentWindow({ run, agentId, providers, onClose }: { run: Workflo
         >
           {t('前往它的卡片', 'Go to its card')}
         </button>
-      </div>
+      }
+    >
+      <Row label={t('狀態', 'Status')}>
+        <Status t={t} agent={a} /> · <span className="num">{elapsed(a.startedAt, a.endedAt)}</span>
+      </Row>
+      <Row label={t('模型', 'Model')}>
+        {a.model ? modelLabel(a.model) : t('預設模型', 'default model')}
+        {a.effort ? ` · ${t('推理', 'effort')} ${a.effort}` : ''}
+      </Row>
+      <Row label={t('任務', 'Task')}>{a.task}</Row>
+      {(a.waiting || a.activity) && <Row label={t('現在', 'Now')}>{a.waiting ?? a.activity?.replace(/^\S+\s/, '')}</Row>}
+      {a.failure && <Row label={t('狀況', 'Issue')}>{a.failure.action}</Row>}
+      <Row label={t('統計', 'Stats')}>
+        <span className="num">
+          {a.stats.tools} {t('個動作', 'actions')} · {a.stats.commands} {t('個指令', 'commands')} · {a.stats.filesChanged.length} {t('個檔案', 'files')}
+        </span>
+      </Row>
+      <h4 className="dw-heading">{t('最近的步驟', 'Latest steps')}</h4>
+      <div className="dw-steps">{events.length ? <Transcript events={events} limit={8} /> : <span className="muted small">{t('載入中…', 'Loading…')}</span>}</div>
     </Window>
   );
 }
@@ -149,31 +133,37 @@ export function GpuWindow({ run, providers, onClose }: { run: WorkflowRun; provi
     <Window onClose={onClose} title={t('GPU 狀態', 'GPU status')}>
       {error && <div className="err-text small">{error}</div>}
       {!data && !error && <div className="muted small">{t('讀取中…', 'Reading…')}</div>}
-      {data && !data.length && <div className="muted small">{t('沒有偵測到 NVIDIA GPU（nvidia-smi）', 'No NVIDIA GPU found (nvidia-smi)')}</div>}
+      {data && !data.length && <div className="muted small">{t('nvidia-smi 沒有偵測到 NVIDIA GPU', 'nvidia-smi found no NVIDIA GPU')}</div>}
       {data?.map((g) => {
         const mem = g.memTotalMB ? (g.memUsedMB / g.memTotalMB) * 100 : 0;
         const holder = g.lockedBy && g.lockedBy.workflowId === run.id ? run.agents[g.lockedBy.agentId] : undefined;
         return (
-          <div key={g.index} className="dw-card">
-            <div className="dw-card-head">
+          <section key={g.index} className="dw-card">
+            <h4 className="dw-card-head">
               GPU {g.index} · {g.name}
               {g.lockedBy && (
-                <span className="badge">
-                  🔒 {holder ? providerName(providers, holder.provider) : t('其他工作流', 'another workflow')} · {elapsed(g.lockedBy.since)}
+                <span className="state-word warn small" title={t('GPU 鎖', 'GPU lock')}>
+                  <Ico i={Lock} size={14} /> {holder ? providerName(providers, holder.provider) : t('其他工作流', 'another workflow')} · {elapsed(g.lockedBy.since)}
                 </span>
               )}
-            </div>
+            </h4>
             <Row label={t('記憶體', 'Memory')}>
-              {bytes(g.memUsedMB * 1024 ** 2)} / {bytes(g.memTotalMB * 1024 ** 2)} ({Math.round(mem)}%)
+              <span className="num">
+                {bytes(g.memUsedMB * 1024 ** 2)} / {bytes(g.memTotalMB * 1024 ** 2)} · {Math.round(mem)}%
+              </span>
             </Row>
             <Bar percent={mem} tone={mem > 90 ? 'err' : mem > 70 ? 'warn' : 'ok'} />
-            <Row label={t('使用率', 'Load')}>{g.util}%</Row>
+            <Row label={t('使用率', 'Load')}>
+              <span className="num">{g.util}%</span>
+            </Row>
             <Bar percent={g.util} />
             <Row label={t('溫度／功耗', 'Temp / power')}>
-              {g.tempC !== undefined ? `${g.tempC}°C` : '—'} · {g.powerW !== undefined ? `${Math.round(g.powerW)} W` : '—'}
+              <span className="num">
+                {g.tempC !== undefined ? `${g.tempC}°C` : '—'} · {g.powerW !== undefined ? `${Math.round(g.powerW)} W` : '—'}
+              </span>
             </Row>
-            <Row label={t('執行中的程序', 'Running on it')}>{g.apps.length ? g.apps.map((p) => `${p.pid} ${p.name.split(/[\\/]/).pop()}${p.memMB ? ` (${bytes(p.memMB * 1024 ** 2)})` : ''}`).join('、') : t('沒有', 'none')}</Row>
-          </div>
+            <Row label={t('執行中的程序', 'Running on it')}>{g.apps.length ? g.apps.map((p) => `${p.pid} ${p.name.split(/[\\/]/).pop()}${p.memMB ? ` · ${bytes(p.memMB * 1024 ** 2)}` : ''}`).join('、') : t('沒有', 'none')}</Row>
+          </section>
         );
       })}
       <div className="muted tiny">{t('每 3 秒更新', 'Updates every 3 seconds')}</div>
@@ -194,14 +184,16 @@ export function ProcessWindow({ run, pid, providers, onClose, workflowId }: { ru
       {d && (
         <>
           <Row label={t('狀態', 'Status')}>
-            <span className={cx('status', d.alive ? 'live' : d.endedEarly ? 'err' : 'muted')}>{d.alive ? t('執行中', 'Running') : d.endedEarly ? t('已結束（未達 100%）', 'Ended (before 100%)') : t('已結束', 'Ended')}</span>
+            <StateWord icon={d.alive ? LoaderCircle : d.endedEarly ? CircleX : CircleCheck} spin={d.alive} tone={d.alive ? 'run' : d.endedEarly ? 'err' : 'muted'}>
+              {d.alive ? t('執行中', 'Running') : d.endedEarly ? t('已結束，未達 100%', 'Ended before 100%') : t('已結束', 'Ended')}
+            </StateWord>
             {' · '}
             {t('已執行', 'running for')} {duration(d.runtimeSec)}
           </Row>
           {d.percent !== undefined ? (
             <>
               <Row label={t('進度', 'Progress')}>
-                <b>{d.percent.toFixed(d.percent < 10 ? 1 : 0)}%</b> <span className="muted">· {source}</span>
+                <b className="num">{d.percent.toFixed(d.percent < 10 ? 1 : 0)}%</b> <span className="muted">· {source}</span>
               </Row>
               <Bar percent={d.percent} tone={d.endedEarly ? 'err' : d.percent >= 100 ? 'ok' : undefined} />
             </>
@@ -212,7 +204,7 @@ export function ProcessWindow({ run, pid, providers, onClose, workflowId }: { ru
           )}
           {d.watchFile && (
             <Row label={t('已寫入', 'Written')}>
-              {bytes(d.bytes)}
+              <span className="num">{bytes(d.bytes)}</span>
               {d.expectedBytes ? ` / ${bytes(d.expectedBytes)}` : ''}
               {d.speed !== undefined && d.alive ? ` · ${bytes(d.speed)}/s` : ''}
               {d.etaSec !== undefined && d.alive ? ` · ${t('約剩', 'about')} ${duration(d.etaSec)}${t('', ' left')}` : ''}
@@ -232,10 +224,10 @@ export function ProcessWindow({ run, pid, providers, onClose, workflowId }: { ru
           {d.watchFile && <Row label={t('輸出', 'Output')}><span className="mono small">{d.watchFile}</span></Row>}
           {d.log && (
             <>
-              <div className="dw-section">
-                {t('日誌（最後幾行）', 'Log (last lines)')} <span className="mono tiny muted">{d.log}</span>
-              </div>
-              <pre className="dw-log">{d.logTail?.length ? d.logTail.join('\n') : t('（還沒有內容）', '(nothing yet)')}</pre>
+              <h4 className="dw-heading">
+                {t('日誌的最後幾行', 'The last lines of its log')} <span className="mono tiny muted">{d.log}</span>
+              </h4>
+              <pre className="dw-log">{d.logTail?.length ? d.logTail.join('\n') : t('還沒有內容', 'Nothing yet')}</pre>
             </>
           )}
           <div className="muted tiny">{t('每 3 秒更新', 'Updates every 3 seconds')}</div>

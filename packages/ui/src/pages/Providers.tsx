@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { ArrowDown, ArrowUp, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleOff, CircleX, ExternalLink, GripVertical, LoaderCircle, LogOut, PlugZap, RefreshCw, RotateCcw, SlidersHorizontal, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { AgentEvent, ProviderInfo, ProviderSpec, TestResult } from '../../../core/src/types';
 import { hub, mergeEvent, useHostInfo, useProviders } from '../api';
 import { Transcript } from '../components/Transcript';
@@ -6,8 +7,12 @@ import { ModelPicker } from '../components/ModelPicker';
 import { CatalogPicker } from '../components/CatalogPicker';
 import { useT } from '../i18n';
 import { cx, elapsed, providerColor } from '../util';
+import { Ico } from '../icons';
 import { useDragOrder, type DragProps } from '../components/DragOrder';
 import { ask } from '../components/Ask';
+import { MoreMenu, type MenuEntry } from '../components/RunTools';
+import { Dialog, Hint, Seg, StateWord } from '../components/Kit';
+import { providerState, type ProviderStateKey } from '../settingsView';
 
 /** English copies of the built-in providers' notes (specs are user data and stay as written). */
 const EN_NOTES: Record<string, { description?: string; login?: string; api?: string }> = {
@@ -62,23 +67,25 @@ function TestPanel({ providerId, onClose }: { providerId: string; onClose: () =>
   }, [providerId]);
   return (
     <div className="test">
-      <div className="row between">
+      <div className="row between gap">
         <span className="small">
           {!result && !error && (
-            <>
-              <span className="spark">✻</span> {t('測試中…（第一次啟動可能需要 10–60 秒）', 'Testing… (first start may take 10–60s)')}
-            </>
+            <StateWord icon={LoaderCircle} tone="run" spin>
+              {t('測試中…第一次啟動可能需要 10–60 秒', 'Testing… the first start may take 10–60s')}
+            </StateWord>
           )}
           {result && (
-            <span className={result.ok ? 'ok-text' : 'err-text'}>
-              {result.ok ? `✓ ${t('連線成功', 'Connected')}` : `✕ ${result.error ?? t('失敗', 'Failed')}`} · {elapsed(0, result.durationMs)} ·{' '}
-              {result.mcpCalled ? t('Aivenue 工具可用', 'Aivenue tools available') : t('未呼叫到 Aivenue 工具（無法當 sub agent 協作）', 'Aivenue tools not called (cannot coordinate as sub-agent)')}
-            </span>
+            <>
+              <StateWord icon={result.ok ? CircleCheck : CircleX} tone={result.ok ? 'ok' : 'err'}>
+                {result.ok ? t('連線成功', 'Connected') : (result.error ?? t('失敗', 'Failed'))}
+              </StateWord>{' '}
+              · {elapsed(0, result.durationMs)} · {result.mcpCalled ? t('Aivenue 工具可用', 'Aivenue tools available') : t('未呼叫到 Aivenue 工具，無法當 sub agent 協作', 'Aivenue tools not called, so it cannot coordinate as a sub-agent')}
+            </>
           )}
           {error && <span className="err-text">{error}</span>}
         </span>
-        <button className="icon-btn" onClick={onClose}>
-          ✕
+        <button className="icon-btn" onClick={onClose} aria-label={t('關閉測試結果', 'Close the test result')} title={t('關閉測試結果', 'Close the test result')}>
+          <Ico i={CircleX} size={16} />
         </button>
       </div>
       <Transcript events={events} />
@@ -86,7 +93,7 @@ function TestPanel({ providerId, onClose }: { providerId: string; onClose: () =>
   );
 }
 
-function SpecEditor({ initial, isNew, onClose }: { initial: ProviderSpec; isNew: boolean; onClose: () => void }) {
+function SpecEditor({ initial, isNew, onClose, returnFocus }: { initial: ProviderSpec; isNew: boolean; onClose: () => void; returnFocus?: () => HTMLElement | null }) {
   const t = useT();
   const [text, setText] = useState(JSON.stringify(initial, null, 2));
   const [templates, setTemplates] = useState<{ id: string; label: string; spec: ProviderSpec }[]>([]);
@@ -106,53 +113,54 @@ function SpecEditor({ initial, isNew, onClose }: { initial: ProviderSpec; isNew:
       onClose();
     });
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{isNew ? t('新增供應商', 'Add provider') : t(`編輯 ${initial.name}`, `Edit ${initial.name}`)}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        {isNew && (
-          <select
-            defaultValue=""
-            onChange={(e) => {
-              const tpl = templates.find((x) => x.id === e.target.value);
-              if (tpl) setText(JSON.stringify(tpl.spec, null, 2));
-              setError(null);
-            }}
-          >
-            <option value="" disabled>
-              {t('從範本開始（選擇輸出格式相近的 CLI）…', 'Start from a template (closest output format)…')}
-            </option>
-            {templates.map((tpl) => (
-              <option key={tpl.id} value={tpl.id}>
-                {tpl.label}
-              </option>
-            ))}
-          </select>
-        )}
-        <div className="muted small">
-          {t('參數以群組表示，群組中任何變數沒有值時整組省略。可用變數：', 'Args are groups; a group is dropped when any of its variables is empty. Variables: ')}
-          <code>{'{model} {sessionId} {newSessionId} {mcpConfigFile} {mcpCommandToml} {mcpArgsToml} {mcpEnvToml} {cwd} {prompt}'}</code>
-          {t('。output：', '. output: ')}
-          <code>claude-stream · gemini-stream · codex-jsonl · text</code>
-          {t('。API 模式加入 ', '. For API mode add ')}
-          <code>{'"apiKey": {"env": "X_API_KEY", "baseUrlEnv": "X_BASE_URL"}'}</code>
-        </div>
-        <textarea className="code" spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} rows={22} />
-        {error && <div className="note err">{error}</div>}
-        <div className="row end gap">
+    <Dialog
+      title={isNew ? t('新增供應商', 'Add provider') : t(`編輯 ${initial.name}`, `Edit ${initial.name}`)}
+      onClose={onClose}
+      size="lg"
+      keepOpen
+      returnFocus={returnFocus}
+      foot={
+        <>
           <button className="btn" onClick={onClose}>
             {t('取消', 'Cancel')}
           </button>
           <button className="btn primary" disabled={busy === 'save'} onClick={save}>
             {t('儲存', 'Save')}
           </button>
-        </div>
+        </>
+      }
+    >
+      {isNew && (
+        <select
+          aria-label={t('範本', 'Template')}
+          defaultValue=""
+          onChange={(e) => {
+            const tpl = templates.find((x) => x.id === e.target.value);
+            if (tpl) setText(JSON.stringify(tpl.spec, null, 2));
+            setError(null);
+          }}
+        >
+          <option value="" disabled>
+            {t('從範本開始，選擇輸出格式相近的 CLI…', 'Start from a template, the closest output format…')}
+          </option>
+          {templates.map((tpl) => (
+            <option key={tpl.id} value={tpl.id}>
+              {tpl.label}
+            </option>
+          ))}
+        </select>
+      )}
+      <div className="muted small">
+        {t('參數以群組表示，群組中任何變數沒有值時整組省略。可用變數：', 'Args are groups; a group is dropped when any of its variables is empty. Variables: ')}
+        <code>{'{model} {sessionId} {newSessionId} {mcpConfigFile} {mcpCommandToml} {mcpArgsToml} {mcpEnvToml} {cwd} {prompt}'}</code>
+        {t('。output：', '. output: ')}
+        <code>claude-stream · gemini-stream · codex-jsonl · text</code>
+        {t('。API 模式加入 ', '. For API mode add ')}
+        <code>{'"apiKey": {"env": "X_API_KEY", "baseUrlEnv": "X_BASE_URL"}'}</code>
       </div>
-    </div>
+      <textarea className="code" aria-label={t('供應商設定 JSON', 'Provider settings JSON')} spellCheck={false} value={text} onChange={(e) => setText(e.target.value)} rows={22} />
+      {error && <div className="note err">{error}</div>}
+    </Dialog>
   );
 }
 
@@ -170,7 +178,23 @@ function toHex(color: string): string {
   return `#${f(0)}${f(8)}${f(4)}`;
 }
 
-function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; drag?: DragProps }) {
+const STATE_ICON: Record<ProviderStateKey, LucideIcon> = {
+  ready: CircleCheck,
+  api: CircleCheck,
+  usable: CircleCheck,
+  signedOut: CircleDashed,
+  notInstalled: CircleOff,
+  checking: LoaderCircle,
+  unknown: CircleHelp,
+  notReady: CircleDashed,
+};
+
+/**
+ * One provider: a row with its name (a button that opens its settings), its state as an icon and a word, the one thing
+ * to do next (sign in, install) and a ⋯ menu with the rest (re-check, sign out, test, advanced, docs, move up or down,
+ * uninstall, reset, remove). Opened, it shows how it signs in, its key, default model, colour and accounts.
+ */
+function ProviderRow({ p, secure, drag, onMove, first, last }: { p: ProviderInfo; secure: boolean; drag?: DragProps; onMove: (dir: -1 | 1) => void; first: boolean; last: boolean }) {
   const t = useT();
   const { busy, error, run } = useAction();
   const [open, setOpen] = useState(false);
@@ -178,74 +202,120 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
   const [editing, setEditing] = useState(false);
   const [key, setKey] = useState('');
   const [baseUrl, setBaseUrl] = useState(p.baseUrl ?? '');
+  const bodyId = useId();
+  const stateId = useId();
   useEffect(() => setBaseUrl(p.baseUrl ?? ''), [p.baseUrl]);
   const s = p.spec;
   const en = EN_NOTES[s.id];
   const call = (name: string, method: string, params: unknown) => run(name, () => hub.call(method, params));
   // Run by a built-in extension (OmniRoute): turned on, off and signed in from Capabilities → Built-in extensions.
   const managed = s.modelSource?.type === 'extension';
-  const stateText = !p.installed
-    ? t('未安裝', 'Not installed')
-    : managed
-      ? p.auth.state === 'logged_in'
-        ? t('可以使用', 'Ready')
-        : t('未就緒', 'Not ready')
-    : p.auth.state === 'logged_in'
-      ? p.authMode === 'api'
-        ? t('API 金鑰', 'API key')
-        : p.auth.signedIn === false
-          ? t('可使用／未登入', 'Usable / not signed in')
-          : t('已登入', 'Signed in')
-      : p.auth.state === 'checking'
-        ? t('檢查中…', 'Checking…')
-        : p.auth.state === 'unknown'
-          ? t('狀態不明', 'Unknown')
-          : t('未登入', 'Signed out');
-  const ready = p.installed && p.auth.state === 'logged_in';
+  const st = providerState({ installed: p.installed, managed, authState: p.auth.state, authMode: p.authMode, signedIn: p.auth.signedIn, canInstall: !!p.installCommand });
+  const stateText = {
+    ready: managed ? t('可以使用', 'Ready') : t('已登入', 'Signed in'),
+    api: t('API 金鑰', 'API key'),
+    usable: t('可使用／未登入', 'Usable / not signed in'),
+    signedOut: t('未登入', 'Signed out'),
+    notInstalled: t('未安裝', 'Not installed'),
+    checking: t('檢查中…', 'Checking…'),
+    unknown: t('狀態不明', 'Unknown'),
+    notReady: t('未就緒', 'Not ready'),
+  }[st.key];
+  const loginLabel = p.loginLegacy && s.login?.older ? t(s.login.older.zh, s.login.older.en) : s.loginOptions ? t('登入帳號', 'Sign in to the account') : p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in');
+  const login = () => call('login', 'providers.login', { id: s.id });
+  const test = () => {
+    setOpen(true);
+    setTesting(true);
+  };
+  const removeAccount = async () => {
+    if (!(await ask(t(`移除帳號「${s.accountName}」？`, `Remove the account "${s.accountName}"?`), { danger: true }))) return;
+    const deleteData = await ask(t('也要刪除這個帳號在這台電腦上的登入資料嗎？保留的話，之後重新加入同名帳號不用再登入。', "Also delete this account's sign-in data on this computer? If kept, re-adding the account later needs no new sign-in."), { ok: t('刪除登入資料', 'Delete sign-in data'), cancel: t('保留', 'Keep'), danger: true });
+    void call('delete', 'providers.removeAccount', { id: s.id, deleteData });
+  };
+  const account = !!(s.accountOf && s.accountHome);
+  // An extra account is a copy of its tool's spec (core/providers/registry.ts), so it signs out the same way.
+  const items: (MenuEntry | 'sep' | false)[] = [
+    { label: busy === 'refresh' ? t('檢查中…', 'Checking…') : t('重新檢查', 'Re-check'), hint: t('登入狀態、模型清單與用量', 'Sign-in, model list and usage'), icon: RefreshCw, disabled: busy === 'refresh', onSelect: () => void call('refresh', 'providers.refresh', { id: s.id }) },
+    !managed && p.installed && !!s.logout && { label: t('登出', 'Sign out'), icon: LogOut, disabled: busy === 'logout', onSelect: () => void call('logout', 'providers.logout', { id: s.id }) },
+    p.installed && !testing && { label: t('測試連線', 'Test'), icon: PlugZap, onSelect: test },
+    !account && { label: t('進階設定', 'Advanced'), hint: t('編輯供應商設定 JSON', 'Edit the provider settings JSON'), icon: SlidersHorizontal, onSelect: () => setEditing(true) },
+    !account && !!s.docsUrl && { label: t('文件', 'Docs'), hint: t('在瀏覽器開啟', 'Opens in the browser'), icon: ExternalLink, onSelect: () => void hub.call('host.openExternal', { url: s.docsUrl }) },
+    'sep',
+    !first && { label: t('上移', 'Move up'), hint: t('選單與用量頁都照這個順序', 'Menus and the usage page follow this order'), icon: ArrowUp, onSelect: () => onMove(-1) },
+    !last && { label: t('下移', 'Move down'), icon: ArrowDown, onSelect: () => onMove(1) },
+    'sep',
+    !account && p.installed && !!p.uninstallCommand && {
+      label: t('解除安裝…', 'Uninstall…'),
+      hint: p.uninstallCommand,
+      icon: Trash2,
+      onSelect: async () => {
+        if (await ask(t(`解除安裝 ${s.name}？\n\n會在終端機執行：${p.uninstallCommand}\n登入資料與設定不會刪除，之後重新安裝即可再用。`, `Uninstall ${s.name}?\n\nThis runs in a terminal: ${p.uninstallCommand}\nSign-in data and settings are kept, so reinstalling brings it back.`), { danger: true })) void call('uninstall', 'providers.uninstall', { id: s.id });
+      },
+    },
+    !account && p.customized && { label: t('還原預設', 'Reset'), icon: RotateCcw, onSelect: () => void call('reset', 'providers.reset', { id: s.id }) },
+    !account && !managed && { label: t('移除…', 'Remove…'), icon: Trash2, danger: true, onSelect: async () => (await ask(t(`移除 ${s.name}？`, `Remove ${s.name}?`), { danger: true })) && void call('delete', 'providers.delete', { id: s.id }) },
+    account && { label: t('移除這個帳號…', 'Remove this account…'), icon: Trash2, danger: true, onSelect: () => void removeAccount() },
+  ];
 
   return (
     <div className={cx('prow', open && 'open', drag?.dragging && 'dragging', drag?.over)} {...drag?.row}>
-      <div className="prow-head" onClick={() => setOpen(!open)}>
+      <div className="prow-head">
         {drag && (
-          <span className="prow-grip" title={t('拖動調整順序', 'Drag to reorder')} aria-hidden="true" onClick={(e) => e.stopPropagation()} {...drag.grip}>
-            ⋮⋮
+          <span className="prow-grip" title={t('拖動調整順序，「更多」選單也能上移下移', 'Drag to reorder; the More menu moves it too')} aria-hidden="true" {...drag.grip}>
+            <Ico i={GripVertical} size={14} />
           </span>
         )}
-        <span className="mark lg" style={{ background: providerColor(s.id) }} />
-        <div className="grow">
-          <div className="prow-name">
-            {s.name}
-            {s.accountOf && <span className="tag">{t('其他帳號', 'Extra account')}</span>}
-            {managed ? <span className="tag">{t('內建擴充', 'Built-in extension')}</span> : !p.builtin && !s.accountOf && <span className="tag">{t('自訂', 'Custom')}</span>}
-            {p.customized && <span className="tag">{t('已修改', 'Modified')}</span>}
-          </div>
-          <div className="muted small">{t(s.description ?? '', en?.description ?? s.description ?? '')}</div>
-          {(s.id === 'antigravity' || s.accountOf === 'antigravity') && <AgyWarning />}
-          {(p.defaultModel || p.defaultEffort) && <div className="muted tiny mono">{[p.defaultModel, p.defaultEffort && `effort ${p.defaultEffort}`].filter(Boolean).join(' · ')}</div>}
-        </div>
-        <span className={cx('state', ready ? 'ok' : p.installed ? 'warn' : 'err')}>{stateText}</span>
-        <span className="chev">{open ? '▾' : '▸'}</span>
+        <button type="button" className="prow-toggle" aria-expanded={open} aria-controls={open ? bodyId : undefined} aria-describedby={stateId} onClick={() => setOpen(!open)}>
+          <Ico i={ChevronRight} size={14} className={cx('fold-chev', open && 'open')} />
+          <span className="prow-main">
+            <span className="prow-name">
+              <span className="mark" style={{ background: providerColor(s.id) }} aria-hidden="true" />
+              {s.name}
+              {s.accountOf && <span className="tag">{t('其他帳號', 'Extra account')}</span>}
+              {managed ? <span className="tag">{t('內建擴充', 'Built-in extension')}</span> : !p.builtin && !s.accountOf && <span className="tag">{t('自訂', 'Custom')}</span>}
+              {p.customized && <span className="tag">{t('已修改', 'Modified')}</span>}
+            </span>
+            <span className="prow-desc">{t(s.description ?? '', en?.description ?? s.description ?? '')}</span>
+            {(p.defaultModel || p.defaultEffort) && <span className="prow-desc mono">{[p.defaultModel, p.defaultEffort && `effort ${p.defaultEffort}`].filter(Boolean).join(' · ')}</span>}
+          </span>
+        </button>
+        <span className="prow-side">
+          <StateWord id={stateId} icon={STATE_ICON[st.key]} tone={st.tone} spin={st.key === 'checking'} className="prow-state">
+            {stateText}
+          </StateWord>
+          {st.action === 'install' && (
+            <button className="btn small" disabled={busy === 'install'} onClick={() => call('install', 'providers.install', { id: s.id })}>
+              {t('安裝', 'Install')}
+            </button>
+          )}
+          {st.action === 'login' && (
+            <button className="btn small" disabled={!p.installed || busy === 'login'} onClick={login}>
+              {loginLabel}
+            </button>
+          )}
+          <MoreMenu label={t(`${s.name}：更多動作`, `${s.name}: more actions`)} items={items} />
+        </span>
       </div>
+      {(s.id === 'antigravity' || s.accountOf === 'antigravity') && <AgyWarning />}
 
       {open && (
-        <div className="prow-body">
+        <div className="prow-body" id={bodyId}>
           <div className="muted small mono">
             {p.installed ? p.resolvedPath : t(`找不到指令「${s.command}」`, `Command "${s.command}" not found`)}
             {p.installed && p.cliVersion && (
               <span className="cli-version" title={t('這台電腦安裝的版本', 'The version installed on this computer')}>
                 {' · '}
                 {t('版本', 'version')} {p.cliVersion}
-                {s.login?.minVersion ? ` (V${p.cliVersion.split('.')[0]})` : ''}
+                {s.login?.minVersion ? ` · V${p.cliVersion.split('.')[0]}` : ''}
               </span>
             )}
           </div>
-          {p.auth.detail && p.installed && <div className="muted small">{p.auth.detail}</div>}
+          {/* The row already says 未登入: core's plain 尚未登入 is not said twice (an error it read is). */}
+          {p.auth.detail && p.installed && !(p.auth.state === 'logged_out' && /^(尚未登入|Not signed in)$/.test(p.auth.detail.trim())) && <div className="muted small">{p.auth.detail}</div>}
 
           {!p.installed && p.installCommand && (
-            <div className="row gap wrap">
-              <button className="btn primary" onClick={() => call('install', 'providers.install', { id: s.id })}>
-                {t('安裝', 'Install')}
-              </button>
+            <div className="prow-field">
+              <span className="prow-label">{t('安裝指令', 'Install command')}</span>
               <code className="muted">{p.installCommand}</code>
             </div>
           )}
@@ -258,83 +328,85 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
               </a>
             </div>
           ) : (
-          <>
-          <div className="seg">
-            <button className={cx(p.authMode === 'subscription' && 'on')} onClick={() => call('mode', 'providers.setAuthMode', { id: s.id, mode: 'subscription' })}>
-              {t('訂閱帳號', 'Subscription')}
-            </button>
-            <button className={cx(p.authMode === 'api' && 'on')} disabled={!s.apiKey} onClick={() => call('mode', 'providers.setAuthMode', { id: s.id, mode: 'api', baseUrl: p.baseUrl })}>
-              API
-            </button>
-          </div>
-
-          {p.authMode === 'subscription' ? (
             <>
-              {p.loginLegacy && s.login?.older ? (
-                <div className="muted small">{t(s.login.older.noteZh, s.login.older.noteEn)}</div>
+              <div className="prow-field">
+                <span className="prow-label">{t('登入方式', 'Sign-in')}</span>
+                <Seg
+                  manual
+                  label={t(`${s.name} 的登入方式`, `${s.name} sign-in`)}
+                  value={p.authMode}
+                  onChange={(mode) => call('mode', 'providers.setAuthMode', mode === 'api' ? { id: s.id, mode: 'api', baseUrl: p.baseUrl } : { id: s.id, mode: 'subscription' })}
+                  choices={[
+                    { value: 'subscription', label: t('訂閱帳號', 'Subscription') },
+                    { value: 'api', label: 'API', disabled: !s.apiKey, title: s.apiKey ? undefined : t('這個 CLI 不支援 API 金鑰', 'This CLI takes no API key') },
+                  ]}
+                />
+              </div>
+
+              {p.authMode === 'subscription' ? (
+                <>
+                  {p.loginLegacy && s.login?.older ? (
+                    <div className="muted small">{t(s.login.older.noteZh, s.login.older.noteEn)}</div>
+                  ) : (
+                    s.login?.note && <div className="muted small">{t(s.login.note, en?.login ?? s.login.note)}</div>
+                  )}
+                  {(st.action !== 'login' || s.loginOptions) && (
+                    <div className="row gap wrap">
+                      {st.action !== 'login' && (
+                        <button className="btn" disabled={!p.installed} onClick={login}>
+                          {loginLabel}
+                        </button>
+                      )}
+                      {s.loginOptions && (
+                        <select
+                          className="btn"
+                          disabled={!p.installed}
+                          value=""
+                          onChange={(e) => e.target.value && call('login', 'providers.login', { id: s.id, option: e.target.value })}
+                          title={t('其他登入方式', 'Other ways to sign in')}
+                          aria-label={t('其他登入方式', 'Other ways to sign in')}
+                        >
+                          <option value="">{t('其他登入方式…', 'Other ways to sign in…')}</option>
+                          {s.loginOptions.filter((o) => !p.loginLegacy || o.olderArgs || o.id === 'other').map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {t(o.zh, o.en)}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </>
               ) : (
-                s.login?.note && <div className="muted small">{t(s.login.note, en?.login ?? s.login.note)}</div>
-              )}
-              <div className="row gap wrap">
-                <button className="btn primary" disabled={!p.installed} onClick={() => call('login', 'providers.login', { id: s.id })}>
-                  {p.loginLegacy && s.login?.older ? t(s.login.older.zh, s.login.older.en) : s.loginOptions ? t('登入帳號', 'Sign in to the account') : p.auth.state === 'logged_in' ? t('重新登入', 'Sign in again') : t('登入', 'Sign in')}
-                </button>
-                {s.loginOptions && (
-                  <select
-                    className="btn"
-                    disabled={!p.installed}
-                    value=""
-                    onChange={(e) => e.target.value && call('login', 'providers.login', { id: s.id, option: e.target.value })}
-                    title={t('其他登入方式', 'Other ways to sign in')}
-                  >
-                    <option value="">{t('其他登入方式…', 'Other ways to sign in…')}</option>
-                    {s.loginOptions.filter((o) => !p.loginLegacy || o.olderArgs || o.id === 'other').map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {t(o.zh, o.en)}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {s.logout && (
-                  <button className="btn" disabled={!p.installed} onClick={() => call('logout', 'providers.logout', { id: s.id })}>
-                    {t('登出', 'Sign out')}
-                  </button>
-                )}
-                <button className="btn ghost" disabled={busy === 'refresh'} onClick={() => call('refresh', 'providers.refresh', { id: s.id })}>
-                  {t('重新檢查', 'Re-check')}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              {s.apiKey?.note && <div className="muted small">{t(s.apiKey.note, en?.api ?? s.apiKey.note)}</div>}
-              {!secure && <div className="note warn">{t('瀏覽器模式下金鑰未加密保存，建議使用桌面版或 VS Code 插件。', 'In browser mode keys are not encrypted; prefer the desktop app or the VS Code extension.')}</div>}
-              <div className="row gap">
-                <input type="password" className="grow" autoComplete="off" placeholder={p.hasApiKey ? t('已儲存（輸入新值以取代）', 'Saved (type to replace)') : s.apiKey?.env} value={key} onChange={(e) => setKey(e.target.value)} />
-                <button className="btn primary" disabled={!key.trim()} onClick={() => run('key', async () => (await hub.call('providers.setApiKey', { id: s.id, key }), setKey('')))}>
-                  {t('儲存', 'Save')}
-                </button>
-                {p.hasApiKey && (
-                  <button className="btn" onClick={() => call('key', 'providers.setApiKey', { id: s.id, key: '' })}>
-                    {t('清除', 'Clear')}
-                  </button>
-                )}
-              </div>
-              {s.apiKey?.baseUrlEnv && (
-                <div className="row gap">
-                  <input className="grow" placeholder={t('Base URL（選填）', 'Base URL (optional)')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
-                  <button className="btn" disabled={baseUrl === (p.baseUrl ?? '')} onClick={() => call('base', 'providers.setAuthMode', { id: s.id, mode: 'api', baseUrl })}>
-                    {t('儲存', 'Save')}
-                  </button>
-                </div>
+                <>
+                  {s.apiKey?.note && <div className="muted small">{t(s.apiKey.note, en?.api ?? s.apiKey.note)}</div>}
+                  {!secure && <div className="note warn">{t('瀏覽器模式下金鑰未加密保存，建議使用桌面版或 VS Code 插件。', 'In browser mode keys are not encrypted; prefer the desktop app or the VS Code extension.')}</div>}
+                  <div className="row gap">
+                    <input type="password" className="grow" autoComplete="off" aria-label={t('API 金鑰', 'API key')} placeholder={p.hasApiKey ? t('已儲存，輸入新值以取代', 'Saved; type to replace') : s.apiKey?.env} value={key} onChange={(e) => setKey(e.target.value)} />
+                    <button className="btn primary" disabled={!key.trim()} onClick={() => run('key', async () => (await hub.call('providers.setApiKey', { id: s.id, key }), setKey('')))}>
+                      {t('儲存', 'Save')}
+                    </button>
+                    {p.hasApiKey && (
+                      <button className="btn" onClick={() => call('key', 'providers.setApiKey', { id: s.id, key: '' })}>
+                        {t('清除', 'Clear')}
+                      </button>
+                    )}
+                  </div>
+                  {s.apiKey?.baseUrlEnv && (
+                    <div className="row gap">
+                      <input className="grow" aria-label="Base URL" placeholder={t('Base URL，選填', 'Base URL, optional')} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} />
+                      <button className="btn" disabled={baseUrl === (p.baseUrl ?? '')} onClick={() => call('base', 'providers.setAuthMode', { id: s.id, mode: 'api', baseUrl })}>
+                        {t('儲存', 'Save')}
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </>
-          )}
-          </>
           )}
 
-          <div className="kv sep">
-            <label>{t('預設模型', 'Default model')}</label>
+          <div className="prow-field sep">
+            <span className="prow-label">{t('預設模型', 'Default model')}</span>
             <ModelPicker
               provider={p}
               model={p.defaultModel}
@@ -344,88 +416,37 @@ function ProviderRow({ p, secure, drag }: { p: ProviderInfo; secure: boolean; dr
               onChange={(v) => call('defaults', 'providers.setDefaults', { id: s.id, model: v.model, effort: v.effort })}
             />
           </div>
-          <div className="muted tiny">{t('沒有指定模型的角色（包含自動指派與 sub agent）會使用這組預設。', 'Used by roles that do not pick a model, including auto assignment and sub-agents.')}</div>
+          <div className="muted tiny">{t('沒有指定模型的角色會使用這組預設，包含自動指派與 sub agent。', 'Used by roles that do not pick a model, including auto assignment and sub-agents.')}</div>
 
-          <div className="row gap wrap">
-            <span>{t('顏色', 'Colour')}</span>
-            <input
-              type="color"
-              className="color-pick"
-              value={toHex(providerColor(s.id))}
-              title={t('執行頁面、Agent map 與用量頁面都用這個顏色標示', 'Marks it on the run page, the agent map and the usage page')}
-              onChange={(e) => void hub.call('providers.setColor', { id: s.id, color: e.target.value })}
-            />
-            {p.color && (
-              <button className="btn ghost small" onClick={() => void hub.call('providers.setColor', { id: s.id })}>
-                {t('恢復預設', 'Reset')}
-              </button>
-            )}
-            <span className="muted tiny">{t('執行時這個帳號的 agent 會用這個顏色標示。', "Its agents are marked with this colour while they work.")}</span>
+          <div className="prow-field">
+            <span className="prow-label">{t('顏色', 'Colour')}</span>
+            <span className="row gap wrap">
+              <input
+                type="color"
+                className="color-pick"
+                aria-label={t(`${s.name} 的顏色`, `${s.name} colour`)}
+                value={toHex(providerColor(s.id))}
+                title={t('執行頁面、Agent map 與用量頁面都用這個顏色標示', 'Marks it on the run page, the agent map and the usage page')}
+                onChange={(e) => void hub.call('providers.setColor', { id: s.id, color: e.target.value })}
+              />
+              {p.color && (
+                <button className="btn ghost small" onClick={() => void hub.call('providers.setColor', { id: s.id })}>
+                  {t('恢復預設', 'Reset')}
+                </button>
+              )}
+              <span className="muted tiny">{t('執行時這個帳號的 agent 會用這個顏色標示。', 'Its agents are marked with this colour while they work.')}</span>
+            </span>
           </div>
 
           {s.accounts && !s.accountOf && <AddAccount providerId={s.id} name={s.name} />}
           {s.accountHome && <div className="muted tiny mono">{t(`這個帳號的登入資料：${s.accountHome}`, `This account's sign-in data: ${s.accountHome}`)}</div>}
 
-          {s.accountOf && s.accountHome ? (
-            <div className="row gap wrap sep">
-              <button className="btn" disabled={!p.installed || testing} onClick={() => setTesting(true)}>
-                {t('測試連線', 'Test')}
-              </button>
-              <span className="grow" />
-              <button
-                className="btn ghost danger"
-                onClick={async () => {
-                  if (!(await ask(t(`移除帳號「${s.accountName}」？`, `Remove the account "${s.accountName}"?`), { danger: true }))) return;
-                  const deleteData = (await ask(t('也要刪除這個帳號在這台電腦上的登入資料嗎？（保留的話，之後重新加入同名帳號不用再登入）', 'Also delete this account\'s sign-in data on this computer? (If kept, re-adding the account later needs no new sign-in)'), { ok: t('刪除登入資料', 'Delete sign-in data'), cancel: t('保留', 'Keep'), danger: true }));
-                  void call('delete', 'providers.removeAccount', { id: s.id, deleteData });
-                }}
-              >
-                {t('移除這個帳號', 'Remove this account')}
-              </button>
-            </div>
-          ) : (
-          <div className="row gap wrap sep">
-            <button className="btn" disabled={!p.installed || testing} onClick={() => setTesting(true)}>
-              {t('測試連線', 'Test')}
-            </button>
-            <button className="btn ghost" onClick={() => setEditing(true)}>
-              {t('進階設定', 'Advanced')}
-            </button>
-            {s.docsUrl && (
-              <button className="btn ghost" onClick={() => hub.call('host.openExternal', { url: s.docsUrl })}>
-                {t('文件', 'Docs')} ↗
-              </button>
-            )}
-            <span className="grow" />
-            {p.installed && p.uninstallCommand && (
-              <button
-                className="btn ghost"
-                title={p.uninstallCommand}
-                onClick={async () =>
-                  (await ask(t(`解除安裝 ${s.name}？\n\n會在終端機執行：${p.uninstallCommand}\n登入資料與設定不會刪除，之後重新安裝即可再用。`, `Uninstall ${s.name}?\n\nThis runs in a terminal: ${p.uninstallCommand}\nSign-in data and settings are kept, so reinstalling brings it back.`), { danger: true })) &&
-                  call('uninstall', 'providers.uninstall', { id: s.id })
-                }
-              >
-                {t('解除安裝', 'Uninstall')}
-              </button>
-            )}
-            {p.customized && (
-              <button className="btn ghost" onClick={() => call('reset', 'providers.reset', { id: s.id })}>
-                {t('還原預設', 'Reset')}
-              </button>
-            )}
-            {!managed && (
-              <button className="btn ghost danger" onClick={async () => (await ask(t(`移除 ${s.name}？`, `Remove ${s.name}?`), { danger: true })) && call('delete', 'providers.delete', { id: s.id })}>
-                {t('移除', 'Remove')}
-              </button>
-            )}
-          </div>
-          )}
           {error && <div className="note err">{error}</div>}
           {testing && <TestPanel providerId={s.id} onClose={() => setTesting(false)} />}
-          {editing && <SpecEditor initial={s} isNew={false} onClose={() => setEditing(false)} />}
         </div>
       )}
+      {editing && <SpecEditor initial={s} isNew={false} onClose={() => setEditing(false)} />}
+      {!open && error && <div className="note err prow-error">{error}</div>}
     </div>
   );
 }
@@ -437,12 +458,13 @@ function AddAccount({ providerId, name }: { providerId: string; name: string }) 
   const { busy, error, run } = useAction();
   return (
     <div className="account-add sep">
-      <div className="small">{t(`再加一個 ${name} 帳號`, `Add another ${name} account`)}</div>
-      <div className="muted tiny">
-        {t('每個帳號有自己的登入資料，會變成獨立的供應商，可以同時指派到不同角色或當 sub agent；額度用完時自動指派也會換到另一個帳號。加入後在新的那一列按「登入」。', 'Each account keeps its own sign-in and becomes a provider of its own, so several can work at the same time; auto assignment also switches to another account when one runs out. Sign in on the new row after adding it.')}
-      </div>
+      <div className="prow-label">{t(`再加一個 ${name} 帳號`, `Add another ${name} account`)}</div>
+      <Hint
+        className="muted tiny"
+        text={t('每個帳號有自己的登入資料，會變成獨立的供應商，加入後在新的那一列按「登入」。帳號可以同時指派到不同角色或當 sub agent；額度用完時自動指派也會換到另一個帳號。', 'Each account keeps its own sign-in and becomes a provider of its own; sign in on the new row after adding it. Several can work at the same time in different roles or as sub-agents; auto assignment also switches to another account when one runs out.')}
+      />
       <div className="row gap">
-        <input className="grow" placeholder={t('帳號名稱，例如「公司」或「第二個」', 'Account name, e.g. "Work" or "Second"')} value={value} onChange={(e) => setValue(e.target.value)} />
+        <input className="grow" aria-label={t('帳號名稱', 'Account name')} placeholder={t('帳號名稱，例如「公司」或「第二個」', 'Account name, e.g. "Work" or "Second"')} value={value} onChange={(e) => setValue(e.target.value)} />
         <button className="btn" disabled={!value.trim() || busy === 'add'} onClick={() => run('add', async () => (await hub.call('providers.addAccount', { id: providerId, name: value }), setValue('')))}>
           {t('新增帳號', 'Add account')}
         </button>
@@ -452,87 +474,101 @@ function AddAccount({ providerId, name }: { providerId: string; name: string }) 
   );
 }
 
-function AddProvider({ onClose }: { onClose: () => void }) {
+function AddProvider({ onClose, returnFocus }: { onClose: () => void; returnFocus: () => HTMLElement | null }) {
   const t = useT();
   const [mode, setMode] = useState<'catalog' | 'cli'>('catalog');
-  if (mode === 'cli') return <SpecEditor isNew initial={{ id: 'my-agent', name: 'My Agent', command: 'my-agent', run: { common: [], prompt: 'stdin' }, output: 'text' }} onClose={onClose} />;
+  // The editor replaces this window: on closing, the focus goes back to 新增 (what opened this one is gone by then).
+  if (mode === 'cli') return <SpecEditor isNew initial={{ id: 'my-agent', name: 'My Agent', command: 'my-agent', run: { common: [], prompt: 'stdin' }, output: 'text' }} onClose={onClose} returnFocus={returnFocus} />;
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{t('新增供應商', 'Add a provider')}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        <div className="row gap wrap">
-          <span className="muted small">{t('訂閱方案、API 與本機模型（透過 OpenCode 執行）。要接其他 coding agent CLI 請改用', 'Subscription plans, APIs and local models (run through OpenCode). For another coding-agent CLI use')}</span>
-          <button className="link" onClick={() => setMode('cli')}>
-            {t('自訂 CLI（進階）', 'Custom CLI (advanced)')}
-          </button>
-        </div>
-        <CatalogPicker onDone={onClose} />
+    <Dialog title={t('新增供應商', 'Add a provider')} onClose={onClose} size="xl">
+      <div className="row gap wrap">
+        <span className="muted small">{t('訂閱方案、API 與本機模型，透過 OpenCode 執行。要接其他 coding agent CLI 請改用', 'Subscription plans, APIs and local models, run through OpenCode. For another coding-agent CLI use')}</span>
+        <button className="link" onClick={() => setMode('cli')}>
+          {t('自訂 CLI', 'Custom CLI')}
+        </button>
       </div>
-    </div>
+      <CatalogPicker onDone={onClose} />
+    </Dialog>
   );
 }
 
-/** Google's terms forbid reaching Antigravity through third-party tools: say so wherever it can be set up. */
+/**
+ * Google's terms forbid reaching Antigravity through third-party tools: said wherever it can be set up, as one line on
+ * the first layer with the full wording one click away.
+ */
 export function AgyWarning() {
   const t = useT();
+  const [open, setOpen] = useState(false);
   return (
     <div className="warn-text small agy-warning">
-      ⚠{' '}
-      {t(
-        'Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務（包括代理）存取；在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖。功能保留，是否使用請自行評估。',
-        "Google's Antigravity terms explicitly prohibit access through third-party software, tools or services (proxies included); using Antigravity through Aivenue may get your Google account suspended or blocked. The feature stays available; use it at your own risk.",
+      <Ico i={TriangleAlert} size={14} /> <span>{t('Google 條款禁止第三方工具存取 Antigravity，帳號可能被停用。', 'Google’s terms forbid third-party access to Antigravity; the account may be suspended.')}</span>{' '}
+      <button type="button" className="hint-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {open ? t('收起', 'Less') : t('詳情', 'Details')}
+      </button>
+      {open && (
+        <div className="agy-full">
+          {t(
+            'Google 的 Antigravity 服務條款明確禁止透過第三方軟體、工具或服務存取，包括代理伺服器；在 Aivenue 中使用 Antigravity 可能導致你的 Google 帳號被停用或封鎖。功能保留，是否使用請自行評估。',
+            "Google's Antigravity terms explicitly prohibit access through third-party software, tools or services, proxies included; using Antigravity through Aivenue may get your Google account suspended or blocked. The feature stays available; use it at your own risk.",
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-
 export function ProvidersPane() {
   const t = useT();
   const providers = useProviders();
-  // Drag the providers into the order you want (by the ⋮⋮ grip): every menu that lists them, and the usage page, follow it.
+  // Drag the providers into the order you want (by the grip), or move one up or down from its ⋯ menu: every menu that
+  // lists them, and the usage page, follow it.
   const order = useDragOrder(providers, (p) => p.spec.id, (ids) => hub.call('providers.setOrder', { ids }));
   const host = useHostInfo();
   const [adding, setAdding] = useState(false);
+  const addBtn = useRef<HTMLButtonElement>(null);
   const [checking, setChecking] = useState(false);
   const [builtins, setBuiltins] = useState<ProviderSpec[]>([]);
   useEffect(() => {
     hub.call('providers.templates').then((r) => setBuiltins(r.builtins)).catch(() => undefined);
   }, []);
   const missing = builtins.filter((b) => !providers.some((p) => p.spec.id === b.id));
+  const move = (id: string, dir: -1 | 1) => {
+    const ids = order.list.map((p) => p.spec.id);
+    const at = ids.indexOf(id);
+    const to = at + dir;
+    if (at < 0 || to < 0 || to >= ids.length) return;
+    [ids[at], ids[to]] = [ids[to], ids[at]];
+    void hub.call('providers.setOrder', { ids });
+  };
   return (
     <div className="pane">
       <div className="pane-head">
         <div>
           <h2>{t('供應商與帳號', 'Providers & accounts')}</h2>
-          <p className="muted">
-            {t(
-              '「訂閱帳號」會開啟該 CLI 官方的登入流程，你在瀏覽器中自行選擇 Google、Email 等方式；「API」的金鑰由 Aivenue 加密保存，只在執行時交給該 CLI。',
+          <Hint
+            className="pane-desc"
+            text={t(
+              '「訂閱帳號」會開啟該 CLI 官方的登入流程，你在瀏覽器中自行選擇 Google、Email 等方式。「API」的金鑰由 Aivenue 加密保存，只在執行時交給該 CLI。',
               '"Subscription" runs the CLI\'s own sign-in so you pick Google, email, etc. in your browser. "API" keys are encrypted by Aivenue and only handed to the CLI when it runs.',
             )}
-          </p>
+          />
         </div>
         <div className="row gap">
-          <button className="btn ghost" disabled={checking} onClick={() => (setChecking(true), hub.call('providers.refresh', {}).finally(() => setChecking(false)))} title={t('重新檢查每一家的登入狀態、模型清單與用量', 'Re-check every provider\'s sign-in, model list and usage')}>
+          <button className="btn ghost" disabled={checking} onClick={() => (setChecking(true), hub.call('providers.refresh', {}).finally(() => setChecking(false)))} title={t('重新檢查每一家的登入狀態、模型清單與用量', "Re-check every provider's sign-in, model list and usage")}>
             {checking ? t('檢查中…', 'Checking…') : t('重新檢查', 'Re-check all')}
           </button>
-          <button className="btn primary" onClick={() => setAdding(true)}>
+          <button ref={addBtn} className="btn primary" onClick={() => setAdding(true)}>
             {t('新增', 'Add')}
           </button>
         </div>
       </div>
       <div className="plist">
-        {order.list.map((p) => (
-          <ProviderRow key={p.spec.id} p={p} secure={host?.secureSecrets ?? true} drag={order.props(p.spec.id)} />
+        {order.list.map((p, i) => (
+          <ProviderRow key={p.spec.id} p={p} secure={host?.secureSecrets ?? true} drag={order.props(p.spec.id)} onMove={(dir) => move(p.spec.id, dir)} first={i === 0} last={i === order.list.length - 1} />
         ))}
       </div>
       {missing.length > 0 && (
-        <div className="muted small">
+        <div className="muted small row gap wrap">
           {t('已移除的內建供應商：', 'Removed built-ins: ')}
           {missing.map((b) => (
             <button key={b.id} className="link" onClick={() => hub.call('providers.reset', { id: b.id })}>
@@ -541,7 +577,7 @@ export function ProvidersPane() {
           ))}
         </div>
       )}
-      {adding && <AddProvider onClose={() => setAdding(false)} />}
+      {adding && <AddProvider onClose={() => setAdding(false)} returnFocus={() => addBtn.current} />}
     </div>
   );
 }

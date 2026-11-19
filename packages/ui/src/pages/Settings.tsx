@@ -1,15 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, GripVertical } from 'lucide-react';
 import type { ProviderUsage } from '../../../core/src/types';
 import { hub, useHostInfo, useProviders, useUsage } from '../api';
 import { ACCENTS, saveSettings, useAppSettings, useT } from '../i18n';
 import { cx, fmtTokens, modelLabel, providerColor, providerName } from '../util';
+import { Ico } from '../icons';
 import { ProvidersPane } from './Providers';
 import { useDragOrder, type DragProps } from '../components/DragOrder';
 import { CapabilitiesPane } from './Capabilities';
 import { MemoryPane } from './Memory';
+import { Hint, Seg } from '../components/Kit';
 
 type Tab = 'general' | 'providers' | 'capabilities' | 'usage' | 'memory';
 
+/** One setting: its name and a line on what it does on the left, its control on the right (stacked in a narrow column). */
 function GeneralPane() {
   const t = useT();
   const s = useAppSettings();
@@ -19,85 +23,95 @@ function GeneralPane() {
       <div className="pane-head">
         <h2>{t('一般', 'General')}</h2>
       </div>
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('外觀', 'Appearance')}</div>
-          <div className="muted small">{t('跟隨系統，或固定淺色／深色', 'Follow the system, or force light / dark')}</div>
-        </div>
-        <div className="seg">
-          {(['system', 'light', 'dark'] as const).map((v) => (
-            <button key={v} className={cx(s.theme === v && 'on')} onClick={() => saveSettings({ theme: v })}>
-              {v === 'system' ? t('系統', 'System') : v === 'light' ? t('淺色', 'Light') : t('深色', 'Dark')}
-            </button>
-          ))}
-        </div>
-      </section>
-      {host?.host === 'vscode' && <div className="muted small">{t('在 VS Code 中會沿用編輯器的佈景主題色彩。', 'Inside VS Code the editor theme colors are used.')}</div>}
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('強調色', 'Accent color')}</div>
-          <div className="muted small">{t('按鈕焦點、連結與進度指示的顏色', 'Used for focus, links and progress indicators')}</div>
-        </div>
-        <div className="swatches">
-          {ACCENTS.map((a) => (
-            <button key={a.id} className={cx('swatch', s.accent === a.id && 'on')} style={{ background: a.id }} title={t(a.zh, a.en)} onClick={() => saveSettings({ accent: a.id })} />
-          ))}
-          <label className="swatch custom" title={t('自訂', 'Custom')}>
-            <input type="color" value={s.accent} onChange={(e) => saveSettings({ accent: e.target.value })} />
-          </label>
-        </div>
-      </section>
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('語言', 'Language')}</div>
-          <div className="muted small">{t('介面與 Aivenue 訊息的語言（agent 會用你任務描述的語言回覆）', 'Language of the interface and Aivenue messages (agents reply in the language of your task)')}</div>
-        </div>
-        <select value={s.locale} onChange={(e) => saveSettings({ locale: e.target.value as 'zh-TW' | 'en' })}>
-          <option value="zh-TW">繁體中文</option>
-          <option value="en">English</option>
-        </select>
-      </section>
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')}</div>
-          <div className="muted small">
-            {t(
-              'Claude Code、Antigravity 等會在對話中保持執行，下一輪不用重新讀取全部內容。工作流還沒結束時（例如等額度重置）一律不關；工作流結束後閒置超過這個時間才關閉。',
-              'Claude Code, Antigravity and similar CLIs stay running in a conversation so the next turn need not read everything again. While the workflow has not ended (e.g. waiting for a quota reset) they are never closed; after it ends they close once idle this long.',
-            )}
+      <div className="settings-group">
+        <section className="setting">
+          <div>
+            <div className="setting-title">{t('外觀', 'Appearance')}</div>
+            <div className="setting-desc">
+              {t('跟隨系統，或固定淺色／深色。', 'Follow the system, or force light / dark.')}
+              {host?.host === 'vscode' && ` ${t('在 VS Code 中會沿用編輯器的佈景主題色彩。', 'Inside VS Code the editor theme colors are used.')}`}
+            </div>
           </div>
-        </div>
-        <select value={String(s.cliIdleMinutes ?? 5)} onChange={(e) => saveSettings({ cliIdleMinutes: Number(e.target.value) })}>
-          {[1, 5, 15, 30, 60, 180].map((m) => (
-            <option key={m} value={m}>
-              {m < 60 ? t(`${m} 分鐘`, `${m} min`) : t(`${m / 60} 小時`, `${m / 60} h`)}
-            </option>
-          ))}
-          <option value="0">{t('不自動關閉（關閉 Aivenue 時才關）', 'Never (until Aivenue closes)')}</option>
-        </select>
-      </section>
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('重新啟動後自動接續', 'Resume after a restart')}</div>
-          <div className="muted small">
-            {t(
-              'Aivenue 更新或重新啟動時還在執行的工作流，啟動後從中斷的階段與輪次自動接著做（一天內中斷的、每段對話最新的一則）。暫停中的不會自動接續，按「繼續」才接著做。',
-              'Workflows still running when Aivenue was updated or restarted go on by themselves from the stage and round they stopped in (interrupted within a day, the newest message of each conversation). Paused ones wait until you press Continue.',
-            )}
+          <Seg
+            label={t('外觀', 'Appearance')}
+            value={s.theme}
+            onChange={(v) => saveSettings({ theme: v })}
+            choices={[
+              { value: 'system', label: t('系統', 'System') },
+              { value: 'light', label: t('淺色', 'Light') },
+              { value: 'dark', label: t('深色', 'Dark') },
+            ]}
+          />
+        </section>
+        <section className="setting">
+          <div>
+            <div className="setting-title">{t('強調色', 'Accent color')}</div>
+            <div className="setting-desc">{t('按鈕焦點、連結與進度指示的顏色', 'Used for focus, links and progress indicators')}</div>
           </div>
-        </div>
-        <select value={s.autoResume === false ? 'off' : 'on'} onChange={(e) => saveSettings({ autoResume: e.target.value === 'on' })}>
-          <option value="on">{t('自動接續', 'Resume automatically')}</option>
-          <option value="off">{t('不自動接續（自己按「接續」）', 'Do not (press Resume yourself)')}</option>
-        </select>
-      </section>
-      <section className="setting">
-        <div>
-          <div className="setting-title">{t('資料位置', 'Data folder')}</div>
-          <div className="muted small">{t('設定、對話紀錄與用量統計存放處', 'Where settings, chat logs and usage stats are stored')}</div>
-        </div>
-        <code className="muted">{host?.dataDir}</code>
-      </section>
+          <div className="swatches" role="group" aria-label={t('強調色', 'Accent color')}>
+            {ACCENTS.map((a) => (
+              <button key={a.id} type="button" className={cx('swatch', s.accent === a.id && 'on')} style={{ background: a.id }} title={t(a.zh, a.en)} aria-label={t(a.zh, a.en)} aria-pressed={s.accent === a.id} onClick={() => saveSettings({ accent: a.id })} />
+            ))}
+            <label className="swatch custom" title={t('自訂', 'Custom')}>
+              <input type="color" aria-label={t('自訂強調色', 'Custom accent color')} value={s.accent} onChange={(e) => saveSettings({ accent: e.target.value })} />
+            </label>
+          </div>
+        </section>
+        <section className="setting">
+          <div>
+            <div className="setting-title">{t('語言', 'Language')}</div>
+            <Hint className="setting-desc" text={t('介面與 Aivenue 訊息的語言。agent 會用你任務描述的語言回覆。', 'Language of the interface and Aivenue messages. Agents reply in the language of your task.')} />
+          </div>
+          <select aria-label={t('語言', 'Language')} value={s.locale} onChange={(e) => saveSettings({ locale: e.target.value as 'zh-TW' | 'en' })}>
+            <option value="zh-TW">繁體中文</option>
+            <option value="en">English</option>
+          </select>
+        </section>
+        <section className="setting">
+          <div>
+            <div className="setting-title">{t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')}</div>
+            <Hint
+              className="setting-desc"
+              text={t(
+                '工作流結束後閒置超過這段時間才關閉，執行中一律不關。Claude Code、Antigravity 等會在對話中保持執行，下一輪不用重新讀取全部內容；工作流還沒結束時（例如等額度重置）一律不關。選「不自動關閉」時，關閉 Aivenue 才會關。',
+                'They close once idle this long after the workflow ends, never while it runs. Claude Code, Antigravity and similar CLIs stay running in a conversation so the next turn need not read everything again; while the workflow has not ended (e.g. waiting for a quota reset) they are never closed. With Never, they close when Aivenue closes.',
+              )}
+            />
+          </div>
+          <select aria-label={t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')} value={String(s.cliIdleMinutes ?? 5)} onChange={(e) => saveSettings({ cliIdleMinutes: Number(e.target.value) })}>
+            {[1, 5, 15, 30, 60, 180].map((m) => (
+              <option key={m} value={m}>
+                {m < 60 ? t(`${m} 分鐘`, `${m} min`) : t(`${m / 60} 小時`, `${m / 60} h`)}
+              </option>
+            ))}
+            <option value="0">{t('不自動關閉', 'Never')}</option>
+          </select>
+        </section>
+        <section className="setting">
+          <div>
+            <div className="setting-title">{t('重新啟動後自動接續', 'Resume after a restart')}</div>
+            <Hint
+              className="setting-desc"
+              text={t(
+                'Aivenue 更新或重新啟動時還在執行的工作流，啟動後從中斷的階段與輪次自動接著做。只接續一天內中斷的、每段對話最新的一則；暫停中的不會自動接續，按「繼續」才接著做。選「手動接續」時，自己按「接續」。',
+                'Workflows still running when Aivenue was updated or restarted go on by themselves from the stage and round they stopped in. Only those interrupted within a day, the newest message of each conversation; paused ones wait until you press Continue. With Manual, press Resume yourself.',
+              )}
+            />
+          </div>
+          <select aria-label={t('重新啟動後自動接續', 'Resume after a restart')} value={s.autoResume === false ? 'off' : 'on'} onChange={(e) => saveSettings({ autoResume: e.target.value === 'on' })}>
+            <option value="on">{t('自動接續', 'Resume automatically')}</option>
+            <option value="off">{t('手動接續', 'Manual')}</option>
+          </select>
+        </section>
+        {/* A path, not a control: under its name, left-aligned over the whole width. */}
+        <section className="setting">
+          <div className="grow min0">
+            <div className="setting-title">{t('資料位置', 'Data folder')}</div>
+            <div className="setting-desc">{t('設定、對話紀錄與用量統計存放處', 'Where settings, chat logs and usage stats are stored')}</div>
+            <code className="setting-code">{host?.dataDir}</code>
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -109,15 +123,15 @@ function Meter({ used, label, sub, detail, cap, children }: { used: number; labe
   const level = left <= 10 ? 'err' : left <= 30 ? 'warn' : '';
   return (
     <div className="meter">
-      <div className="row between small gap">
+      <div className="row between gap meter-head">
         <span>{label}</span>
-        <span className={cx('nowrap', level === 'err' ? 'err-text' : level === 'warn' ? 'warn-text' : 'muted')}>{t(`剩餘 ${left.toFixed(0)}%`, `${left.toFixed(0)}% left`)}</span>
+        <span className={cx('nowrap num', level === 'err' ? 'err-text' : level === 'warn' ? 'warn-text' : 'muted')}>{t(`剩餘 ${left.toFixed(0)}%`, `${left.toFixed(0)}% left`)}</span>
       </div>
       <div className="meter-track">
         <div className={cx('meter-fill', level)} style={{ width: `${left}%` }} />
         {cap !== undefined && <div className="meter-cap" style={{ left: `${Math.max(0, 100 - cap)}%` }} title={`${cap}%`} />}
       </div>
-      <div className="muted tiny">
+      <div className="muted tiny num">
         {t(`已用 ${Math.max(0, Math.min(100, used)).toFixed(0)}%`, `${Math.max(0, Math.min(100, used)).toFixed(0)}% used`)}
         {sub ? ` · ${sub}` : ''}
       </div>
@@ -155,7 +169,7 @@ function CapInput({ providerId, window, cap, used }: { providerId: string; windo
         onChange={(e) => setValue(e.target.value)}
         onBlur={() => save(value)}
         onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-        aria-label={t('用量上限（百分比）', 'Usage cap (percent)')}
+        aria-label={t('用量上限百分比', 'Usage cap in percent')}
       />
       <span className="muted">{t('% 時暫停工作並問你', '% used, then pause and ask')}</span>
       {cap !== undefined && used >= cap && <span className="err-text">{t('已達上限', 'At the cap')}</span>}
@@ -168,7 +182,6 @@ function CapInput({ providerId, window, cap, used }: { providerId: string; windo
     </div>
   );
 }
-
 
 /** Antigravity's quota needs a Google sign-in of its own; this connects or disconnects it. */
 function AntigravityConnect({ connected, error }: { connected: boolean; error?: string }) {
@@ -196,11 +209,12 @@ function AntigravityConnect({ connected, error }: { connected: boolean; error?: 
     );
   return (
     <div className="stack">
-      <div className="muted tiny">
-        {t('Antigravity 的額度要向 Google 查詢。連接一次 Google 帳號（官方登入頁，Aivenue 不經手密碼）後，這裡會顯示每個模型的剩餘額度與重置時間。', "Antigravity's quota comes from Google. Connect your Google account once (Google's own sign-in page; Aivenue never sees your password) to see each model's remaining share and reset time here.")}
-      </div>
+      <Hint
+        className="muted tiny"
+        text={t('Antigravity 的額度要向 Google 查詢。連接一次 Google 帳號後，這裡會顯示每個模型的剩餘額度與重置時間；登入在 Google 官方頁面進行，Aivenue 不經手密碼。', "Antigravity's quota comes from Google. Connect your Google account once to see each model's remaining share and reset time here; you sign in on Google's own page and Aivenue never sees your password.")}
+      />
       {(error || fail) && <div className="note warn small">{fail ?? error}</div>}
-      <div className="row gap">
+      <div className="row gap wrap">
         <button className="btn small" onClick={connect}>
           {t('連接 Google 帳號', 'Connect Google account')}
         </button>
@@ -215,21 +229,22 @@ function AntigravityConnect({ connected, error }: { connected: boolean; error?: 
   );
 }
 
+/** One provider's usage: a section (no card) with its quota windows, a few numbers in rows, the last 14 days, by model. */
 function UsageCard({ u, name, drag, caps }: { u: ProviderUsage; name: string; drag?: DragProps; caps?: Record<string, number> }) {
   const t = useT();
   const max = Math.max(1, ...u.daily.map((d) => d.input + d.output + d.cached));
   const windowLabel = (m: number) => (m >= 43200 ? t('每月', 'Monthly') : m >= 10080 ? t('每週', 'Weekly') : m >= 1440 ? t(`${Math.round(m / 1440)} 天`, `${Math.round(m / 1440)}-day`) : t(`${Math.round(m / 60)} 小時`, `${Math.round(m / 60)}-hour`));
   const resets = (ts?: number) => (ts ? t(`重置於 ${new Date(ts).toLocaleString()}`, `Resets ${new Date(ts).toLocaleString()}`) : undefined);
   return (
-    <div className={cx('ucard', drag?.dragging && 'dragging', drag?.over)} {...drag?.row}>
-      <div className="row gap">
+    <section className={cx('ucard', drag?.dragging && 'dragging', drag?.over)} {...drag?.row}>
+      <div className="ucard-head">
         {drag && (
-          <span className="prow-grip" title={t('拖動調整順序', 'Drag to reorder')} aria-hidden="true" {...drag.grip}>
-            ⋮⋮
+          <span className="prow-grip" title={t('拖動調整順序，供應商頁的「更多」選單也能上移下移', 'Drag to reorder; the More menu on the Providers page moves it too')} aria-hidden="true" {...drag.grip}>
+            <Ico i={GripVertical} size={14} />
           </span>
         )}
         <span className="mark lg" style={{ background: providerColor(u.providerId) }} />
-        <strong className="grow">{name}</strong>
+        <h3 className="grow">{name}</h3>
         {u.official?.plan && <span className="tag">{u.official.plan}</span>}
       </div>
 
@@ -241,17 +256,17 @@ function UsageCard({ u, name, drag, caps }: { u: ProviderUsage; name: string; dr
             </Meter>
           ))}
           {u.official.limitReached && <div className="note warn small">{t('目前已達用量上限，要等上面的重置時間。', 'The plan limit is reached right now; wait for the reset time above.')}</div>}
-          {!!u.official.resetCredits && <div className="muted tiny">{t(`帳號還有 ${u.official.resetCredits} 次免費「額度重置」可用（在 Codex 裡使用）。`, `The account has ${u.official.resetCredits} free limit reset(s) left (use them in Codex).`)}</div>}
+          {!!u.official.resetCredits && <div className="muted tiny">{t(`帳號還有 ${u.official.resetCredits} 次免費「額度重置」可用，在 Codex 裡使用。`, `The account has ${u.official.resetCredits} free limit reset(s) left; use them in Codex.`)}</div>}
           <div className="muted tiny">
             {u.official.source === 'antigravity-live'
-              ? t(`來源：Google 即時查詢${u.official.account ? `（${u.official.account}）` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Google${u.official.account ? ` (${u.official.account})` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              ? t(`來源：Google 即時查詢${u.official.account ? ` · ${u.official.account}` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Google${u.official.account ? ` · ${u.official.account}` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
               : u.official.source === 'claude-live'
-              ? t(`來源：Claude 即時查詢（與 Claude Code 的 /usage 相同），${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Claude (same as /usage in Claude Code), ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              ? t(`來源：Claude 即時查詢，與 Claude Code 的 /usage 相同，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Claude, same as /usage in Claude Code, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
               : u.official.source === 'copilot-live'
-              ? t(`來源：GitHub 即時查詢${u.official.account ? `（${u.official.account}）` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from GitHub${u.official.account ? ` (${u.official.account})` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              ? t(`來源：GitHub 即時查詢${u.official.account ? ` · ${u.official.account}` : ''}，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from GitHub${u.official.account ? ` · ${u.official.account}` : ''}, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
               : u.official.source === 'codex-live'
-              ? t(`來源：Codex 即時查詢（${new Date(u.official.updatedAt).toLocaleTimeString()}）`, `Source: live from Codex (${new Date(u.official.updatedAt).toLocaleTimeString()})`)
-              : t(`來源：Codex 本機紀錄，最後一次執行時的狀態（${new Date(u.official.updatedAt).toLocaleString()}）`, `Source: Codex local log, as of its last run (${new Date(u.official.updatedAt).toLocaleString()})`)}
+              ? t(`來源：Codex 即時查詢，${new Date(u.official.updatedAt).toLocaleTimeString()}`, `Source: live from Codex, ${new Date(u.official.updatedAt).toLocaleTimeString()}`)
+              : t(`來源：Codex 本機紀錄，最後一次執行時的狀態，${new Date(u.official.updatedAt).toLocaleString()}`, `Source: Codex local log, as of its last run, ${new Date(u.official.updatedAt).toLocaleString()}`)}
           </div>
           {u.providerId === 'antigravity' && <AntigravityConnect connected />}
         </div>
@@ -264,30 +279,30 @@ function UsageCard({ u, name, drag, caps }: { u: ProviderUsage; name: string; dr
       )}
 
       {u.limitHit && (
-        <div className="note warn">
+        <div className="note warn small">
           {t('最近一次達到用量上限：', 'Last limit hit: ')}
           {new Date(u.limitHit.at).toLocaleString()} — {u.limitHit.message}
         </div>
       )}
 
-      <div className="ustats">
+      <dl className="ustats">
         <div>
-          <div className="big">{u.today.runs}</div>
-          <div className="muted tiny">{t('今日執行', 'Runs today')}</div>
+          <dt>{t('今日執行', 'Runs today')}</dt>
+          <dd className="num">{u.today.runs}</dd>
         </div>
         <div>
-          <div className="big">{fmtTokens(u.today.input + u.today.output)}</div>
-          <div className="muted tiny">{t('今日 tokens', 'Tokens today')}</div>
+          <dt>{t('今日 tokens', 'Tokens today')}</dt>
+          <dd className="num">{fmtTokens(u.today.input + u.today.output)}</dd>
         </div>
         <div>
-          <div className="big">{fmtTokens(u.last7.input + u.last7.output)}</div>
-          <div className="muted tiny">{t('7 天 tokens', '7-day tokens')}</div>
+          <dt>{t('7 天 tokens', '7-day tokens')}</dt>
+          <dd className="num">{fmtTokens(u.last7.input + u.last7.output)}</dd>
         </div>
         <div>
-          <div className="big">{u.last7.costUsd > 0 ? `$${u.last7.costUsd.toFixed(2)}` : '—'}</div>
-          <div className="muted tiny">{t('7 天估計費用', '7-day est. cost')}</div>
+          <dt>{t('7 天估計費用', '7-day est. cost')}</dt>
+          <dd className="num">{u.last7.costUsd > 0 ? `$${u.last7.costUsd.toFixed(2)}` : '—'}</dd>
         </div>
-      </div>
+      </dl>
 
       <div className="spark-bars" title={t('近 14 天 tokens', 'Tokens, last 14 days')}>
         {u.daily.map((d) => {
@@ -297,37 +312,39 @@ function UsageCard({ u, name, drag, caps }: { u: ProviderUsage; name: string; dr
       </div>
 
       {!!u.models?.length && (
-        <table className="umodels">
-          <thead>
-            <tr>
-              <th>{t('依模型（近 7 天）', 'By model (7 days)')}</th>
-              <th>{t('今日', 'Today')}</th>
-              <th>{t('7 天', '7 days')}</th>
-              <th>{t('執行', 'Runs')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {u.models.map((m) => {
-              const week = m.last7.input + m.last7.output;
-              const all = u.last7.input + u.last7.output;
-              return (
-                <tr key={m.model}>
-                  <td title={m.model || undefined}>
-                    <div className="umodel-name">{m.model ? modelLabel(m.model) : t('CLI 預設模型', 'CLI default model')}</div>
-                    <div className="umodel-bar">
-                      <span style={{ width: `${all ? Math.max(2, (week / all) * 100) : 0}%` }} />
-                    </div>
-                  </td>
-                  <td>{fmtTokens(m.today.input + m.today.output)}</td>
-                  <td>{fmtTokens(week)}</td>
-                  <td>{m.last7.runs}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="umodels-wrap">
+          <table className="umodels">
+            <thead>
+              <tr>
+                <th>{t('依模型，近 7 天', 'By model, 7 days')}</th>
+                <th>{t('今日', 'Today')}</th>
+                <th>{t('7 天', '7 days')}</th>
+                <th>{t('執行', 'Runs')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {u.models.map((m) => {
+                const week = m.last7.input + m.last7.output;
+                const all = u.last7.input + u.last7.output;
+                return (
+                  <tr key={m.model}>
+                    <td title={m.model || undefined}>
+                      <div className="umodel-name">{m.model ? modelLabel(m.model) : t('CLI 預設模型', 'CLI default model')}</div>
+                      <div className="umodel-bar">
+                        <span style={{ width: `${all ? Math.min(100, Math.max(2, (week / all) * 100)) : 0}%` }} />
+                      </div>
+                    </td>
+                    <td>{fmtTokens(m.today.input + m.today.output)}</td>
+                    <td>{fmtTokens(week)}</td>
+                    <td>{m.last7.runs}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -369,15 +386,16 @@ function UsagePane() {
       <div className="pane-head">
         <div>
           <h2>{t('用量', 'Usage')}</h2>
-          <p className="muted">
-            {t(
-              '額度和官方 App 一樣顯示「剩餘」百分比。Claude Code 用它自己的登入查詢 5 小時與每週額度；Codex 直接向 Codex 即時查詢；Antigravity 連接 Google 帳號後向 Google 查詢各組模型的額度；GitHub Copilot 用已登入的 GitHub 帳號查詢每月進階請求；其他家沒有公開的查詢方式，顯示的是 Aivenue 統計的每次執行 tokens 與費用。開啟這頁時會立即更新，之後每分鐘自動更新。',
-              "Quotas show the share LEFT, like the vendors' own apps. Claude Code's 5-hour and weekly limits are read with its own sign-in; Codex is read live from Codex; Antigravity per model group from Google once you connect a Google account; GitHub Copilot's monthly premium requests with your GitHub sign-in; other vendors have no public lookup, so their numbers are the tokens and cost Aivenue tracked per run. Refreshed when you open this page and every minute after.",
+          <Hint
+            className="pane-desc"
+            text={t(
+              '額度和官方 App 一樣顯示「剩餘」百分比，開啟這頁時會立即更新，之後每分鐘自動更新。Claude Code 用它自己的登入查詢 5 小時與每週額度；Codex 直接向 Codex 即時查詢；Antigravity 連接 Google 帳號後向 Google 查詢各組模型的額度；GitHub Copilot 用已登入的 GitHub 帳號查詢每月進階請求；其他家沒有公開的查詢方式，顯示的是 Aivenue 統計的每次執行 tokens 與費用。',
+              "Quotas show the share LEFT, like the vendors' own apps, refreshed when you open this page and every minute after. Claude Code's 5-hour and weekly limits are read with its own sign-in; Codex is read live from Codex; Antigravity per model group from Google once you connect a Google account; GitHub Copilot's monthly premium requests with your GitHub sign-in; other vendors have no public lookup, so their numbers are the tokens and cost Aivenue tracked per run.",
             )}
-          </p>
+          />
         </div>
         <div className="row gap">
-          {checkedAt && <span className="muted tiny">{t(`更新於 ${new Date(checkedAt).toLocaleTimeString()}`, `Updated ${new Date(checkedAt).toLocaleTimeString()}`)}</span>}
+          {checkedAt && <span className="muted tiny num">{t(`更新於 ${new Date(checkedAt).toLocaleTimeString()}`, `Updated ${new Date(checkedAt).toLocaleTimeString()}`)}</span>}
           <button className="btn" disabled={loading} onClick={() => refresh(true)}>
             {loading ? t('更新中…', 'Refreshing…') : t('重新整理', 'Refresh')}
           </button>
@@ -393,20 +411,18 @@ function UsagePane() {
 }
 
 /** Version and build of the window and of its background service; a mismatch means a reload is due. */
-function BuildInfo() {
+function BuildInfo({ className }: { className?: string }) {
   const t = useT();
   const host = useHostInfo();
   const ui = typeof __AIVENUE_BUILD__ === 'string' ? __AIVENUE_BUILD__ : 'dev';
   if (!host) return null;
   const same = !host.build || host.build === ui;
   return (
-    <div className="build-info" title={t(`畫面：${ui}\n背景程式：${host.build ?? '?'}`, `Window: ${ui}\nBackground service: ${host.build ?? '?'}`)}>
-      Aivenue {host.version}
-      <br />
-      {t('建置', 'Build')} {host.build ?? ui}
+    <div className={cx('build-info', className)} title={t(`畫面：${ui}\n背景程式：${host.build ?? '?'}`, `Window: ${ui}\nBackground service: ${host.build ?? '?'}`)}>
+      <span>Aivenue {host.version}</span> <span>{t('建置', 'Build')} {host.build ?? ui}</span>
       {!same && (
         <div className="warn-text">
-          {t('畫面和背景程式不是同一個建置：請重新載入視窗（VS Code：Developer: Reload Window）。', 'The window and the background service are different builds: reload the window (VS Code: Developer: Reload Window).')}
+          {t('畫面和背景程式不是同一個建置：請重新載入視窗。VS Code 用 Developer: Reload Window。', 'The window and the background service are different builds: reload the window. In VS Code: Developer: Reload Window.')}
         </div>
       )}
     </div>
@@ -422,19 +438,40 @@ export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: str
     { id: 'usage', label: t('用量', 'Usage') },
     { id: 'memory', label: t('記憶', 'Memory') },
   ];
+  // Narrow, the pages are one row of tabs that may scroll sideways: the open one is scrolled into view, and an edge
+  // fades where more tabs are hidden.
+  const row = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    const active = el.querySelector<HTMLElement>('a.active');
+    if (active && el.scrollWidth > el.clientWidth) el.scrollLeft = Math.max(0, active.offsetLeft - (el.clientWidth - active.offsetWidth) / 2);
+    const check = () => setMore({ left: el.scrollLeft > 1, right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1 });
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    window.addEventListener('resize', check);
+    return () => {
+      el.removeEventListener('scroll', check);
+      window.removeEventListener('resize', check);
+    };
+  }, [tab]);
   return (
     <div className="settings">
-      <nav className="settings-nav">
-        <div className="settings-title">{t('設定', 'Settings')}</div>
-        {tabs.map((x) => (
-          <a key={x.id} href={`#/settings/${x.id}`} className={cx(tab === x.id && 'active')}>
-            {x.label}
-          </a>
-        ))}
-        <a className="settings-back" href={backHref}>
-          ← {t('返回對話', 'Back to chat')}
+      <nav className="settings-nav" aria-label={t('設定', 'Settings')}>
+        <a className="settings-back" href={backHref} title={t('返回對話', 'Back to chat')} aria-label={t('返回對話', 'Back to chat')}>
+          <Ico i={ArrowLeft} size={16} />
+          <span className="settings-back-text">{t('返回對話', 'Back to chat')}</span>
         </a>
-        <BuildInfo />
+        <div className="settings-title">{t('設定', 'Settings')}</div>
+        <div className={cx('settings-tabs', more.left && 'more-left', more.right && 'more-right')} ref={row}>
+          {tabs.map((x) => (
+            <a key={x.id} href={`#/settings/${x.id}`} className={cx(tab === x.id && 'active')} aria-current={tab === x.id ? 'page' : undefined}>
+              {x.label}
+            </a>
+          ))}
+        </div>
+        <BuildInfo className="nav-build" />
       </nav>
       <div className="settings-body">
         {tab === 'general' && <GeneralPane />}
@@ -442,6 +479,8 @@ export function Settings({ tab, backHref = '#/new' }: { tab: Tab; backHref?: str
         {tab === 'capabilities' && <CapabilitiesPane />}
         {tab === 'usage' && <UsagePane />}
         {tab === 'memory' && <MemoryPane />}
+        {/* Narrow, the build is a quiet line at the end of the page instead of a line under the tabs on every page. */}
+        <BuildInfo className="body-build" />
       </div>
     </div>
   );

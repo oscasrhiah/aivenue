@@ -1,12 +1,16 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { CircleCheck, CircleDashed, CircleX, ExternalLink, FolderOpen, Info, LoaderCircle, Lock, LockOpen, Pencil, PlugZap, Plus, Square, SquareCheck, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Ico } from '../icons';
 import type { ConfigValue, ExtensionId, ExtensionStatus, InstructionRole, McpServerConfig, PackSkillId, PonytailLevel, ProjectSkillInfo, SkillInfo, SkillReview } from '../../../core/src/types';
-import { hub, useCapabilities, useExtensions, useHostInfo, usePackSkills, useProviders } from '../api';
+import { hub, useCapabilities, useExtensions, useGithub, useHostInfo, usePackSkills, useProviders } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
 import { ExtensionGuide } from '../components/ExtensionGuide';
 import { OmniProviders } from '../components/OmniProviders';
 import { ask } from '../components/Ask';
+import { Dialog, Hint, Seg, ShowAll, StateWord, Switch } from '../components/Kit';
+import { capabilityCounts, overviewParts } from '../settingsView';
 
 const ROLES: InstructionRole[] = ['all', 'planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent'];
 
@@ -55,23 +59,38 @@ function Instructions() {
       <div className="cap-head">
         <div>
           <h3>{t('角色指示', 'Role instructions')}</h3>
-          <p className="muted small">
-            {t(
-              '加在每個 agent 的系統提示詞後面（Claude Code、Qwen 使用 --append-system-prompt，其他 CLI 會放在任務指示最前面）。「所有角色」會套用到每一個角色。',
-              'Appended to each agent\'s system prompt (Claude Code and Qwen use --append-system-prompt; other CLIs get it at the top of the task). "All roles" applies to every role.',
+          <Hint
+            className="cap-desc"
+            text={t(
+              '加在每個 agent 的系統提示詞後面，「所有角色」會套用到每一個角色。Claude Code、Qwen 使用 --append-system-prompt，其他 CLI 會放在任務指示最前面。',
+              'Appended to each agent\'s system prompt; "All roles" applies to every role. Claude Code and Qwen use --append-system-prompt; other CLIs get it at the top of the task.',
             )}
-          </p>
+          />
         </div>
       </div>
-      <div className="tabs-mini">
-        {ROLES.map((r) => (
-          <button key={r} className={cx(role === r && 'on')} onClick={() => setRole(r)}>
-            {roleName(t, r)}
-            {draft[r]?.trim() ? <span className="has" /> : null}
-          </button>
-        ))}
-      </div>
+      {/* Which role's instructions the box below shows: a radio group (the arrows move between roles, as in segments). */}
+      <Seg
+        className="tabs-mini"
+        label={t('看哪個角色的指示', "Which role's instructions")}
+        value={role}
+        onChange={setRole}
+        choices={ROLES.map((r) => ({
+          value: r,
+          label: (
+            <>
+              {roleName(t, r)}
+              {draft[r]?.trim() ? (
+                <>
+                  <span className="has" aria-hidden="true" />
+                  <span className="sr-only">{t('，已填', ', filled in')}</span>
+                </>
+              ) : null}
+            </>
+          ),
+        }))}
+      />
       <textarea
+        aria-label={t(`${roleName(t, role)}的指示`, `Instructions for ${roleName(t, role)}`)}
         rows={7}
         value={draft[role] ?? ''}
         onChange={(e) => {
@@ -90,7 +109,11 @@ function Instructions() {
         <button className="btn primary" disabled={!dirty || busy} onClick={() => run(() => hub.call('capabilities.setInstructions', { instructions: draft })).then((ok) => ok && setSaved(true))}>
           {t('儲存', 'Save')}
         </button>
-        {saved && !dirty && <span className="ok-text small">✓ {t('已儲存', 'Saved')}</span>}
+        {saved && !dirty && (
+          <StateWord icon={CircleCheck} tone="ok" className="small">
+            {t('已儲存', 'Saved')}
+          </StateWord>
+        )}
         {error && <span className="err-text small">{error}</span>}
       </div>
     </section>
@@ -124,16 +147,23 @@ function KVEditor({ rows, onChange, keyLabel }: { rows: KV[]; onChange: (r: KV[]
             onChange={(e) => set(i, { value: e.target.value })}
             autoComplete="off"
           />
-          <button className={cx('icon-btn', r.secret && 'on')} title={t('以加密方式保存（金鑰、Token）', 'Store encrypted (keys, tokens)')} onClick={() => set(i, { secret: !r.secret, stored: false })}>
-            {r.secret ? '🔒' : '🔓'}
+          <button
+            type="button"
+            className={cx('icon-btn', r.secret && 'on')}
+            title={t('加密保存：用於金鑰、Token', 'Store encrypted: for keys and tokens')}
+            aria-label={t(`加密保存 ${r.key || keyLabel}`, `Store ${r.key || keyLabel} encrypted`)}
+            aria-pressed={r.secret}
+            onClick={() => set(i, { secret: !r.secret, stored: false })}
+          >
+            <Ico i={r.secret ? Lock : LockOpen} size={16} />
           </button>
-          <button className="icon-btn" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
-            ✕
+          <button type="button" className="icon-btn" aria-label={t(`移除 ${r.key || keyLabel} 這一列`, `Remove the ${r.key || keyLabel} row`)} title={t('移除這一列', 'Remove this row')} onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+            <Ico i={X} size={16} />
           </button>
         </div>
       ))}
-      <button className="link" onClick={() => onChange([...rows, { key: '', value: '', secret: false, stored: false }])}>
-        + {t('新增', 'Add')}
+      <button type="button" className="link link-icon" onClick={() => onChange([...rows, { key: '', value: '', secret: false, stored: false }])}>
+        <Ico i={Plus} size={14} /> {t('新增', 'Add')}
       </button>
     </div>
   );
@@ -179,14 +209,21 @@ function ServerEditor({ initial, isNew, onClose }: { initial: McpServerConfig; i
       onClose();
     });
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{isNew ? t('新增 MCP 伺服器', 'Add MCP server') : s.id}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
+    <Dialog
+      title={isNew ? t('新增 MCP 伺服器', 'Add MCP server') : s.id}
+      onClose={onClose}
+      keepOpen
+      foot={
+        <>
+          <button className="btn" onClick={onClose}>
+            {t('取消', 'Cancel')}
           </button>
-        </div>
+          <button className="btn primary" disabled={busy} onClick={save}>
+            {t('儲存', 'Save')}
+          </button>
+        </>
+      }
+    >
         <div className="kv">
           <label>{t('名稱', 'Name')}</label>
           <input className="mono" disabled={!isNew} value={s.id} onChange={(e) => setS({ ...s, id: e.target.value })} placeholder="github" />
@@ -197,14 +234,15 @@ function ServerEditor({ initial, isNew, onClose }: { initial: McpServerConfig; i
         </div>
         <div className="kv">
           <label>{t('類型', 'Type')}</label>
-          <div className="seg">
-            <button className={cx(s.transport === 'stdio' && 'on')} onClick={() => setS({ ...s, transport: 'stdio' })}>
-              stdio（{t('本機指令', 'local command')}）
-            </button>
-            <button className={cx(s.transport === 'http' && 'on')} onClick={() => setS({ ...s, transport: 'http' })}>
-              HTTP
-            </button>
-          </div>
+          <Seg
+            label={t('類型', 'Type')}
+            value={s.transport}
+            onChange={(transport) => setS({ ...s, transport })}
+            choices={[
+              { value: 'stdio', label: t('stdio 本機指令', 'stdio, local command') },
+              { value: 'http', label: 'HTTP' },
+            ]}
+          />
         </div>
         {s.transport === 'stdio' ? (
           <>
@@ -213,7 +251,7 @@ function ServerEditor({ initial, isNew, onClose }: { initial: McpServerConfig; i
               <input className="mono" value={s.command ?? ''} onChange={(e) => setS({ ...s, command: e.target.value })} placeholder="npx" />
             </div>
             <div className="kv top">
-              <label>{t('參數（每行一個）', 'Args (one per line)')}</label>
+              <label>{t('參數，每行一個', 'Args, one per line')}</label>
               <textarea className="code" rows={3} value={args} onChange={(e) => setArgs(e.target.value)} placeholder={'-y\n@modelcontextprotocol/server-github'} />
             </div>
             <div className="kv top">
@@ -258,16 +296,7 @@ function ServerEditor({ initial, isNew, onClose }: { initial: McpServerConfig; i
           </div>
         </div>
         {error && <div className="note err">{error}</div>}
-        <div className="row end gap">
-          <button className="btn" onClick={onClose}>
-            {t('取消', 'Cancel')}
-          </button>
-          <button className="btn primary" disabled={busy} onClick={save}>
-            {t('儲存', 'Save')}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -297,29 +326,27 @@ function ImportJson({ onClose }: { onClose: () => void }) {
       onClose();
     });
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{t('從 JSON 匯入', 'Import from JSON')}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        <p className="muted small">
-          {t('貼上 Claude Code／Cursor／Gemini 常見的 mcpServers 設定。匯入後環境變數是明文保存，含金鑰的欄位建議再編輯改成 🔒。', 'Paste an mcpServers block as used by Claude Code / Cursor / Gemini. Imported env values are stored in plain text; edit and lock 🔒 any secrets afterwards.')}
-        </p>
-        <textarea className="code" rows={14} value={text} onChange={(e) => setText(e.target.value)} placeholder={'{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}'} />
-        {error && <div className="note err">{error}</div>}
-        <div className="row end gap">
+    <Dialog
+      title={t('從 JSON 匯入', 'Import from JSON')}
+      onClose={onClose}
+      keepOpen
+      foot={
+        <>
           <button className="btn" onClick={onClose}>
             {t('取消', 'Cancel')}
           </button>
           <button className="btn primary" disabled={busy || !text.trim()} onClick={doImport}>
             {t('匯入', 'Import')}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+        <p className="muted small">
+          {t('貼上 Claude Code／Cursor／Gemini 常見的 mcpServers 設定。匯入後環境變數是明文保存，含金鑰的欄位建議再編輯，改成「加密保存」。', 'Paste an mcpServers block as used by Claude Code / Cursor / Gemini. Imported env values are stored in plain text; edit them afterwards and set secrets to Store encrypted.')}
+        </p>
+        <textarea className="code" aria-label="JSON" rows={14} value={text} onChange={(e) => setText(e.target.value)} placeholder={'{\n  "mcpServers": {\n    "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] }\n  }\n}'} />
+        {error && <div className="note err">{error}</div>}
+    </Dialog>
   );
 }
 
@@ -340,33 +367,34 @@ function ServerRow({ s }: { s: McpServerConfig }) {
   return (
     <div className="crow">
       <div className="crow-head">
-        <label className="switch">
-          <input type="checkbox" checked={s.enabled} onChange={(e) => hub.call('capabilities.saveServer', { server: { ...s, enabled: e.target.checked } })} />
-          <span />
-        </label>
         <div className="grow min0">
           <div className="crow-name">
             {s.id} <span className="tag">{s.transport}</span>
           </div>
-          <div className="muted small mono ellipsis">{s.description || target}</div>
+          <div className="muted small mono ellipsis" title={target}>
+            {s.description || target}
+          </div>
+          <div className="muted tiny">{s.providers?.length ? s.providers.map((id) => providers.find((p) => p.spec.id === id)?.spec.name ?? id).join(', ') : t('全部供應商', 'All providers')}</div>
         </div>
-        <div className="row gap">
-          <span className="muted small">{s.providers?.length ? s.providers.map((id) => providers.find((p) => p.spec.id === id)?.spec.name ?? id).join(', ') : t('全部供應商', 'All providers')}</span>
-          <button className="btn small" disabled={probe?.busy} onClick={test}>
-            {probe?.busy ? t('測試中…', 'Testing…') : t('測試', 'Test')}
+        <div className="row gap crow-actions">
+          <button className="btn small ghost link-icon" disabled={probe?.busy} onClick={test}>
+            <Ico i={PlugZap} size={14} /> {probe?.busy ? t('測試中…', 'Testing…') : t('測試', 'Test')}
           </button>
-          <button className="btn small ghost" onClick={() => setEditing(true)}>
-            {t('編輯', 'Edit')}
+          <button className="btn small ghost link-icon" onClick={() => setEditing(true)}>
+            <Ico i={Pencil} size={14} /> {t('編輯', 'Edit')}
           </button>
-          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={async () => (await ask(t(`刪除 ${s.id}？`, `Delete ${s.id}?`), { danger: true })) && hub.call('capabilities.deleteServer', { id: s.id })}>
-            ✕
+          <button className="icon-btn" title={t(`刪除 ${s.id}`, `Delete ${s.id}`)} aria-label={t(`刪除 ${s.id}`, `Delete ${s.id}`)} onClick={async () => (await ask(t(`刪除 ${s.id}？`, `Delete ${s.id}?`), { danger: true })) && hub.call('capabilities.deleteServer', { id: s.id })}>
+            <Ico i={Trash2} size={16} />
           </button>
+          <Switch label={s.id} checked={s.enabled} onChange={(on) => void hub.call('capabilities.saveServer', { server: { ...s, enabled: on } })} />
         </div>
       </div>
       {probe?.error && <div className="note err">{probe.error}</div>}
       {probe?.tools && (
         <div className="note">
-          ✓ {t(`連線成功，${probe.tools.length} 個工具：`, `Connected, ${probe.tools.length} tools: `)}
+          <StateWord icon={CircleCheck} tone="ok">
+            {t(`連線成功，${probe.tools.length} 個工具：`, `Connected, ${probe.tools.length} tools: `)}
+          </StateWord>{' '}
           <span className="mono small">{probe.tools.map((x) => x.name).join(', ')}</span>
         </div>
       )}
@@ -394,43 +422,52 @@ function BrowserPresets({ servers }: { servers: McpServerConfig[] }) {
   }, []);
   if (!presets.length) return null;
   return (
-    <div className="presets-grid">
-      {presets.map((p) => {
-        const existing = servers.find((s) => s.id === p.id);
-        return (
-          <div key={p.id} className={cx('preset-card', existing?.enabled && 'on')}>
-            <div className="row gap">
-              <b>🌐 {p.name}</b>
-              {existing && <span className={cx('pill', existing.enabled ? 'ok' : 'muted')}>{existing.enabled ? t('已啟用', 'On') : t('已停用', 'Off')}</span>}
-            </div>
-            <div className="muted small">{t(p.zh, p.en)}</div>
-            {!existing ? (
-              <div className="row gap wrap">
-                <button className="btn primary" disabled={busy} onClick={() => run(() => hub.call('capabilities.addPreset', { id: p.id, headed: !!headed[p.id] }))}>
-                  {t('一鍵啟用', 'Enable')}
-                </button>
-                <label className="check small">
-                  <input type="checkbox" checked={!!headed[p.id]} onChange={(e) => setHeaded({ ...headed, [p.id]: e.target.checked })} />
-                  {t('顯示瀏覽器視窗（看 agent 操作）', 'Show the browser window (watch the agent)')}
-                </label>
-              </div>
-            ) : (
-              <div className="muted tiny">{t('在下方清單可停用、測試或移除。', 'Turn off, test or remove it in the list below.')}</div>
-            )}
-            <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: p.docsUrl })}>
-              {t('說明文件', 'Docs')}
-            </button>
-          </div>
-        );
-      })}
+    <>
       <div className="muted tiny preset-note">
         {t(
-          '使用獨立、用完即丟的瀏覽器設定檔，不會用到你平常登入帳號的瀏覽器。第一次使用時會自動下載工具（需要 Node.js）。',
-          'Uses a separate throwaway browser profile, never your everyday browser with your logins. The tool downloads on first use (needs Node.js).',
+          '使用獨立、用完即丟的瀏覽器設定檔，不會用到你平常登入帳號的瀏覽器。第一次使用時會自動下載工具，需要 Node.js。',
+          'Uses a separate throwaway browser profile, never your everyday browser with your logins. The tool downloads on first use and needs Node.js.',
         )}
       </div>
+      <div className="clist presets-list">
+        {presets.map((p) => {
+          const existing = servers.find((s) => s.id === p.id);
+          return (
+            <div key={p.id} className="crow preset-row">
+              <div className="crow-head">
+                <div className="grow min0">
+                  <div className="crow-name">{p.name}</div>
+                  <div className="muted small">{t(p.zh, p.en)}</div>
+                  {existing ? (
+                    <div className="muted tiny">{t('在下方清單可停用、測試或移除。', 'Turn off, test or remove it in the list below.')}</div>
+                  ) : (
+                    <label className="check small">
+                      <input type="checkbox" checked={!!headed[p.id]} onChange={(e) => setHeaded({ ...headed, [p.id]: e.target.checked })} />
+                      {t('顯示瀏覽器視窗，看 agent 操作', 'Show the browser window to watch the agent')}
+                    </label>
+                  )}
+                </div>
+                <div className="row gap crow-actions">
+                  <button className="link link-icon tiny" onClick={() => hub.call('host.openExternal', { url: p.docsUrl })}>
+                    <Ico i={ExternalLink} size={14} /> {t('說明文件', 'Docs')}
+                  </button>
+                  {existing ? (
+                    <StateWord icon={existing.enabled ? CircleCheck : CircleDashed} tone={existing.enabled ? 'ok' : undefined}>
+                      {existing.enabled ? t('已啟用', 'On') : t('已停用', 'Off')}
+                    </StateWord>
+                  ) : (
+                    <button className="btn small" disabled={busy} onClick={() => run(() => hub.call('capabilities.addPreset', { id: p.id, headed: !!headed[p.id] }))}>
+                      {t('一鍵啟用', 'Enable')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {error && <div className="note err">{error}</div>}
-    </div>
+    </>
   );
 }
 
@@ -444,18 +481,19 @@ function McpServers() {
       <div className="cap-head">
         <div>
           <h3>{t('共用 MCP 伺服器', 'Shared MCP servers')}</h3>
-          <p className="muted small">
-            {t(
+          <Hint
+            className="cap-desc"
+            text={t(
               '設定一次，執行時自動提供給所選供應商的每一個 agent，不必在 Claude、Codex、Antigravity 各設定一次。各 CLI 自己原本設定的 MCP 仍然有效。',
-              'Configure once; every agent of the selected providers gets these servers at run time, so you no longer configure Claude, Codex and Antigravity separately. Each CLI\'s own MCP settings still apply.',
+              "Configure once; every agent of the selected providers gets these servers at run time, so you no longer configure Claude, Codex and Antigravity separately. Each CLI's own MCP settings still apply.",
             )}
-          </p>
+          />
         </div>
         <div className="row gap">
           <button className="btn ghost" onClick={() => setImporting(true)}>
             {t('從 JSON 匯入', 'Import JSON')}
           </button>
-          <button className="btn primary" onClick={() => setAdding(true)}>
+          <button className="btn" onClick={() => setAdding(true)}>
             {t('新增', 'Add')}
           </button>
         </div>
@@ -465,9 +503,9 @@ function McpServers() {
       <div className="block-label">{t('已設定的伺服器', 'Configured servers')}</div>
       <div className="clist">
         {config.mcpServers.length === 0 && <div className="empty-row muted small">{t('尚未設定共用 MCP 伺服器', 'No shared MCP servers yet')}</div>}
-        {config.mcpServers.map((s) => (
-          <ServerRow key={s.id} s={s} />
-        ))}
+        <ShowAll list={config.mcpServers}>
+          {(shown) => shown.map((s) => <ServerRow key={s.id} s={s} />)}
+        </ShowAll>
       </div>
       {adding && <ServerEditor isNew initial={{ id: '', enabled: true, transport: 'stdio', args: [], env: {} }} onClose={() => setAdding(false)} />}
       {importing && <ImportJson onClose={() => setImporting(false)} />}
@@ -496,32 +534,31 @@ function SkillEditor({ name, onClose }: { name?: string; onClose: () => void }) 
     if (name) hub.call<string>('skills.read', { name }).then(setContent).catch(() => undefined);
   }, [name]);
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{name ? name : t('新增 Skill', 'New skill')}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
-          </button>
-        </div>
-        {!name && (
-          <div className="kv">
-            <label>{t('資料夾名稱', 'Folder name')}</label>
-            <input className="mono" value={skillName} onChange={(e) => setSkillName(e.target.value)} placeholder="code-style" />
-          </div>
-        )}
-        <textarea className="code" rows={20} value={content} onChange={(e) => setContent(e.target.value)} spellCheck={false} />
-        {error && <div className="note err">{error}</div>}
-        <div className="row end gap">
+    <Dialog
+      title={name ? name : t('新增 Skill', 'New skill')}
+      onClose={onClose}
+      size="lg"
+      keepOpen
+      foot={
+        <>
           <button className="btn" onClick={onClose}>
             {t('取消', 'Cancel')}
           </button>
           <button className="btn primary" disabled={busy || !skillName.trim()} onClick={() => run(() => hub.call('skills.save', { name: skillName.trim(), content })).then((ok) => ok && onClose())}>
             {t('儲存', 'Save')}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+        {!name && (
+          <div className="kv">
+            <label>{t('資料夾名稱', 'Folder name')}</label>
+            <input className="mono" value={skillName} onChange={(e) => setSkillName(e.target.value)} placeholder="code-style" />
+          </div>
+        )}
+        <textarea className="code" aria-label="SKILL.md" rows={20} value={content} onChange={(e) => setContent(e.target.value)} spellCheck={false} />
+        {error && <div className="note err">{error}</div>}
+    </Dialog>
   );
 }
 
@@ -551,8 +588,10 @@ function ReviewState({ r }: { r: SkillReview }) {
           : t('待確認：還沒確認過這一版，暫停載入。打開開關，看過掃描結果後確認，才會提供給 agent', 'Waiting for approval: not loaded until you turn it on and approve this version after looking at the scan')
   return (
     <div className={cx('skill-review', r.state)}>
-      <span className={cx('ext-chip', r.state === 'approved' ? 'ok' : r.state === 'failed' ? 'bad' : 'warn')}>{state}</span>
-      <span className="muted tiny"> · {scan}</span>
+      <StateWord icon={r.state === 'approved' ? CircleCheck : r.state === 'failed' ? CircleX : TriangleAlert} tone={r.state === 'approved' ? 'ok' : r.state === 'failed' ? 'err' : 'warn'} className="small skill-state">
+        {state}
+      </StateWord>
+      <div className="muted tiny">{scan}</div>
     </div>
   );
 }
@@ -573,14 +612,20 @@ function ApproveSkill({ title, r, onApprove, onClose }: { title: string; r: Skil
       .then(onClose)
       .catch((e) => setError((e as Error).message));
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3>{t(`啟用前確認：${title}`, `Before turning it on: ${title}`)}</h3>
-          <button className="icon-btn" onClick={onClose}>
-            ✕
+    <Dialog
+      title={t(`啟用前確認：${title}`, `Before turning it on: ${title}`)}
+      onClose={onClose}
+      foot={
+        <>
+          <button className="btn ghost" onClick={onClose}>
+            {t('取消', 'Cancel')}
           </button>
-        </div>
+          <button className="btn primary" disabled={failed || (n > 0 && !seen)} onClick={approve}>
+            {t('啟用這一版', 'Turn this version on')}
+          </button>
+        </>
+      }
+    >
         <p className="small">
           {t(
             `Aivenue 只會載入你確認的這一版（版本 ${r.hash?.slice(0, 12) ?? '?'}，${r.scan?.files ?? '?'} 個檔案）。之後任何檔案有變動，都會暫停載入，等你重新確認。`,
@@ -616,16 +661,7 @@ function ApproveSkill({ title, r, onApprove, onClose }: { title: string; r: Skil
           </>
         )}
         {error && <div className="note err">{error}</div>}
-        <div className="row gap end">
-          <button className="btn ghost" onClick={onClose}>
-            {t('取消', 'Cancel')}
-          </button>
-          <button className="btn primary" disabled={failed || (n > 0 && !seen)} onClick={approve}>
-            {t('啟用這一版', 'Turn this version on')}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -644,36 +680,37 @@ function SkillRow({ s }: { s: SkillInfo }) {
   return (
     <div className="crow">
       <div className="crow-head">
-        <label className="switch">
-          <input type="checkbox" checked={loaded} onChange={(e) => toggle(e.target.checked)} />
-          <span />
-        </label>
         <div className="grow min0">
           <div className="crow-name">
             {s.name} {s.files > 1 && <span className="tag">{t(`${s.files} 個檔案`, `${s.files} files`)}</span>}
           </div>
-          <div className="muted small">{s.description || t('（沒有 description）', '(no description)')}</div>
+          <div className="muted small">{s.description || t('沒有 description', 'No description')}</div>
           <ReviewState r={s.review} />
         </div>
-        <div className="row gap">
-          <button className="btn small ghost" onClick={() => setEditing(true)}>
-            {t('編輯', 'Edit')}
+        <div className="row gap crow-actions">
+          <button className="btn small ghost link-icon" onClick={() => setEditing(true)}>
+            <Ico i={Pencil} size={14} /> {t('編輯', 'Edit')}
           </button>
-          <button className="btn small ghost" onClick={() => hub.call('skills.openFolder', { name: s.name })}>
-            {t('資料夾', 'Folder')}
+          <button className="btn small ghost link-icon" onClick={() => hub.call('skills.openFolder', { name: s.name })}>
+            <Ico i={FolderOpen} size={14} /> {t('資料夾', 'Folder')}
           </button>
-          <button className="icon-btn" title={t('刪除', 'Delete')} onClick={async () => (await ask(t(`刪除 skill「${s.name}」與其檔案？`, `Delete skill "${s.name}" and its files?`), { danger: true })) && hub.call('skills.delete', { name: s.name })}>
-            ✕
+          <button className="icon-btn" title={t(`刪除 ${s.name}`, `Delete ${s.name}`)} aria-label={t(`刪除 ${s.name}`, `Delete ${s.name}`)} onClick={async () => (await ask(t(`刪除 skill「${s.name}」與其檔案？`, `Delete skill "${s.name}" and its files?`), { danger: true })) && hub.call('skills.delete', { name: s.name })}>
+            <Ico i={Trash2} size={16} />
           </button>
+          <Switch label={s.name} checked={loaded} onChange={(on) => void toggle(on)} />
         </div>
       </div>
-      <div className="row gap wrap role-filter">
+      <div className="row gap wrap role-filter" role="group" aria-label={t(`${s.name} 提供給哪些角色`, `Roles ${s.name} is offered to`)}>
         <span className="muted tiny">{t('提供給：', 'For: ')}</span>
-        {ROLES.filter((r) => r !== 'all').map((r) => (
-          <button key={r} className={cx('mini-chip', (roles.length === 0 || roles.includes(r)) && 'on')} onClick={() => toggleRole(r)}>
-            {roleName(t, r)}
-          </button>
-        ))}
+        {ROLES.filter((r) => r !== 'all').map((r) => {
+          const on = roles.length === 0 || roles.includes(r);
+          return (
+            <button key={r} type="button" aria-pressed={on} className={cx('role-check', on && 'on')} onClick={() => toggleRole(r)}>
+              <Ico i={on ? SquareCheck : Square} size={14} />
+              {roleName(t, r)}
+            </button>
+          );
+        })}
         {roles.length > 0 && (
           <button className="link" onClick={() => hub.call('skills.set', { name: s.name, roles: [] })}>
             {t('全部角色', 'All roles')}
@@ -694,15 +731,14 @@ function ProjectSkillRow({ s }: { s: ProjectSkillInfo }) {
   return (
     <div className="crow">
       <div className="crow-head">
-        <label className="switch">
-          <input type="checkbox" checked={loaded} onChange={(e) => (e.target.checked ? setApproving(true) : hub.call('skills.disableProject', { dir: s.dir }))} />
-          <span />
-        </label>
         <div className="grow min0">
           <div className="crow-name">{s.name}</div>
-          <div className="muted small">{s.description || t('（沒有 description）', '(no description)')}</div>
+          <div className="muted small">{s.description || t('沒有 description', 'No description')}</div>
           <div className="muted tiny mono break">{s.dir}</div>
           <ReviewState r={s.review} />
+        </div>
+        <div className="row gap crow-actions">
+          <Switch label={s.name} checked={loaded} onChange={(on) => void (on ? setApproving(true) : hub.call('skills.disableProject', { dir: s.dir }))} />
         </div>
       </div>
       {approving && <ApproveSkill title={s.name} r={s.review} onApprove={(acceptFindings) => hub.call('skills.approveProject', { dir: s.dir, hash: s.review.hash, acceptFindings })} onClose={() => setApproving(false)} />}
@@ -721,18 +757,13 @@ function Skills() {
       <div className="cap-head">
         <div>
           <h3>{t('共用 Skills', 'Shared skills')}</h3>
-          <p className="muted small">
-            {t(
-              '採用 Agent Skills 格式（資料夾 + SKILL.md）。每個 agent 都會收到 skill 清單（名稱與說明），需要時自己讀取 SKILL.md，因此任何能讀檔的 CLI 都能使用。',
-              'Agent Skills format (a folder with SKILL.md). Every agent gets the list of skills (name and description) and reads SKILL.md when relevant, so any CLI that can read files can use them.',
+          <Hint
+            className="cap-desc"
+            text={t(
+              '每個 agent 都會收到 skill 清單，需要時自己讀取 SKILL.md，任何能讀檔的 CLI 都能使用。格式是 Agent Skills：一個資料夾加一份 SKILL.md，清單裡是名稱與說明。匯入或手動放進資料夾的 skill 會先暫停載入：Aivenue 在本機做靜態掃描，不連網、不呼叫模型，你看過結果、確認這一版後才會提供給 agent；確認後檔案有變動，會再暫停。用「新增」或「編輯」在這裡寫的 skill 不受影響。',
+              'Every agent gets the list of skills and reads SKILL.md when relevant, so any CLI that can read files can use them. The format is Agent Skills: a folder with SKILL.md; the list holds names and descriptions. Skills you import or put into the folder yourself are not loaded at first: Aivenue scans them locally, with no network and no model, and offers one to agents only after you looked at the result and approved that version; a later change to its files stops it again. Skills written here with Add or Edit are not affected.',
             )}
-          </p>
-          <p className="muted small">
-            {t(
-              '匯入或手動放進資料夾的 skill 會先暫停載入：Aivenue 在本機做靜態掃描（不連網、不呼叫模型），你看過結果、確認這一版後才會提供給 agent；確認後檔案有變動，會再暫停。用「新增」或「編輯」在這裡寫的 skill 不受影響。',
-              'Skills you import or put into the folder yourself are not loaded at first: Aivenue scans them locally (no network, no model), and offers one to agents only after you looked at the result and approved that version; a later change to its files stops it again. Skills written here with Add or Edit are not affected.',
-            )}
-          </p>
+          />
         </div>
         <div className="row gap">
           <button className="btn ghost" onClick={() => hub.call('skills.openFolder', {})}>
@@ -743,7 +774,7 @@ function Skills() {
               {t('匯入資料夾…', 'Import folder…')}
             </button>
           )}
-          <button className="btn primary" onClick={() => setAdding(true)}>
+          <button className="btn" onClick={() => setAdding(true)}>
             {t('新增', 'Add')}
           </button>
         </div>
@@ -751,23 +782,20 @@ function Skills() {
       {error && <div className="note err">{error}</div>}
       <div className="clist">
         {skills.length === 0 && <div className="empty-row muted small">{t('尚未加入 skill。可以從 Claude Code 的 ~/.claude/skills 匯入現有的 skill 資料夾。', 'No skills yet. You can import existing skill folders, e.g. from ~/.claude/skills.')}</div>}
-        {skills.map((s) => (
-          <SkillRow key={s.name} s={s} />
-        ))}
+        <ShowAll list={skills}>{(shown) => shown.map((s) => <SkillRow key={s.name} s={s} />)}</ShowAll>
       </div>
       {projectSkills.length > 0 && (
         <>
-          <h4>{t('工作資料夾裡的專案 skills', 'Project skills in working folders')}</h4>
-          <p className="muted small">
-            {t(
-              'Aivenue 在工作資料夾的 .aivenue/skills 找到這些 skill。檔案留在原處；確認這一版之前不會提供給 agent。Aivenue 自己整理出的專案規則不受影響。',
-              'Aivenue found these in working folders (.aivenue/skills). Their files stay where they are; they are not offered to agents until you approve this version. Project rules Aivenue distilled itself are not affected.',
+          <h4 className="cap-sub">{t('工作資料夾裡的專案 skills', 'Project skills in working folders')}</h4>
+          <Hint
+            className="cap-desc"
+            text={t(
+              'Aivenue 在工作資料夾的 .aivenue/skills 找到這些 skill，確認這一版之前不會提供給 agent。檔案留在原處；Aivenue 自己整理出的專案規則不受影響。',
+              'Aivenue found these in the .aivenue/skills of working folders; they are not offered to agents until you approve this version. Their files stay where they are; project rules Aivenue distilled itself are not affected.',
             )}
-          </p>
+          />
           <div className="clist">
-            {projectSkills.map((s) => (
-              <ProjectSkillRow key={s.dir} s={s} />
-            ))}
+            <ShowAll list={projectSkills}>{(shown) => shown.map((s) => <ProjectSkillRow key={s.dir} s={s} />)}</ShowAll>
           </div>
         </>
       )}
@@ -778,9 +806,9 @@ function Skills() {
 
 // ---------------- built-in extensions ----------------
 
-const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en: string; url: string; license: string }> = {
+/** The built-in extensions: no icon of their own (the name says it), a one-line tagline, where they come from. */
+const EXT_INFO: Record<ExtensionId, { name: string; zh: string; en: string; url: string; license: string }> = {
   ponytail: {
-    icon: '🎀',
     name: 'Ponytail',
     zh: '「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計、不加沒人要的功能。',
     en: '"The laziest senior dev in the room": the smallest change that fully solves the task, no over-engineering, no features nobody asked for.',
@@ -788,7 +816,6 @@ const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en
     license: 'MIT',
   },
   'agent-skills': {
-    icon: '🧰',
     name: 'Agent Skills',
     zh: 'Addy Osmani 的 25 個工程技能：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能等，依角色提供。',
     en: "Addy Osmani's 25 engineering skills: specs, task breakdown, TDD, debugging, code review, security, performance and more, per role.",
@@ -796,7 +823,6 @@ const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en
     license: 'MIT',
   },
   graphify: {
-    icon: '🕸️',
     name: 'Graphify',
     zh: '把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案。程式碼在本機解析，不呼叫 API。',
     en: 'Turns the project into a knowledge graph; agents query the graph before reading files. Code is parsed locally, no API calls.',
@@ -804,7 +830,6 @@ const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en
     license: 'Apache-2.0',
   },
   omniroute: {
-    icon: '🔀',
     name: 'OmniRoute',
     zh: '本機 AI 閘道，接上數百家供應商；auto/best-free 會自動挑選現在能用的免費模型，額度用完就換下一家。',
     en: 'A local AI gateway to hundreds of providers; auto/best-free picks a free model that works right now and moves on when one runs out.',
@@ -816,69 +841,21 @@ const EXT_INFO: Record<ExtensionId, { icon: string; name: string; zh: string; en
 const ROLE_SHORT = (t: T, r: InstructionRole) => roleName(t, r);
 
 /**
- * A window for an extension's longer controls (Agent Skills' skill list, OmniRoute's providers), so the cards stay
- * short and the same height in their grid instead of one card stretching its row.
- */
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-
-/**
- * Keyboard: focus moves into the window when it opens (its first control), Tab and Shift+Tab stay inside it, Escape
- * closes it, and focus goes back to the button that opened it.
+ * A window for an extension's longer controls (Agent Skills' skill list, OmniRoute's providers), so its row stays
+ * short. The keyboard is the dialog's: the focus moves in, Tab stays inside, Esc closes it and the focus goes back.
  */
 function ExtWindow({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
-  const t = useT();
-  const box = useRef<HTMLDivElement>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
-  const titleId = useId();
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const items = () => [...(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])].filter((el) => el.offsetParent !== null);
-    // The first control after the close button (the window's content), else the close button.
-    const list = items();
-    (list[1] ?? list[0] ?? box.current)?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        close.current();
-        return;
-      }
-      if (e.key !== 'Tab') return;
-      const all = items();
-      if (!all.length) return e.preventDefault();
-      const first = all[0];
-      const last = all[all.length - 1];
-      const inside = box.current?.contains(document.activeElement);
-      if (e.shiftKey && (document.activeElement === first || !inside)) {
-        e.preventDefault();
-        last.focus();
-      } else if (!e.shiftKey && (document.activeElement === last || !inside)) {
-        e.preventDefault();
-        first.focus();
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
-    return () => {
-      document.removeEventListener('keydown', onKey, true);
-      if (opener?.isConnected) opener.focus();
-    };
-  }, []);
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div ref={box} className="modal ext-window" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head">
-          <h3 id={titleId}>{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label={t('關閉', 'Close')}>
-            ✕
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
+    <Dialog title={title} onClose={onClose} size="lg" className="ext-window" focus="first">
+      {children}
+    </Dialog>
   );
 }
 
+/**
+ * One built-in extension as a row: its name, version and state (an icon and a word), the switch at the end, 說明 for
+ * what it is; under it the tagline, and once it is on, its own options. Where it comes from and its license close it.
+ */
 function ExtensionCard({ s }: { s: ExtensionStatus }) {
   const t = useT();
   const info = EXT_INFO[s.id];
@@ -887,31 +864,33 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
   const [guide, setGuide] = useState(false);
   const [providers, setProviders] = useState(false);
   const { error, busy, run } = useBusy();
-  const pill =
+  const state =
     s.state === 'ready' ? (
-      <span className="pill ok">{t('可以使用', 'Ready')}</span>
+      <StateWord icon={CircleCheck} tone="ok" className="small">
+        {t('可以使用', 'Ready')}
+      </StateWord>
     ) : s.state === 'working' ? (
-      <span className="pill">{t('處理中…', 'Working…')}</span>
+      <StateWord icon={LoaderCircle} tone="run" spin className="small">
+        {t('處理中…', 'Working…')}
+      </StateWord>
     ) : s.state === 'error' ? (
-      <span className="pill warn">{t('需要處理', 'Needs attention')}</span>
+      <StateWord icon={TriangleAlert} tone="warn" className="small">
+        {t('需要處理', 'Needs attention')}
+      </StateWord>
     ) : null;
   const skills = s.skills ?? [];
   const on = skills.filter((k) => k.enabled).length;
   return (
-    <div className={cx('preset-card ext-card', s.enabled && s.state === 'ready' && 'on')}>
+    <div className={cx('crow ext-card', s.enabled && s.state === 'ready' && 'on')}>
       <div className="ext-head">
-        <label className="switch">
-          <input type="checkbox" checked={s.enabled} disabled={busy} onChange={(e) => run(() => hub.call('extensions.setEnabled', { id: s.id, enabled: e.target.checked }))} />
-          <span />
-        </label>
-        <b>
-          {info.icon} {info.name}
-        </b>
+        <b>{info.name}</b>
         {s.version && <span className="tag">v{s.version}</span>}
-        {pill}
-        <button className="btn small ghost ext-guide-btn" onClick={() => setGuide(true)} title={t('這是什麼、包含哪些技能', 'What it is and what it includes')}>
-          ⓘ {t('說明', 'About')}
+        {state}
+        <span className="grow" />
+        <button className="btn small ghost ext-guide-btn link-icon" onClick={() => setGuide(true)} title={t('這是什麼、包含哪些技能', 'What it is and what it includes')} aria-label={t(`${info.name} 說明`, `About ${info.name}`)}>
+          <Ico i={Info} size={14} /> {t('說明', 'About')}
         </button>
+        <Switch label={info.name} checked={s.enabled} disabled={busy} onChange={(v) => void run(() => hub.call('extensions.setEnabled', { id: s.id, enabled: v }))} />
       </div>
       <div className="muted small">{t(info.zh, info.en)}</div>
       {s.enabled && s.message && <div className={cx('note', s.state === 'error' && 'err')}>{s.message}</div>}
@@ -921,20 +900,21 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         <>
           <div className="row gap wrap">
             <span className="muted tiny">{t('強度', 'Level')}</span>
-            <div className="seg small">
-              {(['lite', 'full', 'ultra'] as PonytailLevel[]).map((l) => (
-                <button key={l} className={cx(s.level === l && 'on')} onClick={() => run(() => hub.call('extensions.setOptions', { id: 'ponytail', level: l }))}>
-                  {l}
-                </button>
-              ))}
-            </div>
+            <Seg
+              manual
+              className="small"
+              label={t('Ponytail 強度', 'Ponytail level')}
+              value={s.level}
+              onChange={(l) => void run(() => hub.call('extensions.setOptions', { id: 'ponytail', level: l }))}
+              choices={(['lite', 'full', 'ultra'] as PonytailLevel[]).map((l) => ({ value: l, label: l }))}
+            />
           </div>
           <div className="muted tiny">
             {s.level === 'lite'
               ? t('lite：照要求做，只用一句話提出更小的做法。', 'lite: build what was asked; name the smaller option in one line.')
               : s.level === 'ultra'
                 ? t('ultra：動手前先質疑需求裡沒必要的部分。', 'ultra: also pushes back on parts of the request the need does not justify.')
-                : t('full（預設）：最小但完整的改動。', 'full (default): the smallest complete change.')}{' '}
+                : t('full 是預設：最小但完整的改動。', 'full, the default: the smallest complete change.')}{' '}
             {t('撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能；審查程式碼套用 ponytail-review。', 'Planner, plan reviewer, implementer and sub-agents always follow the main skill; the code reviewer follows ponytail-review.')}
           </div>
         </>
@@ -949,7 +929,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
             </button>
           </div>
           {open && (
-            <ExtWindow title={t(`${info.name}：選擇技能（已開啟 ${on} / ${skills.length}）`, `${info.name}: choose skills (${on} of ${skills.length} on)`)} onClose={() => setOpen(false)}>
+            <ExtWindow title={t(`${info.name}：選擇技能，已開啟 ${on} / ${skills.length}`, `${info.name}: choose skills, ${on} of ${skills.length} on`)} onClose={() => setOpen(false)}>
               <div className="ext-skills in-window">
                 {skills.map((k) => (
                   <label key={k.name} className="ext-skill" title={k.description}>
@@ -963,29 +943,37 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
               {error && <div className="note err">{error}</div>}
             </ExtWindow>
           )}
-          <div className="muted tiny">{t('agent 只會看到技能名稱與一句說明，用到才讀全文，幾乎不增加 token。', 'Agents only see each skill\'s name and one-line description and read the rest when needed, so it costs almost no tokens.')}</div>
+          <div className="muted tiny">{t('agent 只會看到技能名稱與一句說明，用到才讀全文，幾乎不增加 token。', "Agents only see each skill's name and one-line description and read the rest when needed, so it costs almost no tokens.")}</div>
         </>
       )}
 
       {s.id === 'graphify' && s.enabled && (
-        <div className="muted tiny">
-          {t(
-            '第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python，不需要另外安裝）。agent 需要了解大型專案時會用 graphify update . 建圖（寫到 graphify-out/），之後先查圖再讀檔。',
-            'The first time it installs uv and graphify (uv brings its own Python). When agents need to understand a large project they build the graph with graphify update . (into graphify-out/) and query it before reading files.',
+        <Hint
+          className="muted tiny"
+          text={t(
+            '第一次打開會自動安裝 uv 與 graphify，uv 會自己帶 Python，不需要另外安裝。agent 需要了解大型專案時會用 graphify update . 建圖，寫到 graphify-out/，之後先查圖再讀檔。',
+            'The first time it installs uv and graphify; uv brings its own Python. When agents need to understand a large project they build the graph with graphify update . into graphify-out/ and query it before reading files.',
           )}
-        </div>
+        />
       )}
 
       {s.id === 'omniroute' && s.enabled && (
         <>
           {s.omniroute && (
-            <div className="ext-stats small">
-              <span>
-                {t('網址', 'URL')} <span className="mono">{s.omniroute.url}</span>
-              </span>
-              <span>{t(`已連接 ${s.omniroute.connections} 個供應商`, `${s.omniroute.connections} providers connected`)}</span>
-              <span>{t(`agent 可用 ${s.omniroute.models} 個模型（免費 ${s.omniroute.free}）`, `${s.omniroute.models} models for agents (${s.omniroute.free} free)`)}</span>
-            </div>
+            <dl className="ext-stats small">
+              <div>
+                <dt>{t('網址', 'URL')}</dt>
+                <dd className="mono">{s.omniroute.url}</dd>
+              </div>
+              <div>
+                <dt>{t('已連接供應商', 'Providers connected')}</dt>
+                <dd className="num">{s.omniroute.connections}</dd>
+              </div>
+              <div>
+                <dt>{t('agent 可用模型', 'Models for agents')}</dt>
+                <dd className="num">{t(`${s.omniroute.models}，免費 ${s.omniroute.free}`, `${s.omniroute.models}, ${s.omniroute.free} free`)}</dd>
+              </div>
+            </dl>
           )}
           {s.omniroute && (
             <div className="row gap wrap">
@@ -1002,24 +990,26 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
                   })
                 }
               >
-                {copied ? `✓ ${t('已複製', 'Copied')}` : t('複製管理密碼', 'Copy dashboard password')}
+                {copied ? t('已複製', 'Copied') : t('複製管理密碼', 'Copy dashboard password')}
               </button>
               <button className="btn small ghost" disabled={busy} onClick={() => run(() => hub.call('extensions.refresh'))}>
                 {t('重新讀取', 'Reload')}
               </button>
+              <button className={cx('btn small', !s.omniroute.connections ? 'primary' : 'ghost')} onClick={() => setProviders(true)}>
+                {t(`連接免費供應商…`, `Connect free providers…`)}
+              </button>
             </div>
           )}
-          <div className="muted tiny">
-            {s.omniroute && !s.omniroute.connections
-              ? t('下一步：按「連接免費供應商」接上至少一家。OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: press "Connect free providers" and connect at least one. OmniRoute’s built-in no-sign-in models are too short to run an agent.')
-              : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型；自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')}{' '}
-            {t('只在這台電腦上執行（127.0.0.1），管理密碼是自動產生的亂數。', 'Runs on this computer only (127.0.0.1) with a generated dashboard password.')}
-          </div>
-          {s.omniroute && (
-            <button className={cx('btn small', !s.omniroute.connections ? 'primary' : 'ghost')} onClick={() => setProviders(true)}>
-              {t(`連接免費供應商…（已連接 ${s.omniroute.connections} 家）`, `Connect free providers… (${s.omniroute.connections} connected)`)}
-            </button>
-          )}
+          <Hint
+            className="muted tiny"
+            text={
+              (s.omniroute && !s.omniroute.connections
+                ? t('下一步：按「連接免費供應商」接上至少一家，OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: press "Connect free providers" and connect at least one; OmniRoute’s built-in no-sign-in models are too short to run an agent.')
+                : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型，自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')) +
+              ' ' +
+              t('它只在這台電腦上執行，位址是 127.0.0.1，管理密碼是自動產生的亂數。', 'It runs on this computer only, at 127.0.0.1, with a generated dashboard password.')
+            }
+          />
           {s.omniroute && providers && (
             <ExtWindow title={t(`${info.name}：連接免費供應商`, `${info.name}: connect free providers`)} onClose={() => setProviders(false)}>
               <OmniProviders s={s} />
@@ -1036,8 +1026,8 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
       {error && <div className="note err">{error}</div>}
       {guide && <ExtensionGuide id={s.id} onClose={() => setGuide(false)} />}
       <div className="row gap ext-foot">
-        <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
-          {t('來源', 'Source')}
+        <button className="link link-icon tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
+          <Ico i={ExternalLink} size={14} /> {t('來源', 'Source')}
         </button>
         <span className="muted tiny">{info.license}</span>
       </div>
@@ -1077,15 +1067,13 @@ function Extensions() {
       <div className="cap-head">
         <div>
           <h3>{t('內建擴充', 'Built-in extensions')}</h3>
-          <p className="muted small">{t('隨 Aivenue 附上，預設全部關閉，打開就能用。Graphify 與 OmniRoute 第一次打開時會自動下載需要的工具。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time.')}</p>
+          <Hint className="cap-desc" text={t('隨 Aivenue 附上，預設全部關閉，打開就能用。Graphify 與 OmniRoute 第一次打開時會自動下載需要的工具，OmniRoute 約 500 MB。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time, OmniRoute about 500 MB.')} />
         </div>
       </div>
-      <div className="ext-grid-wrap">
-        <div className="presets-grid ext-grid">
-          {list.map((s) => (
-            <ExtensionCard key={s.id} s={s} />
-          ))}
-        </div>
+      <div className="clist ext-list">
+        {list.map((s) => (
+          <ExtensionCard key={s.id} s={s} />
+        ))}
       </div>
     </section>
   );
@@ -1180,12 +1168,13 @@ function PackSkills() {
       <div className="cap-head">
         <div>
           <h3>{t('可開關的內建 Skill', 'Built-in skills you can turn on')}</h3>
-          <p className="muted small">
-            {t(
-              '隨 Aivenue 提供，預設全部關閉。開啟後就提供給列出的角色：每次都出現在它們的技能清單，由 agent 依任務決定要不要讀；Aivenue 不會先檢查變更的檔案才提供。不會自己安裝工具或連網。',
-              'Shipped with Aivenue and off by default. When one is on it is offered to the roles listed: it is in their skills index every time and the agent decides from the task whether to read it; Aivenue does not check the changed files first. None installs tools or goes online.',
+          <Hint
+            className="cap-desc"
+            text={t(
+              '隨 Aivenue 提供，預設全部關閉，開啟後就提供給列出的角色。每次都出現在它們的技能清單，由 agent 依任務決定要不要讀；Aivenue 不會先檢查變更的檔案才提供，也不會自己安裝工具或連網。',
+              'Shipped with Aivenue and off by default; when one is on it is offered to the roles listed. It is in their skills index every time and the agent decides from the task whether to read it; Aivenue does not check the changed files first, and none installs tools or goes online.',
             )}
-          </p>
+          />
         </div>
       </div>
       <div className="clist builtin-skills">
@@ -1194,28 +1183,30 @@ function PackSkills() {
           return (
             <div key={s.id} className="crow">
               <div className="crow-head">
-                <label className="switch">
-                  <input type="checkbox" checked={s.enabled} disabled={busy || !s.available} aria-label={info.title} onChange={(e) => run(() => hub.call('extensions.setPackSkill', { id: s.id, on: e.target.checked }))} />
-                  <span />
-                </label>
                 <div className="grow min0">
                   <div className="crow-name mono">{info.title}</div>
+                  <div className="small">{t(...info.use)}</div>
+                  <div className="muted small">
+                    {t('適用情境：', 'Best for: ')}
+                    {t(...info.when)}
+                  </div>
+                </div>
+                <div className="row gap crow-actions">
+                  <label className="switch" title={info.title}>
+                    <input type="checkbox" role="switch" checked={s.enabled} disabled={busy || !s.available} aria-label={info.title} onChange={(e) => run(() => hub.call('extensions.setPackSkill', { id: s.id, on: e.target.checked }))} />
+                    <span aria-hidden="true" />
+                  </label>
                 </div>
               </div>
-              <div className="small">{t(...info.use)}</div>
-              <div className="muted small">
-                {t('適用情境：', 'Best for: ')}
-                {t(...info.when)}
-              </div>
-              <div className="row gap wrap">
+              <div className="row gap wrap crow-meta">
                 <span className="muted tiny">{t('開啟後提供給：', 'Offered to: ')}</span>
                 {s.roles.map((r) => (
                   <span key={r} className="tag">
                     {roleName(t, r)}
                   </span>
                 ))}
-                <button className="link tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
-                  {t('來源', 'Source')}
+                <button className="link link-icon tiny" onClick={() => hub.call('host.openExternal', { url: info.url })}>
+                  <Ico i={ExternalLink} size={14} /> {t('來源', 'Source')}
                 </button>
                 <span className="muted tiny">{info.license}</span>
                 {!s.available && <span className="muted tiny">{t('這個版本沒有附上', 'Not shipped in this build')}</span>}
@@ -1226,11 +1217,11 @@ function PackSkills() {
       </div>
       {error && <div className="note err">{error}</div>}
       <div className="block-label">{t('設計參考（不會載入）', 'Design references (not loaded)')}</div>
-      <div className="clist builtin-skills">
+      <div className="clist builtin-skills design-refs">
         {DESIGN_REFS.map((d) => (
           <div key={d.name} className="crow">
             <div className="crow-name mono">{d.name}</div>
-            <div className="muted small">{t(...d.text)}</div>
+            <Hint className="muted small" text={t(...d.text)} />
           </div>
         ))}
       </div>
@@ -1245,7 +1236,7 @@ function BuiltinSkills() {
       <div className="cap-head">
         <div>
           <h3>{t('按需使用的內建 Skill', 'Built-in skills used on demand')}</h3>
-          <p className="muted small">{t('這些 Skill 隨 Aivenue 提供，會依任務或該次工作流的設定使用。', 'These skills ship with Aivenue and are used according to the task or that workflow\'s settings.')}</p>
+          <div className="cap-desc">{t('這些 Skill 隨 Aivenue 提供，會依任務或該次工作流的設定使用。', "These skills ship with Aivenue and are used according to the task or that workflow's settings.")}</div>
         </div>
       </div>
       <div className="clist builtin-skills">
@@ -1264,6 +1255,38 @@ function BuiltinSkills() {
   );
 }
 
+/** What is on, in one line at the top of the page: the extensions, the built-in skills, the skills, MCP, GitHub. */
+function Overview() {
+  const t = useT();
+  const ext = useExtensions();
+  const pack = usePackSkills();
+  const { config, skills, projectSkills = [] } = useCapabilities();
+  const gh = useGithub();
+  const c = capabilityCounts({
+    extensions: ext,
+    packSkills: pack,
+    skills: skills.map((s) => ({ enabled: s.enabled, approved: s.review.state === 'approved' })),
+    projectSkills: projectSkills.map((s) => ({ approved: s.review.state === 'approved' })),
+    mcp: config.mcpServers,
+    github: { installed: gh.git.installed && gh.gh.installed, signedIn: gh.auth.loggedIn },
+  });
+  // Each kind under the name of its section below; what is on first, the kinds with nothing on after it.
+  const name = {
+    extensions: t('內建擴充', 'built-in extensions'),
+    builtinSkills: t('可開關的內建 Skill', 'built-in skills you can turn on'),
+    skills: t('共用 Skill', 'shared skills'),
+    mcp: t('MCP 伺服器', 'MCP servers'),
+  };
+  const { on, off } = overviewParts(c);
+  const github = gh.checkedAt === 0 ? t('GitHub 檢查中', 'GitHub: checking') : c.github === 'signedIn' ? t('GitHub 已登入', 'GitHub signed in') : c.github === 'signedOut' ? t('GitHub 未登入', 'GitHub signed out') : t('GitHub 未安裝', 'GitHub not installed');
+  return (
+    <div className="cap-overview">
+      <div>{[on.length > 0 && t(`已開啟：${on.map((p) => `${name[p.kind]} ${p.n} 個`).join('、')}`, `On: ${on.map((p) => `${p.n} ${name[p.kind]}`).join(', ')}`), github].filter(Boolean).join(' · ')}</div>
+      {off.length > 0 && <div className="muted">{t(`未開啟：${off.map((k) => name[k]).join('、')}`, `Nothing on yet: ${off.map((k) => name[k]).join(', ')}`)}</div>}
+    </div>
+  );
+}
+
 export function CapabilitiesPane() {
   const t = useT();
   return (
@@ -1271,7 +1294,8 @@ export function CapabilitiesPane() {
       <div className="pane-head">
         <div>
           <h2>{t('能力', 'Capabilities')}</h2>
-          <p className="muted">{t('所有供應商、所有角色共用的工具、技能與指示。', 'Tools, skills and instructions shared by every provider and role.')}</p>
+          <div className="pane-desc">{t('所有供應商、所有角色共用的工具、技能與指示。', 'Tools, skills and instructions shared by every provider and role.')}</div>
+          <Overview />
         </div>
       </div>
       <GithubCard />

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeftRight, Asterisk, ChevronDown, ChevronRight, CircleOff, Folder, GitBranch, Lightbulb, Shuffle, Workflow, X } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, ReviewTask, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
@@ -12,6 +12,8 @@ import { fmtContext } from '../../../core/src/modelContext';
 import { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, STANDARD_ROUNDS } from '../../../core/src/flowMode';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerColor, providerName } from '../util';
+import { Dialog, Hint, RadioList, Seg, Switch } from './Kit';
+import { folderExample } from '../settingsView';
 
 export type RoleDraft = Omit<WorkflowConfig, 'goal' | 'title'>;
 
@@ -72,14 +74,15 @@ function SecurityCheck({ draft, disabled, locked, onChange }: { draft: RoleDraft
       <label className="check">
         {/* Set before the workflow starts: a running one keeps what it started with (the hub does not take it mid-run). */}
         <input type="checkbox" disabled={disabled || locked} checked={on} onChange={(e) => onChange(e.target.checked)} />
-        {t('安全檢查（這次的程式審查者另外做安全審查）', 'Security check (the code reviewer also reviews for security)')}
+        {t('安全檢查：這次的程式審查者另外做安全審查', 'Security check: the code reviewer also reviews for security')}
       </label>
-      <div className="muted small">
-        {t(
+      <Hint
+        className="muted small"
+        text={t(
           '使用內建的 Cloudflare security-audit skill，只交給這次的程式審查者，依變更範圍讀取相關段落。只做靜態檢查：不執行程式；需要執行才能確認的項目會列為「待驗證」。只套用在這段對話，不會成為新對話的預設。',
           'Uses the bundled Cloudflare security-audit skill, for this workflow\'s code reviewer only, reading the parts that fit the change. Static only: no code is run; what would need running to confirm is listed as "needs validation". For this conversation only, not a default for new ones.',
         )}
-      </div>
+      />
       {locked && (
         <div className="note small">
           {on
@@ -97,20 +100,21 @@ function SecurityCheck({ draft, disabled, locked, onChange }: { draft: RoleDraft
 }
 
 /** A count the user may leave empty for "no limit" (stored as 0); any number from `min` up. */
-function OptionalLimit({ value, min, onChange, disabled }: { value: number; min: number; onChange: (v: number) => void; disabled?: boolean }) {
+function OptionalLimit({ value, min, onChange, disabled, label }: { value: number; min: number; onChange: (v: number) => void; disabled?: boolean; label?: string }) {
   const t = useT();
   return (
     <span className="row gap">
       <input
         disabled={disabled}
         type="number"
+        aria-label={label}
         min={min}
         value={value === 0 ? '' : value}
         placeholder={t('無上限', 'No limit')}
         style={{ width: 96 }}
         onChange={(e) => onChange(e.target.value === '' || Number(e.target.value) <= 0 ? 0 : Math.max(min, Math.round(Number(e.target.value))))}
       />
-      <span className="muted small">{value === 0 ? t('無上限', 'no limit') : t('留空＝無上限', 'empty = no limit')}</span>
+      <span className="muted small">{value === 0 ? t('無上限', 'no limit') : t('留空表示無上限', 'empty for no limit')}</span>
     </span>
   );
 }
@@ -331,7 +335,11 @@ function WfSummary({ permission, isolation, folder, short, label, children }: { 
       </button>
       {open && (
         <div className="wf-pop" role="dialog" aria-label={t('這則訊息的設定', 'Settings for this message')} ref={pop}>
-          {children(() => setOpen(false))}
+          {children(() => {
+            // Back on the summary first: a window opened from here gives the focus back to it when it closes.
+            setOpen(false);
+            btn.current?.focus();
+          })}
         </div>
       )}
     </span>
@@ -371,13 +379,14 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
   const reviewer = draft.implement.reviewer ?? draft.implement.author;
   return (
     <section className="sect">
-      <div className="sect-title">{t('審查目標', 'What to review')}</div>
-      <div className="muted small">
-        {t(
-          '受審提交留空＝審查工作資料夾目前的內容（含未提交的變更）。受審提交不是工作資料夾目前的 HEAD 時，審查者用 git show／git diff 讀它，要執行就另外建立工作樹，不會切換你的資料夾。審查前後 Aivenue 會比對工作資料夾，有變動會寫在報告裡。',
-          "Empty commit = the working folder as it is (uncommitted changes included). When the commit is not the folder's HEAD, the reviewer reads it with git show / git diff and runs it in a separate worktree, never switching your folder. Aivenue compares the working folder before and after the review and reports any change.",
+      <h4 className="sect-title">{t('審查目標', 'What to review')}</h4>
+      <Hint
+        className="muted small"
+        text={t(
+          '受審提交留空時，審查工作資料夾目前的內容，含未提交的變更。受審提交不是工作資料夾目前的 HEAD 時，審查者用 git show／git diff 讀它，要執行就另外建立工作樹，不會切換你的資料夾。審查前後 Aivenue 會比對工作資料夾，有變動會寫在報告裡。',
+          "An empty commit reviews the working folder as it is, uncommitted changes included. When the commit is not the folder's HEAD, the reviewer reads it with git show / git diff and runs it in a separate worktree, never switching your folder. Aivenue compares the working folder before and after the review and reports any change.",
         )}
-      </div>
+      />
       <div className="review-target-fields">
         <div className="kv">
           <label>{t('受審提交', 'Commit')}</label>
@@ -385,10 +394,10 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
         </div>
         <div className="kv">
           <label>{t('比較起點', 'Base')}</label>
-          <input className="mono" disabled={disabled} value={r.base ?? ''} placeholder={t('留空＝受審提交的上一個提交', "empty = the commit's parent")} onChange={(e) => setReview({ base: e.target.value })} />
+          <input className="mono" disabled={disabled} value={r.base ?? ''} placeholder={t('留空表示受審提交的上一個提交', "empty for the commit's parent")} onChange={(e) => setReview({ base: e.target.value })} />
         </div>
         <label className="small" htmlFor="review-material">
-          {t('待查證的材料（實作者的報告、交接）', "Material to verify (an implementer's report, a hand-off)")}
+          {t('待查證的材料：實作者的報告、交接', "Material to verify: an implementer's report, a hand-off")}
         </label>
         <textarea
           id="review-material"
@@ -398,7 +407,7 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
           onChange={(e) => setReview({ material: e.target.value })}
         />
         <label className="small" htmlFor="review-decide">
-          {t(`要審查者決定的事（選填，一行一項，最多 ${DECIDE_MAX} 項、每項 ${DECIDE_ITEM_MAX} 字）`, `Decisions you leave to the reviewer (optional, one per line, at most ${DECIDE_MAX}, each up to ${DECIDE_ITEM_MAX} characters)`)}
+          {t(`要審查者決定的事，選填：一行一項，最多 ${DECIDE_MAX} 項、每項 ${DECIDE_ITEM_MAX} 字`, `Decisions you leave to the reviewer, optional: one per line, at most ${DECIDE_MAX}, each up to ${DECIDE_ITEM_MAX} characters`)}
         </label>
         <textarea
           id="review-decide"
@@ -414,12 +423,13 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
         <div id="review-decide-state" className={decideOver.length ? 'err-text small' : 'muted tiny'} role={decideOver.length ? 'alert' : undefined}>
           {decideOver.length ? decideProblemText(t, decideOver) : t(`${decideItems(r.decide).length}／${DECIDE_MAX} 項`, `${decideItems(r.decide).length} of ${DECIDE_MAX}`)}
         </div>
-        <div className="muted tiny">
-          {t(
+        <Hint
+          className="muted tiny"
+          text={t(
             '列在這裡的，審查者要在報告裡逐項給出選擇、理由和前提，漏答的報告會被退回。只寫在要求裡的選擇，審查者也會回答，但 Aivenue 只能逐項核對列在這裡的。',
             'The reviewer must answer each one listed here with a choice, reasons and assumptions; a report that leaves one out is refused. A choice asked only in your request is answered too, but Aivenue can check only the ones listed here.',
           )}
-        </div>
+        />
         {!auto && (
           <div className="kv">
             <label>{t('審查者', 'Reviewer')}</label>
@@ -437,13 +447,10 @@ function StageSection({ title, hint, authorLabel, reviewerLabel, stage, provider
     <section className="sect">
       <div className="sect-head">
         <div>
-          <div className="sect-title">{title}</div>
+          <h4 className="sect-title">{title}</h4>
           <div className="muted small">{hint}</div>
         </div>
-        <label className="switch">
-          <input type="checkbox" disabled={disabled} checked={stage.enabled} onChange={(e) => onChange({ ...stage, enabled: e.target.checked })} />
-          <span />
-        </label>
+        <Switch label={title} disabled={disabled} checked={stage.enabled} onChange={(on) => onChange({ ...stage, enabled: on })} />
       </div>
       {stage.enabled && (
         <div className="sect-body">
@@ -458,19 +465,16 @@ function StageSection({ title, hint, authorLabel, reviewerLabel, stage, provider
               <div>{reviewerLabel}</div>
               <div className="muted tiny">{t('由另一家 agent 審查，有問題就退回修改，直到通過', 'Another agent reviews and sends it back until it passes')}</div>
             </div>
-            <label className="switch">
-              <input
-                type="checkbox"
-                disabled={disabled}
-                checked={stage.reviewer !== null}
-                onChange={(e) => {
-                  // Default to a different vendor than the author.
-                  const other = providers.find((p) => p.spec.id !== stage.author.provider && p.installed && p.auth.state === 'logged_in')?.spec.id ?? stage.author.provider;
-                  onChange({ ...stage, reviewer: e.target.checked ? { provider: other } : null });
-                }}
-              />
-              <span />
-            </label>
+            <Switch
+              label={reviewerLabel}
+              disabled={disabled}
+              checked={stage.reviewer !== null}
+              onChange={(on) => {
+                // Default to a different vendor than the author.
+                const other = providers.find((p) => p.spec.id !== stage.author.provider && p.installed && p.auth.state === 'logged_in')?.spec.id ?? stage.author.provider;
+                onChange({ ...stage, reviewer: on ? { provider: other } : null });
+              }}
+            />
           </div>
           {!auto && stage.reviewer && (
             <div className="kv">
@@ -481,7 +485,7 @@ function StageSection({ title, hint, authorLabel, reviewerLabel, stage, provider
           {stage.reviewer && (
             <div className="kv">
               <label>{t('最多來回', 'Max rounds')}</label>
-              <OptionalLimit disabled={disabled} value={stage.maxRounds} min={1} onChange={(maxRounds) => onChange({ ...stage, maxRounds })} />
+              <OptionalLimit label={t('最多來回', 'Max rounds')} disabled={disabled} value={stage.maxRounds} min={1} onChange={(maxRounds) => onChange({ ...stage, maxRounds })} />
             </div>
           )}
           <label className="check">
@@ -502,29 +506,24 @@ function GoalSection({ value, onChange, providers, disabled, auto, implementer }
     <section className="sect">
       <div className="sect-head">
         <div>
-          <div className="sect-title">{t('目標驗收', 'Goal verification')}</div>
-          <div className="muted small">{t('計畫者設定一定要通過的最終目標（可量測的驗收指標）。程式審查通過後再逐項量測：有缺陷或證據無效就退回實作者，目標沒達成就退回計畫者重新規劃，直到全部達標才結束。', 'The planner sets a final goal that must pass (measurable acceptance metrics). After the code review each metric is measured: defects or bad evidence go back to the implementer, a missed goal back to the planner to re-plan, until every metric is met.')}</div>
+          <h4 className="sect-title">{t('目標驗收', 'Goal verification')}</h4>
+          <Hint className="muted small" text={t('計畫者設定一定要通過的最終目標，也就是可量測的驗收指標。程式審查通過後再逐項量測：有缺陷或證據無效就退回實作者，目標沒達成就退回計畫者重新規劃，直到全部達標才結束。', 'The planner sets a final goal that must pass: measurable acceptance metrics. After the code review each metric is measured: defects or bad evidence go back to the implementer, a missed goal back to the planner to re-plan, until every metric is met.')} />
         </div>
-        <label className="switch">
-          <input type="checkbox" disabled={disabled} checked={value.enabled} onChange={(e) => onChange({ ...value, enabled: e.target.checked })} />
-          <span />
-        </label>
+        <Switch label={t('目標驗收', 'Goal verification')} disabled={disabled} checked={value.enabled} onChange={(on) => onChange({ ...value, enabled: on })} />
       </div>
       {value.enabled && (
         <div className="sect-body">
-          <div className="seg wide">
-            <button disabled={disabled} className={cx(value.by === 'planner' && 'on')} onClick={() => onChange({ ...value, by: 'planner' })}>
-              {t('由計畫者驗收', 'The planner verifies')}
-            </button>
-            <button disabled={disabled} className={cx(value.by === 'independent' && 'on')} onClick={() => onChange({ ...value, by: 'independent', verifier: value.verifier ?? (auto ? undefined : { provider: other }) })}>
-              {t('獨立驗收者', 'Independent verifier')}
-            </button>
-          </div>
-          <div className="muted small">
-            {value.by === 'planner'
-              ? t('設定目標的計畫者在自己的對話中驗收：最清楚每個指標的用意。', 'The planner that set the goal verifies in its own conversation: it knows why each metric is there.')
-              : t('另一家 agent 獨立量測，不看實作者的說法；預設和實作者不同家。', 'Another agent measures independently, without trusting the implementer; by default another vendor than the implementer.')}
-          </div>
+          <RadioList
+            label={t('誰來驗收', 'Who verifies')}
+            hints="chosen"
+            disabled={disabled}
+            value={value.by}
+            onChange={(by) => onChange(by === 'planner' ? { ...value, by } : { ...value, by, verifier: value.verifier ?? (auto ? undefined : { provider: other }) })}
+            choices={[
+              { value: 'planner', label: t('由計畫者驗收', 'The planner verifies'), hint: t('設定目標的計畫者在自己的對話中驗收：最清楚每個指標的用意。', 'The planner that set the goal verifies in its own conversation: it knows why each metric is there.') },
+              { value: 'independent', label: t('獨立驗收者', 'Independent verifier'), hint: t('另一家 agent 獨立量測，不看實作者的說法；預設和實作者不同家。', 'Another agent measures independently, without trusting the implementer; by default another vendor than the implementer.') },
+            ]}
+          />
           {value.by === 'independent' && !auto && (
             <div className="kv">
               <label>{t('驗收者', 'Verifier')}</label>
@@ -533,7 +532,7 @@ function GoalSection({ value, onChange, providers, disabled, auto, implementer }
           )}
           <div className="kv">
             <label title={t('同一個問題連續修這麼多次還沒好，就交回計畫者重新診斷', 'The same problem failing this many fixes in a row goes back to the planner to re-diagnose')}>{t('重新診斷門檻', 'Re-diagnose after')}</label>
-            <OptionalLimit disabled={disabled} value={value.repeatLimit ?? 3} min={2} onChange={(repeatLimit) => onChange({ ...value, repeatLimit })} />
+            <OptionalLimit label={t('重新診斷門檻', 'Re-diagnose after')} disabled={disabled} value={value.repeatLimit ?? 3} min={2} onChange={(repeatLimit) => onChange({ ...value, repeatLimit })} />
           </div>
         </div>
       )}
@@ -548,7 +547,7 @@ function LimitsSection({ value, onChange, disabled }: { value: LimitsConfig; onC
     <div className="kv">
       <label>{label}</label>
       <span className="row gap">
-        <input disabled={disabled} type="number" min={0} value={value[k] ?? ''} placeholder={t('不限', 'none')} onChange={(e) => onChange({ ...value, [k]: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })} />
+        <input disabled={disabled} aria-label={label} type="number" min={0} value={value[k] ?? ''} placeholder={t('不限', 'none')} onChange={(e) => onChange({ ...value, [k]: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })} />
         <span className="muted small">{unit}</span>
       </span>
     </div>
@@ -557,18 +556,15 @@ function LimitsSection({ value, onChange, disabled }: { value: LimitsConfig; onC
     <section className="sect">
       <div className="sect-head">
         <div>
-          <div className="sect-title">{t('執行限制', 'Limits')}</div>
+          <h4 className="sect-title">{t('執行限制', 'Limits')}</h4>
           <div className="muted small">{t('預設關閉。開啟後碰到上限就停下並標成「未完成」，保留真實狀態，不會假裝成功。', 'Off by default. When on, reaching a limit stops the run and marks it "incomplete": the true state is kept, never a false success.')}</div>
         </div>
-        <label className="switch">
-          <input type="checkbox" disabled={disabled} checked={value.enabled} onChange={(e) => onChange({ ...value, enabled: e.target.checked })} />
-          <span />
-        </label>
+        <Switch label={t('執行限制', 'Limits')} disabled={disabled} checked={value.enabled} onChange={(on) => onChange({ ...value, enabled: on })} />
       </div>
       {value.enabled && (
         <div className="sect-body">
           {num('maxMinutes', t('總時間上限', 'Time limit'), t('分鐘', 'min'))}
-          {num('maxCostUsd', t('費用上限', 'Cost limit'), t('美元（CLI 有回報費用時）', 'USD (when the CLI reports cost)'))}
+          {num('maxCostUsd', t('費用上限', 'Cost limit'), t('美元，CLI 有回報費用時', 'USD, when the CLI reports cost'))}
           {num('maxCycles', t('修正／重新規劃次數', 'Fix / re-plan cycles'), t('次', 'times'))}
           {num('noProgressMinutes', t('沒有進展多久就問我', 'Ask me after no progress for'), t('分鐘', 'min'))}
         </div>
@@ -594,8 +590,8 @@ function PreflightSection({ draft, onDryRun }: { draft: RoleDraft; onDryRun?: ()
     <section className="sect">
       <div className="sect-head">
         <div>
-          <div className="sect-title">{t('預檢與試跑', 'Preflight and dry run')}</div>
-          <div className="muted small">{t('送出前檢查：供應商是否登入、模型與思考程度是否存在、資料夾能否寫入、git、GPU、磁碟與中斷恢復。送出時也會自動檢查，有錯誤會先告訴你。', 'Checks before sending: providers signed in, models and efforts that exist, writable folders, git, GPUs, disk and recovery. Sending runs it too and tells you about errors first.')}</div>
+          <h4 className="sect-title">{t('預檢與試跑', 'Preflight and dry run')}</h4>
+          <Hint className="muted small" text={t('送出時也會自動檢查，有錯誤會先告訴你。預檢會看供應商是否登入、模型與思考程度是否存在、資料夾能否寫入、git、GPU、磁碟與中斷恢復。', 'Sending runs it too and tells you about errors first. It checks that providers are signed in, models and efforts exist, folders are writable, and git, GPUs, disk and recovery.')} />
         </div>
       </div>
       <div className="row gap">
@@ -653,7 +649,7 @@ function AdvisorOptions({ value, onChange, providers, disabled, mains }: { value
         </div>
         <div className="kv">
           <label>{t('最多請教', 'Max calls')}</label>
-          <OptionalLimit disabled={disabled} value={value.maxCalls ?? 5} min={1} onChange={(maxCalls) => onChange({ ...value, maxCalls })} />
+          <OptionalLimit label={t('最多請教', 'Max calls')} disabled={disabled} value={value.maxCalls ?? 5} min={1} onChange={(maxCalls) => onChange({ ...value, maxCalls })} />
         </div>
         <div className="muted tiny">{t('每段對話的請教次數上限。', 'Consultations allowed per conversation.')}</div>
         <FactRounds value={value} onChange={onChange} disabled={disabled} />
@@ -799,22 +795,23 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
   const pct = (n: number) => `${Math.round(n * 100)}%`;
   return (
     <section className="sect">
-      <div className="sect-title">{t('共用上下文的容量與壓縮', 'Shared context size & compaction')}</div>
-      <div className="muted small">
-        {t(
-          'Aivenue 共用上下文（筆記、各 agent 的結果與交接）最多累積多少，以及何時壓縮。輸入框旁的圓餅圖顯示目前用量。容量越大越少壓縮，但 agent 讀完整內容時花的 token 也越多。',
-          "How much Aivenue's shared context (notes, agents' results and hand-offs) may hold, and when it is compacted. The pie next to the message box shows how full it is. A bigger size compacts less often, but agents reading all of it spend more tokens.",
+      <h4 className="sect-title">{t('共用上下文的容量與壓縮', 'Shared context size & compaction')}</h4>
+      <Hint
+        className="muted small"
+        text={t(
+          'Aivenue 共用上下文最多累積多少，以及何時壓縮。共用上下文是筆記、各 agent 的結果與交接；輸入框旁的圓餅圖顯示目前用量。容量越大越少壓縮，但 agent 讀完整內容時花的 token 也越多。',
+          "How much Aivenue's shared context may hold, and when it is compacted. It holds notes and the agents' results and hand-offs; the pie next to the message box shows how full it is. A bigger size compacts less often, but agents reading all of it spend more tokens.",
         )}
-      </div>
+      />
       {summaryOnly && <div className="note small">{t('目前設為「只交摘要」，沒有共用上下文，這些設定暫時不會用到。', 'Sharing is set to summaries only, so these settings are not used right now.')}</div>}
       <div className="kv">
         <label>{t('容量', 'Size')}</label>
         <div className="row gap">
-          <select disabled={disabled} value={custom ? 'custom' : String(cap)} onChange={(e) => onChange({ ...value, capacity: e.target.value === 'custom' ? 300_000 : Number(e.target.value) })}>
+          <select aria-label={t('容量', 'Size')} disabled={disabled} value={custom ? 'custom' : String(cap)} onChange={(e) => onChange({ ...value, capacity: e.target.value === 'custom' ? 300_000 : Number(e.target.value) })}>
             {CAPACITIES.map((c) => (
               <option key={c} value={c}>
                 {label(c)}
-                {c === CAPACITIES[0] ? t('（預設）', ' (default)') : ''}
+                {c === CAPACITIES[0] ? t(' · 預設', ' · default') : ''}
               </option>
             ))}
             <option value="custom">{t('自訂…', 'Custom…')}</option>
@@ -827,7 +824,7 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
       </div>
       <div className="kv">
         <label>{t('自動壓縮', 'Auto-compact at')}</label>
-        <select disabled={disabled} value={value.compactAt ?? 0.8} onChange={(e) => onChange({ ...value, compactAt: Number(e.target.value) })}>
+        <select aria-label={t('自動壓縮', 'Auto-compact at')} disabled={disabled} value={value.compactAt ?? 0.8} onChange={(e) => onChange({ ...value, compactAt: Number(e.target.value) })}>
           {withCurrent([0.7, 0.8, 0.9], value.compactAt ?? 0.8).map((n) => (
             <option key={n} value={n}>
               {t(`用到 ${pct(n)} 時`, `${pct(n)} full`)}
@@ -838,39 +835,40 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
       <div className="kv">
         <label>{t('壓縮者', 'Compactor')}</label>
         <div className="stack">
-          <select disabled={disabled} value={value.compactor ? 'pick' : 'auto'} onChange={(e) => onChange({ ...value, compactor: e.target.value === 'pick' ? { provider: providers.find((p) => p.auth.state === 'logged_in')?.spec.id ?? providers[0]?.spec.id ?? 'claude' } : undefined })}>
-            <option value="auto">{t('自動（已登入中的中價位模型，例如 Claude Haiku）', 'Automatic (a mid-priced signed-in model, e.g. Claude Haiku)')}</option>
+          <select aria-label={t('壓縮者', 'Compactor')} disabled={disabled} value={value.compactor ? 'pick' : 'auto'} onChange={(e) => onChange({ ...value, compactor: e.target.value === 'pick' ? { provider: providers.find((p) => p.auth.state === 'logged_in')?.spec.id ?? providers[0]?.spec.id ?? 'claude' } : undefined })}>
+            <option value="auto">{t('自動：已登入中的中價位模型，例如 Claude Haiku', 'Automatic: a mid-priced signed-in model, e.g. Claude Haiku')}</option>
             <option value="pick">{t('指定…', 'Choose…')}</option>
           </select>
           {value.compactor && <ProviderSelect disabled={disabled} value={value.compactor} providers={providers} onChange={(v) => v && onChange({ ...value, compactor: v })} />}
         </div>
       </div>
-      <div className="muted tiny">
-        {t(
-          '較弱的模型可能漏掉細節：目標、計畫、未解決的審查問題與你的指示一律逐字保留，壓縮後也會檢查檔案路徑與問題編號是否都還在，原文仍可讀取。',
-          'Weaker models may drop details: the goal, plan, open review issues and your instructions are always kept word for word, the summary is checked for every file path and issue id, and the originals stay readable.',
+      <Hint
+        className="muted tiny"
+        text={t(
+          '較弱的模型可能漏掉細節，所以目標、計畫、未解決的審查問題與你的指示一律逐字保留。壓縮後也會檢查檔案路徑與問題編號是否都還在，原文仍可讀取。',
+          'Weaker models may drop details, so the goal, plan, open review issues and your instructions are always kept word for word. The summary is checked for every file path and issue id, and the originals stay readable.',
         )}
-      </div>
+      />
       <div className="kv">
         <label>{t('agent 對話詢問', 'Ask about agents')}</label>
-        <select disabled={disabled} value={value.agentAskAt ?? 0.8} onChange={(e) => onChange({ ...value, agentAskAt: Number(e.target.value) })}>
+        <select aria-label={t('agent 對話詢問', 'Ask about agents')} disabled={disabled} value={value.agentAskAt ?? 0.8} onChange={(e) => onChange({ ...value, agentAskAt: Number(e.target.value) })}>
           {withCurrent([0.7, 0.8, 0.9], value.agentAskAt ?? 0.8).filter((n) => n > 0).map((n) => (
             <option key={n} value={n}>
               {t(`對話用到 ${pct(n)} 時詢問是否壓縮`, `Ask to compact at ${pct(n)}`)}
             </option>
           ))}
-          <option value={0}>{t('不詢問（交給各家 CLI 自己壓縮）', "Never ask (the CLIs compact on their own)")}</option>
+          <option value={0}>{t('不詢問，交給各家 CLI 自己壓縮', 'Never ask; the CLIs compact on their own')}</option>
         </select>
       </div>
       <div className="kv">
         <label>{t('整理共用知識', 'Organize knowledge')}</label>
-        <select disabled={disabled} value={value.organizeEvery ?? 30} onChange={(e) => onChange({ ...value, organizeEvery: Number(e.target.value) })}>
+        <select aria-label={t('整理共用知識', 'Organize knowledge')} disabled={disabled} value={value.organizeEvery ?? 30} onChange={(e) => onChange({ ...value, organizeEvery: Number(e.target.value) })}>
           {withCurrent([10, 20, 30, 50, 100], value.organizeEvery ?? 30)
             .filter((n) => n > 0)
             .map((n) => (
               <option key={n} value={n}>
                 {t(`每 ${n} 則新筆記整理一次`, `Every ${n} new notes`)}
-                {n === 30 ? t('（預設）', ' (default)') : ''}
+                {n === 30 ? t(' · 預設', ' · default') : ''}
               </option>
             ))}
           <option value={0}>{t('不自動整理', 'Never automatically')}</option>
@@ -878,25 +876,29 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
       </div>
       <div className="kv">
         <label>{t('每個 agent 讀入', 'Each agent reads')}</label>
-        <select disabled={disabled} value={value.shareOfWindow ?? 0.5} onChange={(e) => onChange({ ...value, shareOfWindow: Number(e.target.value) })}>
+        <select aria-label={t('每個 agent 讀入', 'Each agent reads')} disabled={disabled} value={value.shareOfWindow ?? 0.5} onChange={(e) => onChange({ ...value, shareOfWindow: Number(e.target.value) })}>
           {withCurrent([0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8], value.shareOfWindow ?? 0.5).map((n) => (
             <option key={n} value={n}>
               {t(`最多佔它上下文的 ${pct(n)}`, `Up to ${pct(n)} of its context`)}
-              {n === 0.5 ? t('（預設）', ' (default)') : ''}
+              {n === 0.5 ? t(' · 預設', ' · default') : ''}
             </option>
           ))}
         </select>
       </div>
-      <div className="muted tiny">
-        {t(
-          '每個 agent 依自己模型能容納的大小讀入共用上下文：目標、狀態與交接一律放最前面，其餘由新到舊放到這個比例為止，放不下的仍可查到。如果某個 CLI 曾在比模型上限更低的大小自己壓縮對話，就以那個大小計算。',
-          'Each agent reads the shared context in proportion to what its model holds: the goal, status and hand-offs always come first, the rest goes in newest first up to this share, and what does not fit can still be looked up. When a CLI has compacted its conversation below its model limit, that size counts instead.',
-        )}{' '}
-        {t(
-          '整理共用知識：壓縮者模型把新的筆記與 findings 依主題（環境、資料、程式結構、已知問題、決策、不可行的做法、進度）整理成一份文件，每一條附出處，原本的筆記不變。',
-          'Organizing: the compactor model sorts new notes and findings by subject (environment, data, code structure, known problems, decisions, approaches that did not work, progress) into one document, each line with its source; the notes stay as they are.',
-        )}
-      </div>
+      <Hint
+        className="muted tiny"
+        text={
+          t(
+            '每個 agent 依自己模型能容納的大小讀入共用上下文。目標、狀態與交接一律放最前面，其餘由新到舊放到這個比例為止，放不下的仍可查到；如果某個 CLI 曾在比模型上限更低的大小自己壓縮對話，就以那個大小計算。',
+            'Each agent reads the shared context in proportion to what its model holds. The goal, status and hand-offs always come first, the rest goes in newest first up to this share, and what does not fit can still be looked up; when a CLI has compacted its conversation below its model limit, that size counts instead.',
+          ) +
+          ' ' +
+          t(
+            '整理共用知識：壓縮者模型把新的筆記與 findings 依主題（環境、資料、程式結構、已知問題、決策、不可行的做法、進度）整理成一份文件，每一條附出處，原本的筆記不變。',
+            'Organizing: the compactor model sorts new notes and findings by subject (environment, data, code structure, known problems, decisions, approaches that did not work, progress) into one document, each line with its source; the notes stay as they are.',
+          )
+        }
+      />
     </section>
   );
 }
@@ -914,11 +916,12 @@ function FactRounds({ value, onChange, disabled }: { value: AdvisorConfig; onCha
         <label>{t('查證輪數', 'Fact-finding rounds')}</label>
         <div className="row gap">
           <select
+            aria-label={t('查證輪數', 'Fact-finding rounds')}
             disabled={disabled}
             value={kind}
             onChange={(e) => onChange({ ...value, factRounds: e.target.value === 'default' ? undefined : e.target.value === 'unlimited' ? 0 : value.factRounds || 5 })}
           >
-            <option value="default">{t('預設（3 輪）', 'Default (3 rounds)')}</option>
+            <option value="default">{t('預設 3 輪', 'Default, 3 rounds')}</option>
             <option value="custom">{t('自訂輪數', 'Custom')}</option>
             <option value="unlimited">{t('無限', 'Unlimited')}</option>
           </select>
@@ -1031,15 +1034,15 @@ function AdvisorSection({ value, onChange, providers, disabled, mains }: { value
   const t = useT();
   return (
     <section className="sect">
-      <div className="sect-title">{t('顧問模式', 'Advisor')}</div>
-      <div className="seg wide">
-        {(['off', 'claude', 'cross'] as const).map((m) => (
-          <button key={m} disabled={disabled} className={cx(value.mode === m && 'on')} onClick={() => onChange(withMode(value, m, providers))}>
-            {advisorModeLabel(t, m)}
-          </button>
-        ))}
-      </div>
-      <div className="muted small">{advisorModeHint(t, value.mode)}</div>
+      <h4 className="sect-title">{t('顧問模式', 'Advisor')}</h4>
+      <RadioList
+        label={t('顧問模式', 'Advisor')}
+        hints="chosen"
+        disabled={disabled}
+        value={value.mode}
+        onChange={(m) => onChange(withMode(value, m, providers))}
+        choices={(['off', 'claude', 'cross'] as const).map((m) => ({ value: m, label: advisorModeLabel(t, m), hint: <Hint text={advisorModeHint(t, m)} /> }))}
+      />
       <AdvisorOptions value={value} onChange={onChange} providers={providers} disabled={disabled} mains={mains} />
     </section>
   );
@@ -1051,7 +1054,7 @@ function SubagentModels({ providers, models, onChange, disabled }: { providers: 
   if (!providers.length) return null;
   return (
     <div className="sub-models">
-      <div className="muted small">{t('當 sub agent 時使用的模型（不選就用供應商預設；指定後呼叫的 agent 也不能更改）', 'Model when used as a sub-agent (empty = provider default; once set, the calling agent cannot change it)')}</div>
+      <div className="muted small">{t('當 sub agent 時使用的模型：不選就用供應商預設，指定後呼叫的 agent 也不能更改。', 'Model when used as a sub-agent: empty uses the provider default; once set, the calling agent cannot change it.')}</div>
       {providers.map((p) => {
         const v = models[p.spec.id] ?? {};
         const inherit = p.defaultModel || p.defaultEffort ? t(`供應商預設（${[p.defaultModel, p.defaultEffort].filter(Boolean).join(' · ')}）`, `Provider default (${[p.defaultModel, p.defaultEffort].filter(Boolean).join(' · ')})`) : undefined;
@@ -1121,11 +1124,6 @@ export function RoleSettings({
   useEffect(() => {
     hub.call<WorkflowPreset[]>('presets.list').then(setPresets).catch(() => undefined);
   }, []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   // A change away from the standard layout drops the mode mark, so the settings then show as custom.
   const set = (patch: Partial<RoleDraft>) => onChange(keepFlowMark({ ...draft, ...patch }));
   const mode = flowModeOf(draft);
@@ -1134,46 +1132,69 @@ export function RoleSettings({
   const prefs = draft.assignment?.auto ?? DEFAULT_AUTO;
   const setPrefs = (patch: Partial<AutoAssignPrefs>) => set({ assignment: { mode: 'auto', auto: { ...prefs, ...patch } } });
   const preview = useAssignPreview(readOnly ? null : draft, providers);
+  const flowTitle = useId();
+  const folderTitle = useId();
+  const memoryTitle = useId();
+  const sharingTitle = useId();
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head wf-modal-head">
-          <h3>{notice || readOnly ? t('這段對話的設定', 'Settings of this conversation') : t('工作流設定', 'Workflow settings')}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="close">
-            <Ico i={X} size={18} />
+    <Dialog
+      className="wf-modal"
+      size="md"
+      onClose={onClose}
+      returnFocus={() => document.querySelector<HTMLElement>('.composer :is(.wf-summary, .wf-folder, .wf-btn)')}
+      title={notice || readOnly ? t('這段對話的設定', 'Settings of this conversation') : t('工作流設定', 'Workflow settings')}
+      foot={
+        <>
+          {onApplyNow && (
+            <button className="btn" onClick={onApplyNow} title={t('正在工作、且設定被你改過的角色會停下，用新設定在同一輪重新派發', 'Working agents whose role you changed stop and are re-dispatched in the same round with the new settings')}>
+              {t('立即重新派發', 'Re-dispatch now')}
+            </button>
+          )}
+          {(readOnly || notice) && onReuse && (
+            <button className="btn" onClick={onReuse}>
+              {t('用這組設定開新對話', 'New chat with these settings')}
+            </button>
+          )}
+          <button className="btn primary" onClick={onClose}>
+            {t('完成', 'Done')}
           </button>
-        </div>
+        </>
+      }
+    >
         {notice && <div className="note small">{notice}</div>}
 
         {!readOnly && (
-          <div className="seg wide">
-            <button className={cx(auto && 'on')} onClick={() => set({ assignment: { mode: 'auto', auto: prefs } })}>
-              <Ico i={Shuffle} size={14} /> {t('自動指派', 'Auto assign')}
-            </button>
-            <button className={cx(!auto && 'on')} onClick={() => set({ assignment: { mode: 'manual', auto: prefs } })}>
-              {t('自訂指派', 'Choose myself')}
-            </button>
+          <Seg
+            className="wrap assign-mode"
+            label={t('指派方式', 'Assignment')}
+            value={auto ? 'auto' : 'manual'}
+            onChange={(m) => set({ assignment: { mode: m, auto: prefs } })}
+            choices={[
+              { value: 'auto', icon: Shuffle, label: t('自動指派', 'Auto assign') },
+              { value: 'manual', label: t('自訂指派', 'Choose myself') },
+            ]}
+          />
+        )}
+        {readOnly && isAuto(draft) && (
+          <div className="muted small">
+            <Ico i={Shuffle} size={14} /> {t('這段對話使用自動指派，以下是實際分配到的供應商。', 'This conversation used auto assignment; these are the providers it picked.')}
           </div>
         )}
-        {readOnly && isAuto(draft) && <div className="muted small"><Ico i={Shuffle} size={14} /> {t('這段對話使用自動指派，以下是實際分配到的供應商。', 'This conversation used auto assignment; these are the providers it picked.')}</div>}
 
         {auto && (
           <section className="sect">
-            <div className="sect-title">{t('自動指派偏好', 'Auto assignment')}</div>
-            <div className="seg">
-              {(['quality', 'balanced', 'economy'] as const).map((p) => (
-                <button key={p} className={cx(prefs.priority === p && 'on')} onClick={() => setPrefs({ priority: p })}>
-                  {p === 'quality' ? t('品質優先', 'Quality') : p === 'balanced' ? t('平衡', 'Balanced') : t('省額度', 'Economy')}
-                </button>
-              ))}
-            </div>
-            <div className="muted small">
-              {prefs.priority === 'quality'
-                ? t('每個角色都找能力最強的一家，即使同一家負責多個角色。', 'Strongest provider for each role, even if one does several.')
-                : prefs.priority === 'balanced'
-                  ? t('兼顧能力，並把角色分散給不同家，額度不會集中燒在同一家。', 'Strong providers, spread across vendors so no single quota burns out.')
-                  : t('偏好速度快、額度寬鬆的供應商。', 'Prefer fast providers with generous limits.')}
-            </div>
+            <h4 className="sect-title">{t('自動指派偏好', 'Auto assignment')}</h4>
+            <RadioList
+              label={t('自動指派偏好', 'Auto assignment')}
+              hints="chosen"
+              value={prefs.priority}
+              onChange={(p) => setPrefs({ priority: p })}
+              choices={[
+                { value: 'quality', label: t('品質優先', 'Quality'), hint: t('每個角色都找能力最強的一家，即使同一家負責多個角色。', 'Strongest provider for each role, even if one does several.') },
+                { value: 'balanced', label: t('平衡', 'Balanced'), hint: t('兼顧能力，並把角色分散給不同家，額度不會集中燒在同一家。', 'Strong providers, spread across vendors so no single quota burns out.') },
+                { value: 'economy', label: t('省額度', 'Economy'), hint: t('偏好速度快、額度寬鬆的供應商。', 'Prefer fast providers with generous limits.') },
+              ]}
+            />
             <label className="check">
               <input type="checkbox" checked={prefs.crossReview} onChange={(e) => setPrefs({ crossReview: e.target.checked })} />
               {t('審查者一定和撰寫者不同家', 'Reviewer is always a different vendor than the author')}
@@ -1183,39 +1204,64 @@ export function RoleSettings({
               {t('執行失敗或額度用完時，自動換下一家', 'On failure or usage limit, switch to the next provider automatically')}
             </label>
             <div className="assign-preview">
-              <div className="block-label">{t('目前會這樣分配', 'Current picks')}</div>
+              <h5 className="sub-title">{t('目前會這樣分配', 'Current picks')}</h5>
               {preview.error && <div className="err-text small">{preview.error}</div>}
               {preview.result?.notes.map((n, i) => (
                 <div key={i} className="small">
                   {n}
                 </div>
               ))}
-              <div className="muted tiny">{t('實際指派在送出時依當下的登入與額度狀態決定；能力分數可在供應商的「進階設定」調整（profile 欄位）。', 'Final picks are made when you send, based on sign-in and quota at that moment; tune scores in a provider\'s Advanced settings (profile).')}</div>
+              <Hint
+                className="muted tiny"
+                text={t('實際指派在送出時依當下的登入與額度狀態決定。能力分數可在供應商的「進階設定」調整，欄位是 profile。', "Final picks are made when you send, based on sign-in and quota at that moment. Tune scores in a provider's Advanced settings, in its profile field.")}
+              />
             </div>
           </section>
         )}
 
         {!readOnly && (
           <section className="sect">
-            <div className="sect-title">{t('流程模式', 'Flow mode')}</div>
-            <div className="seg">
-              <button className={cx(mode === 'standard' && 'on')} onClick={() => mode !== 'standard' && onChange(applyStandard(draft, otherReviewer(draft, providers)))}>
-                {t('標準', 'Standard')}
-              </button>
-              <button className={cx(mode === 'review' && 'on')} onClick={() => mode !== 'review' && onChange(applyReview(draft, otherReviewer(draft, providers)))}>
-                {t('獨立審查', 'Review only')}
-              </button>
-              <button className={cx(mode === 'custom' && 'on')} disabled={mode === 'custom'} onClick={() => (mode === 'review' ? onChange(leaveReview(draft)) : set({ flow: undefined }))}>
-                {t('自訂', 'Custom')}
-              </button>
-            </div>
-            <div className="muted small">
-              {mode === 'review'
-                ? t('只審查、不實作：由下面的審查者（唯讀）審查你指定的提交或工作資料夾，交出審查報告；不執行計畫、實作、目標驗收與 sub agent。之後的追問也一樣是審查。你貼上的實作者報告只當成要查證的材料，不會變成審查者的任務。只套用在這段對話，不會成為新對話的預設。', 'Review only, no implementation: the reviewer below (read-only) reviews the commit or working folder you name and hands in a review report; no planning, building, goal verification or sub-agents. Follow-up messages are reviews too. A report from the implementer that you paste is material to check, never a task for the reviewer. For this conversation only, not a default for new ones.')
-                : mode === 'standard'
-                ? t(`不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式審查者，最多 ${STANDARD_ROUNDS} 輪；不做目標驗收、不開 sub agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`, `No planning stage: the implementer writes a short plan itself first. One code reviewer, at most ${STANDARD_ROUNDS} rounds; no goal verification, no sub-agents. Changing who writes or reviews keeps it Standard; changing a stage switch, the review rounds or other flow settings makes it "Custom".`)
-                : t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與 sub agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')}
-            </div>
+            <h4 className="sect-title" id={flowTitle}>
+              {t('流程模式', 'Flow mode')}
+            </h4>
+            <RadioList
+              className="flow-radio"
+              labelledBy={flowTitle}
+              hints="chosen"
+              value={mode}
+              onChange={(m) => (m === 'standard' ? onChange(applyStandard(draft, otherReviewer(draft, providers))) : m === 'review' ? onChange(applyReview(draft, otherReviewer(draft, providers))) : mode === 'review' ? onChange(leaveReview(draft)) : set({ flow: undefined }))}
+              choices={[
+                {
+                  value: 'standard',
+                  label: t('標準', 'Standard'),
+                  hint: (
+                    <Hint
+                      text={t(
+                        `不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式審查者，最多 ${STANDARD_ROUNDS} 輪；不做目標驗收、不開 sub agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`,
+                        `No planning stage: the implementer writes a short plan itself first. One code reviewer, at most ${STANDARD_ROUNDS} rounds; no goal verification, no sub-agents. Changing who writes or reviews keeps it Standard; changing a stage switch, the review rounds or other flow settings makes it "Custom".`,
+                      )}
+                    />
+                  ),
+                },
+                {
+                  value: 'review',
+                  label: t('獨立審查', 'Review only'),
+                  hint: (
+                    <Hint
+                      text={t(
+                        '只審查、不實作：由下面的審查者以唯讀方式審查你指定的提交或工作資料夾，交出審查報告；不執行計畫、實作、目標驗收與 sub agent。之後的追問也一樣是審查。你貼上的實作者報告只當成要查證的材料，不會變成審查者的任務。只套用在這段對話，不會成為新對話的預設。',
+                        'Review only, no implementation: the reviewer below, read-only, reviews the commit or working folder you name and hands in a review report; no planning, building, goal verification or sub-agents. Follow-up messages are reviews too. A report from the implementer that you paste is material to check, never a task for the reviewer. For this conversation only, not a default for new ones.',
+                      )}
+                    />
+                  ),
+                },
+                {
+                  value: 'custom',
+                  label: t('自訂', 'Custom'),
+                  hint: <Hint text={t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與 sub agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')} />,
+                },
+              ]}
+            />
           </section>
         )}
 
@@ -1226,7 +1272,7 @@ export function RoleSettings({
                 <button className="chip-btn" onClick={() => onChange(keepFlowMark({ ...p.config, cwd: draft.cwd }))}>
                   {p.name}
                 </button>
-                <button className="icon-btn tiny" title={t('刪除', 'Delete')} onClick={() => hub.call<WorkflowPreset[]>('presets.delete', { id: p.id }).then(setPresets)} aria-label={t('刪除', 'Delete')}>
+                <button className="icon-btn tiny" title={t(`刪除組合「${p.name}」`, `Delete the preset "${p.name}"`)} onClick={() => hub.call<WorkflowPreset[]>('presets.delete', { id: p.id }).then(setPresets)} aria-label={t(`刪除組合「${p.name}」`, `Delete the preset "${p.name}"`)}>
                   <Ico i={X} size={13} />
                 </button>
               </span>
@@ -1245,9 +1291,11 @@ export function RoleSettings({
         />
 
         <section className="sect">
-          <div className="sect-title">{t('工作資料夾', 'Working folder')}</div>
+          <h4 className="sect-title" id={folderTitle}>
+            {t('工作資料夾', 'Working folder')}
+          </h4>
           <div className="row gap">
-            <input disabled={readOnly || lockFolder} className="grow mono" value={draft.cwd} onChange={(e) => set({ cwd: e.target.value })} placeholder="C:\\path\\to\\project" />
+            <input disabled={readOnly || lockFolder} aria-labelledby={folderTitle} className="grow mono" value={draft.cwd} onChange={(e) => set({ cwd: e.target.value })} placeholder={folderExample(typeof navigator === 'undefined' ? '' : navigator.platform || navigator.userAgent)} />
             {canPickFolder && !readOnly && !lockFolder && (
               <button
                 className="btn"
@@ -1267,28 +1315,28 @@ export function RoleSettings({
         {mode === 'review' && <ReviewSection draft={draft} providers={providers} auto={auto} disabled={readOnly} onChange={set} />}
         {mode !== 'review' && (
           <>
-        <StageSection
-          disabled={readOnly}
-          title={t('計畫', 'Plan')}
-          hint={t('一家撰寫計畫，另一家審查，來回修改直到通過。簡單的任務可以關掉，直接實作', 'One agent drafts, another reviews, until approved. Turn it off for simple tasks to go straight to building')}
-          authorLabel={t('撰寫', 'Author')}
-          reviewerLabel={t('審查計畫', 'Review the plan')}
-          stage={draft.plan}
-          providers={providers}
-          auto={auto}
-          onChange={(plan) => set({ plan })}
-        />
-        <StageSection
-          disabled={readOnly}
-          title={t('實作', 'Build')}
-          hint={t('依計畫實作；可以只做規劃時關掉，只要計畫不要動手', 'Implement the plan; turn it off when you only want a plan')}
-          authorLabel={t('實作', 'Implementer')}
-          reviewerLabel={t('審查程式碼', 'Review the code')}
-          stage={draft.implement}
-          providers={providers}
-          auto={auto}
-          onChange={(implement) => set({ implement })}
-        />
+            <StageSection
+              disabled={readOnly}
+              title={t('計畫', 'Plan')}
+              hint={t('一家撰寫計畫，另一家審查，來回修改直到通過。簡單的任務可以關掉，直接實作', 'One agent drafts, another reviews, until approved. Turn it off for simple tasks to go straight to building')}
+              authorLabel={t('撰寫', 'Author')}
+              reviewerLabel={t('審查計畫', 'Review the plan')}
+              stage={draft.plan}
+              providers={providers}
+              auto={auto}
+              onChange={(plan) => set({ plan })}
+            />
+            <StageSection
+              disabled={readOnly}
+              title={t('實作', 'Build')}
+              hint={t('依計畫實作；可以只做規劃時關掉，只要計畫不要動手', 'Implement the plan; turn it off when you only want a plan')}
+              authorLabel={t('實作', 'Implementer')}
+              reviewerLabel={t('審查程式碼', 'Review the code')}
+              stage={draft.implement}
+              providers={providers}
+              auto={auto}
+              onChange={(implement) => set({ implement })}
+            />
           </>
         )}
         <SecurityCheck draft={draft} disabled={readOnly} locked={lockSecurity} onChange={(securityReview) => set({ securityReview: securityReview || undefined })} />
@@ -1297,97 +1345,101 @@ export function RoleSettings({
         <LimitsSection disabled={readOnly} value={draft.limits ?? { enabled: false }} onChange={(limits) => set({ limits })} />
 
         <section className="sect">
-          <div className="sect-title">{t('專案記憶', 'Project memory')}</div>
-          <div className="muted small">
-            {t(
-              '過去工作流在這個專案留下的記憶（設定 → 記憶）。開始前就決定：完整＝帶入並寫入新的候選；只讀＝只帶入、不寫入任何東西；完全不用＝不帶入也不寫入（專案 Skill 照常載入）。執行中也能在 ⋯ → 專案記憶 切換。',
-              "What earlier workflows left in this project's memory (Settings → Memory). Decide before it starts: Full = give it to agents and write new candidates; Read only = give it, write nothing; Off = neither (project Skills still load). It can also be switched while running, in ⋯ → Project memory.",
+          <h4 className="sect-title" id={memoryTitle}>
+            {t('專案記憶', 'Project memory')}
+          </h4>
+          <Hint
+            className="muted small"
+            text={t(
+              '過去工作流在這個專案留下的記憶，開始前就決定怎麼用。記憶在設定的「記憶」頁管理；執行中也能從對話「更多」選單的「專案記憶」切換。',
+              "What earlier workflows left in this project's memory; decide before it starts. It is managed on the Memory page of Settings, and can be switched while running from Project memory in the chat's More menu.",
             )}
-          </div>
-          <div className="seg" role="radiogroup">
-            {(
-              [
-                ['full', t('完整', 'Full')],
-                ['readonly', t('只讀', 'Read only')],
-                ['off', t('完全不用', 'Off')],
-              ] as const
-            ).map(([mode, label]) => (
-              <button key={mode} disabled={readOnly} className={cx((draft.memory?.mode ?? 'full') === mode && 'on')} onClick={() => set({ memory: { mode } })}>
-                {label}
-              </button>
-            ))}
-          </div>
+          />
+          <RadioList
+            labelledBy={memoryTitle}
+            disabled={readOnly}
+            value={draft.memory?.mode ?? 'full'}
+            onChange={(m) => set({ memory: { mode: m } })}
+            choices={[
+              { value: 'full', label: t('完整', 'Full'), hint: t('帶入記憶，並寫入新的候選。', 'Give it to agents and write new candidates.') },
+              { value: 'readonly', label: t('只讀', 'Read only'), hint: t('只帶入，不寫入任何東西。', 'Give it, write nothing.') },
+              { value: 'off', label: t('完全不用', 'Off'), hint: t('不帶入也不寫入，專案 Skill 照常載入。', 'Neither; project Skills still load.') },
+            ]}
+          />
         </section>
 
         {mode !== 'review' && (
-        <section className="sect">
-          <div className="sect-head">
-            <div>
-              <div className="sect-title">Sub agents</div>
-              <div className="muted small">{t('任何角色都能把子任務交給以下供應商', 'Any role may delegate sub-tasks to these providers')}</div>
+          <section className="sect">
+            <div className="sect-head">
+              <div>
+                <h4 className="sect-title">Sub agents</h4>
+                <div className="muted small">{t('任何角色都能把子任務交給以下供應商', 'Any role may delegate sub-tasks to these providers')}</div>
+              </div>
+              <Switch label="Sub agents" disabled={readOnly} checked={sub.enabled} onChange={(on) => set({ subagents: { ...sub, enabled: on } })} />
             </div>
-            <label className="switch">
-              <input disabled={readOnly} type="checkbox" checked={sub.enabled} onChange={(e) => set({ subagents: { ...sub, enabled: e.target.checked } })} />
-              <span />
-            </label>
-          </div>
-          {sub.enabled && (
-            <div className="sect-body">
-              {auto ? (
-                <div className="muted small">{t('自動：所有可用的供應商都能被調用。', 'Auto: every ready provider can be called.')}</div>
-              ) : (
-              <div className="row gap wrap">
-                {providers.map((p) => (
-                  <label key={p.spec.id} className={cx('chip-check', sub.allowed.includes(p.spec.id) && 'on')}>
-                    <input
-                      disabled={readOnly}
-                      type="checkbox"
-                      checked={sub.allowed.includes(p.spec.id)}
-                      onChange={(e) => set({ subagents: { ...sub, allowed: e.target.checked ? [...sub.allowed, p.spec.id] : sub.allowed.filter((x) => x !== p.spec.id) } })}
-                    />
-                    <Dot id={p.spec.id} />
-                    {p.spec.name}
-                  </label>
-                ))}
+            {sub.enabled && (
+              <div className="sect-body">
+                {auto ? (
+                  <div className="muted small">{t('自動：所有可用的供應商都能被調用。', 'Auto: every ready provider can be called.')}</div>
+                ) : (
+                  <div className="row gap wrap" role="group" aria-label={t('可以被調用的供應商', 'Providers that may be called')}>
+                    {providers.map((p) => (
+                      <label key={p.spec.id} className={cx('chip-check', sub.allowed.includes(p.spec.id) && 'on')}>
+                        <input
+                          disabled={readOnly}
+                          type="checkbox"
+                          checked={sub.allowed.includes(p.spec.id)}
+                          onChange={(e) => set({ subagents: { ...sub, allowed: e.target.checked ? [...sub.allowed, p.spec.id] : sub.allowed.filter((x) => x !== p.spec.id) } })}
+                        />
+                        <Dot id={p.spec.id} />
+                        {p.spec.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <SubagentModels
+                  disabled={readOnly}
+                  providers={providers.filter((p) => (auto ? p.installed && p.auth.state === 'logged_in' : sub.allowed.includes(p.spec.id)))}
+                  models={sub.models ?? {}}
+                  onChange={(models) => set({ subagents: { ...sub, models } })}
+                />
+                <div className="kv">
+                  <label>{t('最多巢狀層數', 'Max depth')}</label>
+                  <input disabled={readOnly} aria-label={t('最多巢狀層數', 'Max depth')} type="number" min={1} max={5} value={sub.maxDepth} onChange={(e) => set({ subagents: { ...sub, maxDepth: Math.max(1, Number(e.target.value) || 1) } })} />
+                </div>
+                <div className="kv">
+                  <label>{t('同時執行上限', 'Max concurrent')}</label>
+                  <input disabled={readOnly} aria-label={t('同時執行上限', 'Max concurrent')} type="number" min={1} max={10} value={sub.maxConcurrent} onChange={(e) => set({ subagents: { ...sub, maxConcurrent: Math.max(1, Number(e.target.value) || 1) } })} />
+                </div>
               </div>
-              )}
-              <SubagentModels
-                disabled={readOnly}
-                providers={providers.filter((p) => (auto ? p.installed && p.auth.state === 'logged_in' : sub.allowed.includes(p.spec.id)))}
-                models={sub.models ?? {}}
-                onChange={(models) => set({ subagents: { ...sub, models } })}
-              />
-              <div className="kv">
-                <label>{t('最多巢狀層數', 'Max depth')}</label>
-                <input disabled={readOnly} type="number" min={1} max={5} value={sub.maxDepth} onChange={(e) => set({ subagents: { ...sub, maxDepth: Math.max(1, Number(e.target.value) || 1) } })} />
-              </div>
-              <div className="kv">
-                <label>{t('同時執行上限', 'Max concurrent')}</label>
-                <input disabled={readOnly} type="number" min={1} max={10} value={sub.maxConcurrent} onChange={(e) => set({ subagents: { ...sub, maxConcurrent: Math.max(1, Number(e.target.value) || 1) } })} />
-              </div>
-            </div>
-          )}
-        </section>
+            )}
+          </section>
         )}
 
         <section className="sect">
-          <div className="sect-title">{t('上下文分享', 'Context sharing')}</div>
-          <div className="seg wide">
-            {(['summary', 'on_demand', 'full'] as ContextSharing[]).map((m) => (
-              <button key={m} disabled={readOnly} className={cx((draft.contextSharing ?? 'on_demand') === m && 'on')} onClick={() => set({ contextSharing: m })}>
-                {{ summary: t('只交摘要', 'Summaries'), on_demand: t('摘要＋可查閱', 'Summaries + lookup'), full: t('完整交接', 'Full hand-offs') }[m]}
-              </button>
-            ))}
-          </div>
-          <div className="muted small">
-            {
+          <h4 className="sect-title" id={sharingTitle}>
+            {t('上下文分享', 'Context sharing')}
+          </h4>
+          <RadioList
+            labelledBy={sharingTitle}
+            hints="chosen"
+            disabled={readOnly}
+            value={draft.contextSharing ?? 'on_demand'}
+            onChange={(m) => set({ contextSharing: m })}
+            choices={[
+              { value: 'summary' as ContextSharing, label: t('只交摘要', 'Summaries'), hint: t('agent 之間只交接計畫、審查意見與摘要；最省 context。', 'Agents only hand over the plan, reviews and summaries; uses the least context.') },
               {
-                summary: t('agent 之間只交接計畫、審查意見與摘要；最省 context。', 'Agents only hand over the plan, reviews and summaries; uses the least context.'),
-                on_demand: t('每個 agent 會看到其他人做了什麼與共用筆記，需要時可用 read_context 讀任何人的完整紀錄（回覆、指令與輸出），也能用 post_note 留筆記給後面的人。', 'Each agent sees who did what plus shared notes, can read anyone\'s full transcript (replies, commands, output) with read_context when needed, and can leave notes with post_note.'),
-                full: t('另外附上每個 agent 自己寫的完整交接（不只前一棒），不是原始對話；細節較多，也會多用一些 context。任何人的完整對話仍用 read_context 查。', 'Also includes every agent\'s whole hand-off (not only the previous one), written by the agent itself rather than its raw conversation; more detail for a bit more context. Anyone\'s whole conversation is still one read_context away.'),
-              }[draft.contextSharing ?? 'on_demand']
-            }
-          </div>
+                value: 'on_demand' as ContextSharing,
+                label: t('摘要加查閱', 'Summaries and lookup'),
+                hint: <Hint text={t('每個 agent 會看到其他人做了什麼與共用筆記。需要時可用 read_context 讀任何人的完整紀錄，包括回覆、指令與輸出，也能用 post_note 留筆記給後面的人。', "Each agent sees who did what plus shared notes. It can read anyone's full transcript, replies, commands and output, with read_context when needed, and leave notes with post_note.")} />,
+              },
+              {
+                value: 'full' as ContextSharing,
+                label: t('完整交接', 'Full hand-offs'),
+                hint: <Hint text={t('另外附上每個 agent 自己寫的完整交接，不只前一棒；細節較多，也會多用一些 context。這是 agent 寫的交接，不是原始對話；任何人的完整對話仍用 read_context 查。', "Also includes every agent's whole hand-off, not only the previous one; more detail for a bit more context. It is written by the agent itself rather than its raw conversation; anyone's whole conversation is still one read_context away.")} />,
+              },
+            ]}
+          />
         </section>
 
         <ContextSizeSection disabled={readOnly} providers={providers} value={draft.context ?? {}} onChange={(context) => set({ context })} summaryOnly={(draft.contextSharing ?? 'on_demand') === 'summary'} />
@@ -1397,41 +1449,27 @@ export function RoleSettings({
         {!readOnly && <PreflightSection draft={draft} onDryRun={onDryRun} />}
 
         {!readOnly && (
-          <div className="row gap">
-            <input className="grow" placeholder={t('存成常用組合，例如「Claude 寫、Codex 審」', 'Save as preset, e.g. "Claude writes, Codex reviews"')} value={presetName} onChange={(e) => setPresetName(e.target.value)} />
-            <button
-              className="btn"
-              disabled={!presetName.trim()}
-              onClick={() => {
-                const { cwd: _cwd, ...config } = draft;
-                hub
-                  .call<WorkflowPreset[]>('presets.save', { preset: { id: String(Date.now()), name: presetName.trim(), config } })
-                  .then(setPresets)
-                  .then(() => setPresetName(''));
-              }}
-            >
-              {t('存成組合', 'Save preset')}
-            </button>
-          </div>
+          <section className="sect">
+            <h4 className="sect-title">{t('常用組合', 'Presets')}</h4>
+            <div className="row gap stack-narrow">
+              <input className="grow" aria-label={t('組合名稱', 'Preset name')} placeholder={t('存成常用組合，例如「Claude 寫、Codex 審」', 'Save as preset, e.g. "Claude writes, Codex reviews"')} value={presetName} onChange={(e) => setPresetName(e.target.value)} />
+              <button
+                className="btn"
+                disabled={!presetName.trim()}
+                onClick={() => {
+                  const { cwd: _cwd, ...config } = draft;
+                  hub
+                    .call<WorkflowPreset[]>('presets.save', { preset: { id: String(Date.now()), name: presetName.trim(), config } })
+                    .then(setPresets)
+                    .then(() => setPresetName(''));
+                }}
+              >
+                {t('存成組合', 'Save preset')}
+              </button>
+            </div>
+          </section>
         )}
-
-        <div className="wf-modal-foot">
-          {onApplyNow && (
-            <button className="btn" onClick={onApplyNow} title={t('正在工作、且設定被你改過的角色會停下，用新設定在同一輪重新派發', 'Working agents whose role you changed stop and are re-dispatched in the same round with the new settings')}>
-              {t('立即套用（重新派發）', 'Apply now (re-dispatch)')}
-            </button>
-          )}
-          {(readOnly || notice) && onReuse && (
-            <button className="btn" onClick={onReuse}>
-              {t('用這組設定開新對話', 'New chat with these settings')}
-            </button>
-          )}
-          <button className="btn primary" onClick={onClose}>
-            {t('完成', 'Done')}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -1446,8 +1484,8 @@ function ExtraDirs({ dirs, disabled, canPick, onChange }: { dirs: string[]; disa
   };
   return (
     <section className="sect">
-      <div className="sect-title">{t('額外資料夾', 'Extra folders')}</div>
-      <div className="muted small">{t('工作資料夾以外，所有 agent 都能讀取和探索的資料夾，例如函式庫原始碼、文件或另一個專案。agent 會把它們當參考資料，不會修改，除非你要求。', 'Folders besides the working folder that every agent may read and explore, e.g. a library\'s source, docs or another project. Agents treat them as reference and leave them unchanged unless you ask.')}</div>
+      <h4 className="sect-title">{t('額外資料夾', 'Extra folders')}</h4>
+      <Hint className="muted small" text={t('工作資料夾以外，所有 agent 都能讀取和探索的資料夾，例如函式庫原始碼、文件或另一個專案。agent 會把它們當參考資料，不會修改，除非你要求。', 'Folders besides the working folder that every agent may read and explore, e.g. a library\'s source, docs or another project. Agents treat them as reference and leave them unchanged unless you ask.')} />
       {dirs.length > 0 && (
         <ul className="extra-dirs">
           {dirs.map((d) => (
@@ -1456,7 +1494,7 @@ function ExtraDirs({ dirs, disabled, canPick, onChange }: { dirs: string[]; disa
                 <Ico i={Folder} size={14} /> {d}
               </span>
               {!disabled && (
-                <button className="link tiny" onClick={() => onChange(dirs.filter((x) => x !== d))} aria-label={t('移除', 'Remove')}>
+                <button className="icon-btn tiny" onClick={() => onChange(dirs.filter((x) => x !== d))} aria-label={t(`移除 ${d}`, `Remove ${d}`)} title={t('移除', 'Remove')}>
                   <Ico i={X} size={13} />
                 </button>
               )}
@@ -1466,7 +1504,7 @@ function ExtraDirs({ dirs, disabled, canPick, onChange }: { dirs: string[]; disa
       )}
       {!disabled && (
         <div className="row gap">
-          <input className="grow mono" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add(text)} placeholder={t('貼上完整路徑後按 Enter', 'Paste a full path and press Enter')} />
+          <input className="grow mono" aria-label={t('額外資料夾路徑', 'Extra folder path')} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add(text)} placeholder={t('貼上完整路徑後按 Enter', 'Paste a full path and press Enter')} />
           {text.trim() ? (
             <button className="btn" onClick={() => add(text)}>
               {t('加入', 'Add')}

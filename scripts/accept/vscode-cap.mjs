@@ -111,7 +111,8 @@ const at = `VS Code editor tab (${pane.width}px)`;
 chk(`${at}: build line in Settings shows the same build`, pane.buildLine?.includes(String(hub.build)), true);
 chk(`${at}: section "內建擴充", the four extension cards`, pane.extensions.map((x) => x.name), ['Ponytail', 'Agent Skills', 'Graphify', 'OmniRoute']);
 chk(`${at}: extension switches, off in a clean AIVENUE_HOME and usable`, pane.extensions.map((x) => `${x.name}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`), ['Ponytail:off', 'Agent Skills:off', 'Graphify:off', 'OmniRoute:off']);
-chk(`${at}: Ponytail icon`, pane.extensions[0]?.icon ?? null, '🎀');
+// No icon before the name since UI round C (emoji icons are gone; the name says it).
+chk(`${at}: no emoji icon before an extension's name`, pane.extensions.map((x) => x.icon), ['', '', '', '']);
 chk(`${at}: every extension card inside the window`, pane.extensions.every((x) => x.left >= 0 && x.right <= pane.width), true);
 chk(`${at}: section "按需使用的內建 Skill"`, find(either('按需使用的內建 Skill', 'Built-in skills used on demand'))?.lists[0] ?? null, ['gh-fix-ci', 'gh-address-comments', 'security-audit']);
 const pack = find(either('可開關的內建 Skill', 'Built-in skills you can turn on'));

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { ChevronDown, ChevronRight, ClipboardList, FolderOpen, GitBranch, Hand, Pencil, ShieldAlert, Square, SquareCheck, Zap, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PermissionLevel, ProviderInfo, WorkflowRun } from '../../../core/src/types';
@@ -8,6 +8,7 @@ import { cx, providerName } from '../util';
 import { ask } from './Ask';
 import { useMenuKeys } from './RunTools';
 import { byFolder } from '../timeline';
+import { RadioList } from './Kit';
 
 export const PERMISSION_ICON: Record<PermissionLevel, LucideIcon> = { plan: ClipboardList, ask: Hand, edit: Pencil, auto: Zap, full: ShieldAlert };
 
@@ -255,9 +256,14 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
   );
 }
 
-/** Permission level + isolation controls (role drawer). */
+/**
+ * Permission level + isolation controls (the workflow settings window): the five levels one under the other, each with
+ * its icon, name (in its risk colour, as on the composer) and what it allows, the chosen one a filled radio; isolation
+ * as a check box right under them. Whole-computer access, once chosen, says what it allows in a warning box.
+ */
 export function SafetySection({ permission, isolation, providers, roleProviders, onChange, disabled, isolationLocked }: { permission: PermissionLevel; isolation: boolean; providers: ProviderInfo[]; roleProviders: string[]; onChange: (v: { permission?: PermissionLevel; isolation?: boolean }) => void; disabled?: boolean; isolationLocked?: boolean }) {
   const t = useT();
+  const titleId = useId();
   const { pick, dialog } = useGuardedPermission(permission, onChange);
   const notes =
     permission === 'ask'
@@ -271,24 +277,31 @@ export function SafetySection({ permission, isolation, providers, roleProviders,
       : [];
   return (
     <section className="sect">
-      <div className="sect-title">{t('權限與安全', 'Permissions & safety')}</div>
-      <div className="seg wide">
-        {LEVELS.map((p) => (
-          <button key={p} disabled={disabled} className={cx(permission === p && 'on', p === 'full' && 'danger')} onClick={() => pick(p)}>
-            <Ico i={PERMISSION_ICON[p]} size={15} /> {permissionLabel(t, p)}
-          </button>
-        ))}
-      </div>
-      <div className={cx('small', permission === 'full' ? 'note warn' : 'muted')}>{permissionHint(t, permission)}</div>
+      <h4 className="sect-title" id={titleId}>
+        {t('權限與安全', 'Permissions & safety')}
+      </h4>
+      <RadioList
+        className="perm-radio"
+        labelledBy={titleId}
+        value={permission}
+        disabled={disabled}
+        onChange={pick}
+        choices={LEVELS.map((p) => ({ value: p, icon: PERMISSION_ICON[p], label: permissionLabel(t, p), hint: p === 'full' && permission === 'full' ? undefined : permissionHint(t, p), tone: permissionRisk(p, isolation) }))}
+      />
+      {/* Whole-computer access chosen: what it allows is a warning under the list, framed as before round C (said once). */}
+      {permission === 'full' && <div className="note warn small">{permissionHint(t, 'full')}</div>}
       {dialog}
       {notes.map((n, i) => (
         <div key={i} className="note warn small">
           {n}
         </div>
       ))}
-      <label className="check">
+      <label className="check iso-check">
         <input type="checkbox" disabled={disabled || isolationLocked} checked={isolation} onChange={(e) => onChange({ isolation: e.target.checked })} />
-        {t('隔離模式：在獨立的 git worktree 副本中工作，完成後再決定是否套用（需要 git 專案）', 'Isolation: work in a separate git worktree and decide afterwards whether to apply (needs a git repo)')}
+        <span>
+          {t('隔離模式：在獨立的 git worktree 副本中工作，完成後再決定是否套用', 'Isolation: work in a separate git worktree and decide afterwards whether to apply')}
+          <span className="muted small"> · {t('需要 git 專案', 'needs a git repo')}</span>
+        </span>
       </label>
     </section>
   );

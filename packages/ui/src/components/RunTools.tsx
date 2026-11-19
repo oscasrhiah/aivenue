@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Pencil, Search, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Pencil, Search, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PreflightItem, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
@@ -8,6 +8,8 @@ import { cx, providerName, roleLabel } from '../util';
 import { ask } from './Ask';
 import { RunMemoryWindow } from './Memory';
 import { CostWindow } from './Cost';
+import { Dialog, Hint } from './Kit';
+import { menuEntries } from '../settingsView';
 
 /**
  * The keyboard of a menu that opens from a button (the WAI-ARIA menu button pattern): when it opens, the focus goes to
@@ -65,8 +67,11 @@ export interface MenuEntry {
   hint?: string;
   icon?: LucideIcon;
   danger?: boolean;
+  /** Shown but not usable right now (e.g. while it runs). */
+  disabled?: boolean;
   onSelect: () => void;
 }
+
 
 /**
  * A ⋯ button and its menu (WAI-ARIA menu button: aria-haspopup, aria-expanded, role menu and menuitem, the keyboard of
@@ -105,8 +110,17 @@ export function MoreMenu({ label, items, className, openSignal }: { label: strin
       window.removeEventListener('scroll', onScroll, true);
     };
   }, [open]);
+  // Kept inside the window: in a narrow column (the VS Code side bar) a menu wider than the space left of its button
+  // moves right until it is a margin from the edge.
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (!pos || !el || pos.left !== undefined) return;
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    if (r.left < margin) setPos({ ...pos, right: undefined, left: margin });
+  }, [pos]);
   useMenuKeys(open, list, btn, close);
-  const entries = items.filter((e): e is MenuEntry | 'sep' => !!e);
+  const entries = menuEntries(items);
   return (
     <span className={cx('more', open && 'open', className)} ref={wrap}>
       <button
@@ -140,6 +154,7 @@ export function MoreMenu({ label, items, className, openSignal }: { label: strin
                 role="menuitem"
                 tabIndex={-1}
                 className={cx('menu-item', e.danger && 'danger')}
+                disabled={e.disabled}
                 onClick={() => {
                   close();
                   // Back on ⋯ first: an item that opens a window or a box moves the focus on from there.
@@ -238,30 +253,29 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
       {memory && <RunMemoryWindow run={run} onClose={() => setMemory(false)} />}
       {cost && <CostWindow run={run} onClose={() => setCost(false)} />}
       {note && (
-        <div className="modal-back" onClick={() => setNote(undefined)}>
-          <div className="modal small-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="small break">{note}</div>
-            <div className="wf-modal-foot">
-              <button className="btn primary" onClick={() => setNote(undefined)}>
-                {t('好', 'OK')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <Dialog
+          title={t('結果', 'Result')}
+          size="sm"
+          onClose={() => setNote(undefined)}
+          foot={
+            <button className="btn primary" onClick={() => setNote(undefined)}>
+              {t('好', 'OK')}
+            </button>
+          }
+        >
+          <div className="small break">{note}</div>
+        </Dialog>
       )}
       {shared !== undefined && (
-        <div className="modal-back" onClick={() => setShared(undefined)}>
-          <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <div className="drawer-head wf-modal-head">
-              <h3>{t('共享上下文', 'Shared context')}</h3>
-              <button className="icon-btn" onClick={() => setShared(undefined)} aria-label={t('關閉', 'Close')}>
-                <Ico i={X} size={18} />
-              </button>
-            </div>
-            <div className="muted small">{t(`agent 用 read_context 讀到的完整總覽：目標與差距、目前狀態（等待、GPU 鎖、背景程序）、審查與驗收、交接摘要、專案結構（Graphify）、每個 agent 跑過的指令與結果。約 ${Math.round(shared.length / 4).toLocaleString()} tokens。`, `The full overview agents read with read_context: goal and gap, current status (waits, GPU locks, background processes), reviews and verifications, hand-offs, project structure (Graphify), and every agent's commands and results. About ${Math.round(shared.length / 4).toLocaleString()} tokens.`)}</div>
-            <pre className="shared-view">{shared}</pre>
-          </div>
-        </div>
+        <Dialog title={t('共享上下文', 'Shared context')} size="lg" onClose={() => setShared(undefined)} back="detail-back">
+          <Hint
+            className="muted small"
+            text={t(`agent 用 read_context 讀到的完整總覽，約 ${Math.round(shared.length / 4).toLocaleString()} tokens。內容有目標與差距、目前狀態（等待、GPU 鎖、背景程序）、審查與驗收、交接摘要、專案結構（Graphify），以及每個 agent 跑過的指令與結果。`, `The full overview agents read with read_context, about ${Math.round(shared.length / 4).toLocaleString()} tokens. It holds the goal and gap, current status (waits, GPU locks, background processes), reviews and verifications, hand-offs, project structure (Graphify), and every agent's commands and results.`)}
+          />
+          <pre className="shared-view" tabIndex={0} aria-label={t('共享上下文全文', 'Shared context, full text')}>
+            {shared}
+          </pre>
+        </Dialog>
       )}
       {search && <RecordSearch run={run} providers={providers} onClose={() => setSearch(false)} />}
     </div>
@@ -286,28 +300,16 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
       .then(setHits)
       .catch((e) => setErr((e as Error).message));
   };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head wf-modal-head">
-          <h3>{t('搜尋紀錄', 'Search records')}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label={t('關閉', 'Close')}>
-            <Ico i={X} size={18} />
-          </button>
-        </div>
+    <Dialog title={t('搜尋紀錄', 'Search records')} size="lg" onClose={onClose} back="detail-back">
         <div className="row gap wrap">
-          <input className="grow" autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('文字（訊息、指令、輸出、筆記、問題）', 'Text (messages, commands, output, notes, issues)')} />
+          <input className="grow" aria-label={t('搜尋文字', 'Search text')} autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('文字：訊息、指令、輸出、筆記、問題', 'Text: messages, commands, output, notes, issues')} />
           <button className="btn primary" onClick={go}>
             {t('搜尋', 'Search')}
           </button>
         </div>
         <div className="row gap wrap small">
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <select aria-label={t('角色', 'Role')} value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="">{t('所有角色', 'Any role')}</option>
             {roles.map((r) => (
               <option key={r} value={r}>
@@ -315,19 +317,19 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
               </option>
             ))}
           </select>
-          <select value={stage} onChange={(e) => setStage(e.target.value)}>
+          <select aria-label={t('階段', 'Stage')} value={stage} onChange={(e) => setStage(e.target.value)}>
             <option value="">{t('所有階段', 'Any stage')}</option>
             <option value="plan">{t('計畫', 'Plan')}</option>
             <option value="implement">{t('實作', 'Build')}</option>
             <option value="verify">{t('目標驗收', 'Goal check')}</option>
           </select>
-          <input className="mono" style={{ width: 160 }} value={file} onChange={(e) => setFile(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('檔案', 'File')} />
-          <input className="mono" style={{ width: 90 }} value={issueId} onChange={(e) => setIssueId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('問題編號', 'Issue id')} />
+          <input className="mono" aria-label={t('檔案', 'File')} style={{ width: 160 }} value={file} onChange={(e) => setFile(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('檔案', 'File')} />
+          <input className="mono" aria-label={t('問題編號', 'Issue id')} style={{ width: 90 }} value={issueId} onChange={(e) => setIssueId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder={t('問題編號', 'Issue id')} />
         </div>
         {err && <div className="err-text small">{err}</div>}
         {hits && (
           <div className="search-hits">
-            <div className="muted small">{t(`${hits.length} 筆`, `${hits.length} hit(s)`)}</div>
+            <div className="muted small num">{t(`${hits.length} 筆`, `${hits.length} hit(s)`)}</div>
             {hits.map((h, i) => {
               const a = h.agentId ? run.agents[h.agentId] : undefined;
               return (
@@ -344,8 +346,7 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
             })}
           </div>
         )}
-      </div>
-    </div>
+    </Dialog>
   );
 }
 

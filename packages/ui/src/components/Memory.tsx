@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { BookmarkPlus, X } from 'lucide-react';
+import { BookmarkPlus } from 'lucide-react';
 import { Ico } from '../icons';
 import { createPortal } from 'react-dom';
 import type { MemoryKind, MemoryMode, RunMemoryView, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { cx } from '../util';
+import { Dialog, Seg } from './Kit';
 
 export const KIND_LABEL = (t: T, k?: MemoryKind) =>
   k
@@ -74,28 +75,31 @@ export function RememberButton({ runId, text, noteId, ts, className }: { runId: 
       </button>
       {open &&
         createPortal(
-        <div className="modal-back" onClick={() => setOpen(false)}>
-          <div className="modal small-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-            <h3>{t('記住這件事', 'Remember this')}</h3>
-            <p className="muted small">
-              {t(
-                '存成這個專案的「指示」記憶，立刻生效：之後的工作流會把它當參考資料帶給 agent（不是命令，當次的指示優先）。可以先修改文字，存好後也能在「設定 → 記憶」編輯或刪除。',
-                "Saved as an instruction in this project's memory, in force at once: later workflows give it to agents as reference material (not a command; that run's own instructions come first). Edit the text first if you like; you can edit or delete it later in Settings → Memory.",
-              )}
-            </p>
-            <textarea value={value} rows={Math.min(10, Math.max(3, value.split('\n').length + 1))} onChange={(e) => setValue(e.target.value)} autoFocus />
-            {error && <div className="err-text small">{error}</div>}
-            {note && <div className="muted small">{note}</div>}
-            <div className="wf-modal-foot">
+        <Dialog
+          title={t('記住這件事', 'Remember this')}
+          onClose={() => setOpen(false)}
+          size="sm"
+          foot={
+            <>
               <button className="btn" onClick={() => setOpen(false)}>
                 {t('取消', 'Cancel')}
               </button>
               <button className="btn primary" disabled={!value.trim() || state !== 'idle'} onClick={() => void save()}>
                 {state === 'done' ? t('已記住', 'Remembered') : state === 'busy' ? t('儲存中…', 'Saving…') : t('記住', 'Remember')}
               </button>
-            </div>
-          </div>
-        </div>,
+            </>
+          }
+        >
+            <p className="muted small">
+              {t(
+                '存成這個專案的「指示」記憶，立刻生效：之後的工作流會把它當參考資料帶給 agent，不是命令，當次的指示優先。可以先修改文字，存好後也能在「設定 → 記憶」編輯或刪除。',
+                "Saved as an instruction in this project's memory, in force at once: later workflows give it to agents as reference material (not a command; that run's own instructions come first). Edit the text first if you like; you can edit or delete it later in Settings → Memory.",
+              )}
+            </p>
+            <textarea aria-label={t('要記住的內容', 'What to remember')} value={value} rows={Math.min(10, Math.max(3, value.split('\n').length + 1))} onChange={(e) => setValue(e.target.value)} autoFocus />
+            {error && <div className="err-text small">{error}</div>}
+            {note && <div className="muted small">{note}</div>}
+        </Dialog>,
           document.body,
         )}
     </>
@@ -105,7 +109,7 @@ export function RememberButton({ runId, text, noteId, ts, className }: { runId: 
 const MODES: { id: MemoryMode; zh: string; en: string; tipZh: string; tipEn: string }[] = [
   { id: 'full', zh: '完整', en: 'Full', tipZh: '帶入記憶，並把這次的候選寫進記憶', tipEn: 'Gives agents the memory and writes this run’s candidates' },
   { id: 'readonly', zh: '只讀', en: 'Read only', tipZh: '只帶入記憶，不寫入任何東西', tipEn: 'Gives agents the memory, writes nothing' },
-  { id: 'off', zh: '完全不用', en: 'Off', tipZh: '不帶入也不寫入記憶（專案 Skill 照常載入）', tipEn: 'Neither reads nor writes the memory (project Skills still load)' },
+  { id: 'off', zh: '完全不用', en: 'Off', tipZh: '不帶入也不寫入記憶，專案 Skill 照常載入', tipEn: 'Neither reads nor writes the memory; project Skills still load' },
 ];
 
 /** A workflow's use of the project memory: its mode, what it picked, what each agent got, what was left out. */
@@ -138,25 +142,12 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
   const textOf = (id: string) => view?.picks.find((p) => p.memoryId === id)?.text ?? id;
   // On the body: an ancestor of the ⋯ menu would otherwise confine a fixed overlay to the header.
   return createPortal(
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal wf-modal mem-window" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <div className="drawer-head wf-modal-head">
-          <h3>{t('專案記憶', 'Project memory')}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="close">
-            <Ico i={X} size={18} />
-          </button>
-        </div>
+    <Dialog title={t('專案記憶', 'Project memory')} onClose={onClose} size="lg" className="mem-window" back="detail-back">
         <div className="mem-body">
           <section className="mem-section">
             <div className="mem-row">
-              <b>{t('記憶模式', 'Memory mode')}</b>
-              <div className="seg" role="radiogroup">
-                {MODES.map((m) => (
-                  <button key={m.id} className={cx(view?.mode === m.id && 'on')} disabled={busy || !running} title={t(m.tipZh, m.tipEn)} onClick={() => void setMode(m.id)}>
-                    {t(m.zh, m.en)}
-                  </button>
-                ))}
-              </div>
+              <h4 className="dw-heading">{t('記憶模式', 'Memory mode')}</h4>
+              <Seg manual label={t('記憶模式', 'Memory mode')} value={view?.mode} disabled={busy || !running} onChange={(m) => void setMode(m)} choices={MODES.map((m) => ({ value: m.id, label: t(m.zh, m.en), title: t(m.tipZh, m.tipEn) }))} />
             </div>
             <p className="muted small">
               {view && t(MODES.find((m) => m.id === view.mode)!.tipZh, MODES.find((m) => m.id === view.mode)!.tipEn)}
@@ -168,16 +159,16 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
           </section>
 
           <section className="mem-section">
-            <b>{t(`這次選用的記憶（${view?.picks.length ?? 0}）`, `Memories picked for this run (${view?.picks.length ?? 0})`)}</b>
+            <h4 className="dw-heading">{t(`這次選用的記憶 ${view?.picks.length ?? 0} 條`, `Memories picked for this run: ${view?.picks.length ?? 0}`)}</h4>
             {!view?.picks.length && <p className="muted small">{view?.projectId ? t('這個專案還沒有可用的記憶。', 'This project has no usable memories yet.') : t('這個工作流沒有使用專案記憶。', 'This workflow does not use the project memory.')}</p>}
             <ul className="mem-list">
               {view?.picks.map((p) => (
                 <li key={p.memoryId} className={cx(p.gone && 'gone')}>
                   {p.gone ? (
-                    <span className="muted">{t('（開始後已被刪除、封存或取代）', '(deleted, archived or superseded since the run started)')}</span>
+                    <span className="muted">{t('開始後已被刪除、封存或取代', 'Deleted, archived or superseded since the run started')}</span>
                   ) : (
                     <>
-                      <span className="pill">{KIND_LABEL(t, p.kind)}</span>
+                      <span className="tag">{KIND_LABEL(t, p.kind)}</span>
                       <span className={cx('badge', STATE_CLASS(p.state))}>{STATE_LABEL(t, p.state)}</span>
                       {p.updated && <span className="badge warn">{t('使用者已更新', 'updated by you')}</span>}
                       <span className="mem-text">{p.text}</span>
@@ -190,7 +181,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
 
           {!!view?.given.length && (
             <section className="mem-section">
-              <b>{t('各 agent 收到的記憶', 'What each agent got')}</b>
+              <h4 className="dw-heading">{t('各 agent 收到的記憶', 'What each agent got')}</h4>
               <ul className="mem-list">
                 {view.given.map((g) => (
                   <li key={g.agentId}>
@@ -205,7 +196,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
 
           {!!view?.leftOut.length && (
             <section className="mem-section">
-              <b>{t('最近一次沒有帶入的', 'Left out last time')}</b>
+              <h4 className="dw-heading">{t('最近一次沒有帶入的', 'Left out last time')}</h4>
               <ul className="mem-list">
                 {view.leftOut.map((x) => (
                   <li key={x.memoryId}>
@@ -220,10 +211,10 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
           <section className="mem-section">
             <div className="mem-row small">
               <span>
-                {t('累計注入 token 估算', 'Injected tokens (estimate)')}：<b>{view?.injectedTokens ?? 0}</b>
+                {t('累計注入 token 估算', 'Injected tokens, estimated')}：<b className="num">{view?.injectedTokens ?? 0}</b>
               </span>
               <span>
-                {t('這次排入的候選', 'Candidates queued')}：<b>{view?.queued ?? 0}</b>
+                {t('這次排入的候選', 'Candidates queued')}：<b className="num">{view?.queued ?? 0}</b>
               </span>
             </div>
             <p className="muted tiny">
@@ -234,8 +225,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
             </p>
           </section>
         </div>
-      </div>
-    </div>,
+    </Dialog>,
     document.body,
   );
 }

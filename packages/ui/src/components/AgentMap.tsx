@@ -1,4 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, CircleCheck, CircleDashed, CircleStop, CircleX, CornerDownRight, Hourglass, LoaderCircle, Pause, RotateCw, Square, X, type LucideIcon } from 'lucide-react';
+import { Ico } from '../icons';
+import { Dialog } from './Kit';
 import type { AgentRunInfo, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub, useAgentEvents } from '../api';
 import { failureLabel } from './AgentTurn';
@@ -28,7 +31,7 @@ function useTick(on: boolean) {
 /** What the agent is for: a sub-agent's task, or its role in the workflow. */
 function titleOf(t: T, a: AgentRunInfo): string {
   if (a.role === 'subagent') return subTitle(a) || 'Sub agent';
-  if (a.role === 'advisor') return `❓ ${subTitle(a) || roleLabel(t, a.role)}`;
+  if (a.role === 'advisor') return subTitle(a) ? `${roleLabel(t, a.role)} · ${subTitle(a)}` : roleLabel(t, a.role);
   return `${roleLabel(t, a.role)}${a.round ? ` · ${t(`第 ${a.round} 輪`, `round ${a.round}`)}` : ''}`;
 }
 
@@ -43,18 +46,20 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   const t = useT();
   const [selected, setSelected] = useState<string | undefined>();
   const [proc, setProc] = useState<TrackedProcess>();
+  // The clicked card and the back button leave the page as the view changes: the focus goes to the back button when
+  // an agent opens, and back to that agent's card on the map.
+  const backBtn = useRef<HTMLButtonElement>(null);
+  const shown = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const was = shown.current;
+    shown.current = selected;
+    if (selected === was) return;
+    if (selected) backBtn.current?.focus();
+    else if (was) document.querySelector<HTMLElement>(`.am-modal .am-node[data-am-id="${CSS.escape(was)}"]`)?.focus();
+  }, [selected]);
   // Closed agents leave the map (their records stay in the conversation).
   const agents = Object.values(run.agents).filter((a) => a.role !== 'test' && !a.closed);
   useTick(agents.some(isLive));
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      if (selected) setSelected(undefined);
-      else onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, selected]);
 
   const roots = agents.filter((a) => !a.parentId || !run.agents[a.parentId]).sort(byStart);
   const childrenOf = (id: string) => agents.filter((a) => a.parentId === id).sort(byStart);
@@ -78,21 +83,29 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
   };
 
   return (
-    <div className="modal-back" onClick={onClose}>
-      <div className="modal am-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+    <>
+      <Dialog
+        className="am-modal"
+        size="xl"
+        onClose={onClose}
+        // Esc steps back from an agent to the map first, then closes the map.
+        onEscape={() => (current ? setSelected(undefined) : onClose())}
+        lead={
+          current ? (
+            <button ref={backBtn} type="button" className="icon-btn" onClick={() => setSelected(undefined)} aria-label={t('返回 Agent map', 'Back to the agent map')} title={t('返回', 'Back')}>
+              <Ico i={ArrowLeft} size={16} />
+            </button>
+          ) : undefined
+        }
+        title={current ? <span className="am-detail-title">{titleOf(t, current)}</span> : 'Agent map'}
+      >
         {current ? (
-          <Detail t={t} run={run} agent={current} providers={providers} onBack={() => setSelected(undefined)} onOpen={setSelected} onClose={onClose} />
+          <Detail t={t} run={run} agent={current} providers={providers} onOpen={setSelected} />
         ) : (
           <>
-            <div className="am-head">
-              <h3>Agent map</h3>
-              <button className="icon-btn" onClick={onClose} aria-label="close">
-                ✕
-              </button>
-            </div>
-            <div className="muted small">
+            <div className="muted small num">
               {t(`${agents.length} 個 agent`, `${agents.length} agents`)}
-              {subs > 0 && t(`（${subs} 個 sub agent／顧問）`, ` (${subs} sub-agents / advisors)`)}
+              {subs > 0 && t(`，其中 ${subs} 個 sub agent 或顧問`, `, ${subs} of them sub-agents or advisors`)}
               {live > 0 && t(` · ${live} 個執行中`, ` · ${live} running`)}
               {' · '}
               {t('點一下 agent 看詳細內容', 'click an agent for details')}
@@ -126,9 +139,9 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
             )}
           </>
         )}
-      </div>
+      </Dialog>
       {proc && <ProcessWindow run={run} pid={proc.pid} workflowId={proc.workflowId} providers={providers} onClose={() => setProc(undefined)} />}
-    </div>
+    </>
   );
 }
 
@@ -158,9 +171,17 @@ function groupRoots(roots: AgentRunInfo[]): Section[] {
   return out;
 }
 
-function Dot({ t, agent }: { t: T; agent: AgentRunInfo }) {
+const STATUS_ICON: Record<AgentRunInfo['status'], LucideIcon> = { queued: CircleDashed, running: LoaderCircle, paused: Pause, completed: CircleCheck, failed: CircleX, cancelled: CircleStop };
+
+/** An agent's state as an icon and a word (not a coloured dot alone); also the detail windows' (DetailWindows.tsx). */
+export function Status({ t, agent, small }: { t: T; agent: AgentRunInfo; small?: boolean }) {
   const st = agentStatus(t, agent.status);
-  return <span className={cx('am-dot', st.cls, isLive(agent) && 'live')} title={st.label} />;
+  return (
+    <span className={cx('state-word', st.cls, small && 'small')}>
+      <Ico i={STATUS_ICON[agent.status]} size={small ? 14 : 16} className={agent.status === 'running' ? 'spin' : undefined} />
+      {st.label}
+    </span>
+  );
 }
 
 function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; providers: ProviderInfo[]; onOpen: () => void }) {
@@ -170,9 +191,8 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
   // What a helper came back with, in one line (or why it failed).
   const outcome = main || isLive(agent) ? '' : agent.status === 'failed' || agent.status === 'cancelled' ? (agent.error ? firstLine(agent.error, 80) : '') : firstLine(agent.finalText, 80);
   return (
-    <button className={cx('am-node', roleTone(agent.role), main && 'am-root', isLive(agent) && 'live')} onClick={onOpen} title={agent.brief ?? agent.task}>
+    <button className={cx('am-node', roleTone(agent.role), main && 'am-root', isLive(agent) && 'live')} data-am-id={agent.id} onClick={onOpen} title={agent.brief ?? agent.task}>
       <div className="am-node-title">
-        <Dot t={t} agent={agent} />
         {/* The round is on the row's label already. */}
         <span className="am-title-text">{main ? roleLabel(t, agent.role) : titleOf(t, agent)}</span>
       </div>
@@ -182,8 +202,9 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
         {' · '}
         {agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}
       </div>
-      <div className="am-node-meta muted">
-        {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : agentStatus(t, agent.status).label}
+      <div className="am-node-meta muted num">
+        <Status t={t} agent={agent} small />
+        {agent.startedAt ? ` · ${elapsed(agent.startedAt, agent.endedAt)}` : ''}
         {tokens > 0 && ` · ${fmtTokens(tokens)} tokens`}
         {agent.stats.tools > 0 && ` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
         {files > 0 && ` · ${t(`改 ${files} 檔`, `${files} file(s)`)}`}
@@ -197,16 +218,19 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
         </div>
       )}
       {isLive(agent) && (agent.waiting || agent.activity) && <div className="am-node-doing">{agent.waiting ?? agent.activity!.replace(/^\S+\s/, '')}</div>}
-      {outcome && <div className={cx('am-node-result', agent.status === 'failed' && 'err')}>{agent.status === 'completed' ? '↳ ' : '✕ '}{outcome}</div>}
+      {outcome && (
+        <div className={cx('am-node-result', agent.status === 'failed' && 'err')}>
+          <Ico i={agent.status === 'completed' ? CornerDownRight : CircleX} size={14} /> {outcome}
+        </div>
+      )}
     </button>
   );
 }
 
-function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; run: WorkflowRun; agent: AgentRunInfo; providers: ProviderInfo[]; onBack: () => void; onOpen: (id: string) => void; onClose: () => void }) {
+function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; agent: AgentRunInfo; providers: ProviderInfo[]; onOpen: (id: string) => void }) {
   // In a conversation's map the agent may belong to an earlier message (its own workflow).
   const events = useAgentEvents(agent.workflowId ?? run.id, agent.id);
   const [raw, setRaw] = useState(false);
-  const st = agentStatus(t, agent.status);
   const parent = agent.parentId ? run.agents[agent.parentId] : undefined;
   const kids = Object.values(run.agents)
     .filter((a) => a.parentId === agent.id)
@@ -216,25 +240,15 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
   const answer = agent.finalText?.trim();
   return (
     <>
-      <div className="am-head">
-        <button className="icon-btn" onClick={onBack} aria-label={t('返回', 'Back')}>
-          ←
-        </button>
-        <Dot t={t} agent={agent} />
-        <h3 className="am-detail-title">{titleOf(t, agent)}</h3>
-        <button className="icon-btn" onClick={onClose} aria-label="close">
-          ✕
-        </button>
-      </div>
       <div className="am-facts">
         <div>
-          <span className={cx('status', st.cls)}>{st.label}</span>
+          <Status t={t} agent={agent} />
           {' · '}
           <span className="am-mark" style={{ background: providerColor(agent.provider) }} />
           {providerName(providers, agent.provider)}
           {' · '}
           <b>{agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}</b>
-          {agent.servedBy?.length ? ` → ${t('實際', 'served by')} ${agent.servedBy.join('、')}` : ''}
+          {agent.servedBy?.length ? ` · ${t('實際回答', 'served by')} ${agent.servedBy.join('、')}` : ''}
           {agent.effort && ` · ${t('推理', 'effort')} ${agent.effort}`}
           {' · '}
           {roleLabel(t, agent.role)}
@@ -253,9 +267,9 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
             t('工作流的主要 agent', 'A main agent of the workflow')
           )}
         </div>
-        <div className="muted">
+        <div className="muted num">
           {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : '—'}
-          {tokens && ` · ${fmtTokens(tokens.input + tokens.output)} tokens（${t('輸入', 'in')} ${fmtTokens(tokens.input)}${tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''} · ${t('輸出', 'out')} ${fmtTokens(tokens.output)}）`}
+          {tokens && ` · ${fmtTokens(tokens.input + tokens.output)} tokens · ${t('輸入', 'in')} ${fmtTokens(tokens.input)}${tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''} · ${t('輸出', 'out')} ${fmtTokens(tokens.output)}`}
           {` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
           {agent.stats.commands > 0 && ` · ${agent.stats.commands} ${t('個指令', 'commands')}`}
           {agent.stats.filesChanged.length > 0 && ` · ${agent.stats.filesChanged.length} ${t('個檔案', 'files')}`}
@@ -281,18 +295,18 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
         <div className="am-section">
           <div className="am-label">{t('現在正在做', 'Doing now')}</div>
           <div className="working">
-            <span className="spark">✻</span> {agent.activity?.replace(/^\S+\s/, '') ?? t('啟動中…', 'Starting…')}
+            <Ico i={LoaderCircle} size={14} className="spark spin" /> {agent.activity?.replace(/^\S+\s/, '') ?? t('啟動中…', 'Starting…')}
           </div>
         </div>
       )}
 
       {kids.length > 0 && (
         <div className="am-section">
-          <div className="am-label">{t(`派出的 agent（${kids.length}）`, `Agents it started (${kids.length})`)}</div>
+          <div className="am-label">{t(`派出的 agent · ${kids.length}`, `Agents it started · ${kids.length}`)}</div>
           <div className="am-kid-list">
             {kids.map((k) => (
               <button key={k.id} className="am-kid" onClick={() => onOpen(k.id)}>
-                <Dot t={t} agent={k} /> <b>{titleOf(t, k)}</b>
+                <Status t={t} agent={k} small /> <b>{titleOf(t, k)}</b>
                 <span className="muted">
                   {' '}
                   · {providerName(providers, k.provider)} · {k.model ? modelLabel(k.model) : t('預設模型', 'default model')}
@@ -312,7 +326,11 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
           </Clamp>
         </div>
       )}
-      {agent.status === 'failed' && agent.error && <div className="tx-err">✕ {agent.error}</div>}
+      {agent.status === 'failed' && agent.error && (
+        <div className="tx-err">
+          <Ico i={CircleX} size={14} /> {agent.error}
+        </div>
+      )}
 
       {agent.stats.filesChanged.length > 0 && (
         <div className="am-section">
@@ -326,7 +344,7 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
       )}
       {(agent.stats.filesMaybeChanged?.length ?? 0) > 0 && (
         <div className="am-section">
-          <div className="am-label">{t('可能改動的檔案（編輯失敗，請確認）', 'Possibly changed (the edit failed; check them)')}</div>
+          <div className="am-label">{t('可能改動的檔案：編輯失敗，請確認', 'Possibly changed: the edit failed, check them')}</div>
           <div className="am-files mono small">
             {agent.stats.filesMaybeChanged!.map((f) => (
               <div key={f}>{f}</div>
@@ -337,7 +355,7 @@ function Detail({ t, run, agent, providers, onBack, onOpen, onClose }: { t: T; r
 
       <div className="am-section">
         <div className="am-label row gap">
-          <span className="grow">{t(`處理過程（${steps.length} 個步驟）`, `What it did (${steps.length} steps)`)}</span>
+          <span className="grow">{t(`處理過程 · ${steps.length} 個步驟`, `What it did · ${steps.length} steps`)}</span>
           <label className="toggle">
             <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> {t('原始紀錄', 'Raw log')}
           </label>
@@ -356,29 +374,33 @@ function AgentActions({ t, run, agent }: { t: T; run: WorkflowRun; agent: AgentR
   const canRerun = live && ((agent.role === 'subagent' && parentLive) || (agent.role !== 'subagent' && agent.role !== 'advisor' && agent.status === 'running'));
   return (
     <div className="am-section">
-      {agent.waiting && <div className="small">⏳ {agent.waiting}</div>}
+      {agent.waiting && (
+        <div className="small state-word warn">
+          <Ico i={Hourglass} size={14} /> {agent.waiting}
+        </div>
+      )}
       {agent.failure && agent.status !== 'completed' && (
         <div className="small warn-text">
           {failureLabel(t, agent.failure.kind)}：{agent.failure.action}
         </div>
       )}
-      {agent.endedWithoutResult && <div className="small warn-text">{t('程序已結束，但沒有交出結果（不是成功）', 'The process ended without a result (not a success)')}</div>}
+      {agent.endedWithoutResult && <div className="small warn-text">{t('程序已結束，但沒有交出結果，不是成功', 'The process ended without a result, which is not a success')}</div>}
       {live && agent.role !== 'compactor' && (
         <div className="row gap">
           {isLive(agent) && (
-            <button className="btn small danger" onClick={() => act('agents.stop')}>
-              ■ {t('停止', 'Stop')}
+            <button className="btn small ghost danger" onClick={() => act('agents.stop')}>
+              <Ico i={Square} size={14} /> {t('停止', 'Stop')}
             </button>
           )}
           {canRerun && (
-            <button className="btn small" onClick={() => act('agents.rerun')}>
-              ↻ {agent.role === 'subagent' ? t('重跑', 'Re-run') : t('重新派發', 'Re-dispatch')}
+            <button className="btn small ghost" onClick={() => act('agents.rerun')}>
+              <Ico i={RotateCw} size={14} /> {agent.role === 'subagent' ? t('重跑', 'Re-run') : t('重新派發', 'Re-dispatch')}
             </button>
           )}
           {live && agent.role === 'subagent' && parentLive && <SwitchProvider workflowId={agent.workflowId ?? run.id} agentId={agent.id} urgent={agent.failure?.kind === 'quota' || agent.failure?.kind === 'rate_limit'} />}
           {agent.role === 'subagent' && !isLive(agent) && (
-            <button className="btn small" onClick={() => act('agents.close')}>
-              ✕ {t('關閉', 'Close')}
+            <button className="btn small ghost" onClick={() => act('agents.close')}>
+              <Ico i={X} size={14} /> {t('關閉', 'Close')}
             </button>
           )}
         </div>
@@ -412,14 +434,14 @@ function RoundProcesses({ t, run, agents, onOpen }: { t: T; run: WorkflowRun; ag
               <span className="am-tag">{kind}</span>
               {p.detected && <span className="am-tag" title={t('agent 沒有登記它，是 Aivenue 從 agent 執行的指令偵測到的', 'The agent did not register it; Aivenue found it from the commands the agent ran')}>{t('自動偵測', 'detected')}</span>}
               <span className={cx('am-tag', incomplete && 'warn')}>{state}</span>
-              {p.lastPercent !== undefined && <span className="am-tag">{Math.round(p.lastPercent)}%</span>}
+              {p.lastPercent !== undefined && <span className="am-tag num">{Math.round(p.lastPercent)}%</span>}
             </div>
             {p.lastPercent !== undefined && (
               <div className="dw-bar">
                 <div className={cx('dw-fill', incomplete ? 'err' : p.lastPercent >= 100 ? 'ok' : undefined)} style={{ width: `${Math.min(100, p.lastPercent)}%` }} />
               </div>
             )}
-            <div className="am-proc-pid muted">PID {p.pid}{p.endedAt ? ` · ${elapsed(p.startedAt, p.endedAt)}` : ''}</div>
+            <div className="am-proc-pid muted num">PID {p.pid}{p.endedAt ? ` · ${elapsed(p.startedAt, p.endedAt)}` : ''}</div>
           </button>
         );
       })}

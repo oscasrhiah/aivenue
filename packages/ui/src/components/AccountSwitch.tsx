@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { ProviderInfo, ProviderUsage } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, providerName } from '../util';
+import { ChevronDown } from 'lucide-react';
+import { Ico } from '../icons';
+import { useMenuKeys } from './RunTools';
 
 /** An extra account's id is `<tool>~<slug>`: the tool it belongs to. */
 const toolOf = (id: string) => id.split('~')[0];
@@ -61,6 +64,10 @@ function SwitchGroup({ tool, list, providers, usage, onChoose, primary }: { tool
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+  // A menu button: the focus goes to the first account, the arrows move, Esc closes it back to the button.
+  useMenuKeys(open, menu, btn, () => setOpen(false));
   useEffect(() => {
     if (!open) return;
     const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
@@ -86,16 +93,28 @@ function SwitchGroup({ tool, list, providers, usage, onChoose, primary }: { tool
   const account = (o: SwitchOption) => providers.find((x) => x.spec.id === o.id.slice(7))?.spec.accountName ?? t('主帳號', 'Main account');
   return (
     <span className="switch-prov" ref={ref}>
-      <button className={cx('btn', primary && 'primary')} aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button
+        ref={btn}
+        className={cx('btn', primary && 'primary')}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onKeyDown={(e) => {
+          if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) {
+            e.preventDefault();
+            setOpen(true);
+          }
+        }}
+      >
         {t(`改用 ${name}`, `Use ${name} instead`)}
-        <span className="switch-left"> {t(`（${list.length} 個帳號）`, ` (${list.length} accounts)`)} ▾</span>
+        <span className="switch-left"> · {t(`${list.length} 個帳號`, `${list.length} accounts`)}</span> <Ico i={ChevronDown} size={14} />
       </button>
       {open && (
-        <div className="menu switch-menu left">
+        <div className="menu switch-menu left" role="menu" aria-label={t(`改用 ${name} 的哪個帳號`, `Which ${name} account`)} ref={menu}>
           {ranked.map((o) => (
-            <button key={o.id} onClick={() => (setOpen(false), onChoose(o.id))}>
+            <button key={o.id} type="button" role="menuitem" tabIndex={-1} onClick={() => (setOpen(false), btn.current?.focus(), onChoose(o.id))}>
               <span className="grow">
-                {name}（{account(o)}）<span className="muted"> — {quotaText(t, usageOf(o))}</span>
+                {name} · {account(o)}<span className="muted"> — {quotaText(t, usageOf(o))}</span>
               </span>
               {remaining(usageOf(o)).full && <span className="pill warn">{t('額度已滿', 'At its limit')}</span>}
             </button>

@@ -4,6 +4,9 @@ import { hub, useProviders } from '../api';
 import { useT } from '../i18n';
 import { fmtContext } from '../../../core/src/modelContext';
 import { cx } from '../util';
+import { ExternalLink } from 'lucide-react';
+import { Ico } from '../icons';
+import { Seg } from './Kit';
 
 type Kind = CatalogProvider['kind'] | 'custom';
 
@@ -62,14 +65,13 @@ export function CatalogPicker({ onDone }: { onDone: () => void }) {
         </div>
       )}
       <div className="row gap wrap">
-        <div className="seg">
-          {tabs.map((x) => (
-            <button key={x.id} className={cx(tab === x.id && !q && 'on')} onClick={() => (setTab(x.id), setQ(''), setSel(null))}>
-              {x.label}
-            </button>
-          ))}
-        </div>
-        {tab !== 'custom' && <input className="grow" placeholder={t(`搜尋全部 ${catalog?.length ?? ''} 家…`, `Search all ${catalog?.length ?? ''}…`)} value={q} onChange={(e) => setQ(e.target.value)} />}
+        <Seg
+          label={t('供應商種類', 'Kind of provider')}
+          value={q ? undefined : tab}
+          onChange={(id) => (setTab(id), setQ(''), setSel(null))}
+          choices={tabs.map((x) => ({ value: x.id, label: x.label }))}
+        />
+        {tab !== 'custom' && <input className="grow" aria-label={t('搜尋供應商', 'Search providers')} placeholder={t(`搜尋全部 ${catalog?.length ?? ''} 家…`, `Search all ${catalog?.length ?? ''}…`)} value={q} onChange={(e) => setQ(e.target.value)} />}
       </div>
       <div className="muted small">{tabs.find((x) => x.id === tab)?.hint}</div>
       {error && <div className="note err">{error}</div>}
@@ -123,8 +125,8 @@ export function CatalogPicker({ onDone }: { onDone: () => void }) {
                 </div>
                 {sel.api && <div className="muted tiny mono">{sel.api}</div>}
                 {sel.doc && (
-                  <button className="link" onClick={() => hub.call('host.openExternal', { url: sel.doc })}>
-                    {t('取得金鑰／說明文件 ↗', 'Get a key / docs ↗')}
+                  <button className="link link-icon" onClick={() => hub.call('host.openExternal', { url: sel.doc })}>
+                    <Ico i={ExternalLink} size={14} /> {t('取得金鑰／說明文件', 'Get a key / docs')}
                   </button>
                 )}
                 <div className="field">
