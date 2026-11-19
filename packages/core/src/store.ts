@@ -243,7 +243,8 @@ export class RunStore {
   }
 
   static summary(run: WorkflowRun): WorkflowSummary {
-    return { id: run.id, threadId: run.config.threadId ?? run.id, replacedBy: run.replacedBy, title: run.config.title, status: run.status, createdAt: run.createdAt, updatedAt: run.updatedAt, cwd: run.config.cwd };
+    const waiting = run.pending ? (run.pending.question ? 'question' : 'decision') : run.status === 'waiting_human' ? 'decision' : run.status === 'running' && run.approvals?.length ? 'approval' : undefined;
+    return { id: run.id, threadId: run.config.threadId ?? run.id, replacedBy: run.replacedBy, title: run.config.title, status: run.status, createdAt: run.createdAt, updatedAt: run.updatedAt, cwd: run.worktree?.origCwd ?? run.config.cwd, ...(waiting ? { waiting } : {}) };
   }
 
   loadPresets(): WorkflowPreset[] {

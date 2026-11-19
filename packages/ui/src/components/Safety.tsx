@@ -1,16 +1,45 @@
-import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, ClipboardList, FolderOpen, GitBranch, Hand, Pencil, ShieldAlert, Zap, type LucideIcon } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { ChevronDown, ChevronRight, ClipboardList, FolderOpen, GitBranch, Hand, Pencil, ShieldAlert, Square, SquareCheck, Zap, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PermissionLevel, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { cx, providerName } from '../util';
 import { ask } from './Ask';
+import { useMenuKeys } from './RunTools';
 import { byFolder } from '../timeline';
 
 export const PERMISSION_ICON: Record<PermissionLevel, LucideIcon> = { plan: ClipboardList, ask: Hand, edit: Pencil, auto: Zap, full: ShieldAlert };
 
 const LEVELS: PermissionLevel[] = ['plan', 'ask', 'edit', 'auto', 'full'];
+
+/**
+ * Whether a list that opens upwards from a composer control (the permission and advisor menus) must open downwards
+ * instead: when the room above it, inside the scrolling page that holds it (the new chat's page, its composer near the
+ * top), is smaller than the list and there is more room below. Measured once it is drawn, and again on `again`.
+ */
+export function useOpensDown(open: boolean, menu: RefObject<HTMLElement | null>, again?: unknown): boolean {
+  const [down, setDown] = useState(false);
+  useLayoutEffect(() => {
+    const el = menu.current;
+    const anchor = el?.parentElement;
+    if (!open || !el || !anchor) return setDown(false);
+    let top = 0;
+    let bottom = window.innerHeight;
+    for (let p = anchor.parentElement; p; p = p.parentElement) {
+      if (getComputedStyle(p).overflowY === 'visible') continue;
+      const r = p.getBoundingClientRect();
+      top = Math.max(top, r.top);
+      bottom = Math.min(bottom, r.bottom);
+      break;
+    }
+    const a = anchor.getBoundingClientRect();
+    const above = a.top - top;
+    const below = bottom - a.bottom;
+    setDown(above < el.offsetHeight + 6 && below > above);
+  }, [open, again]); // eslint-disable-line react-hooks/exhaustive-deps
+  return down;
+}
 
 export const permissionLabel = (t: T, p: PermissionLevel) =>
   ({ plan: t('Plan 唯讀', 'Plan (read-only)'), ask: t('手動核准', 'Ask me'), edit: t('自動編輯', 'Auto-edit'), auto: t('完全 Auto', 'Full auto'), full: t('完整電腦存取', 'Whole computer') })[p];
@@ -140,11 +169,24 @@ export function OutsideChanges({ run }: { run: WorkflowRun }) {
   );
 }
 
-/** Composer button showing the permission level; opens a small pick-list (or the settings window when read-only). */
+/**
+ * How much a permission level can do beyond the working folder, as its colour: whole-computer access is red; full auto
+ * without isolation (everything approved, and CLIs other than Codex may write outside the folder) is amber. Read-only,
+ * ask, auto-edit, and full auto in an isolated copy stay neutral, whether or not they are the default.
+ */
+export const permissionRisk = (p: PermissionLevel, isolation: boolean): '' | 'warn' | 'err' => (p === 'full' ? 'err' : p === 'auto' && !isolation ? 'warn' : '');
+
+/**
+ * Composer control showing the permission level in words, coloured by what it can do (permissionRisk); opens a pick-list
+ * (or the settings window when read-only). The list is a menu: the focus goes to the level in use, the arrows move,
+ * Esc closes it and gives the focus back.
+ */
 export function PermissionButton({ permission, isolation, onChange, onOpen }: { permission: PermissionLevel; isolation: boolean; onChange?: (v: { permission?: PermissionLevel; isolation?: boolean }) => void; onOpen: () => void }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const { pick, dialog } = useGuardedPermission(permission, onChange);
   useEffect(() => {
     if (!open) return;
@@ -158,23 +200,37 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
       document.removeEventListener('keydown', close);
     };
   }, [open]);
+  useMenuKeys(open, list, btn, () => setOpen(false));
+  const down = useOpensDown(open, list);
+  const label = `${t('權限', 'Permissions')}：${permissionLabel(t, permission)}${isolation ? ` · ${t('隔離模式', 'Isolation')}` : ''}`;
   return (
     <span className="perm-wrap" ref={ref}>
-      <button className={cx('pill-btn perm-btn', permission === 'full' && 'danger-on')} title={`${t('權限', 'Permissions')}：${permissionLabel(t, permission)}`} onClick={() => (onChange ? setOpen(!open) : onOpen())}>
-        <Ico i={PERMISSION_ICON[permission]} size={15} /> <span className="perm-label">{permissionLabel(t, permission)}</span>
-        {isolation && <Ico i={GitBranch} size={14} label={t('隔離模式', 'Isolation')} />}
+      <button
+        ref={btn}
+        className={cx('wf-ctl perm-btn', permissionRisk(permission, isolation))}
+        title={label}
+        aria-label={label}
+        aria-haspopup={onChange ? 'menu' : 'dialog'}
+        aria-expanded={onChange ? open : undefined}
+        onClick={() => (onChange ? setOpen(!open) : onOpen())}
+      >
+        <Ico i={PERMISSION_ICON[permission]} size={16} /> <span className="perm-label">{permissionLabel(t, permission)}</span>
+        {isolation && <Ico i={GitBranch} size={14} />}
+        {onChange && <Ico i={ChevronDown} size={14} className="wf-chev" />}
       </button>
       {open && onChange && (
-        <div className="perm-menu" role="menu">
+        <div className={cx('perm-menu', down && 'down')} role="menu" aria-label={t('權限', 'Permissions')} ref={list}>
           {LEVELS.map((p) => (
             <button
               key={p}
               role="menuitemradio"
+              tabIndex={-1}
               aria-checked={p === permission}
               className={cx('perm-item', p === permission && 'on', p === 'full' && 'danger')}
               onClick={() => {
                 pick(p);
                 setOpen(false);
+                btn.current?.focus();
               }}
             >
               <Ico i={PERMISSION_ICON[p]} size={16} className="perm-item-icon" />
@@ -184,10 +240,14 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
               </span>
             </button>
           ))}
-          <label className="check perm-iso">
-            <input type="checkbox" checked={isolation} onChange={(e) => onChange({ isolation: e.target.checked })} />
-            {t('隔離模式（在 git worktree 副本中工作）', 'Isolation (work in a git worktree copy)')}
-          </label>
+          <button type="button" role="menuitemcheckbox" tabIndex={-1} aria-checked={isolation} className={cx('perm-item perm-iso', isolation && 'on')} onClick={() => onChange({ isolation: !isolation })}>
+            <Ico i={GitBranch} size={16} className="perm-item-icon" />
+            <span>
+              <span className="perm-item-title">{t('隔離模式', 'Isolation')}</span>
+              <span className="perm-item-hint">{t('在 git worktree 副本中工作', 'Work in a git worktree copy')}</span>
+            </span>
+            <Ico i={isolation ? SquareCheck : Square} size={16} className="perm-iso-box" />
+          </button>
         </div>
       )}
       {dialog}

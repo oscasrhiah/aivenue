@@ -235,7 +235,8 @@ try {
   log('chat 1 (question) from window A');
   const id1 = (await A.call('workflows.start', { config: cfg(A.info.defaultCwd, goalAsk, 'two-windows: question') })).result;
   check('a chat started in A is listed in B at once', await until(async () => (await B.call('workflows.list')).result?.some((w) => w.id === id1), 'B lists it', 10_000, 300).catch(() => false));
-  const sidebarHas = (side, text) => side.evaluate(`[...document.querySelectorAll('.side-item-title')].some((e) => e.innerText.includes(${JSON.stringify(text)}))`);
+  // textContent, not innerText: in a narrow tab the chat list is a closed drawer (visibility: hidden), whose innerText is empty.
+  const sidebarHas = (side, text) => side.evaluate(`[...document.querySelectorAll('.side-item-title')].some((e) => e.textContent.includes(${JSON.stringify(text)}))`);
   check("B's sidebar shows it", await until(() => sidebarHas(B, 'two-windows: question'), "B's sidebar", 10_000, 300).catch(() => false));
   const pending = await until(async () => (await B.call('workflows.get', { id: id1 })).result?.pending, 'the question', 300_000, 2000).catch(() => undefined);
   check('the agent asked its question (seen from B)', !!pending, pending?.message?.slice(0, 80));

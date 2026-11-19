@@ -29,6 +29,19 @@ const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
 const { Orchestrator, RunStore, applyStandard, CapabilityStore, sessionGone } = mod.exports;
 
+test('RunStore.summary 帶出等待的種類：問題、核准（工作流仍在執行）、其他決定；沒在等就沒有這一欄', () => {
+  const run = (o) => ({ id: 'r', config: { title: 't', cwd: 'C:\\p' }, status: 'running', createdAt: 1, updatedAt: 2, agents: {}, ...o });
+  assert.equal(RunStore.summary(run({ status: 'waiting_human', pending: { id: 'q', question: true } })).waiting, 'question');
+  assert.equal(RunStore.summary(run({ status: 'waiting_human', pending: { id: 'd' } })).waiting, 'decision');
+  assert.equal(RunStore.summary(run({ status: 'waiting_human' })).waiting, 'decision');
+  assert.equal(RunStore.summary(run({ approvals: [{ id: 'a' }] })).waiting, 'approval');
+  assert.ok(!('waiting' in RunStore.summary(run({ status: 'paused', approvals: [{ id: 'a' }] }))));
+  assert.ok(!('waiting' in RunStore.summary(run({}))));
+  // Its folder is the user's, not the isolated copy the agents work in (the new chat offers it as a recent folder).
+  assert.equal(RunStore.summary(run({ config: { title: 't', cwd: 'C:\\wt\\copy' }, worktree: { origCwd: 'C:\\p', state: 'active' } })).cwd, 'C:\\p');
+  assert.equal(RunStore.summary(run({})).cwd, 'C:\\p');
+});
+
 const spec = (id) => ({ id, name: id, command: id, run: { args: [] }, output: 'text' });
 function setup(o = {}) {
   // `dir`: the same data folder again (Aivenue restarted).

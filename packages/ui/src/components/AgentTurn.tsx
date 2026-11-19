@@ -4,7 +4,7 @@ import { Ico } from '../icons';
 import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ObservedCheck, ProviderInfo, ReviewIssue, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
 import { useT } from '../i18n';
-import { cx, duration, firstLine, fullTime, saidOwner, modelLabel, providerName, roleLabel, similar, subTitle } from '../util';
+import { cx, duration, firstLine, fullTime, saidOwner, modelLabel, providerName, roleLabel, similar, subTitle, waitWord } from '../util';
 import { Clamp } from './Clamp';
 import { SwitchProvider } from './RunTools';
 import { LiveFeed, Transcript, visible } from './Transcript';
@@ -762,19 +762,20 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
   const when = agent.startedAt ? (agent.endedAt ? t(`開始 ${fullTime(agent.startedAt)}，結束 ${fullTime(agent.endedAt)}`, `Started ${fullTime(agent.startedAt)}, ended ${fullTime(agent.endedAt)}`) : t(`開始 ${fullTime(agent.startedAt)}`, `Started ${fullTime(agent.startedAt)}`)) : undefined;
   // Asked you a question (ask_user) and waits for the answer: Aivenue holds its turn (paused) until you answer below.
   const asking = run.status === 'waiting_human' && !!run.pending?.question && (agent.status === 'paused' || (now?.kind === 'tool' && now.calls.some((e) => e.tool?.category === 'hub' && /ask_user$/.test(e.tool.name))));
-  // Its state, coloured, only while it is not plainly done: running, waiting (paused, an approval, your answer, a
-  // condition), failed, stopped (queued, not started yet, in grey). A finished turn's first line says how it ended.
+  // Its state, coloured, only while it is not plainly done: running, waiting (an approval, your answer, a condition),
+  // failed, stopped; paused and queued (not started yet) in grey, as the header says paused. A finished turn's first
+  // line says how it ended.
   const state: TurnState | undefined =
     agent.status === 'failed'
       ? { cls: 'err', icon: CircleX, label: [t('失敗', 'Failed'), agent.failure && failureLabel(t, agent.failure.kind)].filter(Boolean).join(' · ') }
       : agent.status === 'cancelled'
         ? { cls: 'warn', icon: CircleStop, label: t('已停止', 'Stopped') }
         : asking
-          ? { cls: 'warn', icon: MessageCircleQuestionMark, label: t('等你回覆', 'Waiting for your answer') }
+          ? { cls: 'warn', icon: MessageCircleQuestionMark, label: waitWord(t, 'question') }
           : now?.kind === 'paused'
-            ? { cls: 'warn', icon: Pause, label: t('已暫停', 'Paused') }
+            ? { cls: 'muted', icon: Pause, label: t('已暫停', 'Paused') }
             : now?.kind === 'approval'
-              ? { cls: 'warn', icon: Hand, label: t('等你核准', 'Needs your approval') }
+              ? { cls: 'warn', icon: Hand, label: waitWord(t, 'approval') }
               : now?.kind === 'waiting'
                 ? { cls: 'warn', icon: Hourglass, label: t('等待中', 'Waiting') }
                 : agent.status === 'queued'

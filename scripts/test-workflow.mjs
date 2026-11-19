@@ -33,7 +33,7 @@ const bundled = await build({
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { reviewMarkdown } from './packages/ui/src/reviewText';
-      export { msgTime, duration } from './packages/ui/src/util';
+      export { msgTime, duration, waitKind, waitWord, askerOf, attention, attentionLabel, wfStatus, summaryWait, recentFolders, folderName, RECENT_FAILURE_MS } from './packages/ui/src/util';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
       export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupCount, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates, resultText, activityCounts, activityLabel, chatLines, issueCounts, verdictWords, reviseReason } from './packages/ui/src/timeline';
@@ -3423,6 +3423,73 @@ test('用時：十秒以上才寫，寫成「4 分 58 秒」「1 小時 5 分」
   assert.equal(W.duration(zh, undefined, 3000), '');
 });
 
+test('等你處理的說法：問題、核准、其他決定各一個詞，頁首、進度、回合都一樣；問的人取自問題的開頭', () => {
+  const zh = (z) => z;
+  assert.equal(W.waitKind({ status: 'waiting_human', pending: { id: 'q', question: true } }), 'question');
+  assert.equal(W.waitKind({ status: 'waiting_human', pending: { id: 'd' } }), 'decision');
+  // Waiting with the decision not loaded yet: still a decision, never nothing.
+  assert.equal(W.waitKind({ status: 'waiting_human' }), 'decision');
+  assert.equal(W.waitKind({ status: 'running', approvals: [{ id: 'a' }] }), 'approval');
+  // Paused with an approval left over, or ended: not waiting for you.
+  assert.equal(W.waitKind({ status: 'paused', approvals: [{ id: 'a' }] }), undefined);
+  assert.equal(W.waitKind({ status: 'running', approvals: [] }), undefined);
+  assert.equal(W.waitKind({ status: 'completed' }), undefined);
+  assert.deepEqual(['question', 'approval', 'decision'].map((k) => W.waitWord(zh, k)), ['等你回答', '等你核准', '等你決定']);
+  assert.deepEqual(['question', 'approval', 'decision'].map((k) => W.waitWord(tr, k)), ['Waiting for your answer', 'Waiting for your approval', 'Waiting for your decision']);
+  const providers = [{ spec: { id: 'opencode', name: 'OpenCode' } }];
+  assert.equal(W.askerOf(zh, { pending: { message: 'OpenCode · 實作 問你：月報要匯出哪種格式？' }, agents: {} }, providers), 'OpenCode · 實作');
+  assert.equal(W.askerOf(tr, { pending: { message: 'OpenCode · Implement asks: which format?' }, agents: {} }, providers), 'OpenCode · Implement');
+  // A message in another shape: the main agent that holds its turn for the answer.
+  assert.equal(W.askerOf(zh, { pending: { message: '要換一家嗎？' }, agents: { a: { id: 'a', role: 'executor', provider: 'opencode', status: 'paused' }, s: { id: 's', role: 'subagent', provider: 'opencode', status: 'paused', parentId: 'a' } } }, providers), 'OpenCode · 實作');
+  assert.equal(W.askerOf(zh, { pending: { message: '要換一家嗎？' }, agents: {} }, providers), undefined);
+});
+
+test('☰ 的數字：等你處理（含等你核准）和一天內失敗的對話一起算，名稱分開說；更早的失敗不算；沒有就只說「對話紀錄」', () => {
+  const zh = (z) => z;
+  const now = 10 * W.RECENT_FAILURE_MS;
+  const at = (status, ago = 0, waiting) => ({ status, updatedAt: now - ago, ...(waiting ? { waiting } : {}) });
+  const list = [
+    at('waiting_human', 0, 'question'),
+    at('failed', 60_000),
+    at('waiting_human'),
+    // Waiting for an approval: the workflow still runs.
+    at('running', 0, 'approval'),
+    at('running'),
+    at('paused'),
+    at('completed'),
+    at('incomplete'),
+    // A failure older than a day stays in its row, not on ☰.
+    at('failed', W.RECENT_FAILURE_MS + 1),
+  ];
+  assert.deepEqual(W.attention(list, now), { waiting: 3, failed: 1 });
+  assert.equal(W.attentionLabel(zh, W.attention(list, now)), '對話紀錄，3 段等你處理，1 段最近失敗');
+  assert.equal(W.attentionLabel(tr, W.attention(list, now)), 'Chat history, 3 waiting for you, 1 failed lately');
+  assert.equal(W.attentionLabel(zh, W.attention([at('failed')], now)), '對話紀錄，1 段最近失敗');
+  assert.equal(W.attentionLabel(zh, W.attention([at('failed', W.RECENT_FAILURE_MS * 2)], now)), '對話紀錄');
+  assert.equal(W.attentionLabel(zh, W.attention([at('completed')], now)), '對話紀錄');
+  // What a row waits for: its summary's kind; waiting without one (an older hub) is a decision; else nothing.
+  assert.equal(W.summaryWait({ status: 'waiting_human', waiting: 'question' }), 'question');
+  assert.equal(W.summaryWait({ status: 'running', waiting: 'approval' }), 'approval');
+  assert.equal(W.summaryWait({ status: 'waiting_human' }), 'decision');
+  assert.equal(W.summaryWait({ status: 'running' }), undefined);
+  // The fallback word for waiting, and no parentheses (未完成, as the end of the chat and its record line say).
+  assert.equal(W.wfStatus(zh, 'waiting_human').label, '等你處理');
+  assert.equal(W.wfStatus(zh, 'incomplete').label, '未完成');
+  assert.equal(W.wfStatus(zh, 'paused').cls, 'muted');
+  assert.equal(W.wfStatus(zh, 'completed').cls, 'muted');
+});
+
+test('新對話的最近資料夾：依最近的活動排序、同一個資料夾只算一次、不含目前的資料夾、最多五個', () => {
+  const w = (cwd, updatedAt) => ({ cwd, updatedAt });
+  const list = [w('C:\\work\\a', 5), w('C:\\work\\b', 9), w('c:\\work\\A\\', 7), w('', 8), w('/home/u/c', 3), w('/home/u/d', 2), w('/home/u/e', 1), w('/home/u/f', 0)];
+  assert.deepEqual(W.recentFolders(list), ['C:\\work\\b', 'c:\\work\\A\\', '/home/u/c', '/home/u/d', '/home/u/e']);
+  assert.deepEqual(W.recentFolders(list, 'C:\\work\\b\\', 2), ['c:\\work\\A\\', '/home/u/c']);
+  assert.deepEqual(W.recentFolders([]), []);
+  assert.equal(W.folderName('C:\\work\\csv-import\\'), 'csv-import');
+  assert.equal(W.folderName('/home/u/proj'), 'proj');
+  assert.equal(W.folderName('/'), '/');
+});
+
 test('活動紀錄收合時的一行：依種類計數（讀的檔、執行的指令、改的檔），同一個呼叫只算一次，Aivenue 自己的呼叫不算', () => {
   const zh = (z) => z;
   const events = [
@@ -3628,7 +3695,10 @@ test('長工作流的總覽：本輪狀態、子代理批次與背景程序分�
     stages: {},
   };
   assert.deepEqual(W.runOverview(tr, run, (a) => a.title), ['This round of the workflow is complete', 'sub-agent batches 1/3 done, 1 running, 1 blocked', '1 background process(es) still running']);
-  assert.equal(W.runOverview(tr, { ...run, status: 'running', pending: { id: 'd' } }, (a) => a.title)[0], 'Waiting for you');
+  // Waiting for you: in the header's word for what it waits for (a decision, an agent's question, an approval).
+  assert.equal(W.runOverview(tr, { ...run, status: 'running', pending: { id: 'd' } }, (a) => a.title)[0], 'Waiting for your decision');
+  assert.equal(W.runOverview(tr, { ...run, status: 'waiting_human', pending: { id: 'q', question: true } }, (a) => a.title)[0], 'Waiting for your answer');
+  assert.equal(W.runOverview(tr, { ...run, status: 'running', approvals: [{ id: 'a' }] }, (a) => a.title)[0], 'Waiting for your approval');
   assert.deepEqual(W.runOverview(tr, { status: 'running', agents: {}, stages: {} }, (a) => a.title), ['This round is running']);
 });
 

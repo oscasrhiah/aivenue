@@ -12,7 +12,8 @@
 //  - Lucide icons drawn, no emoji or text-symbol icon left in a button;
 //  - the result card's verification states apart (with their reasons) and the "agent's own words" tag;
 //  - agents' Markdown drawn: no raw table rows or code fences; a table in the reply is a table;
-//  - the waiting state and its question in view: the agent's answers to pick from, "Other", a box, nothing sent yet;
+//  - the waiting state in the header ("等你回答") and its question in view: the agent's answers to pick from, "Other", a
+//    box, nothing sent yet;
 //  - the folder path: a button the keyboard reaches; when cut, it opens to the whole path;
 //  - every message's time shown (the user's, the timeline's lines); an agent's turn shows how long it took from 10 s up,
 //    its start and end in that time's tooltip and its activity log;
@@ -262,7 +263,9 @@ const INSPECT = `(() => {
     leftovers: leftovers.slice(0, 8),
     states: [...document.querySelectorAll('.vstate-row')].map((r) => r.innerText.replace(/\\s+/g, ' ').trim()),
     selfTag: !!document.querySelector('.self-tag'),
-    waiting: !!document.querySelector('.decision') && /等待你的決定|Waiting for your decision/.test(document.body.innerText),
+    // The waiting state in the header's word for what it waits for: an agent's question here (「等你回答」; another
+    // decision would say 「等你決定」).
+    waiting: !!document.querySelector('.decision') && /等你回答|等你決定|Waiting for your answer|Waiting for your decision/.test(document.querySelector('header.topbar')?.innerText ?? ''),
     // The agent's question: its answers to pick from, "Other" last, the box, and nothing sent before a pick.
     question: (() => {
       const q = document.querySelector('.decision.question');
@@ -424,7 +427,7 @@ try {
       if (name === 'result') check(`${place} · ${theme} · result: verification states apart, with reasons; "agent 自述" tag`, r.states.length > 0 && r.selfTag && !r.states.some((s) => /未驗證/.test(s)), r.states);
       if (name !== 'new') check(`${place} · ${theme} · ${name}: agents' Markdown drawn (no raw table rows or code fences)`, r.rawMarkdown.length === 0, { tables: r.tables, raw: r.rawMarkdown });
       if (name === 'result' && agentTable) check(`${place} · ${theme} · result: the agent's Markdown table is drawn as a table`, r.tables > 0, r.tables);
-      if (name === 'waiting') check(`${place} · ${theme} · waiting: "等待你的決定" and the question in view`, r.waiting);
+      if (name === 'waiting') check(`${place} · ${theme} · waiting: the header says "等你回答" and the question is in view`, r.waiting);
       // An agent's turn no longer shows a clock time: how long it took, from 10 s up, with its start as the tooltip. Every
       // turn that started is measured (one not started yet has no length); none has a time it should not have, or lacks
       // one it should.

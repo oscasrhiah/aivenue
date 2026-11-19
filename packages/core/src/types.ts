@@ -1656,7 +1656,13 @@ export interface WorkflowSummary {
   status: WorkflowStatus;
   createdAt: number;
   updatedAt: number;
+  /** The user's working folder (not the isolated copy the agents may work in). */
   cwd: string;
+  /**
+   * What it waits for from the user, when it does: an agent's question, an approval (the workflow still runs while one
+   * waits) or another decision. The chat list says it in the same word as the chat's header.
+   */
+  waiting?: 'question' | 'approval' | 'decision';
 }
 
 // ---------- Hub <-> UI protocol ----------

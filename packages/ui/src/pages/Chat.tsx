@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, CircleCheck, CircleDashed, CircleHelp, CircleStop, CircleX, MessageCircleQuestionMark, RefreshCw, Target, Undo2, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleStop, CircleX, GitBranch, Hand, LoaderCircle, LogIn, MessageCircleQuestionMark, Network, RefreshCw, Signpost, Target, Undo2, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
-import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
+import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun, WorkflowStatus } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
@@ -10,7 +10,7 @@ import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
-import { PreflightList, RunMenu } from '../components/RunTools';
+import { deleteConversation, PreflightList, RunMenu, useMenuKeys } from '../components/RunTools';
 import { Replies, type Reply } from '../components/Replies';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
@@ -24,7 +24,7 @@ import { followUpGoal } from '../followUp';
 import { chatLines, deliverableRows, resultText, verificationStates, type ChatLine, type VerificationState } from '../timeline';
 import { CheckRows } from '../components/Checks';
 import { FinalWho, ReviewResult, reviewShown } from '../components/ReviewResult';
-import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
+import { cx, duration, folderName, fullTime, modelLabel, providerName, recentFolders, roleLabel, saidOwner, waitKind, waitWord, wfStatus, type WaitKind } from '../util';
 import { Markdown } from '../components/Markdown';
 import { CopyButton } from '../components/CopyButton';
 import { ask } from '../components/Ask';
@@ -55,13 +55,19 @@ function timeline(run: WorkflowRun, t: T, endNote: boolean): Item[] {
 }
 
 /**
- * The chat's working folder under its header. A long path keeps its end in one line; then a click, Enter, Space or a
- * tap shows it whole (wrapped), for keyboard and touch too, not only in the mouse's tooltip. The whole path is the
- * button's text either way, so a screen reader reads it all.
+ * The chat's working folder under its header, quiet but always in view: the folders above it muted, its own name in the
+ * text colour. A long path keeps its end in one line; then a click, Enter, Space or a tap shows it whole (wrapped), for
+ * keyboard and touch too, not only in the mouse's tooltip. The whole path is the button's text either way, so a screen
+ * reader reads it all. The folder button at the end opens it in the file manager (the folder the agents work in: the
+ * isolated copy while there is one, its path in the tooltip).
  */
 function CwdBar({ run }: { run: WorkflowRun }) {
   const t = useT();
   const dir = run.worktree?.origCwd ?? run.config.cwd;
+  const end = Math.max(dir.replace(/[\\/]+$/, '').lastIndexOf('\\'), dir.replace(/[\\/]+$/, '').lastIndexOf('/'));
+  const parent = end > 0 ? dir.slice(0, end + 1) : '';
+  const leaf = end > 0 ? dir.slice(end + 1) : dir;
+  const isolated = run.worktree?.state === 'active';
   const [whole, setWhole] = useState(false);
   const [cut, setCut] = useState(false);
   const path = useRef<HTMLSpanElement>(null);
@@ -85,11 +91,82 @@ function CwdBar({ run }: { run: WorkflowRun }) {
         onClick={() => (cut || whole) && setWhole(!whole)}
       >
         <span className="run-cwd-path" ref={path}>
-          <bdi dir="ltr">{dir}</bdi>
+          <bdi dir="ltr">
+            <span className="run-cwd-parent">{parent}</span>
+            <span className="run-cwd-leaf">{leaf}</span>
+          </bdi>
         </span>
-        {(cut || whole) && <Ico i={whole ? ChevronUp : ChevronDown} size={13} label={whole ? t('收起路徑', 'Shorten the path') : t('顯示完整路徑', 'Show the whole path')} />}
+        {(cut || whole) && <Ico i={whole ? ChevronUp : ChevronDown} size={14} label={whole ? t('收起路徑', 'Shorten the path') : t('顯示完整路徑', 'Show the whole path')} />}
       </button>
-      {run.worktree?.state === 'active' && <span className="run-cwd-label">{t('（在隔離副本中工作）', '(works in an isolated copy)')}</span>}
+      {isolated && (
+        <span className="run-cwd-note" title={t('在隔離副本中工作', 'Works in an isolated copy')}>
+          <Ico i={GitBranch} size={14} />
+          <span className="run-cwd-note-long">{t('在隔離副本中工作', 'Works in an isolated copy')}</span>
+          <span className="run-cwd-note-short" aria-hidden="true">
+            {t('隔離副本', 'Isolated')}
+          </span>
+        </span>
+      )}
+      <button
+        type="button"
+        className="icon-btn run-cwd-open"
+        title={isolated ? `${t('開啟資料夾', 'Open folder')}：${run.config.cwd}` : t('開啟資料夾', 'Open folder')}
+        aria-label={t('開啟資料夾', 'Open folder')}
+        onClick={() => void hub.call('host.openPath', { path: run.config.cwd }).catch(() => undefined)}
+      >
+        <Ico i={Folder} size={16} />
+      </button>
+    </div>
+  );
+}
+
+/** A workflow's state by its icon (the word beside it says it too); waiting for you, by what it waits for. */
+const STATUS_ICON: Record<WorkflowStatus, LucideIcon> = { running: LoaderCircle, paused: Pause, waiting_human: MessageCircleQuestionMark, completed: CircleCheck, incomplete: TriangleAlert, failed: CircleX, cancelled: CircleStop, interrupted: CircleSlash };
+const WAIT_ICON: Record<WaitKind, LucideIcon> = { question: MessageCircleQuestionMark, approval: Hand, decision: Signpost };
+
+/** Stopping a workflow asks once, in one wording, from the header's 停止 and from the send button's right-click alike. */
+const confirmStop = (t: T) =>
+  ask(t('停止這個工作流？', 'Stop this workflow?'), {
+    detail: t('已改動的檔案和紀錄都會保留。送出新訊息之前，可以按「接續原工作流」繼續。', 'Files changed and records are kept. Until you send a new message, "Resume this workflow" carries on.'),
+    danger: true,
+    ok: t('停止工作流', 'Stop the workflow'),
+    cancel: t('取消', 'Cancel'),
+  });
+
+/**
+ * The providers on a new chat, in one line: how many can work and how many are signed out, with a link to manage them;
+ * the line opens to each provider and its state (also in its tooltip).
+ */
+function ProviderLine({ providers }: { providers: ProviderInfo[] }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  if (!providers.length) return null;
+  const state = (p: ProviderInfo) =>
+    p.auth.state === 'checking' ? 'checking' : p.installed && p.auth.state === 'logged_in' ? 'ready' : p.installed && p.auth.state === 'unknown' ? 'unknown' : p.installed ? 'out' : 'missing';
+  const word = { ready: t('已登入', 'signed in'), checking: t('檢查中', 'checking'), unknown: t('狀態不明', 'state unknown'), out: t('未登入', 'signed out'), missing: t('未安裝', 'not installed') };
+  const icon = { ready: CircleCheck, checking: LoaderCircle, unknown: CircleHelp, out: Circle, missing: CircleDashed };
+  const ready = providers.filter((p) => state(p) === 'ready').length;
+  const out = providers.filter((p) => state(p) === 'out').length;
+  const checking = providers.filter((p) => state(p) === 'checking').length;
+  return (
+    <div className="home-providers">
+      <button type="button" className="home-prov-btn" aria-expanded={open} aria-controls="home-prov-list" title={providers.map((p) => `${p.spec.name}：${word[state(p)]}`).join('\n')} onClick={() => setOpen(!open)}>
+        <Ico i={open ? ChevronDown : ChevronRight} size={14} />
+        {[t(`可用 ${ready} 家`, `${ready} available`), out ? t(`${out} 家未登入`, `${out} signed out`) : '', checking ? t('檢查登入狀態中…', 'Checking sign-ins…') : ''].filter(Boolean).join(' · ')}
+      </button>
+      <span className="home-sep" aria-hidden="true">
+        ·
+      </span>
+      <a href="#/settings/providers">{t('管理供應商', 'Manage providers')}</a>
+      {open && (
+        <ul id="home-prov-list" className="home-prov-list">
+          {providers.map((p) => (
+            <li key={p.spec.id} className={state(p)}>
+              <Ico i={icon[state(p)]} size={14} className={state(p) === 'checking' ? 'spin' : undefined} /> {p.spec.name} <span className="muted">{word[state(p)]}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -463,6 +540,7 @@ function Composer({
   onResume,
   onSay,
   onStop,
+  unassigned,
   extra,
 }: {
   draft: RoleDraft;
@@ -483,8 +561,10 @@ function Composer({
   /** Shown after the role pills (the shared-context pie). */
   extra?: ReactNode;
   onPause?: () => void;
-  /** End the workflow for good (from the send button's right-click menu while it runs or is paused). */
+  /** End the workflow for good (from the send button's right-click menu while it runs or is paused; it asks first). */
   onStop?: () => void;
+  /** Nothing can be assigned (no provider signed in): the roles summary says so instead of naming providers. */
+  unassigned?: boolean;
   /** Resume; what the user typed meanwhile is passed to the agents. */
   onResume?: (note: string) => void;
   /** While agents work: hand a message (and files) to them right away. */
@@ -494,8 +574,19 @@ function Composer({
   const [text, setText] = useState('');
   const [files, setFiles] = useState<Pending[]>([]);
   const [dragging, setDragging] = useState(false);
-  const [stopMenu, setStopMenu] = useState<{ x: number; y: number } | null>(null);
-  const [confirmStop, setConfirmStop] = useState(false);
+  // The send button's right-click menu (a shortcut to stopping the workflow), above the button: a menu by the keyboard
+  // too (Esc or Tab closes it and the focus goes back to the button); a click outside closes it.
+  const [stopMenu, setStopMenu] = useState(false);
+  const sendWrap = useRef<HTMLSpanElement>(null);
+  const stopList = useRef<HTMLSpanElement>(null);
+  const sendBtn = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (!stopMenu) return;
+    const close = (e: MouseEvent) => !sendWrap.current?.contains(e.target as Node) && setStopMenu(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [stopMenu]);
+  useMenuKeys(stopMenu, stopList, sendBtn, () => setStopMenu(false));
   const ref = useRef<HTMLTextAreaElement>(null);
   const input = useRef<HTMLInputElement>(null);
   // The box fits its text — again when the window or the hint changes (a size taken while the window was tiny
@@ -641,9 +732,11 @@ function Composer({
           }
         }}
       />
+      {/* One row, in the order it is read and tabbed through: attach, the settings of the next message (one summary on a
+          narrow composer), the context ring, send. */}
       <div className="composer-bar">
-        <button className="clip" disabled={disabled} onClick={pick} title={t('附加圖片或檔案（也可以拖曳或貼上）', 'Attach images or files (or drag & drop / paste)')} aria-label={t('附加檔案', 'Attach files')}>
-          <Ico i={Paperclip} size={18} />
+        <button className="clip" disabled={disabled} onClick={pick} title={t('附加圖片或檔案，也可以拖曳或貼上', 'Attach images or files, or drag & drop or paste them')} aria-label={t('附加檔案', 'Attach files')}>
+          <Ico i={Paperclip} size={16} />
         </button>
         <input
           ref={input}
@@ -655,24 +748,27 @@ function Composer({
             e.target.value = '';
           }}
         />
-        <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} />
+        <RolePills draft={draft} providers={providers} onOpen={onOpenRoles} preview={preview} compact={compact} onSafety={onSafety} onAdvisor={onAdvisor} unassigned={unassigned} />
         {extra}
-        {/* Right-click while it runs or is paused: end the workflow (asks for confirmation). */}
+        {/* Right-click while it runs or is paused: a shortcut to stopping it (the header's 停止 is the way in view; both
+            ask the same question). */}
         <span
           className="send-wrap"
+          ref={sendWrap}
           onContextMenu={(e) => {
             if (!runState || !onStop) return;
             e.preventDefault();
-            setStopMenu({ x: e.clientX, y: e.clientY });
+            sendBtn.current = sendWrap.current?.querySelector<HTMLElement>('button.send') ?? null;
+            setStopMenu(true);
           }}
         >
         {runState === 'running' && (text.trim() || files.some((f) => f.status === 'ready')) ? (
           <button className="send" onClick={send} title={t('交給正在工作的 agent：它們會停下來看這則訊息，再接著做', 'Hand it to the working agents: they stop, read it and carry on')} aria-label={t('送出', 'Send')}>
-            <Ico i={ArrowUp} size={18} />
+            <Ico i={ArrowUp} size={16} />
           </button>
         ) : runState === 'running' ? (
           <button className="send pause" onClick={onPause} title={t('暫停：停下正在工作的 agent，之後可以繼續', 'Pause: stop the working agents; you can resume later')} aria-label={t('暫停', 'Pause')}>
-            <Ico i={Pause} size={18} />
+            <Ico i={Pause} size={16} />
           </button>
         ) : runState === 'paused' ? (
           <button
@@ -684,58 +780,32 @@ function Composer({
             title={text.trim() ? t('繼續，並把輸入的內容交給 agent', 'Resume and pass what you typed to the agents') : t('繼續', 'Resume')}
             aria-label={t('繼續', 'Resume')}
           >
-            <Ico i={Play} size={18} />
+            <Ico i={Play} size={16} />
           </button>
         ) : (
           <button className="send" disabled={disabled || busy || uploading || !text.trim()} onClick={send} aria-label={t('送出', 'Send')}>
-            <Ico i={ArrowUp} size={18} />
+            <Ico i={ArrowUp} size={16} />
           </button>
+        )}
+        {stopMenu && (
+          <span className="ctx-menu" role="menu" aria-label={t('工作流', 'Workflow')} ref={stopList}>
+            <button
+              role="menuitem"
+              tabIndex={-1}
+              className="danger"
+              onClick={() => {
+                setStopMenu(false);
+                // Back on the send button first: the confirmation gives the focus back there.
+                sendBtn.current?.focus();
+                onStop?.();
+              }}
+            >
+              <Ico i={Square} size={14} /> {t('停止工作流…', 'Stop the workflow…')}
+            </button>
+          </span>
         )}
         </span>
       </div>
-      {stopMenu && (
-        <>
-          <div className="ctx-scrim" onClick={() => setStopMenu(null)} onContextMenu={(e) => (e.preventDefault(), setStopMenu(null))} />
-          <div className="ctx-menu" style={{ left: Math.min(stopMenu.x, window.innerWidth - 220), top: Math.max(8, stopMenu.y - 56) }}>
-            <button
-              className="danger"
-              onClick={() => {
-                setStopMenu(null);
-                setConfirmStop(true);
-              }}
-            >
-              <Ico i={Square} size={14} /> {t('終止此工作流…', 'End this workflow…')}
-            </button>
-          </div>
-        </>
-      )}
-      {confirmStop && (
-        <div className="modal-back" onClick={() => setConfirmStop(false)}>
-          <div className="modal stop-confirm" onClick={(e) => e.stopPropagation()}>
-            <h3>{t('確定要終止這個工作流嗎？', 'End this workflow?')}</h3>
-            <p className="small">
-              {t(
-                '正在工作的 agent 會立刻停止，已改動的檔案與紀錄都保留。之後有兩種接著做的方式：在這段對話送出新訊息之前，可以按「接續原工作流」，從停下的階段與輪次繼續同一個工作流（計畫、步驟進度、審查與共用上下文都保留）；或送出新訊息，用相同設定開始下一段工作流。',
-                'Working agents stop right away; files changed and records so far are kept. You can then go on in two ways: until you send a new message in this chat, "Resume this workflow" continues the same workflow from the stage and round it stopped in (plan, step progress, reviews and shared context kept); or send a new message to start the next workflow with the same setup.',
-              )}
-            </p>
-            <div className="row end gap">
-              <button className="btn" onClick={() => setConfirmStop(false)}>
-                {t('不確認', 'Cancel')}
-              </button>
-              <button
-                className="btn stop-yes"
-                onClick={() => {
-                  setConfirmStop(false);
-                  onStop?.();
-                }}
-              >
-                {t('確認終止', 'End it')}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1037,9 +1107,22 @@ export function Chat({ id }: { id?: string }) {
   const deleted = useDeleted(id);
   // The conversation this message belongs to, and its earlier messages (shown above it, oldest first).
   const summaries = useWorkflows();
-  const thread = useThreads().find((th) => !!run && th.ids.includes(run.id));
-  // A double click on the title renames the conversation (the sidebar has the rename button).
+  const threads = useThreads();
+  const thread = threads.find((th) => !!run && th.ids.includes(run.id));
+  // Renaming the conversation: from ⋯, a double click on the title or F2 on it (its row in the chat list does it too).
+  // Done, the focus goes back to the title.
   const [renaming, setRenaming] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  const wasRenaming = useRef(false);
+  useEffect(() => {
+    if (renaming) {
+      wasRenaming.current = true;
+      return;
+    }
+    if (!wasRenaming.current) return;
+    wasRenaming.current = false;
+    if (!document.activeElement || document.activeElement === document.body) titleRef.current?.focus();
+  }, [renaming]);
   const threadKey = run ? run.config.threadId ?? run.id : '';
   const earlierIds = run
     ? summaries
@@ -1095,7 +1178,7 @@ export function Chat({ id }: { id?: string }) {
   useEffect(() => hub.on('reconnect', () => void init.current!.retry()), []);
 
   useEffect(() => {
-    if (run?.status !== 'running' && run?.status !== 'waiting_human') return;
+    if (run?.status !== 'running' && run?.status !== 'waiting_human' && run?.status !== 'paused') return;
     const timer = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, [run?.status]);
@@ -1256,8 +1339,50 @@ export function Chat({ id }: { id?: string }) {
     if (shown.implement.enabled) list.push(of(a?.implement.author, shown.implement.author), shown.implement.reviewer ? of(a?.implement.reviewer, shown.implement.reviewer) : undefined);
     return list.filter((x): x is RoleTarget => !!x);
   })();
-  const missing = !run && !isAuto(shown) ? missingProviders(shown, providers) : [];
-  const st = run ? wfStatus(t, run.status) : null;
+  // No provider signed in at all (a new chat): one empty state says so and leads to signing in; the notes that would say
+  // the same give way, and the roles summary says nothing can be assigned instead of naming providers.
+  // Not while sign-ins are still being checked (each start checks them again) or one could not be read: that would flash
+  // the empty state, or keep it for a provider that may well be signed in.
+  const checkingProviders = providers.some((p) => p.auth.state === 'checking' || (p.installed && p.auth.state === 'unknown'));
+  const noProvider = !run && providers.length > 0 && !checkingProviders && !providers.some((p) => p.installed && p.auth.state === 'logged_in');
+  const unassigned = !run && !checkingProviders && (noProvider || (isAuto(shown) && !!preview.error));
+  // A new chat offers the folders of the latest conversations, one click each (from the chat list: nothing new is kept).
+  const recent = run ? [] : recentFolders(threads, shown.cwd);
+  const missing = !run && !noProvider && !isAuto(shown) ? missingProviders(shown, providers) : [];
+  // The header's state: what the workflow waits for from you when it does (an answer, an approval, a decision), else its
+  // state; an icon and a short word, coloured only while it runs, waits for you, missed its goal or failed.
+  const head = run
+    ? (() => {
+        const k = waitKind(run);
+        if (k) return { word: waitWord(t, k), cls: 'warn', icon: WAIT_ICON[k], spin: false };
+        const st = wfStatus(t, run.status);
+        return { word: st.label, cls: st.cls, icon: STATUS_ICON[run.status], spin: run.status === 'running' };
+      })()
+    : null;
+  // How long it ran (to its end, or so far), in words; when it started and ended in the tooltip. An interrupted one (the
+  // app closed while it ran) counts to when it was interrupted, never on to now.
+  const end = run ? (run.endedAt ?? (run.status === 'interrupted' ? (run.interruptedAt ?? run.updatedAt) : undefined)) : undefined;
+  const took = run ? duration(t, run.createdAt, end, 1) : '';
+  const tookS = run ? Math.max(0, Math.round(((end ?? Date.now()) - run.createdAt) / 1000)) : 0;
+  const when = run
+    ? end
+      ? run.endedAt
+        ? t(`開始 ${fullTime(run.createdAt)}，結束 ${fullTime(end)}`, `Started ${fullTime(run.createdAt)}, ended ${fullTime(end)}`)
+        : t(`開始 ${fullTime(run.createdAt)}，中斷 ${fullTime(end)}`, `Started ${fullTime(run.createdAt)}, interrupted ${fullTime(end)}`)
+      : t(`開始 ${fullTime(run.createdAt)}`, `Started ${fullTime(run.createdAt)}`)
+    : '';
+  const title = run ? (thread?.title ?? run.config.title) : '';
+  const stopRun = async () => {
+    if (run && (await confirmStop(t))) hub.call('workflows.cancel', { id: run.id }).catch((e) => setError((e as Error).message));
+  };
+  const deleteRun = async () => {
+    if (run && (await deleteConversation(t, thread?.ids ?? [run.id]))) navigate('new');
+  };
+  // A failure is said once: when a turn's error line already gives it whole, the end of the chat does not repeat it (the
+  // record line 「工作流失敗」 says the state there; without that line, a note with the word does).
+  const failure = run?.status === 'failed' ? run.error?.trim() : undefined;
+  const failureInTurn = !!run && !!failure && Object.values(run.agents).some((a) => !a.parentId && a.status === 'failed' && !!a.error && a.error.includes(failure));
+  const failureLine = items.some((it) => it.type === 'divider' && it.line.tone === 'failed');
 
   const composer = (
     <>
@@ -1282,7 +1407,7 @@ export function Chat({ id }: { id?: string }) {
           </div>
         </div>
       )}
-      {!run && preview.error && <div className="note warn">{preview.error}</div>}
+      {!run && !noProvider && preview.error && <div className="note warn">{preview.error}</div>}
       <Composer
         draft={shown}
         providers={providers}
@@ -1294,7 +1419,8 @@ export function Chat({ id }: { id?: string }) {
         onSend={send}
         runState={run?.status === 'running' ? 'running' : paused ? 'paused' : undefined}
         onPause={() => run && hub.call('workflows.pause', { id: run.id }).catch((e) => setError((e as Error).message))}
-        onStop={() => run && hub.call('workflows.cancel', { id: run.id }).catch((e) => setError((e as Error).message))}
+        onStop={() => void stopRun()}
+        unassigned={unassigned}
         onResume={(note) => run && hub.call('workflows.resume', { id: run.id, note }).catch((e) => setError((e as Error).message))}
         onSay={(text, attachments) =>
           run
@@ -1315,10 +1441,10 @@ export function Chat({ id }: { id?: string }) {
             ? run!.status === 'waiting_human'
               ? t('請先回應上方的問題', 'Answer the question above first')
               : paused
-                ? t('已暫停：可以輸入補充說明，按 Enter 或右邊的繼續', 'Paused: type extra guidance if you like, then press Enter or Resume on the right')
-                : t('agent 正在工作…輸入訊息會立刻交給它們（或按右邊的暫停）', 'Agents are working… a message goes to them right away (or press Pause on the right)')
+                ? t('已暫停，可以補充說明後按繼續', 'Paused: add a note if you like, then resume')
+                : t('agent 正在工作，訊息會立刻交給它們', 'Agents are working; a message goes to them right away')
             : run
-              ? t('接著要做什麼？（沿用相同角色與資料夾）', 'What next? (same roles and folder)')
+              ? t('接著要做什麼？', 'What next?')
               : t('描述要完成的任務…', 'Describe the task…')
         }
       />
@@ -1344,40 +1470,45 @@ export function Chat({ id }: { id?: string }) {
     <div className="chat">
       {run && (
         <>
+        {/* One row: the title (cut first, two lines at most in a narrow column; F2 or a double click renames it), its
+            state in an icon and a word, how long it ran (the first to go when room runs out, still in the title's
+            tooltip and read out); then the agent map, ⋯ (rename, the records, delete) and 停止 while it runs. */}
         <header className="topbar">
           <div className="topbar-title">
             {renaming ? (
-              <RenameInput id={run.id} title={thread?.title ?? run.config.title} onDone={() => setRenaming(false)} className="title-rename" />
+              <RenameInput id={run.id} title={title} onDone={() => setRenaming(false)} className="title-rename" />
             ) : (
-              <>
-                <span className="title-text" title={thread?.title ?? run.config.title} onDoubleClick={() => setRenaming(true)}>
-                  {thread?.title ?? run.config.title}
-                </span>
-              </>
+              <h1
+                ref={titleRef}
+                className="title-text"
+                tabIndex={0}
+                title={[title, [head!.word, took].filter(Boolean).join(' · '), t('按 F2 或連按兩下重新命名', 'F2 or a double click renames it')].join('\n')}
+                onDoubleClick={() => setRenaming(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'F2') {
+                    e.preventDefault();
+                    setRenaming(true);
+                  }
+                }}
+              >
+                {title}
+              </h1>
             )}
-            <span className={cx('status', st!.cls)}>
-              {(run.status === 'running' || run.status === 'waiting_human') && <span className="pulse" />}
-              {st!.label}
+            <span className={cx('status', head!.cls)} aria-live="polite">
+              <Ico i={head!.icon} size={14} className={head!.spin ? 'spin' : undefined} /> {head!.word}
             </span>
-            <span className="muted small">{elapsed(run.createdAt, run.endedAt)}</span>
+            {took && (
+              <time className="run-time" dateTime={`PT${tookS}S`} title={when}>
+                {took}
+              </time>
+            )}
           </div>
-          <div className="row gap">
+          <div className="topbar-actions">
             <AgentMapButton run={run} thread={earlier.length > 0} onOpen={() => setAgentMap(true)} />
-            <RunMenu run={run} providers={providers} />
-            <button className="icon-btn" title={t('開啟資料夾', 'Open folder')} aria-label={t('開啟資料夾', 'Open folder')} onClick={() => hub.call('host.openPath', { path: run.config.cwd })}>
-              <Ico i={Folder} size={18} />
-            </button>
-            {active ? (
-              <button className="btn small danger" onClick={async () => (await ask(t('停止這個工作流？正在執行的 agent 會被中止。之後可以「接續原工作流」（在送出新訊息之前），或送出新訊息開始下一段。', 'Stop this workflow? Running agents are terminated. Afterwards you can resume this workflow (until you send a new message) or send a new message to start the next one.'), { danger: true })) && hub.call('workflows.cancel', { id: run.id })}>
+            <RunMenu run={run} providers={providers} onRename={() => setRenaming(true)} onDelete={active ? undefined : () => void deleteRun()} />
+            {active && (
+              <button className="btn small danger" onClick={() => void stopRun()}>
                 {t('停止', 'Stop')}
-              </button>
-            ) : (
-              <button className="icon-btn" title={t('刪除對話', 'Delete chat')} aria-label={t('刪除對話', 'Delete chat')} onClick={async () => {
-                  const ids = thread?.ids ?? [run.id];
-                  if (!(await ask(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息與紀錄？（不會動到專案檔案）`, `Delete this chat's ${ids.length} messages and logs? (project files are not touched)`) : t('刪除這段對話與紀錄？（不會動到專案檔案）', 'Delete this chat and its logs? (project files are not touched)'), { danger: true }))) return;
-                  void ids.reduce((p, rid) => p.then(() => hub.call('workflows.delete', { id: rid })), Promise.resolve<unknown>(undefined)).then(() => navigate('new'));
-                }}>
-                <Ico i={Trash2} size={18} />
               </button>
             )}
           </div>
@@ -1388,19 +1519,36 @@ export function Chat({ id }: { id?: string }) {
       )}
 
       {!run ? (
+        // A new chat: a working header at the column's left, not a greeting. Its title, then (with no provider signed in)
+        // the one thing to do first, the composer, and the providers in one line.
         <div className="home">
-          <h1 className="greet">{t('今天要讓哪些 agent 一起工作？', 'What should your agents work on?')}</h1>
-          <div className="home-composer">{composer}</div>
-          <div className="home-providers">
-            {providers.map((p) => (
-              <span key={p.spec.id} className={cx('prov', p.auth.state === 'logged_in' && 'ready')}>
-                <span className="mark" style={{ background: p.auth.state === 'logged_in' ? undefined : 'transparent' }} />
-                {p.spec.name}
-              </span>
-            ))}
-            <a href="#/settings/providers" className="muted small">
-              {t('管理供應商', 'Manage providers')}
-            </a>
+          <div className="home-col">
+            <h1 className="home-title">{t('新對話', 'New chat')}</h1>
+            {noProvider && (
+              <div className="home-empty">
+                <span className="home-empty-text">
+                  <Ico i={LogIn} size={16} /> {t('還沒有登入任何供應商', 'No provider is signed in yet')}
+                </span>
+                <a className="btn primary" href="#/settings/providers">
+                  {t('前往登入', 'Sign in')}
+                </a>
+              </div>
+            )}
+            <div className="home-composer">{composer}</div>
+            {recent.length > 0 && (
+              <div className="home-recent" role="group" aria-labelledby="home-recent-label">
+                <span className="home-recent-label" id="home-recent-label">
+                  {t('最近的資料夾', 'Recent folders')}
+                </span>
+                {recent.map((dir) => (
+                  <button key={dir} type="button" className="home-recent-btn" title={dir} onClick={() => updateDraft({ ...shown, cwd: dir })}>
+                    <Ico i={Folder} size={14} />
+                    <bdi className="home-recent-name">{folderName(dir)}</bdi>
+                  </button>
+                ))}
+              </div>
+            )}
+            {!noProvider && <ProviderLine providers={providers} />}
           </div>
         </div>
       ) : (
@@ -1485,7 +1633,12 @@ export function Chat({ id }: { id?: string }) {
               <ContextAsk run={run} providers={providers} />
               <CompactFailedAsk run={run} providers={providers} />
               {run.pending && (run.pending.question ? <Question key={run.pending.id} run={run} d={run.pending} /> : <Decision key={run.pending.id} run={run} d={run.pending} />)}
-              {run.status === 'failed' && run.error && <div className="note err">{run.error}</div>}
+              {failure && !failureInTurn && <div className="note err">{run.error}</div>}
+              {failure && failureInTurn && !failureLine && (
+                <div className="note err">
+                  <Ico i={CircleX} size={14} /> {t('工作流失敗', 'Workflow failed')}
+                </div>
+              )}
               {run.status === 'incomplete' && (
                 <div className="note warn">
                   {t(`未完成：${run.incompleteReason ?? '目標沒有達成'}。這不是成功；可以在下方輸入訊息，用相同設定接續。`, `Incomplete: ${run.incompleteReason ?? 'the goal was not met'}. This is not a success; send a message below to continue with the same setup.`)}
@@ -1601,12 +1754,19 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
   ]
     .filter(Boolean)
     .join('\n');
+  // A narrow header keeps its icon (under 400px not the numbers either); the name and the numbers stay in the tooltip
+  // and for screen readers.
   return (
     <button className="btn small am-open" onClick={onOpen} title={title}>
-      {running > 0 && <span className="am-dot live" />}
-      Agent map
-      {running > 0 && <span className="muted">· {running}</span>}
-      {alive > 0 && <span className="muted">· <Ico i={Activity} size={13} /> {alive}</span>}
+      <Ico i={Network} size={14} />
+      {running > 0 && <span className="am-dot live" aria-hidden="true" />}
+      <span className="am-open-label">Agent map</span>
+      {running > 0 && <span className="am-open-count muted">· {running}</span>}
+      {alive > 0 && (
+        <span className="am-open-count muted">
+          · <Ico i={Activity} size={14} /> {alive}
+        </span>
+      )}
     </button>
   );
 }

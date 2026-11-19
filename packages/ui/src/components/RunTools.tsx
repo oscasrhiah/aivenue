@@ -1,12 +1,185 @@
-import { useEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Search, TriangleAlert, X } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from 'react';
+import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Pencil, Search, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PreflightItem, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
-import { useT } from '../i18n';
+import { useT, type T } from '../i18n';
 import { cx, providerName, roleLabel } from '../util';
+import { ask } from './Ask';
 import { RunMemoryWindow } from './Memory';
 import { CostWindow } from './Cost';
+
+/**
+ * The keyboard of a menu that opens from a button (the WAI-ARIA menu button pattern): when it opens, the focus goes to
+ * the checked item (else the first); Up, Down, Home and End move through the items; Esc closes it and gives the focus
+ * back to its button; Tab closes it and goes on from the button. The items are the list's [role^=menuitem] elements.
+ * `tabCloses` false: a popup that also holds fields (the advisor's dialog: its modes, a model and limits) lets Tab go
+ * into them, and closes when the focus leaves it; the arrows then move only between its items (`items`, e.g. its
+ * radio buttons), not inside a field.
+ */
+export function useMenuKeys(open: boolean, list: RefObject<HTMLElement | null>, button: RefObject<HTMLElement | null>, close: () => void, tabCloses = true, itemSelector = '[role^="menuitem"]') {
+  useEffect(() => {
+    const el = list.current;
+    if (!open || !el) return;
+    const items = () => [...el.querySelectorAll<HTMLElement>(`${itemSelector}:not(:disabled)`)];
+    (items().find((i) => i.getAttribute('aria-checked') === 'true') ?? items()[0])?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      const all = items();
+      const at = all.indexOf(document.activeElement as HTMLElement);
+      const go = (n: number) => {
+        e.preventDefault();
+        all[(n + all.length) % all.length]?.focus();
+      };
+      const inField = e.target instanceof HTMLElement && !!e.target.closest('input, select, textarea');
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        button.current?.focus();
+      } else if (inField) return;
+      else if (e.key === 'ArrowDown') go(at + 1);
+      else if (e.key === 'ArrowUp') go(at < 0 ? all.length - 1 : at - 1);
+      else if (e.key === 'Home') go(0);
+      else if (e.key === 'End') go(all.length - 1);
+      else if (e.key === 'Tab' && tabCloses) {
+        close();
+        button.current?.focus();
+      }
+    };
+    const onOut = (e: FocusEvent) => {
+      const to = e.relatedTarget as Node | null;
+      if (!tabCloses && to && !el.contains(to) && !button.current?.contains(to)) close();
+    };
+    el.addEventListener('keydown', onKey);
+    el.addEventListener('focusout', onOut);
+    return () => {
+      el.removeEventListener('keydown', onKey);
+      el.removeEventListener('focusout', onOut);
+    };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+export interface MenuEntry {
+  label: string;
+  /** A second, quieter line: what the item is about (instead of a parenthesis in its label). */
+  hint?: string;
+  icon?: LucideIcon;
+  danger?: boolean;
+  onSelect: () => void;
+}
+
+/**
+ * A ⋯ button and its menu (WAI-ARIA menu button: aria-haspopup, aria-expanded, role menu and menuitem, the keyboard of
+ * useMenuKeys; a click outside closes it). The menu is drawn fixed under the button, or over it near the window's
+ * bottom, so a scrolling list (the chat list) does not cut it. `openSignal`: opened from elsewhere (a right-click on the
+ * row) when it changes.
+ */
+export function MoreMenu({ label, items, className, openSignal }: { label: string; items: (MenuEntry | 'sep' | false | undefined)[]; className?: string; openSignal?: number }) {
+  const [pos, setPos] = useState<CSSProperties | null>(null);
+  const wrap = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const open = !!pos;
+  const place = () => {
+    const b = btn.current?.getBoundingClientRect();
+    if (!b) return;
+    const up = b.bottom > window.innerHeight * 0.6;
+    setPos({ right: Math.max(8, window.innerWidth - b.right), ...(up ? { bottom: window.innerHeight - b.top + 4 } : { top: b.bottom + 4 }) });
+  };
+  const close = () => setPos(null);
+  useEffect(() => {
+    if (openSignal) place();
+  }, [openSignal]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => !wrap.current?.contains(e.target as Node) && close();
+    // Only a scroll that moves the button (the chat list scrolled): the thread growing under the header leaves it open.
+    const onScroll = (e: Event) => e.target instanceof Node && !!btn.current && e.target.contains(btn.current) && close();
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', onScroll, true);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('scroll', onScroll, true);
+    };
+  }, [open]);
+  useMenuKeys(open, list, btn, close);
+  const entries = items.filter((e): e is MenuEntry | 'sep' => !!e);
+  return (
+    <span className={cx('more', open && 'open', className)} ref={wrap}>
+      <button
+        ref={btn}
+        type="button"
+        className="icon-btn more-btn"
+        title={label}
+        aria-label={label}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => (open ? close() : place())}
+        onKeyDown={(e) => {
+          if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && !open) {
+            e.preventDefault();
+            place();
+          }
+        }}
+      >
+        <Ico i={Ellipsis} size={16} />
+      </button>
+      {pos && (
+        <div className="more-menu" role="menu" id={id} aria-label={label} ref={list} style={pos}>
+          {entries.map((e, i) =>
+            e === 'sep' ? (
+              <div key={`sep${i}`} role="separator" className="menu-sep" />
+            ) : (
+              <button
+                key={e.label}
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                className={cx('menu-item', e.danger && 'danger')}
+                onClick={() => {
+                  close();
+                  // Back on ⋯ first: an item that opens a window or a box moves the focus on from there.
+                  btn.current?.focus();
+                  e.onSelect();
+                }}
+              >
+                {e.icon && <Ico i={e.icon} />}
+                <span className="menu-text">
+                  <span className="menu-label">{e.label}</span>
+                  {e.hint && <span className="menu-hint">{e.hint}</span>}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+/**
+ * Delete a conversation (every message of it) after one confirmation, the same from the chat's ⋯ and from its row in
+ * the chat list. Project files are not touched. True when it was deleted.
+ */
+export async function deleteConversation(t: T, ids: string[]): Promise<boolean> {
+  const sure = await ask(ids.length > 1 ? t(`刪除這段對話的 ${ids.length} 則訊息？`, `Delete this chat's ${ids.length} messages?`) : t('刪除這段對話？', 'Delete this chat?'), {
+    detail: t('紀錄一起刪除，無法復原。不會動到專案檔案。', 'Its records go too, for good. Project files are not touched.'),
+    danger: true,
+    ok: t('刪除對話', 'Delete chat'),
+    cancel: t('取消', 'Cancel'),
+  });
+  if (!sure) return false;
+  try {
+    for (const id of ids) await hub.call('workflows.delete', { id });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface Hit {
   agentId?: string;
@@ -17,24 +190,18 @@ interface Hit {
   text: string;
 }
 
-/** The ⋯ menu of a conversation: search its records, export them, distil the verified rules into a project Skill. */
-export function RunMenu({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
+/**
+ * The ⋯ menu of a conversation: rename it; look at its shared context, cost and project memory; search, export or distil
+ * its records into a project Skill; delete it (`onDelete`, only while it does not run).
+ */
+export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowRun; providers: ProviderInfo[]; onRename: () => void; onDelete?: () => void }) {
   const t = useT();
-  const [open, setOpen] = useState(false);
   const [search, setSearch] = useState(false);
   const [shared, setShared] = useState<string>();
   const [memory, setMemory] = useState(false);
   const [cost, setCost] = useState(false);
   const [note, setNote] = useState<string>();
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    window.addEventListener('mousedown', close);
-    return () => window.removeEventListener('mousedown', close);
-  }, [open]);
   const exportRun = async () => {
-    setOpen(false);
     try {
       const r = await hub.call<{ path: string; bytes: number; masked: number }>('workflows.export', { id: run.id, mask: true });
       setNote(t(`已匯出（${Math.ceil(r.bytes / 1024)} KB，遮罩了 ${r.masked} 處金鑰／信箱）：${r.path}。保存 30 天後自動刪除。`, `Exported (${Math.ceil(r.bytes / 1024)} KB, ${r.masked} keys / emails masked): ${r.path}. Deleted automatically after 30 days.`));
@@ -44,7 +211,6 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
     }
   };
   const distil = async () => {
-    setOpen(false);
     try {
       const r = await hub.call<{ path: string; added: number }>('workflows.distilSkill', { id: run.id });
       setNote(r.added ? t(`已把 ${r.added} 條驗證過的規則寫進專案 Skill：${r.path}。之後在這個資料夾工作的 agent 都會優先讀它。`, `Added ${r.added} verified rule(s) to the project Skill: ${r.path}. Agents working in this folder read it first from now on.`) : t(`沒有新的已驗證規則可加（推論不會收錄）。檔案：${r.path}`, `No new verified rules to add (inferences are left out). File: ${r.path}`));
@@ -53,20 +219,22 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
     }
   };
   return (
-    <div className="run-menu" ref={ref}>
-      <button className="icon-btn" title={t('更多', 'More')} aria-label={t('更多', 'More')} aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Ico i={Ellipsis} size={18} />
-      </button>
-      {open && (
-        <div className="menu">
-          <button onClick={() => (setOpen(false), void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)))}><Ico i={Layers} /> {t('檢視共享上下文（agent 看到的內容）', 'View the shared context (what agents see)')}</button>
-          <button onClick={() => (setOpen(false), setCost(true))}><Ico i={ChartColumn} /> {t('成本分解（token、時間、prompt 組成）', 'Cost breakdown (tokens, time, prompt makeup)')}</button>
-          <button onClick={() => (setOpen(false), setMemory(true))}><Ico i={Library} /> {t('專案記憶（這次帶入了什麼、記憶模式）', 'Project memory (what this run was given, memory mode)')}</button>
-          <button onClick={() => (setOpen(false), setSearch(true))}><Ico i={Search} /> {t('搜尋紀錄', 'Search records')}</button>
-          <button onClick={exportRun}><Ico i={Download} /> {t('匯出完整紀錄（遮罩金鑰）', 'Export full records (keys masked)')}</button>
-          <button onClick={distil}><Ico i={BookCheck} /> {t('把驗證過的規則存成專案 Skill', 'Save verified rules as a project Skill')}</button>
-        </div>
-      )}
+    <div className="run-menu">
+      <MoreMenu
+        label={t('更多', 'More')}
+        items={[
+          { label: t('重新命名', 'Rename'), icon: Pencil, onSelect: onRename },
+          'sep',
+          { label: t('檢視共享上下文', 'View the shared context'), hint: t('agent 看到的內容', 'What agents see'), icon: Layers, onSelect: () => void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)) },
+          { label: t('成本分解', 'Cost breakdown'), hint: t('token、時間、prompt 組成', 'Tokens, time, prompt makeup'), icon: ChartColumn, onSelect: () => setCost(true) },
+          { label: t('專案記憶', 'Project memory'), hint: t('這次帶入了什麼、記憶模式', 'What this run was given, memory mode'), icon: Library, onSelect: () => setMemory(true) },
+          { label: t('搜尋紀錄', 'Search records'), icon: Search, onSelect: () => setSearch(true) },
+          { label: t('匯出完整紀錄', 'Export full records'), hint: t('金鑰會遮罩', 'Keys masked'), icon: Download, onSelect: () => void exportRun() },
+          { label: t('存成專案 Skill', 'Save as a project Skill'), hint: t('只收驗證過的規則', 'Verified rules only'), icon: BookCheck, onSelect: () => void distil() },
+          !!onDelete && 'sep',
+          !!onDelete && { label: t('刪除對話…', 'Delete chat…'), icon: Trash2, danger: true, onSelect: onDelete },
+        ]}
+      />
       {memory && <RunMemoryWindow run={run} onClose={() => setMemory(false)} />}
       {cost && <CostWindow run={run} onClose={() => setCost(false)} />}
       {note && (
@@ -86,7 +254,7 @@ export function RunMenu({ run, providers }: { run: WorkflowRun; providers: Provi
           <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div className="drawer-head wf-modal-head">
               <h3>{t('共享上下文', 'Shared context')}</h3>
-              <button className="icon-btn" onClick={() => setShared(undefined)} aria-label="close">
+              <button className="icon-btn" onClick={() => setShared(undefined)} aria-label={t('關閉', 'Close')}>
                 <Ico i={X} size={18} />
               </button>
             </div>
@@ -128,7 +296,7 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
       <div className="modal wf-modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-head wf-modal-head">
           <h3>{t('搜尋紀錄', 'Search records')}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="close">
+          <button className="icon-btn" onClick={onClose} aria-label={t('關閉', 'Close')}>
             <Ico i={X} size={18} />
           </button>
         </div>

@@ -1,4 +1,4 @@
-import type { AgentRole, AgentStatus, ProviderInfo, StageRun, WorkflowRun, WorkflowStatus } from '../../core/src/types';
+import type { AgentRole, AgentStatus, ProviderInfo, StageRun, WorkflowRun, WorkflowStatus, WorkflowSummary } from '../../core/src/types';
 import type { T } from './i18n';
 import { taskTitle } from '../../core/src/taskTitle';
 
@@ -26,17 +26,74 @@ export const agentStatus = (t: T, s: AgentStatus) =>
     cancelled: { label: t('已取消', 'Cancelled'), cls: 'muted' },
   })[s];
 
+/**
+ * A workflow's state in a word, and its colour: only running, waiting for you, short of its goal and failed take one; a
+ * finished, paused or stopped one is muted (its icon tells them apart). Waiting for you is said by what it waits for
+ * (waitWord, from the run or its summary); this word is only the fallback when that is not known.
+ */
 export const wfStatus = (t: T, s: WorkflowStatus) =>
   ({
     running: { label: t('執行中', 'Running'), cls: 'run' },
-    paused: { label: t('已暫停', 'Paused'), cls: 'warn' },
-    waiting_human: { label: t('等待你的決定', 'Needs your input'), cls: 'warn' },
-    completed: { label: t('已完成', 'Completed'), cls: 'ok' },
-    incomplete: { label: t('未完成（未達標）', 'Incomplete (goal not met)'), cls: 'warn' },
+    paused: { label: t('已暫停', 'Paused'), cls: 'muted' },
+    waiting_human: { label: t('等你處理', 'Waiting for you'), cls: 'warn' },
+    completed: { label: t('已完成', 'Completed'), cls: 'muted' },
+    incomplete: { label: t('未完成', 'Incomplete'), cls: 'warn' },
     failed: { label: t('失敗', 'Failed'), cls: 'err' },
     cancelled: { label: t('已取消', 'Cancelled'), cls: 'muted' },
     interrupted: { label: t('已中斷', 'Interrupted'), cls: 'muted' },
   })[s];
+
+/** What a workflow waits for from you: an agent's question, an approval, or another decision (e.g. rounds used up). */
+export type WaitKind = 'question' | 'approval' | 'decision';
+
+export function waitKind(run: Pick<WorkflowRun, 'status' | 'pending' | 'approvals'>): WaitKind | undefined {
+  if (run.pending) return run.pending.question ? 'question' : 'decision';
+  if (run.status === 'waiting_human') return 'decision';
+  if (run.approvals?.length && run.status === 'running') return 'approval';
+  return undefined;
+}
+
+/** One word per kind of waiting, the same in the header, the progress panel and an agent's turn. */
+export const waitWord = (t: T, k: WaitKind): string =>
+  ({ question: t('等你回答', 'Waiting for your answer'), approval: t('等你核准', 'Waiting for your approval'), decision: t('等你決定', 'Waiting for your decision') })[k];
+
+/** Who asked the pending question: the "provider · role" its message starts with, else the main agent holding its turn. */
+export function askerOf(t: T, run: Pick<WorkflowRun, 'pending' | 'agents'>, providers: ProviderInfo[]): string | undefined {
+  const m = /^(.+?) (?:問你：|asks: )/.exec(run.pending?.message ?? '');
+  if (m) return m[1];
+  const a = Object.values(run.agents).find((x) => x.status === 'paused' && !x.parentId);
+  return a ? `${providerName(providers, a.provider)} · ${roleLabel(t, a.role)}` : undefined;
+}
+
+/** What a conversation in the chat list waits for from you (its summary says it; a summary without it: a decision). */
+export function summaryWait(w: Pick<WorkflowSummary, 'status' | 'waiting'>): WaitKind | undefined {
+  return w.waiting ?? (w.status === 'waiting_human' ? 'decision' : undefined);
+}
+
+/** How long a failed conversation still counts on ☰: a day, so an old failure left in the list does not keep it lit. */
+export const RECENT_FAILURE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Conversations that need you (the ☰ badge in a narrow window): those waiting for your answer, approval or decision,
+ * and those that failed within the last day (an older failure stays in its row, not on ☰).
+ */
+export function attention(list: Pick<WorkflowSummary, 'status' | 'waiting' | 'updatedAt'>[], now = Date.now()): { waiting: number; failed: number } {
+  return {
+    waiting: list.filter((w) => !!summaryWait(w)).length,
+    failed: list.filter((w) => w.status === 'failed' && now - (w.updatedAt ?? 0) < RECENT_FAILURE_MS).length,
+  };
+}
+
+/** The ☰ button's name: the chat list, and how many conversations wait for you or failed lately. */
+export function attentionLabel(t: T, a: { waiting: number; failed: number }): string {
+  return [
+    t('對話紀錄', 'Chat history'),
+    a.waiting ? t(`${a.waiting} 段等你處理`, `${a.waiting} waiting for you`) : '',
+    a.failed ? t(`${a.failed} 段最近失敗`, `${a.failed} failed lately`) : '',
+  ]
+    .filter(Boolean)
+    .join(t('，', ', '));
+}
 
 export const stageStatus = (t: T, s: StageRun['status']) =>
   ({
@@ -111,6 +168,28 @@ export function msgTime(ts: number, now = Date.now()): string {
   if (d.toDateString() === n.toDateString()) return hm;
   const md = `${d.getMonth() + 1}/${d.getDate()}`;
   return d.getFullYear() === n.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}/${md} ${hm}`;
+}
+
+/** A folder's own name, the last part of its path ("C:\\work\\csv-import\\" → "csv-import"). */
+export function folderName(dir: string): string {
+  return dir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || dir;
+}
+
+/**
+ * The working folders of the latest conversations, newest activity first, each once (the same folder written with
+ * another case or a trailing slash on Windows counts once), without `current`; at most `max`.
+ */
+export function recentFolders(list: Pick<WorkflowSummary, 'cwd' | 'updatedAt'>[], current = '', max = 5): string[] {
+  const key = (d: string) => d.replace(/[\\/]+$/, '').replace(/\\/g, '/').toLowerCase();
+  const seen = new Set<string>(current ? [key(current)] : []);
+  const out: string[] = [];
+  for (const w of [...list].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    if (!w.cwd || seen.has(key(w.cwd))) continue;
+    seen.add(key(w.cwd));
+    out.push(w.cwd);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 /** The full date and time, to the second (a message time's tooltip). */

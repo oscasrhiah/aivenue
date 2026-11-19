@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleMinus, CircleX, Lock, Pause, RefreshCw, Target, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleMinus, CircleX, Hand, Lock, MessageCircleQuestionMark, Pause, RefreshCw, Signpost, Target, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
-import { cx, modelLabel, providerName, subTitle } from '../util';
+import { askerOf, cx, modelLabel, providerName, subTitle, waitWord } from '../util';
 import { batchCounts, runBatches, runOverview, stepState, verdictWords } from '../timeline';
 import { AgentWindow, GpuWindow, ProcessWindow, Window } from './DetailWindows';
 
@@ -289,17 +289,24 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
   );
 }
 
-/** What holds the workflow up right now, in words (empty when nothing does). */
-export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): string[] {
-  const out: string[] = [];
-  if (run.status === 'paused') out.push(t('已暫停', 'Paused'));
-  if (run.pending) out.push(t(`等你決定：${run.pending.message}`, `Waiting for your decision: ${run.pending.message}`));
-  if (run.approvals?.length) out.push(t(`等你核准 ${run.approvals.length} 個動作`, `${run.approvals.length} action(s) waiting for your approval`));
+/**
+ * What holds the workflow up right now, in words (empty when nothing does), each with its icon: paused; your answer to an
+ * agent's question (who asked; the card above has the question), your decision, your approval (one word per kind, as in
+ * the header); an agent waiting for something or recovering from a failure.
+ */
+export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): { text: string; icon?: LucideIcon }[] {
+  const out: { text: string; icon?: LucideIcon }[] = [];
+  if (run.status === 'paused') out.push({ text: t('已暫停', 'Paused'), icon: Pause });
+  if (run.pending?.question) {
+    const who = askerOf(t, run, providers);
+    out.push({ text: who ? t(`${waitWord(t, 'question')} ${who} 的問題`, `${waitWord(t, 'question')} to ${who}'s question`) : waitWord(t, 'question'), icon: MessageCircleQuestionMark });
+  } else if (run.pending) out.push({ text: `${waitWord(t, 'decision')} · ${run.pending.message}`, icon: Signpost });
+  if (run.approvals?.length) out.push({ text: t(`${waitWord(t, 'approval')} ${run.approvals.length} 個動作`, `${waitWord(t, 'approval')} on ${run.approvals.length} action(s)`), icon: Hand });
   for (const a of Object.values(run.agents)) {
     if (!['running', 'paused', 'queued'].includes(a.status)) continue;
     const who = `${providerName(providers, a.provider)}`;
-    if (a.waiting) out.push(`${who}：${a.waiting}`);
-    else if (a.failure && a.status === 'running') out.push(`${who}：${a.failure.action}`);
+    if (a.waiting) out.push({ text: `${who}：${a.waiting}` });
+    else if (a.failure && a.status === 'running') out.push({ text: `${who}：${a.failure.action}` });
   }
   return out;
 }
@@ -345,7 +352,7 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
             {live && !open && block.length ? (
               <>
                 {' · '}
-                <Ico i={Pause} size={12} /> {block[0]}
+                {block[0].icon && <Ico i={block[0].icon} size={14} />} {block[0].text}
               </>
             ) : live && !open && current ? ` · ${current.label}` : ''}
           </span>
@@ -367,14 +374,13 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
               ))}
             </div>
           )}
+          {/* One quiet line, no box: what to do is in the card right above it. */}
           {block.length > 0 && (
             <div className="pp-block">
               <span className="pp-sub">{t('卡在', 'Blocked by')}</span>
-              {block.map((b, i) => (
-                <span key={i} className="pp-chip warn">
-                  {b}
-                </span>
-              ))}
+              <span className="pp-block-text" title={block.map((b) => b.text).join('\n')}>
+                {block.map((b) => b.text).join(' · ')}
+              </span>
             </div>
           )}
           {!!run.gpuLocks?.length && (

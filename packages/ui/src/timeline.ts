@@ -2,6 +2,7 @@
 // activity folded into one line, the one-line result of a finished turn, why work came back, a readable preview of
 // a result, and the state of a plan step. The cards render these; the full records stay one click away.
 import type { AgentEvent, AgentRunInfo, ObservedCheck, PlanStep, Review, Round, WorkflowRun } from '../../core/src/types';
+import { waitKind, waitWord } from './util';
 
 export type Tr = (zh: string, en: string) => string;
 
@@ -480,22 +481,23 @@ import { batchCounts, runBatches } from '../../core/src/batches';
  */
 export function runOverview(t: Tr, run: WorkflowRun, titleOf: (a: AgentRunInfo) => string): string[] {
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
-  const phase =
-    run.status === 'waiting_human' || run.pending || run.approvals?.length
-      ? t('等你處理', 'Waiting for you')
-      : run.status === 'paused'
-        ? t('已暫停', 'Paused')
-        : live
-          ? t('本輪執行中', 'This round is running')
-          : run.status === 'completed'
-            ? t('本輪工作流已完成', 'This round of the workflow is complete')
-            : run.status === 'cancelled'
-              ? t('本輪已停止', 'This round was stopped')
-              : run.status === 'failed'
-                ? t('本輪失敗', 'This round failed')
-                : run.status === 'incomplete'
-                  ? t('本輪結束，目標未達成', 'This round ended without meeting the goal')
-                  : t('本輪已結束', 'This round has ended');
+  // Waiting for you: in the same word as the header (your answer, your approval, your decision).
+  const waiting = waitKind(run);
+  const phase = waiting
+    ? waitWord(t, waiting)
+    : run.status === 'paused'
+      ? t('已暫停', 'Paused')
+      : live
+        ? t('本輪執行中', 'This round is running')
+        : run.status === 'completed'
+          ? t('本輪工作流已完成', 'This round of the workflow is complete')
+          : run.status === 'cancelled'
+            ? t('本輪已停止', 'This round was stopped')
+            : run.status === 'failed'
+              ? t('本輪失敗', 'This round failed')
+              : run.status === 'incomplete'
+                ? t('本輪結束，目標未達成', 'This round ended without meeting the goal')
+                : t('本輪已結束', 'This round has ended');
   const parts = [phase];
   const all = runBatches(Object.values(run.agents), titleOf);
   if (all.length) {

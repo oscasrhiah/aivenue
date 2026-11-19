@@ -31,7 +31,11 @@ function methodOf(t: ReturnType<typeof useT>, providers: ProviderInfo[], provide
   return t('由壓縮者整理交接摘要，下一輪開新對話', 'The compactor writes a hand-off summary; the next turn starts a fresh conversation');
 }
 
-/** Pie in the composer: how full the shared context is; hover or click for details and compaction. */
+/**
+ * The ring in the composer: how full the shared context is, named 「上下文 37%」; hover or click for details and
+ * compaction. Not drawn while there is nothing to show (no shared usage and no agent conversation measured yet), and its
+ * arc only from 1% (a round line cap would draw a dot at 0).
+ */
 export function ContextPie({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
   const [pinned, setPinned] = useState(false);
@@ -69,14 +73,23 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
     hub.call(method, params).catch((e) => setError((e as Error).message));
   };
   const open = pinned || hover;
+  const shown = Math.round(pct);
+  // Nothing to show: no shared usage and no agent conversation measured or compacted yet. Either one keeps it (each
+  // agent's usage and its compaction are reached only from here), also under 1% of shared usage: then without an arc.
+  const measured = conversations(run).some((a) => (a.context?.used ?? 0) > 0 || !!a.context?.compactedAt) || !!run.memory;
+  if (summaryOnly ? !measured : shown < 1 && !measured) return null;
+  const pctText = used > 0 && shown < 1 ? '<1%' : `${shown}%`;
+  const label = summaryOnly ? t('上下文：只交摘要', 'Context: summaries only') : t(`上下文 ${pctText}`, `Context ${pctText}`);
   return (
     <span className="ctx-wrap" ref={ref} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
-      <button className={cx('pill-btn ctx-pie', level(pct), busy && 'busy')} onClick={() => setPinned(!pinned)} aria-label={t('共用上下文用量', 'Shared context usage')}>
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <button className={cx('wf-ctl ctx-pie', level(pct), busy && 'busy')} onClick={() => setPinned(!pinned)} aria-label={label} aria-expanded={pinned} aria-haspopup="dialog" title={label}>
+        <svg width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
           <circle cx="9" cy="9" r={r} className="ctx-track" />
-          <circle cx="9" cy="9" r={r} className="ctx-fill" strokeDasharray={`${(pct / 100) * circ} ${circ}`} transform="rotate(-90 9 9)" />
+          {!summaryOnly && shown >= 1 && <circle cx="9" cy="9" r={r} className="ctx-fill" strokeDasharray={`${(pct / 100) * circ} ${circ}`} transform="rotate(-90 9 9)" />}
         </svg>
-        <span className="ctx-pct">{summaryOnly ? '—' : `${Math.round(pct)}%`}</span>
+        <span className="ctx-pct">
+          <span className="ctx-word">{t('上下文', 'Context')}</span> {summaryOnly ? '—' : pctText}
+        </span>
       </button>
       {open && (
         <div className="ctx-pop" role="dialog">

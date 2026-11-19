@@ -1,17 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, Asterisk, CircleOff, Folder, Lightbulb, Shuffle, SlidersHorizontal, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowLeftRight, Asterisk, ChevronDown, ChevronRight, CircleOff, Folder, GitBranch, Lightbulb, Shuffle, Workflow, X } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AssignmentResult, AutoAssignPrefs, ContextConfig, ContextSharing, LimitsConfig, PermissionLevel, PreflightItem, ProviderInfo, ReviewTask, RoleConfig, StageConfig, VerifyConfig, WorkflowConfig, WorkflowPreset } from '../../../core/src/types';
-import { PreflightList } from './RunTools';
+import { PreflightList, useMenuKeys } from './RunTools';
 import { ModelPicker } from './ModelPicker';
-import { PermissionButton, permissionLabel, SafetySection } from './Safety';
+import { PERMISSION_ICON, PermissionButton, permissionLabel, permissionRisk, SafetySection, useOpensDown } from './Safety';
 import { hub, useModels } from '../api';
 import { advisorPairing } from '../../../core/src/advisorPairing';
 import { DECIDE_ITEM_MAX, DECIDE_MAX, decideItems, decideProblemText, decideProblems } from '../../../core/src/reviewDecide';
 import { fmtContext } from '../../../core/src/modelContext';
 import { applyReview, applyStandard, flowModeOf, keepFlowMark, leaveReview, STANDARD_ROUNDS } from '../../../core/src/flowMode';
 import { useT } from '../i18n';
-import { cx, providerColor, providerName } from '../util';
+import { cx, modelLabel, providerColor, providerName } from '../util';
 
 export type RoleDraft = Omit<WorkflowConfig, 'goal' | 'title'>;
 
@@ -120,10 +120,13 @@ function Dot({ id }: { id: string }) {
 }
 
 /**
- * Workflow summary in the composer. Full pills when there is room; otherwise (and always when `compact`, e.g. in VS Code)
- * just a permission button and a role-settings button that opens the settings window.
+ * What the next message runs with, under the composer's text box: the folder, the permission (in words, coloured by what
+ * it can do), the advisor and the workflow, as quiet text controls (an icon, a short text, ⌄ where a menu opens). The
+ * workflow keeps its shape (計畫 › 實作, who works in each); with nothing assignable it says so instead of naming
+ * providers. A narrow composer (below 440px) shows one summary control instead, the permission first, which opens all
+ * four in a popover (WfSummary). Everything else lives in the settings window; the full summary is each control's tooltip.
  */
-export function RolePills({ draft, providers, onOpen, preview, compact, onSafety, onAdvisor }: { draft: RoleDraft; providers: ProviderInfo[]; onOpen: () => void; preview?: AssignmentResult; compact?: boolean; onSafety?: (v: { permission?: PermissionLevel; isolation?: boolean }) => void; onAdvisor?: (v: AdvisorConfig) => void }) {
+export function RolePills({ draft, providers, onOpen, preview, compact, onSafety, onAdvisor, unassigned }: { draft: RoleDraft; providers: ProviderInfo[]; onOpen: () => void; preview?: AssignmentResult; compact?: boolean; onSafety?: (v: { permission?: PermissionLevel; isolation?: boolean }) => void; onAdvisor?: (v: AdvisorConfig) => void; unassigned?: boolean }) {
   const t = useT();
   const name = (id: string) => providerName(providers, id);
   const auto = isAuto(draft);
@@ -135,51 +138,207 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   const subs = preview?.subagents ?? draft.subagents.allowed;
   const priority = { quality: t('品質優先', 'Quality'), balanced: t('平衡', 'Balanced'), economy: t('省額度', 'Economy') }[draft.assignment?.auto?.priority ?? 'balanced'];
   const permission = draft.permission ?? 'auto';
-  const stage = (label: string, s: StageConfig) => `${label}：${s.enabled ? [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ') : t('略過', 'skip')}`;
-  // Everything lives in the settings window; the button carries just a hint and the full summary as a tooltip.
+  const isolation = draft.isolation === 'worktree';
+  const reviewer = (implement.reviewer ?? implement.author).provider;
+  const names = (s: StageConfig) => [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name);
+  const stage = (label: string, s: StageConfig) => `${label}：${s.enabled ? names(s).join(t('，審查 ', ', reviewed by ')) : t('略過', 'skip')}`;
+  const nothing = t('沒有可用的供應商', 'no provider available');
+  const standard = flowModeOf(draft) === 'standard';
+  // Who works in it, in words: what the control shows first (so its name starts with what is seen).
+  const who = unassigned
+    ? [`${t('未指派', 'Not assigned')}：${nothing}`]
+    : draft.review
+      ? [`${t('獨立審查', 'Review only')}：${name(reviewer)}${draft.review.commit ? ` · ${t('受審', 'commit')} ${draft.review.commit}` : ''}`]
+      : [stage(t('計畫', 'Plan'), plan), stage(t('實作', 'Build'), implement)];
+  // How it is set up: the mode, auto assignment, the sub-agents (none named while nothing can be assigned).
+  const setup = [
+    standard ? t('標準模式', 'Standard mode') : '',
+    auto ? `${t('自動指派', 'Auto assignment')} · ${priority}` : '',
+    `Sub agents：${!draft.subagents.enabled ? t('關閉', 'off') : unassigned ? t('未指派', 'not assigned') : subs.map(name).join(', ') || '—'}`,
+  ].filter(Boolean);
+  // Everything lives in the settings window; the controls carry a hint and the full summary as a tooltip.
   const details = [
     `${t('資料夾', 'Folder')}：${draft.cwd || t('未選擇', 'none')}`,
-    `${t('權限', 'Permissions')}：${permissionLabel(t, permission)}${draft.isolation === 'worktree' ? ` · ${t('隔離', 'isolated')}` : ''}`,
-    auto ? `${t('自動指派', 'Auto assignment')} · ${priority}` : '',
-    ...(draft.review ? [`${t('獨立審查', 'Review only')}：${name((implement.reviewer ?? implement.author).provider)}`] : [stage(t('計畫', 'Plan'), plan), stage(t('實作', 'Build'), implement)]),
-    `Sub agents：${draft.subagents.enabled ? subs.map(name).join(', ') || '—' : t('關閉', 'off')}`,
-  ].filter(Boolean);
-  const reviewer = (implement.reviewer ?? implement.author).provider;
-  const short = draft.review
-    ? `${t('獨立審查', 'Review only')}${auto ? '' : ` · ${name(reviewer)}`}`
-    : (auto ? t('自動指派', 'Auto') : implement.enabled ? name(implement.author.provider) : name(plan.author.provider)) + (!plan.enabled && implement.enabled ? ` · ${t('直接實作', 'no plan')}` : '');
-  const pair = (s: StageConfig) => [s.author.provider, s.reviewer?.provider].filter((x): x is string => !!x).map(name).join(' → ');
-  const long = (
-    draft.review
-      ? [t('獨立審查（不實作）', 'Review only (no implementation)'), auto ? `${t('自動指派', 'Auto')} · ${priority}` : `${t('審查', 'Reviewer')} ${name(reviewer)}`, draft.review.commit ? `${t('受審', 'commit')} ${draft.review.commit}` : '']
-      : [
-          flowModeOf(draft) === 'standard' ? t('標準模式', 'Standard') : '',
-          auto ? `${t('自動指派', 'Auto')} · ${priority}` : '',
-          plan.enabled ? `${t('計畫', 'Plan')} ${pair(plan)}` : t('不規劃', 'No plan'),
-          implement.enabled ? `${t('實作', 'Build')} ${pair(implement)}` : '',
-          draft.subagents.enabled && subs.length ? t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`) : '',
-        ]
-  )
-    .filter(Boolean)
-    .join(' · ');
+    `${t('權限', 'Permissions')}：${permissionLabel(t, permission)}${isolation ? ` · ${t('隔離模式', 'isolation')}` : ''}`,
+    ...setup,
+    ...who,
+  ];
+  // The workflow's shape: its stages in order, each with who works in it (author › reviewer); the arrows are icons.
+  const arrow = <Ico i={ChevronRight} size={12} className="wf-arrow" />;
+  const pair = (s: StageConfig) =>
+    names(s).map((n, i) => (
+      <span key={i} className="wf-who">
+        {i > 0 && arrow}
+        {n}
+      </span>
+    ));
+  const roles = (draft.plan.enabled ? 1 + (draft.plan.reviewer ? 1 : 0) : 0) + (draft.implement.enabled ? 1 + (draft.implement.reviewer ? 1 : 0) : 0);
+  // The same in words (a tooltip, a screen reader): the stages listed, without the arrow icons.
+  const autoMark = auto ? t('自動', 'Auto') : '';
+  const shortText = (draft.review ? [t('獨立審查', 'Review only'), name(reviewer)] : !plan.enabled ? [t('直接實作', 'No plan'), name(implement.author.provider)] : [[t('計畫', 'Plan'), implement.enabled ? t('實作', 'Build') : ''].filter(Boolean).join(t('、', ', ')), t(`${roles} 個角色`, `${roles} roles`)]).concat(autoMark ? [autoMark] : []);
+  const short = unassigned ? (
+    <span className="wf-unassigned">{t('未指派', 'Not assigned')}</span>
+  ) : draft.review || !plan.enabled ? (
+    shortText.join(' · ')
+  ) : (
+    <>
+      {t('計畫', 'Plan')}
+      {implement.enabled && (
+        <>
+          {arrow}
+          {t('實作', 'Build')}
+        </>
+      )}
+      {` · ${shortText.slice(1).join(' · ')}`}
+    </>
+  );
+  const long = unassigned ? (
+    <span className="wf-unassigned">{`${t('未指派', 'Not assigned')}：${nothing}`}</span>
+  ) : draft.review ? (
+    <>
+      {t('獨立審查', 'Review only')} · {name(reviewer)}
+      {draft.review.commit ? ` · ${t('受審', 'commit')} ${draft.review.commit}` : ''}
+      {auto ? ` · ${t('自動指派', 'Auto')}` : ''}
+    </>
+  ) : (
+    <>
+      {plan.enabled ? (
+        <>
+          {t('計畫', 'Plan')} {pair(plan)}
+          {implement.enabled && (
+            <>
+              {' · '}
+              {t('實作', 'Build')} {pair(implement)}
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {t('直接實作', 'No plan')} · {pair(implement)}
+        </>
+      )}
+      {standard ? ` · ${t('標準模式', 'Standard')}` : ''}
+      {auto ? ` · ${t('自動指派', 'Auto')}` : ''}
+      {draft.subagents.enabled && subs.length ? ` · ${t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`)}` : ''}
+    </>
+  );
   const folder = draft.cwd ? draft.cwd.split(/[\\/]/).filter(Boolean).slice(-1)[0] : t('選擇資料夾', 'Choose folder');
-  // One tidy row: folder, permission, role summary. Narrow composers (and VS Code) drop the folder and shorten the summary.
+  const advisor = draft.advisor ?? { mode: 'off' as const };
+  const mains = claudeMains(t, draft, providers, preview);
+  const flowLabel = [...who, ...setup].join(' · ');
+  const controls = (inPop: boolean, done?: () => void) => {
+    const open = () => {
+      done?.();
+      onOpen();
+    };
+    return (
+      <>
+        <button
+          type="button"
+          className="wf-ctl wf-folder"
+          onClick={open}
+          title={`${t('資料夾', 'Folder')}：${draft.cwd || t('未選擇', 'none')}`}
+          aria-label={draft.cwd ? `${inPop ? draft.cwd : folder} · ${t('工作資料夾', 'working folder')}` : folder}
+        >
+          <Ico i={Folder} size={16} />
+          <span className="wf-text">{inPop ? draft.cwd || folder : folder}</span>
+        </button>
+        <PermissionButton permission={permission} isolation={isolation} onChange={onSafety} onOpen={open} />
+        <AdvisorButton value={advisor} providers={providers} onChange={onAdvisor} onOpen={open} mains={mains} />
+        <button type="button" className={cx('wf-ctl wf-btn', unassigned && 'warn')} onClick={open} title={details.join('\n')} aria-label={flowLabel}>
+          <Ico i={auto ? Shuffle : Workflow} size={16} />
+          {inPop ? (
+            <span className="wf-text wf-long">{long}</span>
+          ) : (
+            <>
+              <span className="wf-text wf-long">{compact ? short : long}</span>
+              <span className="wf-text wf-short">{short}</span>
+            </>
+          )}
+        </button>
+      </>
+    );
+  };
   return (
     <span className={cx('wf-bar', compact && 'compact')}>
-      <button className="pill-btn wf-folder" onClick={onOpen} title={draft.cwd}>
-        <Ico i={Folder} size={15} className="pill-icon" />
-        <span className="pill-text">{folder}</span>
-      </button>
-      <PermissionButton permission={permission} isolation={draft.isolation === 'worktree'} onChange={onSafety} onOpen={onOpen} />
-      <AdvisorButton value={draft.advisor ?? { mode: 'off' }} providers={providers} onChange={onAdvisor} onOpen={onOpen} mains={claudeMains(t, draft, providers, preview)} />
-      <button className="pill-btn wf-btn" onClick={onOpen} title={details.join('\n')}>
-        <Ico i={auto ? Shuffle : SlidersHorizontal} size={15} className="wf-gear" />
-        <span className="wf-hint wf-long">{long}</span>
-        <span className="wf-hint wf-short">{short}</span>
-      </button>
+      <span className="wf-row">{controls(false)}</span>
+      <WfSummary
+        permission={permission}
+        isolation={isolation}
+        folder={folder}
+        short={short}
+        label={`${permissionLabel(t, permission)}${isolation ? ` · ${t('隔離模式', 'Isolation')}` : ''} · ${folder} · ${unassigned ? t('未指派', 'Not assigned') : shortText.join(' · ')}，${t('這則訊息的設定', 'settings for this message')}`}
+      >
+        {(done) => controls(true, done)}
+      </WfSummary>
     </span>
   );
 }
+
+/**
+ * The narrow composer's one control for what the next message runs with: the permission first (in words, coloured by
+ * what it can do, with the isolation's icon when the agents work in a copy), then the folder (its own part, cut only
+ * when very long) and the workflow, which gives way first. It opens a popover with the folder, permission,
+ * advisor and workflow controls, each whole; the focus goes into it, Esc or a click outside closes it (not while one of
+ * its own menus or dialogs is open) and the focus comes back.
+ */
+function WfSummary({ permission, isolation, folder, short, label, children }: { permission: PermissionLevel; isolation: boolean; folder: string; short: ReactNode; label: string; children: (done: () => void) => ReactNode }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    pop.current?.querySelector<HTMLElement>('button')?.focus();
+    // A menu or dialog of its own (the permission or advisor list, the whole-computer warning) closes first.
+    const busy = () => busyIn(pop.current);
+    const onDown = (e: MouseEvent) => !wrap.current?.contains(e.target as Node) && !busy() && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || busy()) return;
+      setOpen(false);
+      btn.current?.focus();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <span
+      className="wf-sum"
+      ref={wrap}
+      onBlur={(e) => {
+        // Tabbing out of it closes it (not into one of its own menus).
+        if (open && !wrap.current?.contains(e.relatedTarget as Node) && e.relatedTarget && !busyIn(pop.current)) setOpen(false);
+      }}
+    >
+      <button ref={btn} type="button" className="wf-ctl wf-summary" aria-haspopup="dialog" aria-expanded={open} aria-label={label} title={label} onClick={() => setOpen(!open)}>
+        <Ico i={PERMISSION_ICON[permission]} size={16} className={permissionRisk(permission, isolation) || undefined} />
+        <span className={cx('wf-sum-perm', permissionRisk(permission, isolation))}>{permissionLabel(t, permission)}</span>
+        {isolation && <Ico i={GitBranch} size={14} className="wf-sum-iso" />}
+        <span className="wf-text wf-sum-folder">
+          {' · '}
+          {folder}
+        </span>
+        <span className="wf-text wf-sum-rest">
+          {' · '}
+          {short}
+        </span>
+        <Ico i={ChevronDown} size={14} className="wf-chev" />
+      </button>
+      {open && (
+        <div className="wf-pop" role="dialog" aria-label={t('這則訊息的設定', 'Settings for this message')} ref={pop}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
+    </span>
+  );
+}
+
+const busyIn = (el: HTMLElement | null) => !!el?.querySelector('[role="menu"], .adv-menu, .modal-back');
 
 export function ProviderSelect({ value, providers, onChange, disabled }: { value: RoleConfig | null; providers: ProviderInfo[]; onChange: (v: RoleConfig | null) => void; disabled?: boolean }) {
   const t = useT();
@@ -787,11 +946,16 @@ function FactRounds({ value, onChange, disabled }: { value: AdvisorConfig; onCha
   );
 }
 
-/** Advisor switch right in the composer, so it is seen without opening the settings window. */
+/**
+ * The advisor in the composer, so its state is seen without opening the settings window: 「顧問：關」 when off, else
+ * 「顧問：」 and its model's short name. Its menu takes the focus on the mode in use; the options under a mode (model, how
+ * often) are reached with Tab.
+ */
 export function AdvisorButton({ value, providers, onChange, onOpen, mains }: { value: AdvisorConfig; providers: ProviderInfo[]; onChange?: (v: AdvisorConfig) => void; onOpen: () => void; mains?: ClaudeMain[] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const [shift, setShift] = useState(0);
   useEffect(() => {
@@ -813,22 +977,36 @@ export function AdvisorButton({ value, providers, onChange, onOpen, mains }: { v
     const over = r.right - shift - (document.documentElement.clientWidth - 8);
     setShift(over > 0 ? Math.min(over, r.left - shift - 8) : 0);
   }, [open, value.mode]);
+  // No room above (the new chat's composer near the top of its page): it opens downwards.
+  const down = useOpensDown(open, menu, value.mode);
+  useMenuKeys(open, menu, btn, () => setOpen(false), false, '[role="radio"]');
+  // Its model's short name ("Opus", "Opus 5.5"), else who advises; off is 「關」 after the colon, a state, not the verb.
   const who =
     value.mode === 'claude'
-      ? `Claude · ${(value.claudeModel ?? 'opus').replace(/^./, (c) => c.toUpperCase())}`
+      ? modelLabel(value.claudeModel || 'opus')
       : value.mode === 'cross'
-        ? [value.provider && providerName(providers, value.provider), value.model].filter(Boolean).join(' · ') || t('未選擇', 'not set')
-        : t('關閉', 'off');
+        ? (value.model ? modelLabel(value.model) : value.provider ? providerName(providers, value.provider) : '') || t('未選擇', 'not set')
+        : t('關', 'off');
+  const label = `${t('顧問', 'Advisor')}：${who}`;
   return (
     <span className="perm-wrap" ref={ref}>
-      <button className={cx('pill-btn adv-btn', value.mode !== 'off' && 'on')} title={`${t('顧問模式', 'Advisor')}：${advisorModeLabel(t, value.mode)}`} onClick={() => (onChange ? setOpen(!open) : onOpen())}>
-        <Ico i={Lightbulb} size={15} /> <span className="adv-label">{t('顧問', 'Advisor')}</span>
-        <span className="adv-who">{who}</span>
+      <button
+        ref={btn}
+        className={cx('wf-ctl adv-btn', value.mode !== 'off' && 'on')}
+        title={`${t('顧問模式', 'Advisor')}：${advisorModeLabel(t, value.mode)}${value.mode === 'cross' && value.provider ? ` · ${providerName(providers, value.provider)}` : ''}`}
+        aria-label={label}
+        aria-haspopup="dialog"
+        aria-expanded={onChange ? open : undefined}
+        onClick={() => (onChange ? setOpen(!open) : onOpen())}
+      >
+        <Ico i={Lightbulb} size={16} /> <span className="wf-text adv-who">{label}</span>
+        {onChange && <Ico i={ChevronDown} size={14} className="wf-chev" />}
       </button>
       {open && onChange && (
-        <div className="perm-menu adv-menu" role="menu" ref={menu} style={shift ? { left: -shift } : undefined}>
+        <div className={cx('perm-menu adv-menu', down && 'down')} role="dialog" aria-label={t('顧問模式', 'Advisor')} ref={menu} style={shift ? { left: -shift } : undefined}>
+          <div role="radiogroup" aria-label={t('顧問模式', 'Advisor')} className="adv-modes">
           {(['off', 'claude', 'cross'] as const).map((m) => (
-            <button key={m} role="menuitemradio" aria-checked={m === value.mode} className={cx('perm-item', m === value.mode && 'on')} onClick={() => onChange(withMode(value, m, providers))}>
+            <button key={m} type="button" role="radio" tabIndex={m === value.mode ? 0 : -1} aria-checked={m === value.mode} className={cx('perm-item', m === value.mode && 'on')} onClick={() => onChange(withMode(value, m, providers))}>
               <Ico i={{ off: CircleOff, claude: Asterisk, cross: ArrowLeftRight }[m]} size={16} className="perm-item-icon" />
               <span>
                 <span className="perm-item-title">{advisorModeLabel(t, m)}</span>
@@ -836,6 +1014,7 @@ export function AdvisorButton({ value, providers, onChange, onOpen, mains }: { v
               </span>
             </button>
           ))}
+          </div>
           {value.mode !== 'off' && (
             <div className="adv-options">
               <AdvisorOptions value={value} onChange={onChange} providers={providers} mains={mains} />
