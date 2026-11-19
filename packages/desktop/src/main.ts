@@ -70,6 +70,15 @@ if (!app.requestSingleInstanceLock()) {
       return;
     }
 
+    // Linux: the window's X11 class (WM_CLASS) is the app's name, which is the package name "@aivenue/desktop"
+    // (productName is only electron-builder's), so the desktop never tied the window to the menu entry
+    // (StartupWMClass=Aivenue). Name it "Aivenue" for the window. Only now, after the secret store has been used: the
+    // OS keyring entry those keys are encrypted with keeps the name it had; and the data folder stays where it was.
+    if (process.platform === 'linux' && app.getName() !== 'Aivenue') {
+      app.setPath('userData', app.getPath('userData'));
+      app.setName('Aivenue');
+    }
+
     win = new BrowserWindow({
       width: 1440,
       height: 920,
