@@ -72,24 +72,31 @@ if (!app.requestSingleInstanceLock()) {
 
     // Linux: the window's X11 class (WM_CLASS) is the app's name, which is the package name "@aivenue/desktop"
     // (productName is only electron-builder's), so the desktop never tied the window to the menu entry
-    // (StartupWMClass=Aivenue). Name it "Aivenue" for the window. Only now, after the secret store has been used: the
-    // OS keyring entry those keys are encrypted with keeps the name it had; and the data folder stays where it was.
-    if (process.platform === 'linux' && app.getName() !== 'Aivenue') {
+    // (StartupWMClass=Aivenue). The class is taken when the window is created: the app is named "Aivenue" for that
+    // moment only (creating the window is synchronous: nothing else runs in between) and gets its own name back right
+    // after. Everything else that goes by the app's name (the OS keyring entry the API keys are encrypted with, the
+    // data folder) sees the name it always had.
+    const appName = app.getName();
+    const renameForWindow = process.platform === 'linux' && appName !== 'Aivenue';
+    if (renameForWindow) {
       app.setPath('userData', app.getPath('userData'));
       app.setName('Aivenue');
     }
-
-    win = new BrowserWindow({
-      width: 1440,
-      height: 920,
-      minWidth: 960,
-      minHeight: 600,
-      title: 'Aivenue',
-      icon: iconFor(iconDark ?? nativeTheme.shouldUseDarkColors),
-      backgroundColor: '#0f1117',
-      autoHideMenuBar: true,
-      webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
-    });
+    try {
+      win = new BrowserWindow({
+        width: 1440,
+        height: 920,
+        minWidth: 960,
+        minHeight: 600,
+        title: 'Aivenue',
+        icon: iconFor(iconDark ?? nativeTheme.shouldUseDarkColors),
+        backgroundColor: '#0f1117',
+        autoHideMenuBar: true,
+        webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
+      });
+    } finally {
+      if (renameForWindow) app.setName(appName);
+    }
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
       return { action: 'deny' };
