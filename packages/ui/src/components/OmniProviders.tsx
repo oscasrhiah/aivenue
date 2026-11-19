@@ -27,7 +27,7 @@ interface FreeProvider {
 const PROVIDERS: FreeProvider[] = [
   {
     id: 'gemini',
-    name: 'Google Gemini（AI Studio）',
+    name: 'Google Gemini AI Studio',
     keyUrl: 'https://aistudio.google.com/apikey',
     free: ['Gemini Flash 系列，上下文 1M', 'Gemini Flash models, 1M context'],
     note: ['用 Google 帳號登入即可建立金鑰；每個模型有每日次數上限。', 'Sign in with a Google account to create a key; each model has daily limits.'],

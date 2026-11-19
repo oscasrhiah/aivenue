@@ -3295,7 +3295,7 @@ test('時間線：連續的例行讀檔與搜尋收成一行；終端指令不�
   assert.equal(W.groupLabel(tr, 'search', 2), '2 search(es)');
   assert.equal(W.groupLabel((zh) => zh, 'read', 3), '讀 3 個檔案');
   assert.equal(W.groupLabel((zh) => zh, 'command', 2), '執行 2 個指令');
-  assert.equal(W.groupLabel((zh) => zh, 'write', 1), '修改 1 個檔案');
+  assert.equal(W.groupLabel((zh) => zh, 'write', 1), '改了 1 個檔案');
   assert.equal(W.groupCount('read', ['src/a.js', 'src/a.js', 'src/b.js']), 2);
   assert.equal(W.groupCount('command', ['npm test', 'npm test']), 2);
   assert.deepEqual(W.groupNames('read', ['src/a.js', 'src/a.js', 'src/b.js']), ['a.js', 'b.js']);
@@ -3340,7 +3340,8 @@ test('時間線的一行結果與返工原因：只用紀錄裡的事實；送�
       },
     },
   };
-  assert.deepEqual(W.turnSummary(tr, run, agent()), ['Implemented', '2 file(s) changed with the edit tool', '1 check(s) passed, 1 check(s) failed']);
+  // Round D: the checks before the files (the card shows the first two parts; the files are in its tooltip).
+  assert.deepEqual(W.turnSummary(tr, run, agent()), ['Implemented', '1 check(s) passed, 1 check(s) failed', '2 file(s) changed']);
   assert.deepEqual(W.turnSummary(tr, run, agent({ id: 'r', role: 'code_reviewer', stats: { events: 1, tools: 1, commands: 0, filesChanged: [] } })), ['Changes requested · 2 issue(s)']);
   assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'running' })), []);
   assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'failed', round: 2, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] } })), ['Failed']);
@@ -3371,7 +3372,7 @@ test('一次失敗或被停下的嘗試，不把同一輪由別的 agent 交出�
   const x = { id: 'x', role: 'executor', status: 'failed', stage: 'implement', round: 1, stats: stats() };
   const y = { id: 'y', role: 'executor', status: 'completed', stage: 'implement', round: 1, stats: stats(['src/a.js']) };
   assert.deepEqual(W.turnSummary(tr, run, x), ['Failed']);
-  assert.deepEqual(W.turnSummary(tr, run, y), ['Implemented', '1 file(s) changed with the edit tool', '1 check(s) passed']);
+  assert.deepEqual(W.turnSummary(tr, run, y), ['Implemented', '1 check(s) passed', '1 file(s) changed']);
   // A reviewer stopped (re-dispatched) before the one that reviewed the round.
   assert.deepEqual(W.turnSummary(tr, run, { id: 'r1', role: 'code_reviewer', status: 'cancelled', stage: 'implement', round: 1, stats: stats() }), ['Stopped']);
   assert.deepEqual(W.turnSummary(tr, run, { id: 'r2', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats: stats() }), ['Changes requested · 1 issue(s)']);
@@ -3384,7 +3385,7 @@ test('審查的問題數只算這次變更裡的，既有問題另外說；沒�
   assert.deepEqual(W.issueCounts(review), { inChange: 1, before: 1 });
   assert.deepEqual(W.turnSummary(tr, run, { id: 'r', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats }), ['Changes requested · 1 issue(s)', '1 more pre-existing']);
   // Why the work came back, as the round's heading says it: the ids of the issues in the change, those outside it counted.
-  assert.equal(W.reviseReason((zh) => zh, review), '審查要求修改 1 個問題：R1，另有 1 個既有問題');
+  assert.equal(W.reviseReason((zh) => zh, review), '審查退回 1 個問題：R1，另有 1 個既有問題');
   assert.equal(W.reviseReason((zh) => zh, { issues: [] }), '審查要求修改');
   // Only issues outside the change: never "0 個問題".
   const outside = { verdict: 'revise', summary: 's', issues: [{ id: 'R9', severity: 'minor', title: 'old', preExisting: true }] };
@@ -3505,8 +3506,8 @@ test('活動紀錄收合時的一行：依種類計數（讀的檔、執行的�
   ];
   const c = W.activityCounts(events);
   assert.deepEqual(c, { read: 2, search: 1, command: 2, write: 1, other: 0 });
-  assert.equal(W.activityLabel(zh, c), '讀 2 個檔案、搜尋 1 次、執行 2 個指令、修改 1 個檔案');
-  assert.equal(W.activityLabel(tr, c, 2), 'Read 2 file(s), 1 search(es), ran 2 command(s), edited 1 file(s), 2 note(s)');
+  assert.equal(W.activityLabel(zh, c), '讀 2 個檔案、搜尋 1 次、執行 2 個指令、改了 1 個檔案');
+  assert.equal(W.activityLabel(tr, c, 2), 'Read 2 file(s), 1 search(es), ran 2 command(s), changed 1 file(s), 2 note(s)');
   assert.equal(W.activityLabel(zh, W.activityCounts([msg(1, 'only words')])), '');
 });
 
@@ -3530,7 +3531,7 @@ test('時間線的紀錄行：每個階段開始一條標題，第 2 輪起接�
   assert.deepEqual(rows(W.chatLines(zh, run, true)), [
     ['stage', '計畫', ''],
     ['stage', '實作', ''],
-    ['stage', '第 2 輪', '審查要求修改 1 個問題：R1，另有 1 個既有問題'],
+    ['stage', '第 2 輪', '審查退回 1 個問題：R1，另有 1 個既有問題'],
     ['event', '你停止了 Codex', ''],
     ['stage', '驗收', '由計畫者：Claude Code'],
     ['stage', '驗收', '第 2 次 · 獨立驗收者：Codex'],
@@ -3557,8 +3558,8 @@ test('時間線的紀錄行：每個階段開始一條標題，第 2 輪起接�
   };
   const apartLines = W.chatLines(zh, apart2, false);
   assert.deepEqual(rows(apartLines), [
-    ['stage', '第 2 輪', '審查要求修改 1 個問題：R1'],
-    ['event', '實作階段審查要求修改 1 個問題：R3，另有 1 個既有問題', ''],
+    ['stage', '第 2 輪', '審查退回 1 個問題：R1'],
+    ['event', '實作階段審查退回 1 個問題：R3，另有 1 個既有問題', ''],
     ['event', '你的決定: 再進行 2 輪', ''],
     ['stage', '第 3 輪', ''],
   ]);
@@ -3579,17 +3580,17 @@ test('時間線的紀錄行：階段重新開始或接續時，接著開始的�
   const again = { stages, log: [line('目標驗收 第 1 次（由計畫者：Claude Code）'), line('計畫階段重新開始（第 2 輪循環）'), line('計畫階段 第 2 輪'), line('實作階段重新開始（第 2 輪循環）'), line('實作階段 第 3 輪')] };
   assert.deepEqual(rows(W.chatLines(zh, again, false)), [
     ['stage', '驗收', '由計畫者：Claude Code'],
-    ['stage', '計畫', '重新開始 · 第 2 輪循環 · 第 2 輪'],
-    ['stage', '實作', '重新開始 · 第 2 輪循環 · 第 3 輪'],
+    ['stage', '計畫', '重新開始，第 2 輪循環，第 2 輪'],
+    ['stage', '實作', '重新開始，第 2 輪循環，第 3 輪'],
   ]);
   // Resumed after a stop: what you did, then the stage's one heading with the round it goes on with.
   const resumed = { stages, log: [line('從停止的地方接續：實作階段'), line('實作階段接續'), line('實作階段 第 2 輪')] };
   assert.deepEqual(rows(W.chatLines(zh, resumed, false)), [
     ['event', '從停止的地方接續：實作階段', ''],
-    ['stage', '實作', '接續 · 第 2 輪'],
+    ['stage', '實作', '接續，第 2 輪'],
   ]);
   const en = { stages, log: [line('Implementation resumed'), line('Implementation · round 3')] };
-  assert.deepEqual(rows(W.chatLines((_z, e) => e, en, false)), [['stage', 'Implement', 'resumed · round 3']]);
+  assert.deepEqual(rows(W.chatLines((_z, e) => e, en, false)), [['stage', 'Implement', 'resumed, round 3']]);
   // A round line of another stage, or one that does not follow the heading, stays its own heading.
   const later = { stages, log: [line('實作階段接續'), line('你重新派發了 Codex'), line('實作階段 第 2 輪')] };
   assert.deepEqual(rows(W.chatLines(zh, later, false)), [['stage', '實作', '接續'], ['event', '你重新派發了 Codex', ''], ['stage', '第 2 輪', '']]);
@@ -3618,6 +3619,13 @@ test('時間線的紀錄行：提問和停止說得安靜；工作流失敗或�
   const short = { status: 'incomplete', incompleteReason: '驗收 2 次仍未達標', stages, log: [line('工作流未完成：驗收 2 次仍未達標。目標沒有達成，不算完成。', 'warn')] };
   assert.deepEqual(view(W.chatLines(zh, short, false, true)), [['工作流未完成', 'warn', '']]);
   assert.equal(W.chatLines(zh, short, false, false)[0].text, '工作流未完成：驗收 2 次仍未達標。目標沒有達成，不算完成。');
+  // Round D: the record's lines as core writes them now (「工作流未完成：…。」, 「工作流已停止」) are read the same way as the
+  // older ones above, which records on disk still have.
+  const now = { status: 'incomplete', incompleteReason: '驗收 2 次仍未達成。原因二', stages, log: [line('工作流已停止', 'warn'), line('工作流未完成：驗收 2 次仍未達成。原因二。', 'warn')] };
+  assert.deepEqual(view(W.chatLines(zh, now, false, true)), [
+    ['工作流已停止', 'warn', 'stopped'],
+    ['工作流未完成', 'warn', ''],
+  ]);
 });
 
 test('時間線的結果預覽與提交 JSON：去掉 Markdown 語法與長路徑，只留可讀的文字；提交的 JSON 認得出來', () => {
@@ -4058,13 +4066,13 @@ test('時間線：收合的一行列出指令本身，不是指令裡路徑的�
   // Reads and writes still name the files.
   assert.deepEqual(W.groupNames('read', ['src\\slug.js', 'test/slug.test.js']), ['slug.js', 'slug.test.js']);
   assert.deepEqual(W.groupNames('write', ['C:/p/src/a.ts']), ['a.ts']);
-  // The card's line counts the agent's edits only and says so (a file written by a terminal command is in the
-  // workflow's file list, not in the agent's count).
+  // The card's line counts the agent's edits only, in plain words (round D: 「改了 N 個檔案」; that it counts the edit
+  // tool only is said in the line's tooltip, and a file written by a terminal command is in the workflow's file list).
   const zh = (a) => a;
   const run = { id: 'r', status: 'completed', config: { cwd: 'C:/p' }, agents: {}, stages: { plan: { rounds: [] }, implement: { rounds: [] }, verify: { rounds: [] } } };
   const a = { id: 'x', role: 'subagent', status: 'completed', stage: 'implement', round: 1, depth: 1, stats: { events: 1, tools: 2, commands: 1, filesChanged: ['C:/p/src/slug.js'] } };
   run.agents.x = a;
-  assert.ok(W.turnSummary(zh, run, a).includes('以編輯工具改了 1 個檔案'), W.turnSummary(zh, run, a).join(' | '));
+  assert.ok(W.turnSummary(zh, run, a).includes('改了 1 個檔案'), W.turnSummary(zh, run, a).join(' | '));
 });
 
 test('完成摘要：每項檢查一列，重跑與過期放在該列；legacy 範圍外只依使用者原話（slug 案例，0.3.0 候選版驗收）', () => {
@@ -4308,7 +4316,7 @@ test('活動紀錄的 Aivenue 工具標題：舊工具在程式碼模式也不�
   assert.ok(/^(回報進度|Report progress)$/.test(t('mcp__aivenue__report_progress', { code: 'x' })));
   // With arguments: as before.
   assert.ok(/: http:\/\/localhost:5173\/a-very-long-path$/.test(t('mcp__aivenue__capture_screenshot', { target: 'http://localhost:5173/a-very-long-path' })));
-  assert.ok(/: S1 → done$/.test(t('mcp__aivenue__report_progress', { step_id: 'S1', status: 'done' })));
+  assert.ok(/: S1 (改成|to) done$/.test(t('mcp__aivenue__report_progress', { step_id: 'S1', status: 'done' })));
   assert.ok(/: codex — fix the tests$/.test(t('mcp__aivenue__spawn_subagent', { provider: 'codex', task: 'fix the tests' })));
 });
 
@@ -4710,11 +4718,11 @@ test('複製審查報告：結論、受審範圍、摘要（表格、清單、�
       '- **D1** 在做法 A、B 之間選一個',
       '  選擇：A',
       '  理由：B 會遺失',
-      '  前提（不成立時結論可能改變）：',
+      '  前提，不成立時結論可能改變：',
       '  - 一個檔案只有一個寫入者',
       '  - 斷電不在範圍',
       '',
-      '這是審查者的建議；要不要照做、是否合併，仍由你決定。',
+      '這是審查者的建議，要不要照做、是否合併，仍由你決定。',
       '',
       '### 查過',
       '- 跑了 test.js',
@@ -4722,7 +4730,7 @@ test('複製審查報告：結論、受審範圍、摘要（表格、清單、�
       '### 沒查過',
       '- Linux',
       '',
-      '### 採信（未重跑）',
+      '### 直接採信，未重跑',
       '- 材料說測試通過',
       '',
     ].join('\n'),
@@ -4734,7 +4742,7 @@ test('複製審查報告：結論、受審範圍、摘要（表格、清單、�
   // The working folder, an incomplete report, English.
   const en = (_z, e) => e;
   const other = W.reviewMarkdown(en, { verdict: 'approve', summary: 'ok', issues: [], incomplete: ['what was checked is not listed'] }, { files: [], scratch: '' });
-  assert.match(other, /^## Review report: Incomplete report, not a result\n\nReviewed: The working folder as it is\n\n### Incomplete \(still so after two refusals\)\n- what was checked is not listed\n\nok\n$/);
+  assert.match(other, /^## Review report: Incomplete report, not a result\n\nReviewed: The working folder as it is\n\n### Incomplete, still so after two refusals\n- what was checked is not listed\n\nok\n$/);
   // A code block's copy is its body only: no fence, no language, indentation kept.
   const code = W.parseMarkdown('說明\n\n```js\nconst a = 1;\n  b();\n```\n\n- 項目\n\n  ```\n  巢狀\n  ```').filter((b) => b.t === 'code' || b.t === 'list');
   assert.equal(code[0].v, 'const a = 1;\n  b();');

@@ -51,10 +51,10 @@ export function CatalogPicker({ onDone }: { onDone: () => void }) {
   };
 
   const tabs: { id: Kind; label: string; hint: string }[] = [
-    { id: 'plan', label: t('訂閱方案', 'Subscription plans'), hint: t('Coding Plan / Token Plan 等月費方案（如 Kimi、阿里 Qwen、GLM、MiniMax、火山方舟）', 'Monthly coding / token plans (Kimi, Alibaba Qwen, GLM, MiniMax, Volcengine…)') },
+    { id: 'plan', label: t('訂閱方案', 'Subscription plans'), hint: t('Coding Plan、Token Plan 等月費方案，例如 Kimi、阿里 Qwen、GLM、MiniMax、火山方舟', 'Monthly coding / token plans (Kimi, Alibaba Qwen, GLM, MiniMax, Volcengine…)') },
     { id: 'api', label: t('按量 API', 'Pay-as-you-go API'), hint: t('一般 API 金鑰，依用量計費', 'Regular API keys billed by usage') },
     { id: 'local', label: t('本機', 'Local'), hint: t('在這台電腦執行的模型伺服器', 'Model servers running on this machine') },
-    { id: 'custom', label: t('自訂端點', 'Custom endpoint'), hint: t('任何 OpenAI 相容的 API（例如 Ollama、vLLM、公司內部閘道）', 'Any OpenAI-compatible API (Ollama, vLLM, company gateway…)') },
+    { id: 'custom', label: t('自訂端點', 'Custom endpoint'), hint: t('任何 OpenAI 相容的 API，例如 Ollama、vLLM、公司內部閘道', 'Any OpenAI-compatible API (Ollama, vLLM, company gateway…)') },
   ];
 
   return (
@@ -126,7 +126,7 @@ export function CatalogPicker({ onDone }: { onDone: () => void }) {
                 {sel.api && <div className="muted tiny mono">{sel.api}</div>}
                 {sel.doc && (
                   <button className="link link-icon" onClick={() => hub.call('host.openExternal', { url: sel.doc })}>
-                    <Ico i={ExternalLink} size={14} /> {t('取得金鑰／說明文件', 'Get a key / docs')}
+                    <Ico i={ExternalLink} size={14} /> {t('取得金鑰／文件', 'Get a key / docs')}
                   </button>
                 )}
                 <div className="field">

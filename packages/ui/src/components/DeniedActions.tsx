@@ -10,7 +10,7 @@ import { Fold } from './Kit';
 
 const KIND: Record<string, [string, string]> = {
   push: ['推送', 'Push'],
-  pull_request: ['開 Pull Request', 'Open a pull request'],
+  pull_request: ['開 PR', 'Open a pull request'],
   merge: ['合併', 'Merge'],
   comment: ['留言', 'Comment'],
   issue: ['Issue', 'Issue'],
@@ -68,7 +68,7 @@ export function DeniedActions({ run, providers }: { run: WorkflowRun; providers:
           <div key={d.id} className="denied-item">
             <div className="denied-main">
               <div>
-                <b>{t(kind[0], kind[1])}</b> → <span className="mono">{d.target}</span>
+                <b>{t(kind[0], kind[1])}</b>{t('：', ': ')}<span className="mono">{d.target}</span>
               </div>
               <div className="muted small">
                 {agent ? providerName(providers, agent.provider) : ''}

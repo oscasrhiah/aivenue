@@ -43,15 +43,15 @@ export function useOpensDown(open: boolean, menu: RefObject<HTMLElement | null>,
 }
 
 export const permissionLabel = (t: T, p: PermissionLevel) =>
-  ({ plan: t('Plan 唯讀', 'Plan (read-only)'), ask: t('手動核准', 'Ask me'), edit: t('自動編輯', 'Auto-edit'), auto: t('完全 Auto', 'Full auto'), full: t('完整電腦存取', 'Whole computer') })[p];
+  ({ plan: t('唯讀規劃', 'Plan (read-only)'), ask: t('手動核准', 'Ask me'), edit: t('自動編輯', 'Auto-edit'), auto: t('全自動', 'Full auto'), full: t('完整電腦存取', 'Whole computer') })[p];
 
 const permissionHint = (t: T, p: PermissionLevel) =>
   ({
     plan: t('只能讀檔與規劃，不改檔、不執行有副作用的指令。', 'Read and plan only: no file changes, no side-effect commands.'),
     ask: t('每次改檔或執行指令都會在這裡詢問你。', 'Every file change or command asks you here first.'),
-    edit: t('自動允許工作資料夾內的編輯；執行指令依各家沙箱限制或被擋下。', 'Edits in the working folder are auto-approved; commands are sandboxed or blocked per provider.'),
-    auto: t('全部自動核准。Codex 只能寫入工作資料夾；其他 CLI 的工具與指令仍可能改到資料夾外的檔案。建議搭配隔離模式。', "Everything auto-approved. Codex can only write in the working folder; other CLIs' tools and commands may still change files outside it. Pair it with isolation."),
-    full: t('AI 可以讀寫整台電腦的檔案、執行任何指令（拿掉 Codex 的沙箱）。只對這段對話有效，對外動作仍要你核准。', "The AI may read and change files anywhere on this computer and run any command (Codex's sandbox is removed). This conversation only; outside actions still need your OK."),
+    edit: t('自動允許工作資料夾內的編輯，執行指令依各家沙箱限制或被擋下。', 'Edits in the working folder are auto-approved; commands are sandboxed or blocked per provider.'),
+    auto: t('全部自動核准。Codex 只能寫入工作資料夾，其他 CLI 的工具與指令仍可能改到資料夾外的檔案，建議搭配隔離模式。', "Everything auto-approved. Codex can only write in the working folder; other CLIs' tools and commands may still change files outside it. Pair it with isolation."),
+    full: t('AI 可以讀寫整台電腦的檔案、執行任何指令，Codex 的沙箱也會拿掉。只對這段對話有效，對外動作仍要你核准。', "The AI may read and change files anywhere on this computer and run any command (Codex's sandbox is removed). This conversation only; outside actions still need your OK."),
   })[p];
 
 /**
@@ -92,11 +92,11 @@ export function FullAccessConfirm({ onConfirm, onCancel }: { onConfirm: () => vo
         <p>{t('這段對話中的 AI 將可以：', 'In this conversation the AI will be able to:')}</p>
         <ul>
           <li>{t('讀取、修改、刪除電腦上任何檔案，不只工作資料夾', 'read, change and delete any file on this computer, not just the working folder')}</li>
-          <li>{t('執行任何指令與程式（Codex 的沙箱也會拿掉）', 'run any command or program (Codex’s sandbox is removed too)')}</li>
+          <li>{t('執行任何指令與程式，Codex 的沙箱也會拿掉', 'run any command or program (Codex’s sandbox is removed too)')}</li>
         </ul>
         <p className="muted small">
           {t(
-            '仍然有效：規劃者、審查者、顧問維持唯讀；推送、PR、發布等對外動作要你核准；AI 被要求不碰登入憑證與系統設定、外部改動要列在回報中。這些要求是規則，不是技術上的鎖；隔離模式也只保護工作資料夾。只對這段對話有效，新對話會回到完全 Auto。',
+            '仍然有效：計畫者、審查者、顧問維持唯讀；推送、PR、發布等對外動作要你核准；AI 被要求不碰登入憑證與系統設定、外部改動要列在回報中。這些要求是規則，不是技術上的鎖；隔離模式也只保護工作資料夾。只對這段對話有效，新對話會回到全自動。',
             'Still in place: planners, reviewers and advisors stay read-only; pushes, PRs, releases and other outside actions need your OK; the AI is told not to touch credentials or system settings and to list outside changes in its report. Those are rules, not locks, and isolation only protects the working folder. This conversation only; new conversations go back to Full auto.',
           )}
         </p>
@@ -142,7 +142,7 @@ export function OutsideChanges({ run }: { run: WorkflowRun }) {
     <div className="decision outside-changes">
       <div className="decision-q">
         <Ico i={FolderOpen} /> {t(`工作資料夾外有 ${files.length} 筆寫檔工具紀錄`, `${files.length} file-tool write(s) outside the working folder`)}
-        {groups.length > 1 && <span className="muted small">{t(`（${groups.length} 個資料夾）`, ` (${groups.length} folders)`)}</span>}
+        {groups.length > 1 && <span className="muted small">{t(`，${groups.length} 個資料夾`, `, ${groups.length} folders`)}</span>}
       </div>
       <div className="outside-groups">
         {groups.map((g) => (
@@ -164,7 +164,7 @@ export function OutsideChanges({ run }: { run: WorkflowRun }) {
         ))}
       </div>
       <div className="muted tiny">
-        {t('由 agent 的寫檔工具記錄；用指令（shell）改的檔案不一定列得出來。', 'Recorded from the agents’ file tools; files changed through shell commands may be missing.')}
+        {t('由 agent 的寫檔工具記錄，用終端指令改的檔案不一定列得出來。', 'Recorded from the agents’ file tools; files changed through shell commands may be missing.')}
       </div>
     </div>
   );
@@ -245,7 +245,7 @@ export function PermissionButton({ permission, isolation, onChange, onOpen }: { 
             <Ico i={GitBranch} size={16} className="perm-item-icon" />
             <span>
               <span className="perm-item-title">{t('隔離模式', 'Isolation')}</span>
-              <span className="perm-item-hint">{t('在 git worktree 副本中工作', 'Work in a git worktree copy')}</span>
+              <span className="perm-item-hint">{t('在隔離副本中工作', 'Work in an isolated copy')}</span>
             </span>
             <Ico i={isolation ? SquareCheck : Square} size={16} className="perm-iso-box" />
           </button>
@@ -299,8 +299,8 @@ export function SafetySection({ permission, isolation, providers, roleProviders,
       <label className="check iso-check">
         <input type="checkbox" disabled={disabled || isolationLocked} checked={isolation} onChange={(e) => onChange({ isolation: e.target.checked })} />
         <span>
-          {t('隔離模式：在獨立的 git worktree 副本中工作，完成後再決定是否套用', 'Isolation: work in a separate git worktree and decide afterwards whether to apply')}
-          <span className="muted small"> · {t('需要 git 專案', 'needs a git repo')}</span>
+          {t('隔離模式', 'Isolation')}
+          <span className="muted small" title={t('隔離副本是 git worktree，需要 git 專案。', 'The isolated copy is a git worktree; it needs a git repo.')}> {t('在隔離副本中工作，完成後再決定是否套用，需要 git 專案', 'work in an isolated copy and decide afterwards whether to apply; needs a git repo')}</span>
         </span>
       </label>
     </section>

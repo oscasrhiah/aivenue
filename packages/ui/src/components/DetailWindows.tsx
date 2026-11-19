@@ -109,14 +109,14 @@ export function AgentWindow({ run, agentId, providers, onClose }: { run: Workflo
       </Row>
       <Row label={t('模型', 'Model')}>
         {a.model ? modelLabel(a.model) : t('預設模型', 'default model')}
-        {a.effort ? ` · ${t('推理', 'effort')} ${a.effort}` : ''}
+        {a.effort ? ` · ${t('推理強度', 'effort')} ${a.effort}` : ''}
       </Row>
       <Row label={t('任務', 'Task')}>{a.task}</Row>
       {(a.waiting || a.activity) && <Row label={t('現在', 'Now')}>{a.waiting ?? a.activity?.replace(/^\S+\s/, '')}</Row>}
       {a.failure && <Row label={t('狀況', 'Issue')}>{a.failure.action}</Row>}
       <Row label={t('統計', 'Stats')}>
         <span className="num">
-          {a.stats.tools} {t('個動作', 'actions')} · {a.stats.commands} {t('個指令', 'commands')} · {a.stats.filesChanged.length} {t('個檔案', 'files')}
+          {t(`${a.stats.tools} 個動作、${a.stats.commands} 個指令、${a.stats.filesChanged.length} 個檔案`, `${a.stats.tools} actions, ${a.stats.commands} commands, ${a.stats.filesChanged.length} files`)}
         </span>
       </Row>
       <h4 className="dw-heading">{t('最近的步驟', 'Latest steps')}</h4>
@@ -218,7 +218,8 @@ export function ProcessWindow({ run, pid, providers, onClose, workflowId }: { ru
             </Row>
           )}
           <Row label={t('負責', 'Owner')}>
-            {owner ? `${providerName(providers, owner.provider)} · ${roleLabel(t, owner.role)}` : '—'} ·{' '}
+            {owner ? `${providerName(providers, owner.provider)} · ${roleLabel(t, owner.role)}` : '—'}
+            {t('，', ', ')}
             {{ aivenue: t('工作流結束時由 Aivenue 停止', 'Aivenue stops it when the workflow ends'), agent: t('由啟動它的 agent 停止', 'the agent that started it stops it'), keep: t('保留執行', 'keeps running') }[d.cleanup]}
           </Row>
           {d.watchFile && <Row label={t('輸出', 'Output')}><span className="mono small">{d.watchFile}</span></Row>}

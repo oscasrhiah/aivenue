@@ -26,9 +26,9 @@ const GUIDES: Record<ExtensionId, Guide> = {
       ['不會偷懶的地方：信任邊界的驗證、防止資料遺失的錯誤處理、安全、無障礙，以及你明確要求的東西。回覆最後會用一兩行說明略過了什麼、還有什麼風險。', 'Never cut: validation at trust boundaries, error handling that prevents data loss, security, accessibility and anything you asked for. Each reply ends with a line or two on what was skipped and any risk.'],
       ['強度：lite 照要求做，只用一句話提出更小的做法；full（預設）最小但完整的改動；ultra 動手前還會質疑需求裡沒必要的部分。', 'Levels: lite builds what was asked and names the smaller option in one line; full (default) makes the smallest complete change; ultra also pushes back on parts of the request the need does not justify.'],
     ],
-    itemsTitle: ['包含的技能', 'Skills'],
+    itemsTitle: ['包含的 Skill', 'Skills'],
     items: [
-      { name: 'ponytail', note: ['撰寫計畫、審查計畫、實作、sub agent：一直生效', 'planner, plan reviewer, implementer, sub-agents: always on'], text: ['主技能：最小但完整的改動，以及一讀就懂的回覆。', 'The main skill: the smallest complete change, and a reply you understand in one read.'] },
+      { name: 'ponytail', note: ['撰寫計畫、審查計畫、實作、子 agent：一直生效', 'planner, plan reviewer, implementer, sub-agents: always on'], text: ['主 Skill：最小但完整的改動，以及一讀就懂的回覆。', 'The main skill: the smallest complete change, and a reply you understand in one read.'] },
       { name: 'ponytail-review', note: ['審查程式碼：一直生效', 'code reviewer: always on'], text: ['審查改動：邏輯對不對、安全嗎、負載撐不撐得住、有風險的地方有沒有測試、夠不夠快，以及每一行是否必要。', 'Reviews a change: is the logic right, is it safe, does it hold under load, is risky code tested, is it fast enough, is every line needed.'] },
       { name: 'ponytail-audit', text: ['整個專案的品質稽核報告：bug、安全漏洞、負載問題、沒有測試的風險、可以刪除或合併的程式碼。只產生報告，不改檔案。', 'A quality audit of the whole repo: bugs, security holes, load problems, untested risk, code to delete or merge. A report only; changes nothing.'] },
       { name: 'ponytail-debt', text: ['列出所有 `shortcut:` 註解（刻意的簡化與日後要升級的地方），整理成技術債清單。只產生報告，不改檔案。', 'Lists every `shortcut:` comment (deliberate simplifications and when to upgrade them) as a debt ledger. A report only; changes nothing.'] },
@@ -37,10 +37,10 @@ const GUIDES: Record<ExtensionId, Guide> = {
   'agent-skills': {
     title: 'Agent Skills',
     intro: [
-      ['Addy Osmani（Google Chrome 工程主管）整理的工程技能，涵蓋從規格、計畫、實作、測試、審查到上線的整個開發流程。每個技能都是一份步驟清單與檢查表。', 'Engineering skills collected by Addy Osmani (engineering lead on Google Chrome), covering the whole flow from spec and plan to implementation, testing, review and launch. Each skill is a checklist of steps.'],
-      ['Aivenue 依角色提供：例如規劃者拿到「計畫拆解」，審查者拿到「程式碼審查」。agent 平常只看到技能名稱與一句說明，判斷用得到時才讀全文。每個技能都能在卡片裡單獨開關。', 'Aivenue offers them per role, e.g. the planner gets task breakdown and the reviewer gets code review. Agents only see each name and one-line description and read the full skill when it applies. Each skill can be turned off on its own in the card.'],
+      ['Addy Osmani（Google Chrome 工程主管）整理的工程 Skill，涵蓋從規格、計畫、實作、測試、審查到上線的整個開發流程。每個 Skill 都是一份步驟清單與檢查表。', 'Engineering skills collected by Addy Osmani (engineering lead on Google Chrome), covering the whole flow from spec and plan to implementation, testing, review and launch. Each skill is a checklist of steps.'],
+      ['Aivenue 依角色提供：例如計畫者拿到「計畫拆解」，審查者拿到「程式碼審查」。agent 平常只看到 Skill 名稱與一句說明，判斷用得到時才讀全文。每個 Skill 都能在卡片裡單獨開關。', 'Aivenue offers them per role, e.g. the planner gets task breakdown and the reviewer gets code review. Agents only see each name and one-line description and read the full skill when it applies. Each skill can be turned off on its own in the card.'],
     ],
-    itemsTitle: ['25 個技能', 'The 25 skills'],
+    itemsTitle: ['25 個 Skill', 'The 25 skills'],
     items: [
       { name: 'api-and-interface-design', text: ['設計穩定的 API 與模組介面（REST、GraphQL、型別、模組邊界），避免日後的破壞性變更。', 'Stable API and interface design (REST, GraphQL, types, module boundaries) that avoids breaking changes later.'] },
       { name: 'browser-testing-with-devtools', text: ['用 Chrome DevTools MCP 在真的瀏覽器裡測試：檢查 DOM、console 錯誤、網路請求與效能。', 'Tests in a real browser through Chrome DevTools MCP: the DOM, console errors, network requests and performance.'] },
@@ -66,7 +66,7 @@ const GUIDES: Record<ExtensionId, Guide> = {
       { name: 'source-driven-development', text: ['每個實作決定都先對照官方文件確認，不憑印象寫。', 'Checks every implementation decision against the official docs instead of memory.'] },
       { name: 'spec-driven-development', text: ['動手寫程式前先寫規格（PRD、需求），適合新專案或大型改動。', 'Writes a spec (PRD, requirements) before coding; for new projects or big changes.'] },
       { name: 'test-driven-development', text: ['紅、綠、重構的測試驅動開發：先寫會失敗的測試，再寫讓它通過的程式。', 'Red-green-refactor: write a failing test first, then the code that makes it pass.'] },
-      { name: 'using-agent-skills', note: OFF, text: ['教 agent 怎麼挑選與使用這些技能。Aivenue 已會自動列出技能，所以不需要。', 'Teaches an agent how to pick and use these skills. Aivenue already lists the skills, so it is not needed.'] },
+      { name: 'using-agent-skills', note: OFF, text: ['教 agent 怎麼挑選與使用這些 Skill。Aivenue 已會自動列出 Skill，所以不需要。', 'Teaches an agent how to pick and use these skills. Aivenue already lists the skills, so it is not needed.'] },
     ],
   },
   graphify: {
@@ -84,24 +84,24 @@ const GUIDES: Record<ExtensionId, Guide> = {
     ],
     notes: [
       ['資料夾裡已經有 graphify-out/ 時，每個 agent 會先查圖再讀檔；還沒有的話，可寫入檔案的 agent 會在需要時自己建立。', 'When the folder already has graphify-out/, every agent queries it before reading files; otherwise an agent that may write files builds it when it helps.'],
-      ['文件、圖片、影片的語意分析需要模型（graphify 技能會說明），單純的程式碼圖譜不需要。', 'Meaning extraction from docs, images and video needs a model (the graphify skill explains how); the plain code graph does not.'],
+      ['文件、圖片、影片的語意分析需要模型（graphify Skill 會說明），單純的程式碼圖譜不需要。', 'Meaning extraction from docs, images and video needs a model (the graphify skill explains how); the plain code graph does not.'],
     ],
   },
   omniroute: {
     title: 'OmniRoute',
     intro: [
       ['在你電腦上執行的 AI 閘道，一個網址接上數百家模型供應商。最特別的是 auto/… 這類「自動組合」：例如 auto/best-free 會從你連接的供應商裡挑現在能用的免費模型，某家額度用完或出錯就自動換下一家。', 'An AI gateway running on your computer: one URL for hundreds of model providers. Its "auto" pools stand out: auto/best-free picks a free model that works right now from the providers you connected, and moves to the next one when a quota runs out or a call fails.'],
-      ['Aivenue 會自動安裝並在背景啟動它（只在 127.0.0.1，外部連不到），再把它變成一家供應商「OmniRoute」：模型清單、上下文上限、推理強度（支援推理的模型有 low／medium／high）都從 OmniRoute 讀取；agent 跑完後會顯示實際回答的是哪個模型。', 'Aivenue installs it and runs it in the background (127.0.0.1 only, unreachable from outside), then adds it as a provider named "OmniRoute": its model list, context limits and reasoning effort (low/medium/high for reasoning models) come from OmniRoute, and after each agent Aivenue shows which model actually answered.'],
+      ['Aivenue 會自動安裝並在背景啟動它（只在 127.0.0.1，外部連不到），再把它變成一家供應商「OmniRoute」：模型清單、上下文上限、推理強度（可調的模型有 low／medium／high）都從 OmniRoute 讀取；agent 跑完後會顯示實際回答的是哪個模型。', 'Aivenue installs it and runs it in the background (127.0.0.1 only, unreachable from outside), then adds it as a provider named "OmniRoute": its model list, context limits and reasoning effort (low/medium/high for reasoning models) come from OmniRoute, and after each agent Aivenue shows which model actually answered.'],
     ],
     itemsTitle: ['使用步驟', 'How to use it'],
     items: [
-      { name: '1', text: ['打開開關，等它下載完成（約 500 MB，第一次需要幾分鐘）。', 'Turn it on and wait for the download (about 500 MB, a few minutes the first time).'] },
+      { name: '1', text: ['開啟開關，等它下載完成（約 500 MB，第一次需要幾分鐘）。', 'Turn it on and wait for the download (about 500 MB, a few minutes the first time).'] },
       { name: '2', text: ['按「開啟 OmniRoute 管理頁」，用「複製管理密碼」登入。', 'Press "Open the OmniRoute dashboard" and sign in with "Copy dashboard password".'] },
       { name: '3', text: ['在管理頁用你自己的帳號連接免費供應商，例如 Gemini、Groq、OpenRouter。', 'Connect free providers with your own accounts in the dashboard, e.g. Gemini, Groq, OpenRouter.'] },
       { name: '4', text: ['回到 Aivenue 按「重新讀取」，就能在角色設定裡選 OmniRoute 的模型。', 'Back in Aivenue press Reload; OmniRoute models can then be picked in role settings.'] },
     ],
     notes: [
-      ['自動指派只會把它用在 sub agent 與共用上下文壓縮，撰寫者、審查者與顧問仍用你登入的付費模型。', 'Automatic assignment only uses it for sub-agents and shared-context compaction; authors, reviewers and the advisor stay on your signed-in paid models.'],
+      ['自動指派只會把它用在子 agent 與共用上下文壓縮，作者、審查者與顧問仍用你登入的付費模型。', 'Automatic assignment only uses it for sub-agents and shared-context compaction; authors, reviewers and the advisor stay on your signed-in paid models.'],
       ['免費模型的能力不一定，也可能無預警改變額度或下架。部分免費供應商會記錄送出的內容，私人或公司的程式碼請小心。', 'Free models vary in strength and may change limits or disappear without notice. Some free providers log what you send: be careful with private or company code.'],
     ],
   },

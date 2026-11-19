@@ -224,13 +224,13 @@ interface Session {
 
 const roleLabel = (r: AgentRole): string =>
   ({
-    planner: L('計畫撰寫', 'Planner'),
-    plan_reviewer: L('計畫審查', 'Plan reviewer'),
+    planner: L('撰寫計畫', 'Planner'),
+    plan_reviewer: L('審查計畫', 'Plan reviewer'),
     executor: L('實作', 'Implementer'),
-    code_reviewer: L('程式審查', 'Code reviewer'),
+    code_reviewer: L('審查程式碼', 'Code reviewer'),
     verifier: L('目標驗收', 'Goal verifier'),
     adjudicator: L('裁定', 'Adjudicator'),
-    subagent: 'Sub agent',
+    subagent: L('子 agent', 'Sub-agent'),
     advisor: L('顧問', 'Advisor'),
     compactor: L('上下文壓縮', 'Context compactor'),
     test: L('連線測試', 'Connectivity test'),
@@ -248,7 +248,7 @@ function activityOf(e: AgentEvent): string | undefined {
 
 const routeName = (to: RouteDecision['to']) => ({ done: L('完成', 'done'), implementer: L('交回實作者', 'back to the implementer'), planner: L('交回計畫者重新規劃', 'back to the planner'), adjudicate: L('交付裁定', 'to adjudication'), user: L('交給你', 'to you') })[to];
 
-const outcomeLabel = (o: Verification['outcome']) => ({ met: L('達標', 'met'), not_met: L('目標未達成', 'goal not met'), invalid_evidence: L('證據無效', 'invalid evidence'), defect: L('有缺陷', 'defects') })[o];
+const outcomeLabel = (o: Verification['outcome']) => ({ met: L('目標達成', 'goal met'), not_met: L('目標未達成', 'goal not met'), invalid_evidence: L('證據無效', 'invalid evidence'), defect: L('有缺陷', 'defects') })[o];
 
 /** Limits the user may leave empty: 0 means none; not set yet means the old default. */
 const roundLimitOf = (n: number | undefined) => (n === 0 ? 0 : Math.max(1, n ?? 3));
@@ -307,7 +307,7 @@ function externalLabel(input: unknown): { name: string; title: string } {
   const i = (input ?? {}) as { command?: string; target?: string };
   const kinds: Record<string, [string, string]> = {
     push: ['推送', 'Push'],
-    pull_request: ['開 Pull Request', 'Open a pull request'],
+    pull_request: ['開 PR', 'Open a pull request'],
     merge: ['合併', 'Merge'],
     comment: ['留言', 'Comment'],
     issue: ['Issue', 'Issue'],
@@ -315,7 +315,7 @@ function externalLabel(input: unknown): { name: string; title: string } {
     deploy: ['部署', 'Deploy'],
   };
   const k = kinds[i.command ?? ''] ?? ['對外動作', 'External action'];
-  return { name: L('對外動作', 'External action'), title: `${L(k[0], k[1])} → ${i.target ?? ''}` };
+  return { name: L('對外動作', 'External action'), title: `${L(k[0], k[1])}：${i.target ?? ''}` };
 }
 
 /** Model and effort names an agent may pick for a sub-agent: they end up on a command line. */
@@ -1250,7 +1250,7 @@ export class Orchestrator {
           ),
           [
             ...this.switchOptions(info.provider).map((o) => ({ ...o, label: L(`換成 ${this.providerName(o.id.slice(7))} 繼續`, `Go on with ${this.providerName(o.id.slice(7))}`) })),
-            { id: 'raise', label: L(`調整上限（目前 ${hit.cap}%）`, `Change the cap (now ${hit.cap}%)`), input: { min: 1, max: 100, value: example, suffix: '%' } },
+            { id: 'raise', label: L(`調整上限，目前 ${hit.cap}%`, `Change the cap, now ${hit.cap}%`), input: { min: 1, max: 100, value: example, suffix: '%' } },
             { id: 'retry', label: L('重新查詢額度後繼續', 'Check the quota again and go on') },
             { id: 'abort', label: L('結束工作流', 'End the workflow') },
           ],
@@ -1314,7 +1314,7 @@ export class Orchestrator {
       const options = q.options.map((label, i) => ({ id: `answer:${i}`, label }));
       // Always a way to answer otherwise: none of the listed answers fits, or there were none.
       const own = { id: 'answer', label: options.length ? L('其他（自己寫）', 'Other (write your own)') : L('寫下你的回答', 'Write your answer') };
-      const dec = await this.ask(run, info.stage ?? 'run', L(`${who} 問你：${q.question}`, `${who} asks: ${q.question}`), [...options, own, { id: 'abort', label: L('中止工作流', 'Stop the workflow') }], true, true);
+      const dec = await this.ask(run, info.stage ?? 'run', L(`${who} 問你：${q.question}`, `${who} asks: ${q.question}`), [...options, own, { id: 'abort', label: L('停止工作流', 'Stop the workflow') }], true, true);
       if (dec.optionId === 'abort') throw new Cancelled();
       const picked = options.find((o) => o.id === dec.optionId)?.label;
       // Said so the agent can tell a listed answer with a condition from an answer of the user's own.
@@ -1468,7 +1468,7 @@ export class Orchestrator {
     if (!goal.trim()) throw new Error(L('請填寫任務內容', 'Please describe the task'));
     if (old.status === 'running' || old.status === 'paused' || old.status === 'waiting_human') {
       this.cancel(id);
-      this.log(old, L('你編輯了這則訊息，已中止這次的工作流', 'You edited this message; this workflow was stopped'), 'warn', true);
+      this.log(old, L('你編輯了這則訊息，已停止這次的工作流', 'You edited this message; this workflow was stopped'), 'warn', true);
       await Promise.race([this.executions.get(id), sleep(15000)]);
     }
     const base = config ?? old.config;
@@ -1535,7 +1535,7 @@ export class Orchestrator {
     this.log(
       run,
       restart
-        ? L('你調整了設定並立即套用：受影響的 agent 停下後用新設定重新派發', 'You changed the settings and applied them now: affected agents stop and are re-dispatched with them')
+        ? L('你調整了設定並立即重新派發，受影響的 agent 會用新設定重來', 'You changed the settings and re-dispatched now: affected agents start again with them')
         : L('你調整了這段對話的設定（套用到接下來開始的 agent）', 'You changed this conversation\'s settings (applies to agents started from now on)'),
     );
     this.touch(run);
@@ -1680,7 +1680,7 @@ export class Orchestrator {
       ? { provider: provider!, model: pinned?.model || this.d.registry.defaults(provider!).model, effort: pinned?.effort || this.d.registry.defaults(provider!).effort }
       : { provider: a.provider, model: a.model, effort: a.effort };
     const child = this.launchChild(run, parent, { ...target, task: spec.task, mode: spec.mode, rerunOf: a.id, title: a.title });
-    if (moved) this.log(run, L(`你把 sub agent「${a.title ?? a.task.slice(0, 40)}」改由 ${this.providerName(provider!)} 重跑`, `You moved sub-agent "${a.title ?? a.task.slice(0, 40)}" to ${this.providerName(provider!)}`), 'info', true);
+    if (moved) this.log(run, L(`你把子 agent「${a.title ?? a.task.slice(0, 40)}」改由 ${this.providerName(provider!)} 重跑`, `You moved sub-agent "${a.title ?? a.task.slice(0, 40)}" to ${this.providerName(provider!)}`), 'info', true);
     this.notifyParent(run, child, `the user re-ran sub-agent ${a.id}${moved ? ` on another provider (${provider})` : ''} as ${child.id}; collect it with wait_subagent {subagent_id: "${child.id}"} (ignore ${a.id}).`);
     return child.id;
   }
@@ -1759,8 +1759,8 @@ export class Orchestrator {
     // providers, models, efforts
     const roles: [string, RoleConfig | null | undefined][] = [];
     if (config.review) roles.push([L('獨立審查', 'Independent reviewer'), config.implement.reviewer ?? config.implement.author]);
-    else if (config.plan.enabled) roles.push([L('計畫撰寫', 'Planner'), config.plan.author], [L('計畫審查', 'Plan reviewer'), config.plan.reviewer]);
-    if (config.implement.enabled && !config.review) roles.push([L('實作', 'Implementer'), config.implement.author], [L('程式審查', 'Code reviewer'), config.implement.reviewer]);
+    else if (config.plan.enabled) roles.push([L('撰寫計畫', 'Planner'), config.plan.author], [L('審查計畫', 'Plan reviewer'), config.plan.reviewer]);
+    if (config.implement.enabled && !config.review) roles.push([L('實作', 'Implementer'), config.implement.author], [L('審查程式碼', 'Code reviewer'), config.implement.reviewer]);
     if (config.verify?.enabled && !config.review) roles.push([L('目標驗收', 'Goal verifier'), config.verify.by === 'planner' ? (config.plan.enabled ? config.plan.author : config.implement.author) : config.verify.verifier]);
     if (config.advisor?.mode === 'cross' && config.advisor.provider) roles.push([L('顧問', 'Advisor'), { provider: config.advisor.provider, model: config.advisor.model }]);
     // Right after Aivenue starts, every provider's sign-in check is still running: wait for it (or run one that never
@@ -1785,13 +1785,13 @@ export class Orchestrator {
       const models = await this.d.registry.listModels(role.provider).catch(() => [] as ModelInfo[]);
       const m = models.find((x) => x.id === model || x.id.endsWith(`/${model}`));
       if (models.length && !m) add('warn', 'model', L(`${label}：${p.spec.name} 的模型清單裡沒有「${model}」`, `${label}: "${model}" is not in ${p.spec.name}'s model list`));
-      else if (m?.tools === false) add('warn', 'model', L(`${label}：模型 ${model} 不支援工具呼叫，Aivenue 的工具（交結果、sub agent、等待條件…）都不能用，只能用文字格式交結果`, `${label}: model ${model} cannot call tools, so Aivenue's tools (submitting, sub-agents, waits…) do not work; it can only answer in text`));
-      else if (m?.reasoning === false && effort) add('warn', 'model', L(`${label}：模型 ${model} 不會思考，思考程度「${effort}」不會有作用`, `${label}: model ${model} does not think, so effort "${effort}" has no effect`));
-      else if (m && effort && m.efforts?.length && !m.efforts.includes(effort)) add('warn', 'model', L(`${label}：模型 ${model} 不支援思考程度「${effort}」（支援：${m.efforts.join('、')}）`, `${label}: model ${model} does not take effort "${effort}" (it takes: ${m.efforts.join(', ')})`));
+      else if (m?.tools === false) add('warn', 'model', L(`${label}：模型 ${model} 不支援工具呼叫，Aivenue 的工具都不能用，例如交結果、子 agent、等待條件，只能用文字格式交結果`, `${label}: model ${model} cannot call tools, so Aivenue's tools (submitting, sub-agents, waits…) do not work; it can only answer in text`));
+      else if (m?.reasoning === false && effort) add('warn', 'model', L(`${label}：模型 ${model} 不會思考，推理強度「${effort}」不會有作用`, `${label}: model ${model} does not think, so effort "${effort}" has no effect`));
+      else if (m && effort && m.efforts?.length && !m.efforts.includes(effort)) add('warn', 'model', L(`${label}：模型 ${model} 不支援推理強度「${effort}」，支援：${m.efforts.join('、')}`, `${label}: model ${model} does not take effort "${effort}" (it takes: ${m.efforts.join(', ')})`));
     }
     if (config.verify?.enabled && !config.plan.enabled) add('warn', 'model', L('目標驗收已開啟但沒有計畫階段：驗收者會自己從任務推導驗收指標', 'Goal verification is on without a planning stage: the verifier derives the metrics from the task'));
     if (config.securityReview && (!config.implement.enabled || !config.implement.reviewer))
-      add('warn', 'model', L('安全檢查已開啟，但這次沒有程式審查者，所以不會執行：要啟用實作階段並設定程式審查者', 'The security check is on, but this workflow has no code reviewer, so it will not run: enable the implement stage with a code reviewer'));
+      add('warn', 'model', L('安全檢查已開啟，但這次沒有程式碼審查者，所以不會執行：要啟用實作階段並設定程式碼審查者', 'The security check is on, but this workflow has no code reviewer, so it will not run: enable the implement stage with a code reviewer'));
     else if (config.securityReview && !this.d.securityAudit?.()) add('warn', 'model', L('安全檢查已開啟，但這個版本沒有附 security-audit skill，所以不會執行', 'The security check is on, but this build does not ship the security-audit skill, so it will not run'));
     // tools
     const git = await capture('git', ['--version'], { timeoutMs: 10000 }).catch(() => undefined);
@@ -1824,8 +1824,8 @@ export class Orchestrator {
     this.d.store.saveNow(run);
     const back = this.d.store.loadAll().find((r) => r.id === run.id);
     (run.preflight ??= []).push(back ? { level: 'ok', area: 'recovery', message: L('存檔後可重新載入（中斷可恢復）', 'Saved and reloaded (an interruption can be recovered)') } : { level: 'error', area: 'recovery', message: L('存檔後無法重新載入', 'The run could not be reloaded after saving') });
-    const stages = run.config.review ? [L('獨立審查（不實作）', 'independent review (no implementation)')] : [run.config.plan.enabled && L('計畫 → 計畫審查', 'plan → plan review'), run.config.implement.enabled && L('實作 → 程式審查', 'implement → code review'), run.config.verify?.enabled && L(`目標驗收（${run.config.verify.by === 'planner' ? '計畫者' : '獨立驗收者'}）`, `goal verification (${run.config.verify.by === 'planner' ? 'planner' : 'independent'})`)].filter(Boolean);
-    this.log(run, L(`試跑：流程 ${stages.join(' → ')}`, `Dry run: ${stages.join(' → ')}`), 'info', true);
+    const stages = run.config.review ? [L('只做獨立審查，不實作', 'independent review only, no implementation')] : [run.config.plan.enabled && L('撰寫計畫、審查計畫', 'plan, plan review'), run.config.implement.enabled && L('實作、審查程式碼', 'implement, code review'), run.config.verify?.enabled && L(`目標驗收，由${run.config.verify.by === 'planner' ? '計畫者' : '獨立驗收者'}進行`, `goal verification by the ${run.config.verify.by === 'planner' ? 'planner' : 'independent verifier'}`)].filter(Boolean);
+    this.log(run, L(`試跑：流程依序是 ${stages.join('，再')}`, `Dry run, in order: ${stages.join('; then ')}`), 'info', true);
     if (run.config.verify?.enabled) {
       const m = [{ id: 'M1', value: '-', met: false, evidence: '-' }];
       const sims: [string, Verification][] = [
@@ -1834,7 +1834,7 @@ export class Orchestrator {
         ['invalid_evidence', { outcome: 'invalid_evidence', summary: '', metrics: m, issues: [{ id: 'V1', severity: 'major', title: 'x' }] }],
         ['not_met', { outcome: 'not_met', summary: '', metrics: m, issues: [] }],
       ];
-      for (const [name, v] of sims) this.log(run, L(`試跑：驗收結果「${outcomeLabel(v.outcome)}」→ ${routeName(routeVerification(v, []).to)}`, `Dry run: verification ${name} → ${routeName(routeVerification(v, []).to)}`), 'info', true);
+      for (const [name, v] of sims) this.log(run, L(`試跑：驗收結果「${outcomeLabel(v.outcome)}」時${routeName(routeVerification(v, []).to)}`, `Dry run: verification ${name} goes ${routeName(routeVerification(v, []).to)}`), 'info', true);
     }
     const errors = (run.preflight ?? []).filter((p) => p.level === 'error').length;
     run.status = errors ? 'failed' : 'completed';
@@ -2487,7 +2487,7 @@ export class Orchestrator {
         run.worktree = { path: wt.path, branch: wt.branch, baseCommit: wt.baseCommit, repo: wt.repo, origCwd: run.config.cwd, cwd: wt.cwd, state: 'active' };
         run.config.cwd = wt.cwd;
         this.gitStamps.set(run.id, gitStamp(wt.cwd));
-        this.log(run, L(`隔離模式：agent 在獨立的副本（分支 ${wt.branch}）中工作，完成後由你決定是否套用`, `Isolation: agents work in a separate copy (branch ${wt.branch}); you decide whether to apply it afterwards`), 'info', true);
+        this.log(run, L(`隔離模式：agent 在隔離副本中工作，分支 ${wt.branch}，完成後由你決定是否套用`, `Isolation: agents work in an isolated copy on branch ${wt.branch}; you decide whether to apply it afterwards`), 'info', true);
       } catch (e) {
         run.status = 'failed';
         run.error = (e as Error).message;
@@ -2533,7 +2533,7 @@ export class Orchestrator {
       const procs = (run.processes ?? []).filter((p) => p.alive).length;
       // The batches as the screen shows them (batches.ts): blocked when the latest attempt of one failed.
       const blocked = batchCounts(runBatches(Object.values(run.agents), (a) => a.title ?? a.task ?? '')).blocked;
-      const rest = [procs ? L(`背景程序 ${procs} 個仍在執行`, `${procs} background process(es) still running`) : '', blocked ? L(`${blocked} 個子代理批次最後一次嘗試失敗`, `${blocked} sub-agent batch(es) failed on their last attempt`) : ''].filter(Boolean).join(L('；', '; '));
+      const rest = [procs ? L(`背景程序 ${procs} 個仍在執行`, `${procs} background process(es) still running`) : '', blocked ? L(`${blocked} 個子 agent 批次最後一次嘗試失敗`, `${blocked} sub-agent batch(es) failed on their last attempt`) : ''].filter(Boolean).join(L('；', '; '));
       this.log(run, `${run.config.verify?.enabled ? L('本輪工作流完成 ✅ 目標驗收通過', 'This round of the workflow is complete ✅ goal verified') : L('本輪工作流完成 ✅', 'This round of the workflow is complete ✅')}${rest ? L(`（${rest}）`, ` (${rest})`) : ''}`, 'info', true);
     } catch (e) {
       const why = e instanceof Incomplete ? e.message : this.incompleteWhy.get(run.id);
@@ -2544,9 +2544,9 @@ export class Orchestrator {
       this.log(
         run,
         why
-          ? L(`工作流未完成：${why}。目標沒有達成，不算完成。`, `Workflow incomplete: ${why}. The goal was not met, so it is not done.`)
+          ? L(`工作流未完成：${why}。`, `Workflow incomplete: ${why}.`)
           : cancelled
-            ? L('工作流已取消', 'Workflow cancelled')
+            ? L('工作流已停止', 'Workflow stopped')
             : L(`工作流失敗：${(e as Error).message}`, `Workflow failed: ${(e as Error).message}`),
         cancelled || why ? 'warn' : 'error',
         true,
@@ -2704,7 +2704,7 @@ export class Orchestrator {
       const dec = await this.ask(run, 'verify', L(`驗收者（${this.providerName(r.info.provider)}）沒有交出驗收結果：${r.res.error ?? '未呼叫 submit_verification'}`, `The verifier (${this.providerName(r.info.provider)}) submitted no verification: ${r.res.error ?? 'submit_verification was not called'}`), [
         { id: 'retry', label: L('重新驗收', 'Verify again') },
         ...this.switchOptions(who.provider),
-        { id: 'incomplete', label: L('停止（標記為未完成）', 'Stop (mark incomplete)') },
+        { id: 'incomplete', label: L('停止並標為未完成', 'Stop, mark incomplete') },
       ]);
       if (dec.optionId === 'incomplete') throw new Incomplete(L('目標驗收沒有完成', 'goal verification did not finish'));
       if (dec.optionId.startsWith('switch:')) {
@@ -2723,7 +2723,11 @@ export class Orchestrator {
       run,
       route.to === 'done'
         ? L(`目標驗收通過 ✅ ${met}/${verification.metrics.length} 項指標達成`, `Goal verified ✅ ${met}/${verification.metrics.length} metrics met`)
-        : L(`目標驗收未通過（${met}/${verification.metrics.length} 項達成，${outcomeLabel(verification.outcome)}）→ ${routeName(route.to)}`, `Goal not verified (${met}/${verification.metrics.length} met, ${outcomeLabel(verification.outcome)}) → ${routeName(route.to)}`),
+        : // 「未通過」 already says the goal was not met: the outcome is named only when it is something else.
+          L(
+            `目標驗收未通過：${met}/${verification.metrics.length} 項達成，${verification.outcome === 'not_met' ? '' : `${outcomeLabel(verification.outcome)}，`}${routeName(route.to)}`,
+            `Goal not verified: ${met}/${verification.metrics.length} met, ${verification.outcome === 'not_met' ? '' : `${outcomeLabel(verification.outcome)}, `}${routeName(route.to)}`,
+          ),
       route.to === 'done' ? 'info' : 'warn',
       true,
     );
@@ -2795,9 +2799,9 @@ export class Orchestrator {
         [
           ...this.switchOptions('').filter((o) => !tried.includes(o.id.slice(7))),
           { id: 'retry', label: L('再試一次', 'Try again') },
-          { id: 'keep', label: L('維持審查者的意見（作者繼續修改）', "Keep the reviewer's view (the author keeps fixing)") },
-          { id: 'dismiss', label: L('駁回這些問題（作者的說法成立）', "Dismiss them (the author's case stands)") },
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'keep', label: L('維持審查者的意見，作者繼續修改', "Keep the reviewer's view; the author keeps fixing") },
+          { id: 'dismiss', label: L('駁回這些問題，作者的說法成立', "Dismiss them; the author's case stands") },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ],
       );
       if (dec.optionId === 'abort') throw new Cancelled();
@@ -2865,7 +2869,7 @@ export class Orchestrator {
         const dec = await this.ask(run, key, L(`${stageName}已進行 ${stage.rounds.length} 輪，審查仍未通過。要怎麼處理？`, `${stageName} has gone ${stage.rounds.length} rounds without approval. What next?`), [
           { id: 'more', label: L('再進行 2 輪', 'Allow 2 more rounds') },
           { id: 'accept', label: L('視為通過，繼續', 'Accept and continue') },
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ]);
         if (dec.optionId === 'abort') throw new Cancelled();
         if (dec.optionId === 'accept') break;
@@ -2880,7 +2884,7 @@ export class Orchestrator {
         const dec = await this.ask(run, key, L(`${stageName}已進行 ${stage.rounds.length} 輪，審查仍未通過${used}。要繼續嗎？（可以在下面寫給作者與審查者的指示）`, `${stageName} has gone ${stage.rounds.length} rounds without approval${used}. Go on? (You can write instructions for the author and the reviewer below.)`), [
           { id: 'more', label: L('再進行 10 輪', 'Go 10 more rounds') },
           { id: 'accept', label: L('視為通過，繼續', 'Accept and continue') },
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ]);
         if (dec.optionId === 'abort') throw new Cancelled();
         if (dec.optionId === 'accept') break;
@@ -2959,7 +2963,7 @@ export class Orchestrator {
         const dec = await this.ask(run, key, L(`${roleLabel(a.info.role)}（${this.providerName(a.info.provider)}）沒有產出結果：${a.res.error ?? '未知原因'}`, `${roleLabel(a.info.role)} (${this.providerName(a.info.provider)}) produced no result: ${a.res.error ?? 'unknown reason'}`), [
           { id: 'retry', label: L('重試', 'Retry') },
           ...this.switchOptions(cfg.author.provider),
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ]);
         if (dec.optionId === 'abort') throw new Cancelled();
         if (dec.optionId.startsWith('switch:')) {
@@ -3049,7 +3053,7 @@ export class Orchestrator {
           { id: 'retry', label: L('重新審查', 'Review again') },
           ...this.switchOptions(cfg.reviewer.provider),
           { id: 'accept', label: L('視為通過', 'Accept as approved') },
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ]);
         if (dec.optionId === 'abort') throw new Cancelled();
         if (dec.optionId === 'accept') {
@@ -3086,7 +3090,7 @@ export class Orchestrator {
       if (review!.verdict === 'approve') {
         this.log(run, L(`${stageName}審查通過 ✅`, `${stageName} approved ✅`), 'info', true);
         if (cfg.humanGate) {
-          const g = await this.gate(run, key, isPlan ? L('計畫審查通過，要開始實作嗎？', 'The plan was approved. Start implementing?') : L('程式審查通過，確認完成嗎？', 'The code review passed. Mark as done?'));
+          const g = await this.gate(run, key, isPlan ? L('計畫審查通過，要開始實作嗎？', 'The plan was approved. Start implementing?') : L('程式碼審查通過，確認完成嗎？', 'The code review passed. Mark as done?'));
           if (g.revise) {
             userFeedback = g.revise;
             pendingReview = undefined;
@@ -3112,7 +3116,7 @@ export class Orchestrator {
         const dec = await this.ask(run, key, L('連續兩輪審查提出相同的問題，迴圈可能卡住了。要怎麼處理？', 'The reviewer raised the same issues two rounds in a row; the loop may be stuck. What next?'), [
           { id: 'more', label: L('繼續修改', 'Keep revising') },
           { id: 'accept', label: L('視為通過', 'Accept as approved') },
-          { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+          { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
         ]);
         if (dec.optionId === 'abort') throw new Cancelled();
         if (dec.optionId === 'accept') break;
@@ -3161,7 +3165,7 @@ export class Orchestrator {
     if (t.note) this.log(run, t.note, 'warn', true);
     const apart = differsFromCommit(t);
     if (apart)
-      this.log(run, L(`工作資料夾和受審提交不同（${apart.zh}）：審查者用 git show／git diff 讀受審的程式碼，要執行時另外建立乾淨的工作樹，不切換這個資料夾；在這個資料夾執行的結果不算受審提交的驗證`, `The working folder differs from the reviewed commit (${apart.en}): the reviewer reads it with git show / git diff and runs it in a clean separate worktree, without switching this folder; what runs in this folder is not evidence about the commit`), 'warn', true);
+      this.log(run, L(`工作資料夾和受審提交不同（${apart.zh}）：審查者用 git show／git diff 讀受審的程式碼，要執行時另外建立一份乾淨的 git worktree，不切換這個資料夾；在這個資料夾執行的結果不算受審提交的驗證`, `The working folder differs from the reviewed commit (${apart.en}): the reviewer reads it with git show / git diff and runs it in a clean separate worktree, without switching this folder; what runs in this folder is not evidence about the commit`), 'warn', true);
     this.touch(run);
 
     const n = stage.rounds.length + 1;
@@ -3220,7 +3224,7 @@ export class Orchestrator {
       const dec = await this.ask(run, 'implement', L(`審查者（${this.providerName(r.info.provider)}）沒有提交審查報告：${r.res.error ?? '未呼叫 submit_review'}`, `The reviewer (${this.providerName(r.info.provider)}) submitted no report: ${r.res.error ?? 'submit_review was not called'}`), [
         { id: 'retry', label: L('重新審查', 'Review again') },
         ...this.switchOptions(reviewer.provider),
-        { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+        { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
       ]);
       if (dec.optionId === 'abort') throw new Cancelled();
       if (dec.optionId.startsWith('switch:')) {
@@ -3282,8 +3286,8 @@ export class Orchestrator {
   private async gate(run: WorkflowRun, key: StageKey, message: string): Promise<{ revise?: string }> {
     const dec = await this.ask(run, key, message, [
       { id: 'continue', label: key === 'plan' ? L('開始實作', 'Start implementing') : L('完成', 'Done') },
-      { id: 'revise', label: L('退回修改（請填寫意見）', 'Send back with feedback') },
-      { id: 'abort', label: L('中止工作流', 'Stop the workflow') },
+      { id: 'revise', label: L('退回修改並寫下意見', 'Send back with feedback') },
+      { id: 'abort', label: L('停止工作流', 'Stop the workflow') },
     ]);
     if (dec.optionId === 'abort') throw new Cancelled();
     if (dec.optionId === 'revise') return { revise: dec.text || 'Please improve it further.' };
@@ -3791,7 +3795,7 @@ export class Orchestrator {
       rerunOf: o.rerunOf,
     });
     this.subSpecs.set(child.id, { task: o.task, mode: o.mode });
-    this.log(run, L(`${this.label(parent)} 派出 sub agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
+    this.log(run, L(`${this.label(parent)} 派出子 agent：${this.providerName(o.provider)}`, `${this.label(parent)} spawned a sub-agent: ${this.providerName(o.provider)}`));
     // Started again for the same work (retry_of, or handed to another provider): it takes over that one's waits.
     if (o.rerunOf) this.adoptWaitedJobs(run, child, o.rerunOf);
     const prompt = P.subagentPrompt(run.config.cwd, o.task, roleLabel(parent.role), this.subBlock(run, child.depth));
@@ -4208,7 +4212,7 @@ export class Orchestrator {
     this.touch(run);
     const kept = this.keptVerbatim(run);
     const budget = run.config.context?.memoryTokens ?? MEMORY_TOKENS;
-    const task = L('更新共用記憶', 'Update the shared memory');
+    const task = L('更新共用上下文', 'Update the shared context');
     const listing = entries
       .filter((e) => e.status === 'active')
       .map((e) => `- ${e.id} v${e.version} [${e.section}] ${e.text} (sources: ${e.sources.join(', ')})${e.conflicts?.length ? ` [${e.conflicts.length} conflict(s) recorded]` : ''}`)
@@ -4223,7 +4227,7 @@ export class Orchestrator {
     if (!ops) {
       // An automatic run waits until there is clearly more before trying again.
       this.noGainAt.set(run.id, before);
-      this.log(run, L(`${label} 的回覆無法解析成條目操作：共用記憶與處理進度維持原狀，這批內容留到下一次`, `${label}'s reply could not be read as entry operations: the shared memory and its progress stay as they were; this batch waits for the next compaction`), 'warn', true);
+      this.log(run, L(`${label} 的回覆無法解析成條目操作：共用上下文與處理進度維持原狀，這批內容留到下一次`, `${label}'s reply could not be read as entry operations: the shared context and its progress stay as they were; this batch waits for the next compaction`), 'warn', true);
       return;
     }
     const cycle = (m?.cycle ?? 0) + 1;
@@ -4246,15 +4250,15 @@ export class Orchestrator {
     this.log(
       run,
       L(
-        `已更新共用記憶（第 ${cycle} 次，${label}）：新增 ${count('add')}、更新 ${count('update')}、取代 ${count('supersede')}、撤銷 ${count('retract')}、合併 ${count('merge')}；衝突 ${applied.conflicted.length + count('conflict')}、拒絕 ${applied.rejected.length}；${applied.pending.length} 項留到下一次。約 ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}，原文仍可用 read_context 讀取。`,
-        `Shared memory updated (cycle ${cycle}, ${label}): ${count('add')} added, ${count('update')} updated, ${count('supersede')} replaced, ${count('retract')} retracted, ${count('merge')} merged; ${applied.conflicted.length + count('conflict')} conflict(s), ${applied.rejected.length} rejected; ${applied.pending.length} item(s) wait for the next one. About ${fmtK(before)} → ${fmtK(run.sharedTokens ?? 0)}; the originals stay readable with read_context.`,
+        `已更新共用上下文（第 ${cycle} 次，${label}）：新增 ${count('add')}、更新 ${count('update')}、取代 ${count('supersede')}、撤銷 ${count('retract')}、合併 ${count('merge')}；衝突 ${applied.conflicted.length + count('conflict')}、拒絕 ${applied.rejected.length}；${applied.pending.length} 項留到下一次。約 ${fmtK(before)} 壓到 ${fmtK(run.sharedTokens ?? 0)}，原文仍可用 read_context 讀取。`,
+        `Shared context updated (cycle ${cycle}, ${label}): ${count('add')} added, ${count('update')} updated, ${count('supersede')} replaced, ${count('retract')} retracted, ${count('merge')} merged; ${applied.conflicted.length + count('conflict')} conflict(s), ${applied.rejected.length} rejected; ${applied.pending.length} item(s) wait for the next one. About ${fmtK(before)}, now ${fmtK(run.sharedTokens ?? 0)}; the originals stay readable with read_context.`,
       ),
       'info',
       true,
     );
-    if (applied.rejected.length) this.log(run, L(`共用記憶拒絕的操作：${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''}（${x.why}）`).join('；')}`, `Shared memory operations rejected: ${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''} (${x.why})`).join('; ')}`), 'warn', true);
+    if (applied.rejected.length) this.log(run, L(`共用上下文拒絕的操作：${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''}（${x.why}）`).join('；')}`, `Shared context operations rejected: ${applied.rejected.map((x) => `${x.op.op}${x.op.id ? ` ${x.op.id}` : ''} (${x.why})`).join('; ')}`), 'warn', true);
     const stated = notFound.filter((x) => x.as === 'stated');
-    if (stated.length) this.log(run, L(`共用記憶的新內容提到來源中找不到的 ${stated.map((x) => x.ref).join(', ')}（已標示）`, `The shared memory's new entries name ${stated.map((x) => x.ref).join(', ')}, not found in their source (marked)`), 'warn', true);
+    if (stated.length) this.log(run, L(`共用上下文的新內容提到來源中找不到的 ${stated.map((x) => x.ref).join(', ')}（已標示）`, `The shared context's new entries name ${stated.map((x) => x.ref).join(', ')}, not found in their source (marked)`), 'warn', true);
   }
 
   /** An agent's conversation passed the ask threshold (80% by default, again at 90%): let the user decide. */
@@ -4293,7 +4297,7 @@ export class Orchestrator {
    * replaced, so the conversation or shared context stays as it was until then.
    */
   private askOtherCompactor(run: WorkflowRun, e: unknown, job: 'agent' | 'shared' | 'organize', agentId?: string) {
-    if (!(e instanceof CompactorError) || run.status === 'cancelled' || /^(已取消|Cancelled)$/.test(e.message)) return;
+    if (!(e instanceof CompactorError) || run.status === 'cancelled' || /^(已取消|已停止|Cancelled|Stopped)$/.test(e.message)) return;
     run.compactFailed = { job, agentId, provider: e.who.provider, by: this.compactorLabel(e.who), error: e.message, at: now() };
     this.touch(run);
   }
@@ -4416,7 +4420,7 @@ export class Orchestrator {
     }
     this.log(
       run,
-      L(`已壓縮 ${this.label(info)} 的對話${before ? `：約 ${fmtK(before)} → ${after ? fmtK(after) : '下一輪更新'}` : ''}`, `Compacted ${this.label(info)}'s conversation${before ? `: about ${fmtK(before)} → ${after ? fmtK(after) : 'updated next turn'}` : ''}`),
+      L(`已壓縮 ${this.label(info)} 的對話${before ? `：約 ${fmtK(before)}${after ? ` 壓到 ${fmtK(after)}` : '，壓縮後的大小下一輪更新'}` : ''}`, `Compacted ${this.label(info)}'s conversation${before ? `: about ${fmtK(before)}${after ? `, now ${fmtK(after)}` : '; the new size shows next turn'}` : ''}`),
       'info',
       true,
     );
@@ -4879,7 +4883,7 @@ export class Orchestrator {
         child.error = res.error;
         const advice = res.finalText.trim();
         // Later agents see the advice too.
-        if (advice) (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: child.id, text: `${L('顧問建議', 'Advisor')} → ${this.label(asker)}: ${advice.slice(0, 1500)}`, ts: now() });
+        if (advice) (run.notes ??= []).push({ id: randomUUID().slice(0, 8), agentId: child.id, text: `${L(`給 ${this.label(asker)} 的顧問建議：`, `Advisor to ${this.label(asker)}: `)}${advice.slice(0, 1500)}`, ts: now() });
       })
       .catch((e) => {
         child.status = 'failed';
@@ -4905,7 +4909,7 @@ export class Orchestrator {
     for (const a of Object.values(run.agents)) {
       // A handed-off sub-agent keeps running; it ends with the workflow.
       if (a.parentId === parentId && !a.handoff && (a.status === 'running' || a.status === 'queued')) {
-        this.log(run, L(`${this.label(a)} 的上層 agent 已結束，停止此 sub agent`, `${this.label(a)}: its parent finished, stopping this sub-agent`), 'warn');
+        this.log(run, L(`${this.label(a)} 的上層 agent 已結束，停止此子 agent`, `${this.label(a)}: its parent finished, stopping this sub-agent`), 'warn');
         this.agentAborts.get(a.id)?.abort();
       }
     }
@@ -5131,7 +5135,7 @@ export class Orchestrator {
         this.noProgressAskedAt.set(run.id, now());
         void this.ask(run, 'run', L(`已經 ${lim.noProgressMinutes} 分鐘沒有進展（沒有工具呼叫、檔案變更或提交）。要怎麼處理？`, `No progress for ${lim.noProgressMinutes} minutes (no tool call, file change or submission). What next?`), [
           { id: 'continue', label: L('繼續等', 'Keep going') },
-          { id: 'stop', label: L('停止（標記為未完成）', 'Stop (mark incomplete)') },
+          { id: 'stop', label: L('停止並標為未完成', 'Stop, mark incomplete') },
         ])
           .then((d) => {
             if (d.optionId !== 'stop') return;

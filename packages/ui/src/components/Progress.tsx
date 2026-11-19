@@ -12,6 +12,8 @@ interface Item {
   key: string;
   label: string;
   meta?: string;
+  /** What the meta line leaves out: the model each agent ran on. */
+  title?: string;
   state: ItemState;
   sub?: boolean;
 }
@@ -34,7 +36,11 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
     const who = (role: AgentRole, fallback?: string) => {
       const a = agents.filter((x) => x.stage === key && x.role === role).sort((x, y) => (y.startedAt ?? 0) - (x.startedAt ?? 0))[0];
       const id = a?.provider ?? fallback;
-      return id ? `${providerName(providers, id)}${a?.model ? ` · ${modelLabel(a.model)}` : ''}` : undefined;
+      return id ? providerName(providers, id) : undefined;
+    };
+    const modelOf = (role: AgentRole) => {
+      const a = agents.filter((x) => x.stage === key && x.role === role).sort((x, y) => (y.startedAt ?? 0) - (x.startedAt ?? 0))[0];
+      return a?.model ? `${providerName(providers, a.provider)} · ${modelLabel(a.model)}` : undefined;
     };
     const failed = st.status === 'failed' || st.status === 'cancelled';
     const stateOf = (isRunning: boolean, isDone: boolean): ItemState => (isRunning ? 'active' : isDone ? 'done' : failed || (ended && st.status !== 'approved') ? 'failed' : 'pending');
@@ -45,8 +51,9 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
       const verdict = w && [w.label, w.count].filter(Boolean).join(t('，', ', '));
       items.push({
         key: 'review-only',
-        label: t('獨立審查（不實作）', 'Independent review (no implementation)'),
+        label: t('獨立審查', 'Independent review'),
         meta: [who(reviewerRole, (cfg.reviewer ?? cfg.author).provider), verdict].filter(Boolean).join(' · '),
+        title: [t('只審查，不實作', 'Review only, no implementation'), modelOf(reviewerRole)].filter(Boolean).join('\n'),
         state: stateOf(running(reviewerRole), st.status === 'approved'),
       });
       continue;
@@ -56,6 +63,7 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
       key: `${key}-author`,
       label: key === 'plan' ? t('撰寫計畫', 'Write the plan') : t('實作', 'Implement'),
       meta: [who(authorRole, cfg.author.provider), roundMeta].filter(Boolean).join(' · '),
+      title: modelOf(authorRole),
       state: stateOf(running(authorRole), authorDone),
     });
     if (key === 'implement')
@@ -70,7 +78,7 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
             stepState(s, st.status, ended) === 'unreported' ? t('未回報完成', 'not reported done') : undefined,
           ]
             .filter(Boolean)
-            .join(' · '),
+            .join(t('，', ', ')),
           sub: true,
           state: stepState(s, st.status, ended),
         });
@@ -79,6 +87,7 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
         key: `${key}-review`,
         label: key === 'plan' ? t('審查計畫', 'Review the plan') : t('審查程式碼', 'Review the code'),
         meta: [who(reviewerRole, cfg.reviewer.provider), round?.review?.verdict === 'revise' && !running(reviewerRole) && st.status === 'running' ? t('要求修改，退回重做', 'changes requested, back to the author') : undefined].filter(Boolean).join(' · '),
+        title: modelOf(reviewerRole),
         state: stateOf(running(reviewerRole), st.status === 'approved'),
       });
   }
@@ -91,13 +100,10 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
     items.push({
       key: 'verify',
       label: t('目標驗收', 'Goal verification'),
-      meta: [
-        run.config.verify.by === 'planner' ? t('由計畫者', 'by the planner') : t('獨立驗收', 'independent'),
-        vst.rounds.length > 1 ? t(`第 ${vst.rounds.length} 次`, `check ${vst.rounds.length}`) : undefined,
-        v && !runningV ? outcomeText(t, v) : undefined,
-      ]
+      meta: [run.config.verify.by === 'planner' ? t('由計畫者', 'by the planner') : t('獨立驗收', 'independent'), v && !runningV ? outcomeText(t, v) : vst.rounds.length > 1 ? t(`第 ${vst.rounds.length} 次`, `check ${vst.rounds.length}`) : undefined]
         .filter(Boolean)
         .join(' · '),
+      title: v && !runningV && vst.rounds.length > 1 ? t(`第 ${vst.rounds.length} 次驗收`, `check ${vst.rounds.length}`) : undefined,
       state: runningV ? 'active' : vst.status === 'approved' ? 'done' : ended ? 'failed' : 'pending',
     });
   }
@@ -125,7 +131,7 @@ function ProgressItems({ items }: { items: Item[] }) {
   return (
     <div className="pp-list">
       {items.map((i) => (
-        <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
+        <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')} title={i.title}>
           <span className={cx('pp-icon', i.state)}>
             <Ico i={STATE_ICON[i.state]} size={i.sub ? 14 : 16} label={name[i.state]} />
           </span>
@@ -195,7 +201,7 @@ export function ProgressList({ run, providers }: { run: WorkflowRun; providers: 
   const more = runOverview(t, run, subTitle).slice(1);
   return (
     <div className="progress-list">
-      {more.length > 0 && <div className="muted small">{more.join(' · ')}</div>}
+      {more.length > 0 && <div className="muted small">{more.join(t('，', ', '))}</div>}
       <ProgressItems items={items} />
       <GoalButton run={run} />
     </div>
@@ -203,7 +209,7 @@ export function ProgressList({ run, providers }: { run: WorkflowRun; providers: 
 }
 
 export const outcomeText = (t: ReturnType<typeof useT>, v: Verification) =>
-  ({ met: t('達標', 'met'), not_met: t('目標未達成 → 重新規劃', 'goal missed → re-plan'), invalid_evidence: t('證據無效 → 重新驗證', 'invalid evidence → re-test'), defect: t('有缺陷 → 退回修正', 'defects → back to fix') })[v.outcome];
+  ({ met: t('目標達成', 'goal met'), not_met: t('目標未達成，重新規劃', 'goal not met, re-plan'), invalid_evidence: t('證據無效，重新驗證', 'invalid evidence, re-test'), defect: t('有缺陷，退回修正', 'defects, back to fix') })[v.outcome];
 
 /** Latest measurement of each acceptance metric (the gap to the goal). */
 export function goalGap(run: WorkflowRun) {
@@ -232,13 +238,15 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
     <Window title={t(`驗收目標 · ${gap.met}/${gap.rows.length} 項達成`, `Acceptance goal · ${gap.met}/${gap.rows.length} met`)} onClose={onClose}>
       {goal?.statement && <div className="gw-statement">{goal.statement}</div>}
       <div className="muted small gw-meta">
-        {gap.byReview
-          ? t('下面是最近一輪程式碼審查的進度讀數（正式結果以目標驗收為準）', 'Below: progress as read by the latest code review (goal verification has the final say)')
-          : gap.last
-            ? t(`最新驗收：${outcomeText(t, gap.last)}`, `Latest verification: ${outcomeText(t, gap.last)}`)
-            : t('還沒有驗收過', 'Not verified yet')}
-        {gap.byReview && gap.last && t(` · 上次驗收：${outcomeText(t, gap.last)}`, ` · last verification: ${outcomeText(t, gap.last)}`)}
-        {(run.cycles ?? 0) > 0 && t(` · 第 ${(run.cycles ?? 0) + 1} 輪循環`, ` · cycle ${(run.cycles ?? 0) + 1}`)}
+        <div>
+          {gap.byReview
+            ? t('下面是最近一輪程式碼審查的進度讀數，正式結果以目標驗收為準。', 'Below: progress as read by the latest code review; goal verification has the final say.')
+            : gap.last
+              ? t(`最新驗收：${outcomeText(t, gap.last)}`, `Latest verification: ${outcomeText(t, gap.last)}`)
+              : t('還沒有驗收過', 'Not verified yet')}
+        </div>
+        {gap.byReview && gap.last && <div>{t(`上次驗收：${outcomeText(t, gap.last)}`, `Last verification: ${outcomeText(t, gap.last)}`)}</div>}
+        {(run.cycles ?? 0) > 0 && <div>{t(`第 ${(run.cycles ?? 0) + 1} 輪循環`, `Cycle ${(run.cycles ?? 0) + 1}`)}</div>}
       </div>
       {gap.stale && (
         <div className="gw-stale">
@@ -255,7 +263,7 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
             <div className="gw-head">
               <b>{m.id}</b> {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
               <span className={cx('state-word', m.met === true ? 'ok' : m.met === false ? 'err' : undefined)}>
-                <Ico i={m.met === true ? CircleCheck : m.met === false ? CircleX : CircleDashed} size={14} /> {m.met === true ? t('達標', 'met') : m.met === false ? t('未達標', 'not met') : t('尚未量測', 'not measured')}
+                <Ico i={m.met === true ? CircleCheck : m.met === false ? CircleX : CircleDashed} size={14} /> {m.met === true ? t('達成', 'met') : m.met === false ? t('未達成', 'not met') : t('尚未量測', 'not measured')}
               </span>
             </div>
             {m.target && (
@@ -292,16 +300,22 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
 /**
  * What holds the workflow up right now, in words (empty when nothing does), each with its icon: paused; your answer to an
  * agent's question (who asked; the card above has the question), your decision, your approval (one word per kind, as in
- * the header); an agent waiting for something or recovering from a failure.
+ * the header); an agent waiting for something or recovering from a failure. `word` is the waiting word it starts with and
+ * `rest` what it adds to that word (none for a question: the card above names who asks).
  */
-export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): { text: string; icon?: LucideIcon }[] {
-  const out: { text: string; icon?: LucideIcon }[] = [];
-  if (run.status === 'paused') out.push({ text: t('已暫停', 'Paused'), icon: Pause });
+export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): { text: string; icon?: LucideIcon; word?: string; rest?: string }[] {
+  const out: { text: string; icon?: LucideIcon; word?: string; rest?: string }[] = [];
+  if (run.status === 'paused') out.push({ text: t('已暫停', 'Paused'), icon: Pause, word: t('已暫停', 'Paused') });
   if (run.pending?.question) {
     const who = askerOf(t, run, providers);
-    out.push({ text: who ? t(`${waitWord(t, 'question')} ${who} 的問題`, `${waitWord(t, 'question')} to ${who}'s question`) : waitWord(t, 'question'), icon: MessageCircleQuestionMark });
-  } else if (run.pending) out.push({ text: `${waitWord(t, 'decision')} · ${run.pending.message}`, icon: Signpost });
-  if (run.approvals?.length) out.push({ text: t(`${waitWord(t, 'approval')} ${run.approvals.length} 個動作`, `${waitWord(t, 'approval')} on ${run.approvals.length} action(s)`), icon: Hand });
+    const word = waitWord(t, 'question');
+    out.push({ text: who ? t(`${word} ${who} 的問題`, `${word} to ${who}'s question`) : word, icon: MessageCircleQuestionMark, word });
+  } else if (run.pending) out.push({ text: `${waitWord(t, 'decision')} · ${run.pending.message}`, icon: Signpost, word: waitWord(t, 'decision'), rest: run.pending.message });
+  if (run.approvals?.length) {
+    const word = waitWord(t, 'approval');
+    const rest = t(`${run.approvals.length} 個動作`, `${run.approvals.length} action(s)`);
+    out.push({ text: t(`${word} ${rest}`, `${word} on ${rest}`), icon: Hand, word, rest });
+  }
   for (const a of Object.values(run.agents)) {
     if (!['running', 'paused', 'queued'].includes(a.status)) continue;
     const who = `${providerName(providers, a.provider)}`;
@@ -337,24 +351,37 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
   const block = live ? blockers(run, providers, t) : [];
   const working = live ? Object.values(run.agents).filter((a) => a.status === 'running' && a.role !== 'compactor') : [];
   const runningProcs = (run.processes ?? []).filter((p) => p.alive);
+  const overview = runOverview(t, run, subTitle);
+  // What holds it up beyond what the phase already says (「已暫停」 is the phase itself): the 「卡在」 line draws only
+  // that. A blocker that starts with the phase's own word (「等你核准」 under 「等你核准 1 個動作」) adds only its rest
+  // there (「1 個動作」), or nothing (a question: the card above names who asks); its whole text stays in the tooltip.
+  const held = block.filter((b) => b.text !== overview[0]);
+  const heldShown = held.map((b) => (b.word && b.word === overview[0] ? (b.rest ?? '') : b.text)).filter(Boolean);
+  const steps = t(`工作流步驟 ${stepCount(t, items)}`, `workflow steps ${stepCount(t, items)}`);
+  // Folded, the line names what holds it up unless the phase already says it (「等你核准」 and 「等你核准 1 個動作」).
+  const second = live && !open ? held.find((b) => !(b.word && b.word === overview[0]) && !b.text.startsWith(overview[0])) : undefined;
+  const secondText = second ? undefined : live ? steps : unreported > 0 ? t(`${unreported} 個步驟未回報完成`, `${unreported} step(s) not reported done`) : overview[1];
+  const lineTitle = [...overview, live ? steps : '', !live && unreported > 0 ? t(`${unreported} 個步驟未回報完成`, `${unreported} step(s) not reported done`) : '', ...held.map((b) => b.text), live && current ? t(`目前：${current.label}`, `Now: ${current.label}`) : ''].filter(Boolean).join('\n');
   return (
     <div className="progress-panel">
       <div className="pp-headrow">
         <button className="pp-head" onClick={() => setOpen(!open)} aria-expanded={open}>
           <Ico i={open ? ChevronDown : ChevronRight} size={14} className="pp-chev" />
           <span className="pp-title">{t('進度', 'Progress')}</span>
-          <span className="muted small pp-summary">
-            {/* This round, the delegated batches and background processes, each said apart; the count is the
-                workflow's own steps (stages and plan steps), named as such. */}
-            {runOverview(t, run, subTitle).join(' · ')}
-            {live && ` · ${t('工作流步驟', 'workflow steps')} ${stepCount(t, items)}`}
-            {!live && unreported > 0 && t(` · ${unreported} 個步驟未回報完成`, ` · ${unreported} step(s) not reported done`)}
-            {live && !open && block.length ? (
+          <span className="muted small pp-summary" title={lineTitle}>
+            {/* This round's phase and the one thing to know next (what holds it up, else the steps); the batches and
+                background processes in its tooltip and in the open panel. */}
+            {overview[0]}
+            {second ? (
               <>
                 {' · '}
-                {block[0].icon && <Ico i={block[0].icon} size={14} />} {block[0].text}
+                {second.icon && <Ico i={second.icon} size={14} />} {second.text}
               </>
-            ) : live && !open && current ? ` · ${current.label}` : ''}
+            ) : secondText ? (
+              ` · ${secondText}`
+            ) : (
+              ''
+            )}
           </span>
         </button>
         <GoalButton run={run} />
@@ -362,8 +389,9 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
       {open && (
         // The expanded part scrolls inside itself, so the message box never moves however much is in it.
         <div className="pp-body">
-      {(working.length > 0 || block.length > 0 || !!run.gpuLocks?.length || runningProcs.length > 0) && (
+      {(working.length > 0 || heldShown.length > 0 || overview.length > 1 || !!run.gpuLocks?.length || runningProcs.length > 0) && (
         <div className="pp-status">
+          {overview.length > 1 && <div className="muted small">{overview.slice(1).join(t('，', ', '))}</div>}
           {working.length > 0 && (
             <div className="pp-now">
               <span className="pp-sub">{t('目前', 'Now')}</span>
@@ -375,11 +403,11 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
             </div>
           )}
           {/* One quiet line, no box: what to do is in the card right above it. */}
-          {block.length > 0 && (
+          {heldShown.length > 0 && (
             <div className="pp-block">
               <span className="pp-sub">{t('卡在', 'Blocked by')}</span>
-              <span className="pp-block-text" title={block.map((b) => b.text).join('\n')}>
-                {block.map((b) => b.text).join(' · ')}
+              <span className="pp-block-text" title={held.map((b) => b.text).join('\n')}>
+                {heldShown.join(t('、', ', '))}
               </span>
             </div>
           )}
@@ -398,8 +426,8 @@ export function ProgressPanel({ run, providers, resultShown = false }: { run: Wo
               <span className="pp-sub">{t('背景程序', 'Background')}</span>
               {/* Ended ones move to the agent map, next to the round that started them. */}
               {run.processes.filter((p) => p.alive).map((p) => (
-                <button key={p.pid} className={cx('pp-chip clickable', !p.alive && 'muted')} title={t('點一下查看進度、速度與日誌', 'Click to see its progress, speed and log')} onClick={() => setDetail({ pid: p.pid })}>
-                  <span className={cx('am-dot', p.alive && 'live')} /> {p.pid} · {p.purpose} · {p.alive ? t('執行中', 'alive') : t('已結束', 'ended')}
+                <button key={p.pid} className={cx('pp-chip clickable', !p.alive && 'muted')} title={`${p.alive ? t('執行中', 'alive') : t('已結束', 'ended')}\n${t('點一下查看進度、速度與日誌', 'Click to see its progress, speed and log')}`} onClick={() => setDetail({ pid: p.pid })}>
+                  <span className={cx('am-dot', p.alive && 'live')} /> {p.pid} · {p.purpose}
                 </button>
               ))}
             </div>

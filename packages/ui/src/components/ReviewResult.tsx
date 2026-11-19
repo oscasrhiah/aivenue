@@ -50,11 +50,11 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
   const report = review.report;
   const verdict = verdictWords(t, review, true);
   const settled = progressSettled(run, providers, t);
-  const lists: [string, string, string[] | undefined][] = [
+  const lists: [string, string, string[] | undefined, string?][] = [
     ['checked', t('查過', 'Checked'), report?.checked],
     ['not-checked', t('沒查過', 'Not checked'), report?.notChecked],
     ['reproduced', t('自己重現', 'Reproduced'), report?.reproduced],
-    ['trusted', t('採信（未重跑）', 'Taken on trust'), report?.trusted],
+    ['trusted', t('直接採信', 'Taken on trust'), report?.trusted, t('審查者沒有重跑，照材料直接採信', 'The reviewer did not re-run these and took them from the material')],
   ];
   return (
     <div className="final-result review-result">
@@ -151,7 +151,7 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
               )}
               {d.assumptions.length > 0 && (
                 <div>
-                  <span className="final-label">{t('前提（不成立時結論可能改變）', 'Assumes (the choice may change if not)')}</span>
+                  <span className="final-label" title={t('前提不成立時，結論可能改變', 'The choice may change if these do not hold')}>{t('前提', 'Assumes')}</span>
                   <ul>
                     {d.assumptions.map((a, n) => (
                       <li key={n}>
@@ -163,7 +163,7 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
               )}
             </div>
           ))}
-          <div className="muted tiny">{t('這是審查者的建議；要不要照做、是否合併，仍由你決定。', "This is the reviewer's recommendation; whether to act on it, or merge, is still yours to decide.")}</div>
+          <div className="muted tiny">{t('這是審查者的建議，要不要照做、是否合併，仍由你決定。', "This is the reviewer's recommendation; whether to act on it, or merge, is still yours to decide.")}</div>
         </div>
       )}
       {review.issues.length > 0 && (
@@ -174,9 +174,11 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
         </div>
       )}
       <div className="review-basis">
-        {lists.map(([key, label, items]) => (
+        {lists.map(([key, label, items, why]) => (
           <div key={key} className={cx('review-basis-row', key)}>
-            <span className="final-label">{label}</span>
+            <span className="final-label" title={why}>
+              {label}
+            </span>
             {items?.length ? (
               <ul>
                 {items.map((x, n) => (
@@ -186,7 +188,7 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
                 ))}
               </ul>
             ) : (
-              <span className="muted small">{t('（報告沒有列出）', '(not listed in the report)')}</span>
+              <span className="muted small">{t('報告沒有列出', 'Not listed in the report')}</span>
             )}
           </div>
         ))}
@@ -194,7 +196,7 @@ export function ReviewResult({ run, providers }: { run: WorkflowRun; providers: 
       {!!review.needsValidation?.length && (
         <details className="final-evidence">
           <summary className="small">
-            <Ico i={ChevronRight} size={14} className="fold-chev" /> {t(`待驗證 ${review.needsValidation.length} 項（不是缺陷）`, `${review.needsValidation.length} to validate (not defects)`)}
+            <Ico i={ChevronRight} size={14} className="fold-chev" /> <span title={t('審查者沒能確認的疑點，不算缺陷，不會要求修改', 'Points the reviewer could not confirm: not defects, no changes requested')}>{t(`待驗證 ${review.needsValidation.length} 項`, `${review.needsValidation.length} to validate`)}</span>
           </summary>
           {review.needsValidation.map((v) => (
             <div key={v.id} className="small">

@@ -9,7 +9,7 @@ type Snapshot = { entitlement?: number; remaining?: number; percent_remaining?: 
  * GitHub sign-in Aivenue already uses (gh) from the same endpoint the Copilot editor extensions call.
  */
 export async function readCopilotQuota(token: string | undefined): Promise<Official | undefined> {
-  if (!token) throw new Error(L('需要先在「設定 → GitHub」登入 GitHub 才能查詢 Copilot 額度', 'Sign in to GitHub under Settings → GitHub to read the Copilot quota'));
+  if (!token) throw new Error(L('需要先在設定的 GitHub 區塊登入 GitHub 才能查詢 Copilot 額度', 'Sign in to GitHub in the GitHub section of Settings to read the Copilot quota'));
   const get = (path: string) =>
     fetch(`https://api.github.com${path}`, {
       headers: { authorization: `token ${token}`, accept: 'application/json', 'user-agent': 'Aivenue', 'x-github-api-version': '2025-04-01' },

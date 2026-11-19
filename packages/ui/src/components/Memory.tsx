@@ -92,8 +92,8 @@ export function RememberButton({ runId, text, noteId, ts, className }: { runId: 
         >
             <p className="muted small">
               {t(
-                '存成這個專案的「指示」記憶，立刻生效：之後的工作流會把它當參考資料帶給 agent，不是命令，當次的指示優先。可以先修改文字，存好後也能在「設定 → 記憶」編輯或刪除。',
-                "Saved as an instruction in this project's memory, in force at once: later workflows give it to agents as reference material (not a command; that run's own instructions come first). Edit the text first if you like; you can edit or delete it later in Settings → Memory.",
+                '存成這個專案的「指示」記憶，立刻生效：之後的工作流會把它當參考資料帶給 agent，不是命令，當次的指示優先。可以先修改文字，存好後也能在設定的記憶頁編輯或刪除。',
+                "Saved as an instruction in this project's memory, in force at once: later workflows give it to agents as reference material (not a command; that run's own instructions come first). Edit the text first if you like; you can edit or delete it later on the Memory page in Settings.",
               )}
             </p>
             <textarea aria-label={t('要記住的內容', 'What to remember')} value={value} rows={Math.min(10, Math.max(3, value.split('\n').length + 1))} onChange={(e) => setValue(e.target.value)} autoFocus />
@@ -152,7 +152,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
             <p className="muted small">
               {view && t(MODES.find((m) => m.id === view.mode)!.tipZh, MODES.find((m) => m.id === view.mode)!.tipEn)}
               {running
-                ? t('。切換只影響之後開始的對話；已經給 agent 的記憶收不回來。', '. Switching affects only conversations that start later; what agents were already given stays given.')
+                ? t('。切換只影響之後開始的對話，已經給 agent 的記憶收不回來。', '. Switching affects only conversations that start later; what agents were already given stays given.')
                 : t('。工作流已結束，模式不能再改。', '. The workflow has ended; the mode can no longer change.')}
             </p>
             {(error || view?.error) && <div className="err-text small">{error ?? view?.error}</div>}
@@ -186,7 +186,7 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
                 {view.given.map((g) => (
                   <li key={g.agentId}>
                     <span className="mem-agent">{g.label}</span>
-                    <span className="muted small"> · {t(`${g.memoryIds.length} 條`, `${g.memoryIds.length}`)}：</span>
+                    <span className="muted small"> · {t(`${g.memoryIds.length} 條`, `${g.memoryIds.length}`)}{t('：', ': ')}</span>
                     <span className="small">{g.memoryIds.map(textOf).map((x) => (x.length > 40 ? `${x.slice(0, 40)}…` : x)).join('；')}</span>
                   </li>
                 ))}
@@ -211,10 +211,10 @@ export function RunMemoryWindow({ run, onClose }: { run: WorkflowRun; onClose: (
           <section className="mem-section">
             <div className="mem-row small">
               <span>
-                {t('累計注入 token 估算', 'Injected tokens, estimated')}：<b className="num">{view?.injectedTokens ?? 0}</b>
+                {t('累計注入 token 估算', 'Injected tokens, estimated')}{t('：', ': ')}<b className="num">{view?.injectedTokens ?? 0}</b>
               </span>
               <span>
-                {t('這次排入的候選', 'Candidates queued')}：<b className="num">{view?.queued ?? 0}</b>
+                {t('這次排入的候選', 'Candidates queued')}{t('：', ': ')}<b className="num">{view?.queued ?? 0}</b>
               </span>
             </div>
             <p className="muted tiny">

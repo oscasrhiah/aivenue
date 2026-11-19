@@ -10,7 +10,7 @@ export const roleLabel = (t: T, r: AgentRole): string =>
     code_reviewer: t('審查程式碼', 'Code review'),
     verifier: t('目標驗收', 'Goal check'),
     adjudicator: t('裁定', 'Ruling'),
-    subagent: 'Sub agent',
+    subagent: t('子 agent', 'Sub-agent'),
     advisor: t('顧問', 'Advisor'),
     compactor: t('上下文壓縮', 'Compaction'),
     test: t('連線測試', 'Test'),
@@ -23,7 +23,7 @@ export const agentStatus = (t: T, s: AgentStatus) =>
     paused: { label: t('已暫停', 'Paused'), cls: 'warn' },
     completed: { label: t('完成', 'Done'), cls: 'ok' },
     failed: { label: t('失敗', 'Failed'), cls: 'err' },
-    cancelled: { label: t('已取消', 'Cancelled'), cls: 'muted' },
+    cancelled: { label: t('已停止', 'Stopped'), cls: 'muted' },
   })[s];
 
 /**
@@ -39,7 +39,7 @@ export const wfStatus = (t: T, s: WorkflowStatus) =>
     completed: { label: t('已完成', 'Completed'), cls: 'muted' },
     incomplete: { label: t('未完成', 'Incomplete'), cls: 'warn' },
     failed: { label: t('失敗', 'Failed'), cls: 'err' },
-    cancelled: { label: t('已取消', 'Cancelled'), cls: 'muted' },
+    cancelled: { label: t('已停止', 'Stopped'), cls: 'muted' },
     interrupted: { label: t('已中斷', 'Interrupted'), cls: 'muted' },
   })[s];
 
@@ -102,7 +102,7 @@ export const stageStatus = (t: T, s: StageRun['status']) =>
     approved: t('已通過', 'Approved'),
     skipped: t('略過', 'Skipped'),
     failed: t('失敗', 'Failed'),
-    cancelled: t('已取消', 'Cancelled'),
+    cancelled: t('已停止', 'Stopped'),
   })[s];
 
 export const STEP_ICON = { pending: '○', in_progress: '◐', done: '●', blocked: '✕', skipped: '–' } as const;

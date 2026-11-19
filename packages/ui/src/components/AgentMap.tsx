@@ -28,11 +28,14 @@ function useTick(on: boolean) {
   }, [on]);
 }
 
+/** The error text a stopped agent gets (agentRunner): the status says it already. */
+const ABORT_MARK = /^(已取消|已停止|Cancelled|Stopped)$/;
+
 /** What the agent is for: a sub-agent's task, or its role in the workflow. */
 function titleOf(t: T, a: AgentRunInfo): string {
-  if (a.role === 'subagent') return subTitle(a) || 'Sub agent';
+  if (a.role === 'subagent') return subTitle(a) || t('子 agent', 'Sub-agent');
   if (a.role === 'advisor') return subTitle(a) ? `${roleLabel(t, a.role)} · ${subTitle(a)}` : roleLabel(t, a.role);
-  return `${roleLabel(t, a.role)}${a.round ? ` · ${t(`第 ${a.round} 輪`, `round ${a.round}`)}` : ''}`;
+  return `${roleLabel(t, a.role)}${a.round ? ` ${t(`第 ${a.round} 輪`, `round ${a.round}`)}` : ''}`;
 }
 
 const tokensOf = (a: AgentRunInfo) => (a.tokens ? a.tokens.input + a.tokens.output : 0);
@@ -92,12 +95,12 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
         onEscape={() => (current ? setSelected(undefined) : onClose())}
         lead={
           current ? (
-            <button ref={backBtn} type="button" className="icon-btn" onClick={() => setSelected(undefined)} aria-label={t('返回 Agent map', 'Back to the agent map')} title={t('返回', 'Back')}>
+            <button ref={backBtn} type="button" className="icon-btn" onClick={() => setSelected(undefined)} aria-label={t('返回分工圖', 'Back to the agent map')} title={t('返回', 'Back')}>
               <Ico i={ArrowLeft} size={16} />
             </button>
           ) : undefined
         }
-        title={current ? <span className="am-detail-title">{titleOf(t, current)}</span> : 'Agent map'}
+        title={current ? <span className="am-detail-title">{titleOf(t, current)}</span> : t('分工圖', 'Agent map')}
       >
         {current ? (
           <Detail t={t} run={run} agent={current} providers={providers} onOpen={setSelected} />
@@ -105,8 +108,8 @@ export function AgentMap({ run, providers, onClose }: { run: WorkflowRun; provid
           <>
             <div className="muted small num">
               {t(`${agents.length} 個 agent`, `${agents.length} agents`)}
-              {subs > 0 && t(`，其中 ${subs} 個 sub agent 或顧問`, `, ${subs} of them sub-agents or advisors`)}
-              {live > 0 && t(` · ${live} 個執行中`, ` · ${live} running`)}
+              {subs > 0 && t(`，其中 ${subs} 個子 agent 或顧問`, `, ${subs} of them sub-agents or advisors`)}
+              {live > 0 && t(`，${live} 個執行中`, `, ${live} running`)}
               {' · '}
               {t('點一下 agent 看詳細內容', 'click an agent for details')}
             </div>
@@ -189,7 +192,8 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
   const main = agent.role !== 'subagent' && agent.role !== 'advisor';
   const files = agent.stats.filesChanged.length;
   // What a helper came back with, in one line (or why it failed).
-  const outcome = main || isLive(agent) ? '' : agent.status === 'failed' || agent.status === 'cancelled' ? (agent.error ? firstLine(agent.error, 80) : '') : firstLine(agent.finalText, 80);
+  // A stopped agent's error is only the abort marker (已停止 / older 已取消), which the status already says.
+  const outcome = main || isLive(agent) ? '' : agent.status === 'failed' || agent.status === 'cancelled' ? (agent.error && !(agent.status === 'cancelled' && ABORT_MARK.test(agent.error)) ? firstLine(agent.error, 80) : '') : firstLine(agent.finalText, 80);
   return (
     <button className={cx('am-node', roleTone(agent.role), main && 'am-root', isLive(agent) && 'live')} data-am-id={agent.id} onClick={onOpen} title={agent.brief ?? agent.task}>
       <div className="am-node-title">
@@ -202,12 +206,9 @@ function Node({ t, agent, providers, onOpen }: { t: T; agent: AgentRunInfo; prov
         {' · '}
         {agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}
       </div>
-      <div className="am-node-meta muted num">
+      <div className="am-node-meta muted num" title={[tokens > 0 ? `${fmtTokens(tokens)} tokens` : '', agent.stats.tools > 0 ? t(`${agent.stats.tools} 個動作`, `${agent.stats.tools} actions`) : '', files > 0 ? t(`改了 ${files} 個檔案`, `${files} file(s) changed`) : ''].filter(Boolean).join(t('，', ', ')) || undefined}>
         <Status t={t} agent={agent} small />
         {agent.startedAt ? ` · ${elapsed(agent.startedAt, agent.endedAt)}` : ''}
-        {tokens > 0 && ` · ${fmtTokens(tokens)} tokens`}
-        {agent.stats.tools > 0 && ` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
-        {files > 0 && ` · ${t(`改 ${files} 檔`, `${files} file(s)`)}`}
       </div>
       {!main && (
         <div className="am-node-tags">
@@ -246,13 +247,6 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
           {' · '}
           <span className="am-mark" style={{ background: providerColor(agent.provider) }} />
           {providerName(providers, agent.provider)}
-          {' · '}
-          <b>{agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}</b>
-          {agent.servedBy?.length ? ` · ${t('實際回答', 'served by')} ${agent.servedBy.join('、')}` : ''}
-          {agent.effort && ` · ${t('推理', 'effort')} ${agent.effort}`}
-          {' · '}
-          {roleLabel(t, agent.role)}
-          {agent.readonly && ` · ${t('唯讀', 'read-only')}`}
         </div>
         <div className="muted">
           {parent ? (
@@ -267,14 +261,74 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             t('工作流的主要 agent', 'A main agent of the workflow')
           )}
         </div>
-        <div className="muted num">
-          {agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : '—'}
-          {tokens && ` · ${fmtTokens(tokens.input + tokens.output)} tokens · ${t('輸入', 'in')} ${fmtTokens(tokens.input)}${tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''} · ${t('輸出', 'out')} ${fmtTokens(tokens.output)}`}
-          {` · ${agent.stats.tools} ${t('個動作', 'actions')}`}
-          {agent.stats.commands > 0 && ` · ${agent.stats.commands} ${t('個指令', 'commands')}`}
-          {agent.stats.filesChanged.length > 0 && ` · ${agent.stats.filesChanged.length} ${t('個檔案', 'files')}`}
-          {agent.observed?.events ? ` · ${t('花費', 'cost')} ${agent.observed.costUnknown || agent.observed.costUsd === undefined ? t('未知', 'unknown') : `${agent.observed.costUsd.toFixed(4)}`}` : ''}
-        </div>
+        {/* Round D: one fact per row instead of a line of seven 「·」 (every fact kept). */}
+        <dl className="dw-stats am-stats">
+          <div>
+            <dt>{t('模型', 'Model')}</dt>
+            <dd>
+              <b>{agent.model ? modelLabel(agent.model) : t('預設模型', 'default model')}</b>
+            </dd>
+          </div>
+          {agent.servedBy?.length ? (
+            <div>
+              <dt>{t('實際回答', 'Served by')}</dt>
+              <dd>{agent.servedBy.join('、')}</dd>
+            </div>
+          ) : null}
+          {agent.effort && (
+            <div>
+              <dt>{t('推理強度', 'Effort')}</dt>
+              <dd>{agent.effort}</dd>
+            </div>
+          )}
+          <div>
+            <dt>{t('角色', 'Role')}</dt>
+            <dd>
+              {roleLabel(t, agent.role)}
+              {agent.readonly && t('，唯讀', ', read-only')}
+            </dd>
+          </div>
+          <div>
+            <dt>{t('耗時', 'Time')}</dt>
+            <dd className="num">{agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : '—'}</dd>
+          </div>
+          {tokens && (
+            <div>
+              <dt>token</dt>
+              <dd className="num">
+                {fmtTokens(tokens.input + tokens.output)}
+                <span className="muted">
+                  {' '}
+                  {t('輸入', 'in')} {fmtTokens(tokens.input)}
+                  {tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''}
+                  {t('，輸出', ', out')} {fmtTokens(tokens.output)}
+                </span>
+              </dd>
+            </div>
+          )}
+          <div>
+            <dt>{t('動作', 'Actions')}</dt>
+            <dd className="num">{agent.stats.tools}</dd>
+          </div>
+          {agent.stats.commands > 0 && (
+            <div>
+              <dt>{t('指令', 'Commands')}</dt>
+              <dd className="num">{agent.stats.commands}</dd>
+            </div>
+          )}
+          {agent.stats.filesChanged.length > 0 && (
+            <div>
+              <dt>{t('檔案', 'Files')}</dt>
+              <dd className="num">{agent.stats.filesChanged.length}</dd>
+            </div>
+          )}
+          {agent.observed?.events ? (
+            <div>
+              <dt>{t('花費', 'Cost')}</dt>
+              <dd className="num">{agent.observed.costUnknown || agent.observed.costUsd === undefined ? t('未知', 'unknown') : `${agent.observed.costUsd.toFixed(4)}`}</dd>
+            </div>
+          ) : null}
+        </dl>
       </div>
 
       <AgentActions t={t} run={run} agent={agent} />
@@ -293,7 +347,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
 
       {isLive(agent) && (
         <div className="am-section">
-          <div className="am-label">{t('現在正在做', 'Doing now')}</div>
+          <div className="am-label">{t('正在做', 'Doing now')}</div>
           <div className="working">
             <Ico i={LoaderCircle} size={14} className="spark spin" /> {agent.activity?.replace(/^\S+\s/, '') ?? t('啟動中…', 'Starting…')}
           </div>
@@ -307,9 +361,9 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             {kids.map((k) => (
               <button key={k.id} className="am-kid" onClick={() => onOpen(k.id)}>
                 <Status t={t} agent={k} small /> <b>{titleOf(t, k)}</b>
-                <span className="muted">
+                <span className="muted" title={k.model ? modelLabel(k.model) : t('預設模型', 'default model')}>
                   {' '}
-                  · {providerName(providers, k.provider)} · {k.model ? modelLabel(k.model) : t('預設模型', 'default model')}
+                  · {providerName(providers, k.provider)}
                   {!isLive(k) && firstLine(k.finalText, 60) ? ` — ${firstLine(k.finalText, 60)}` : ''}
                 </span>
               </button>
@@ -334,7 +388,9 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
 
       {agent.stats.filesChanged.length > 0 && (
         <div className="am-section">
-          <div className="am-label">{t('改動的檔案', 'Files changed')}</div>
+          <div className="am-label" title={t('只算 agent 用編輯工具改的檔案', "Only files the agent changed with its edit tool")}>
+            {t('改過的檔案', 'Files changed')}
+          </div>
           <div className="am-files mono small">
             {agent.stats.filesChanged.map((f) => (
               <div key={f}>{f}</div>
@@ -381,10 +437,10 @@ function AgentActions({ t, run, agent }: { t: T; run: WorkflowRun; agent: AgentR
       )}
       {agent.failure && agent.status !== 'completed' && (
         <div className="small warn-text">
-          {failureLabel(t, agent.failure.kind)}：{agent.failure.action}
+          {failureLabel(t, agent.failure.kind)}{t('：', ': ')}{agent.failure.action}
         </div>
       )}
-      {agent.endedWithoutResult && <div className="small warn-text">{t('程序已結束，但沒有交出結果，不是成功', 'The process ended without a result, which is not a success')}</div>}
+      {agent.endedWithoutResult && <div className="small warn-text">{t('已結束，未交出結果', 'Ended without handing in a result')}</div>}
       {live && agent.role !== 'compactor' && (
         <div className="row gap">
           {isLive(agent) && (

@@ -26,8 +26,8 @@ function conversations(run: WorkflowRun): AgentRunInfo[] {
 function methodOf(t: ReturnType<typeof useT>, providers: ProviderInfo[], provider: string): string {
   const out = providers.find((p) => p.spec.id === provider)?.spec.output;
   if (out === 'claude-stream') return t('用 Claude Code 自己的 /compact 壓縮', "Claude Code's own /compact");
-  if (out === 'codex-jsonl') return t('用 Codex 的壓縮功能（app-server）', "Codex's compaction (app-server)");
-  if (out === 'agy-stream') return t('用 Antigravity 的 /compact（效果無法驗證）', "Antigravity's /compact (effect can't be verified)");
+  if (out === 'codex-jsonl') return t('用 Codex app-server 的壓縮功能', "Codex app-server's compaction");
+  if (out === 'agy-stream') return t('用 Antigravity 的 /compact，效果無法驗證', "Antigravity's /compact; its effect can't be verified");
   return t('由壓縮者整理交接摘要，下一輪開新對話', 'The compactor writes a hand-off summary; the next turn starts a fresh conversation');
 }
 
@@ -100,7 +100,7 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
             ) : (
               <>
                 <div className="ctx-big">
-                  {t(`已用 ${Math.round(pct)}%`, `${Math.round(pct)}% used`)} <span className="muted small">（{fmtTokens(used)} / {fmtTokens(cap)}，{t('估計', 'estimated')}）</span>
+                  {t(`已用 ${Math.round(pct)}%`, `${Math.round(pct)}% used`)} <span className="muted small">{fmtTokens(used)} / {fmtTokens(cap)}{t('，估計', ', estimated')}</span>
                 </div>
                 <div className="ctx-bar">
                   <div className={cx('ctx-bar-fill', level(pct))} style={{ width: `${pct}%` }} />
@@ -109,11 +109,11 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
                 <div className="muted small">
                   {used >= cap * at
                     ? t('已超過自動壓縮門檻，下一個 agent 開始前會先壓縮。', 'Over the threshold: compacted before the next agent starts.')
-                    : t(`再約 ${fmtTokens(cap * at - used)} 會自動壓縮（${Math.round(at * 100)}%）。`, `Compacts automatically in about ${fmtTokens(cap * at - used)} (${Math.round(at * 100)}%).`)}
+                    : t(`再約 ${fmtTokens(cap * at - used)} 會自動壓縮，門檻 ${Math.round(at * 100)}%。`, `Compacts automatically in about ${fmtTokens(cap * at - used)} (${Math.round(at * 100)}%).`)}
                 </div>
                 {run.memory && (
                   <div className="muted small">
-                    {t(`上次壓縮：約 ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)}（${run.memory.by ?? ''}）`, `Last compaction: about ${fmtTokens(run.memory.before ?? 0)} → ${fmtTokens(run.memory.after ?? 0)} (${run.memory.by ?? ''})`)}
+                    {t(`上次壓縮：約 ${fmtTokens(run.memory.before ?? 0)} 壓到 ${fmtTokens(run.memory.after ?? 0)}，由 ${run.memory.by ?? ''} 執行`, `Last compaction: about ${fmtTokens(run.memory.before ?? 0)}, down to ${fmtTokens(run.memory.after ?? 0)}, by ${run.memory.by ?? ''}`)}
                     {run.memory.kept?.length ? t(`，逐字保留 ${run.memory.kept.length} 項`, `, ${run.memory.kept.length} item(s) kept verbatim`) : ''}
                   </div>
                 )}
@@ -126,7 +126,7 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
                 <div className="ctx-head sub">{t('共用知識', 'Shared knowledge')}</div>
                 <div className="muted small">
                   {run.knowledge
-                    ? t(`已把 ${run.knowledge.notes} 則筆記依主題整理（${run.knowledge.by ?? ''}）`, `${run.knowledge.notes} notes organized by subject (${run.knowledge.by ?? ''})`)
+                    ? t(`已把 ${run.knowledge.notes} 則筆記依主題整理，由 ${run.knowledge.by ?? ''} 執行`, `${run.knowledge.notes} notes organized by subject (${run.knowledge.by ?? ''})`)
                     : t('還沒整理過。', 'Not organized yet.')}{' '}
                   {t(`新筆記 ${fresh} 則`, `${fresh} new note(s)`)}
                   {every ? t(`，滿 ${every} 則自動整理。`, `; organized automatically at ${every}.`) : t('，不自動整理。', '; not organized automatically.')}
@@ -146,7 +146,7 @@ export function ContextPie({ run, providers }: { run: WorkflowRun; providers: Pr
                   >
                     {organizing ? t('整理中…', 'Organizing…') : t('現在整理', 'Organize now')}
                   </button>
-                  <span className="muted tiny">{t('依主題整理筆記與 findings，每一條附出處；原本的筆記不變', 'Sorts the notes and findings by subject, each line with its source; the notes stay as they are')}</span>
+                  <span className="muted tiny">{t('依主題整理筆記與發現，每一條附出處，原本的筆記不變', 'Sorts the notes and findings by subject, each line with its source; the notes stay as they are')}</span>
                 </div>
               </>
             )}
@@ -245,18 +245,18 @@ export function ContextAsk({ run, providers }: { run: WorkflowRun; providers: Pr
       <div className="modal ctx-ask" role="alertdialog" aria-modal="true">
         <h3>{t(`「${who}」的對話快滿了`, `${who}'s conversation is nearly full`)}</h3>
         <p>
-          {t(`已用 ${pct}%（${fmtTokens(ask.used)} / ${fmtTokens(ask.window)}）。要現在壓縮它的對話嗎？`, `${pct}% used (${fmtTokens(ask.used)} / ${fmtTokens(ask.window)}). Compact its conversation now?`)}
+          {t(`已用 ${pct}%，${fmtTokens(ask.used)} / ${fmtTokens(ask.window)}。要現在壓縮它的對話嗎？`, `${pct}% used (${fmtTokens(ask.used)} / ${fmtTokens(ask.window)}). Compact its conversation now?`)}
         </p>
         <p className="muted small">
           {methodOf(t, providers, agent.provider)}
-          {t('。工作中的 agent 會在這一輪結束後再壓縮；不處理的話，CLI 快滿時也會自己壓縮。', '. A working agent is compacted after its current turn; if you skip it, the CLI compacts on its own when it is about to be full.')}
+          {t('。工作中的 agent 會在這一回合結束後再壓縮。不處理的話，CLI 快滿時也會自己壓縮。', '. A working agent is compacted after its current turn; if you skip it, the CLI compacts on its own when it is about to be full.')}
         </p>
         <div className="row gap end">
           <button className="btn ghost" onClick={() => answer('mute')}>
             {t('這個 agent 不再詢問', "Don't ask again for this agent")}
           </button>
-          <button className="btn" onClick={() => answer('later')}>
-            {t('稍後（90% 再問）', 'Later (ask again at 90%)')}
+          <button className="btn" onClick={() => answer('later')} title={t('用到 90% 時再問', 'Ask again at 90%')}>
+            {t('90% 再問', 'Ask at 90%')}
           </button>
           <button className="btn primary" onClick={() => answer('compact')}>
             {t('現在壓縮', 'Compact now')}

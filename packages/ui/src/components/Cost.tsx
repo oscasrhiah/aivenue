@@ -8,7 +8,7 @@ import { Dialog, Hint } from './Kit';
 
 const BLOCK_LABEL = (t: T, key: string) =>
   ({
-    'role.goal': t('任務文字（你的訊息）', 'Task text (your message)'),
+    'role.goal': t('任務文字：你的訊息', 'Task text: your message'),
     'role.plan': t('計畫', 'Plan'),
     'role.goalSpec': t('驗收目標與指標', 'Goal and metrics'),
     'role.priorReview': t('前次審查與回覆', 'Earlier review and replies'),
@@ -18,28 +18,28 @@ const BLOCK_LABEL = (t: T, key: string) =>
     'role.userFeedback': t('你的回饋', 'Your feedback'),
     'role.instructions': t('角色指示', 'Role instructions'),
     'role.other': t('角色 prompt 其他', 'Role prompt, other'),
-    'shared.progress': t('共享：進度與步驟', 'Shared: progress and steps'),
-    'shared.status': t('共享：狀態（目標、問題、等待）', 'Shared: status (goal, issues, waits)'),
-    'shared.handoffs': t('共享：各階段交接', 'Shared: stage hand-offs'),
-    'shared.handover': t('共享：前一個 agent 的交接', 'Shared: hand-off from the agent before'),
-    'shared.recap': t('共享：壓縮後的回顧', 'Shared: recap after compaction'),
-    'shared.log': t('共享：最近的對話紀錄', 'Shared: recent conversation log'),
-    'shared.knowledgeDoc': t('共享：整理後的知識', 'Shared: organized knowledge'),
-    'shared.index': t('共享：主題索引', 'Shared: topic index'),
-    'shared.agents': t('共享：agent 清單', 'Shared: agent list'),
-    'shared.sharedMemory': t('共享：共享記憶', 'Shared: shared memory'),
-    'shared.notes': t('共享：筆記', 'Shared: notes'),
-    'shared.knowledgeBase': t('共享：知識庫', 'Shared: knowledge base'),
-    'shared.activity': t('共享：其他 agent 的活動', "Shared: other agents' activity"),
-    'shared.instructions': t('共享：使用說明', 'Shared: how to use it'),
-    'shared.other': t('共享：標題與分隔', 'Shared: headings and separators'),
-    shared: t('共享上下文', 'Shared context'),
-    rules: t('規則（資料夾、權限、背景工作…）', 'Rules (folders, access, background jobs…)'),
+    'shared.progress': t('共用：進度與步驟', 'Shared: progress and steps'),
+    'shared.status': t('共用：目標、問題、等待', 'Shared: goal, issues, waits'),
+    'shared.handoffs': t('共用：各階段交接', 'Shared: stage hand-offs'),
+    'shared.handover': t('共用：前一個 agent 的交接', 'Shared: hand-off from the agent before'),
+    'shared.recap': t('共用：壓縮後的回顧', 'Shared: recap after compaction'),
+    'shared.log': t('共用：最近的對話紀錄', 'Shared: recent conversation log'),
+    'shared.knowledgeDoc': t('共用：整理後的知識', 'Shared: organized knowledge'),
+    'shared.index': t('共用：主題索引', 'Shared: topic index'),
+    'shared.agents': t('共用：agent 清單', 'Shared: agent list'),
+    'shared.sharedMemory': t('共用：濃縮的筆記與結果', 'Shared: condensed notes and results'),
+    'shared.notes': t('共用：筆記', 'Shared: notes'),
+    'shared.knowledgeBase': t('共用：專案結構', 'Shared: project structure'),
+    'shared.activity': t('共用：其他 agent 的活動', "Shared: other agents' activity"),
+    'shared.instructions': t('共用：使用說明', 'Shared: how to use it'),
+    'shared.other': t('共用：標題與分隔', 'Shared: headings and separators'),
+    shared: t('共用上下文', 'Shared context'),
+    rules: t('規則：資料夾、權限、背景工作…', 'Rules: folders, access, background jobs…'),
     projectMemory: t('專案記憶', 'Project memory'),
     advisor: t('顧問提示', 'Advisor hint'),
     attachments: t('附件', 'Attachments'),
-    skills: 'Skills',
-    systemPrompt: t('角色系統提示（設定的角色指示）', 'System prompt (role instructions you set)'),
+    skills: t('Skill', 'Skills'),
+    systemPrompt: t('角色系統提示：設定的角色指示', 'System prompt: role instructions you set'),
   })[key] ?? key;
 
 const ms = (n: number) => {
@@ -52,7 +52,7 @@ function Cost({ o }: { o: ObservedTotals }) {
   if (!o.events) return <span className="muted">—</span>;
   if (o.costUnknown || o.costUsd === undefined) return <span className="muted">{t('未知', 'unknown')}</span>;
   // A price of 0 is the provider's price, not "no quota used" (that is on the usage page).
-  return <span>{o.costUsd === 0 ? t('$0（價格為 0）', '$0 (priced at 0)') : `$${o.costUsd.toFixed(4)}`}</span>;
+  return <span>{o.costUsd === 0 ? t('$0，價格為 0', '$0, priced at 0') : `$${o.costUsd.toFixed(4)}`}</span>;
 }
 
 /** Where a workflow's tokens and time went (docs/workflow-efficiency-plan.md A2). */
@@ -67,7 +67,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
       .catch((e) => setError((e as Error).message));
   }, [run.id, run.updatedAt]);
   const label = (key: string, role: string, stage?: string) =>
-    key === 'librarian' ? t('整理共用筆記（Aivenue 自動）', 'Organizing notes (Aivenue)') : key === 'compaction' ? t('壓縮對話（Aivenue 自動）', 'Compaction (Aivenue)') : `${roleLabel(t, role as AgentRole)}${stage ? ` · ${stage}` : ''}`;
+    key === 'librarian' ? t('整理共用筆記 · Aivenue 自動', 'Organizing notes · Aivenue') : key === 'compaction' ? t('壓縮對話 · Aivenue 自動', 'Compaction · Aivenue') : `${roleLabel(t, role as AgentRole)}${stage ? ` · ${stage}` : ''}`;
   const promptTotal = data?.blocks.reduce((n, b) => n + b.tokens, 0) ?? 0;
   return createPortal(
     <Dialog title={t('成本分解', 'Cost breakdown')} onClose={onClose} size="xl" className="mem-window cost-window" back="detail-back">
@@ -104,7 +104,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                         <th>{t('未快取輸入', 'Uncached in')}</th>
                         <th>{t('快取輸入', 'Cached in')}</th>
                         <th title={t('這些供應商的數字看不出輸入是否已包含快取：只列它們回報的輸入（括號內是回報的快取），不放進前兩欄', 'For these providers it is not known whether input includes the cache: their reported input (reported cache in brackets), kept out of the two columns before')}>{t('拆分未知的輸入', 'Input, split unknown')}</th>
-                        <th>{t('輸出（推理）', 'Output (reasoning)')}</th>
+                        <th>{t('輸出含推理', 'Output with reasoning')}</th>
                         <th>{t('花費', 'Cost')}</th>
                         <th title={t('Aivenue 自己組出的 prompt 大小估算，不是供應商計費的輸入', "Aivenue's own estimate of the prompts it assembled, not what the provider billed")}>{t('組裝 prompt 估算', 'Assembled prompt (est.)')}</th>
                       </tr>
@@ -121,7 +121,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                             {r.observed.unsplit ? (
                               <>
                                 {fmtTokens(r.observed.unsplit.input)}
-                                <span className="muted">（{fmtTokens(r.observed.unsplit.cached)}）</span>
+                                <span className="muted">{t('（', '(')}{fmtTokens(r.observed.unsplit.cached)}{t('）', ')')}</span>
                               </>
                             ) : (
                               <span className="muted">—</span>
@@ -129,7 +129,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                           </td>
                           <td>
                             {fmtTokens(r.observed.output)}
-                            {r.observed.reasoning !== undefined && <span className="muted">（{fmtTokens(r.observed.reasoning)}）</span>}
+                            {r.observed.reasoning !== undefined && <span className="muted">{t('（', '(')}{fmtTokens(r.observed.reasoning)}{t('）', ')')}</span>}
                           </td>
                           <td>
                             <Cost o={r.observed} />
@@ -146,8 +146,8 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                 <Hint
                   className="muted tiny"
                   text={t(
-                    '拆分已知的供應商：未快取輸入＋快取輸入＋輸出＝它回報的總量；推理是輸出的一部分，不另外相加。「拆分未知的輸入」來自看不出輸入是否已含快取的供應商（例如 Gemini、Antigravity），只列它們回報的數字，不能和前兩欄相加，括號內的快取也可能已包含在內。花費「未知」是供應商沒有回報價格，不是 0；價格為 0 也不代表沒有耗用額度（請看「設定 → 用量」）。',
-                    'Providers with a known split: uncached + cached input + output = what they reported; reasoning is part of output, not added again. "Input, split unknown" comes from providers whose numbers do not say whether input includes the cache (e.g. Gemini, Antigravity): their reported numbers only, not to be added to the two columns before, and the cache in brackets may already be inside. "Unknown" cost means no price was reported, not zero; a price of 0 does not mean no quota was used (see Settings → Usage).',
+                    '拆分已知的供應商：未快取輸入、快取輸入與輸出加起來等於它回報的總量；推理是輸出的一部分，不另外相加。「拆分未知的輸入」來自看不出輸入是否已含快取的供應商（例如 Gemini、Antigravity），只列它們回報的數字，不能和前兩欄相加，括號內的快取也可能已包含在內。花費「未知」是供應商沒有回報價格，不是 0；價格為 0 也不代表沒有耗用額度，請看設定的用量頁。',
+                    'Providers with a known split: uncached input, cached input and output add up to what they reported; reasoning is part of output, not added again. "Input, split unknown" comes from providers whose numbers do not say whether input includes the cache (e.g. Gemini, Antigravity): their reported numbers only, not to be added to the two columns before, and the cache in brackets may already be inside. "Unknown" cost means no price was reported, not zero; a price of 0 does not mean no quota was used; see the Usage page in Settings.',
                   )}
                 />
               </section>
@@ -164,7 +164,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                         </span>
                         <span>{BLOCK_LABEL(t, b.key)}</span>
                         <span className="muted small num">
-                          {fmtTokens(b.tokens)} tokens · {Math.round((b.tokens / Math.max(1, promptTotal)) * 100)}% · {t(`${b.turns} 次`, `${b.turns} turn(s)`)}
+                          {fmtTokens(b.tokens)} tokens{t('，', ', ')}{t(`佔 ${Math.round((b.tokens / Math.max(1, promptTotal)) * 100)}%，${b.turns} 次`, `${Math.round((b.tokens / Math.max(1, promptTotal)) * 100)}%, ${b.turns} turn(s)`)}
                         </span>
                       </li>
                     ))}

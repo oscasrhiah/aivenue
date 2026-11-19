@@ -648,8 +648,11 @@ p {
   background: var(--line);
 }
 
+/* A stage's name reads as the section it opens: above a turn's name (14/600), in the size the thread already uses. */
 .stage-name {
   color: var(--text);
+  font-size: var(--fs-16);
+  font-weight: 600;
 }
 
 .stage-detail {
@@ -720,11 +723,6 @@ p {
 
 .turn-role {
   flex: 0 1 auto;
-  color: var(--muted);
-}
-
-.turn-model {
-  flex: 1 1 0;
   color: var(--muted);
 }
 
@@ -1434,9 +1432,16 @@ details[open] > summary .fold-chev {
   margin-left: var(--sp-1);
 }
 
-/* 「變更後需重驗」 starts with its own icon: no dot before it (none left hanging at a line's end when it wraps). */
-.verdict > :has(+ .verdict-stale)::after {
+/* 「變更後需重驗」 starts with its own icon: no dot before it (none left hanging at a line's end when it wraps). The
+   version it was measured on (round D) is a quieter note at the end, set apart by its size and colour, not a third
+   「·」. */
+.verdict > :has(+ .verdict-stale)::after,
+.verdict > :has(+ .verdict-version)::after {
   content: none;
+}
+
+.verdict > .verdict-version {
+  margin-left: var(--sp-2);
 }
 
 .verdict-stale {
@@ -2918,8 +2923,14 @@ textarea.code {
   outline-offset: 2px;
 }
 
+/* Segments (one rule set; round D merged the second one that sat further down): the chosen one keeps a clear mark in
+   every theme (the text colour, weight and a 1px line), and a long row of them wraps whole words instead of breaking
+   inside one. A disabled option stays at full opacity: one that is not chosen fades to --faint, the chosen one (flow
+   mode "自訂", which cannot be chosen again) still reads as chosen. */
 .seg {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   padding: 2px;
   background: var(--sunken);
   border-radius: var(--r-md);
@@ -2934,22 +2945,31 @@ textarea.code {
   font-size: var(--fs-14);
   color: var(--muted);
   cursor: pointer;
+  white-space: nowrap;
+  word-break: keep-all;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
 }
 
 .seg button.on {
   background: var(--surface);
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--line-strong);
+  font-weight: 600;
+}
+
+.seg.small button.on {
+  font-weight: 400;
 }
 
 .seg button:disabled {
-  opacity: 0.4;
   cursor: default;
 }
 
-/* The chosen option can also be the one that cannot be chosen again (flow mode "自訂"): it still reads as chosen. */
-.seg button.on:disabled {
-  opacity: 1;
+.seg button:disabled:not(.on) {
+  color: var(--faint);
 }
 
 .chip-btn {
@@ -3332,13 +3352,14 @@ textarea.code {
 }
 
 /* The narrow composer's summary: the permission first and never cut, the folder and the workflow after it. */
-/* A grid, so each part gives way in turn: the permission (and the isolation's icon) never, then the workflow (it gets
-   only what is left), the folder last, only when its name alone does not fit; the chevron always stays inside. */
+/* A grid, so each part gives way in turn: the permission (and the isolation's icon) never, the folder only when its
+   name does not fit (the workflow is in the tooltip and the popover since round D); the chevron always stays inside,
+   at the right edge. */
 .wf-summary {
   flex: 1 1 auto;
   min-width: 0;
   display: grid;
-  grid-template-columns: auto auto auto minmax(0, max-content) minmax(0, 1fr) auto;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
   column-gap: 0;
 }
 
@@ -3358,19 +3379,14 @@ textarea.code {
   color: var(--text-2);
 }
 
-/* Each starts with " · ": kept (a grid item would drop its leading space). */
+/* It starts with " · ": kept (a grid item would drop its leading space). */
 .wf-sum-folder {
   grid-column: 4;
   white-space: pre;
 }
 
-.wf-sum-rest {
-  grid-column: 5;
-  white-space: pre;
-}
-
 .wf-summary .wf-chev {
-  grid-column: 6;
+  grid-column: 5;
   margin-left: var(--sp-1);
 }
 
@@ -7816,35 +7832,6 @@ textarea.code {
   color: var(--muted);
 }
 
-/* Segments: the chosen one keeps a clear mark in every theme (the text colour, weight and a 1px line), and a long row
-   of them wraps whole words instead of breaking inside one. */
-.seg {
-  flex-wrap: wrap;
-  max-width: 100%;
-}
-
-.seg button {
-  white-space: nowrap;
-  word-break: keep-all;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-1);
-  min-height: 24px;
-}
-
-.seg button.on {
-  font-weight: 600;
-}
-
-.seg.small button.on {
-  font-weight: 400;
-}
-
-.seg button:disabled:not(.on) {
-  opacity: 1;
-  color: var(--faint);
-}
-
 .seg.wrap {
   align-self: flex-start;
 }
@@ -8584,6 +8571,7 @@ textarea.code {
 }
 
 .seg.tabs-mini button {
+  gap: var(--sp-1);
   border: 0;
   min-height: 24px;
   box-shadow: none;

@@ -51,7 +51,7 @@ export function CheckRows({ checks }: { checks: ObservedCheck[] }) {
                 {r.runs.map((x, i) => (
                   <div key={i} className="check-run">
                     <div className="small">
-                      {r.runs.length > 1 ? t(`第 ${i + 1} 次`, `Run ${i + 1}`) : t('這次執行', 'This run')} · {clock(x.ts)} · {outcome(x.outcome)}
+                      {r.runs.length > 1 ? t(`第 ${i + 1} 次`, `Run ${i + 1}`) : t('這次執行', 'This run')} {clock(x.ts)} · {outcome(x.outcome)}
                       {x.seq !== undefined && <span className="muted tiny"> · {t(`活動紀錄第 ${x.seq} 筆`, `activity log event ${x.seq}`)}</span>}
                     </div>
                     {x.output ? <pre className="check-out">{x.output}</pre> : <div className="muted tiny">{t('提交時沒有留下輸出，完整紀錄在這個 agent 的活動紀錄', "No output kept at submission: the full record is in this agent's activity log")}</div>}

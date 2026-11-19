@@ -8,7 +8,7 @@ import { cx, duration, firstLine, fullTime, saidOwner, modelLabel, providerName,
 import { Clamp } from './Clamp';
 import { SwitchProvider } from './RunTools';
 import { LiveFeed, Transcript, visible } from './Transcript';
-import { Approvals } from './Safety';
+import { Approvals, permissionLabel } from './Safety';
 import { activityCounts, activityLabel, batchCounts, batchesOf, isInternal, liveLine, readableError, reworkLine, roundOf, turnSummary, verdictWords, type Batch, type BatchState } from '../timeline';
 import { Markdown } from './Markdown';
 import { CopyButton } from './CopyButton';
@@ -68,24 +68,28 @@ function HandoffBlock({ h }: { h: Handoff }) {
 }
 
 /**
- * What a review or verification was measured on, said the same way current or not ("量測於 commit … · tree …": the
- * working tree tells two reviews of one commit apart). Out of date: 「變更後需重驗」 with why in view (the code changed
- * after it was measured on that version); else the version, quietly.
+ * What a review or verification was measured on, said the same way current or not (「版本 …」; the commit and the
+ * working tree's hash, which tells two reviews of one commit apart, in its tooltip). Out of date: 「變更後需重驗」 with why
+ * in view (the code changed after that version); else the version, quietly.
  */
 function Evidence({ stale, evidence }: { stale?: boolean; evidence?: { commit?: string; treeHash: string; at: number } }) {
   const t = useT();
   if (!evidence) return null;
-  const where = `${evidence.commit ? `commit ${evidence.commit} · ` : ''}tree ${evidence.treeHash.slice(0, 8)}`;
+  // 「版本」: the commit when there is one, else the working tree's hash; both in the tooltip.
+  const version = (evidence.commit ?? evidence.treeHash).slice(0, 8);
+  const full = `${evidence.commit ? `commit ${evidence.commit}\n` : ''}tree ${evidence.treeHash}`;
   return stale ? (
     <span className="verdict-stale">
       <span className="state-word warn">
         <Ico i={RefreshCw} size={14} /> {t('變更後需重驗', 'Re-check after changes')}
       </span>
-      <span className="verdict-why">{t(`量測於 ${where}，之後程式碼改過`, `measured on ${where}; the code changed since`)}</span>
+      <span className="verdict-why" title={t(`量測於版本 ${version}\n${full}`, `Measured on version ${version}\n${full}`)}>
+        {t(`版本 ${version} 之後程式碼改過`, `code changed after version ${version}`)}
+      </span>
     </span>
   ) : (
-    <span className="verdict-version" title={t(`綁定程式版本：${where}`, `Bound to code version ${where}`)}>
-      {t(`量測於 ${where}`, `measured on ${where}`)}
+    <span className="verdict-version" title={t(`量測於這個程式版本\n${full}`, `Measured on this code version\n${full}`)}>
+      {t(`版本 ${version}`, `version ${version}`)}
     </span>
   );
 }
@@ -103,10 +107,7 @@ function Responses({ round }: { round: Round }) {
   return (
     <div className="block">
       <div className="block-label">
-        {t('對審查意見的回應', 'Responses to review')}
-        {t('（', ' (')}
-        {counts.map(([a, n]) => `${label(a)} ${n}`).join(t('・', ', '))}
-        {t('）', ')')}
+        {t('對審查意見的回應', 'Responses to review')} · {counts.map(([a, n]) => `${label(a)} ${n}`).join(t('、', ', '))}
       </div>
       {rs.map((r, i) => (
         <div key={`${r.issue_id}-${i}`} className="resp">
@@ -114,10 +115,10 @@ function Responses({ round }: { round: Round }) {
           <b>{r.issue_id}</b>{' '}
           {r.unmatched ? (
             <span className="muted">
-              {t(`（不是這一輪的審查問題；作者送出「${r.action === 'unclassified' ? r.given || '無' : label(r.action)}」，不計入）`, `(not a review issue of this round; sent as "${r.action === 'unclassified' ? r.given || 'none' : label(r.action)}", not counted)`)}{' '}
+              {t(`這一輪沒有這個審查問題，作者送出「${r.action === 'unclassified' ? r.given || '無' : label(r.action)}」，不計入`, `Not a review issue of this round; sent as "${r.action === 'unclassified' ? r.given || 'none' : label(r.action)}", not counted`)}{' '}
             </span>
           ) : (
-            r.action === 'unclassified' && <span className="muted">{r.given ? t(`（作者寫的是「${r.given}」，不是已修正或反駁）`, `(the author wrote "${r.given}": neither fixed nor rebutted)`) : t('（作者沒有寫處理方式）', '(the author gave no action)')} </span>
+            r.action === 'unclassified' && <span className="muted">{r.given ? t(`作者寫的是「${r.given}」，既不是已修正也不是反駁`, `The author wrote "${r.given}": neither fixed nor rebutted`) : t('作者沒有寫處理方式', 'The author gave no action')} </span>
           )}
           {r.conflict && <span className="state-word warn">{t(`與待決事項 ${r.conflict} 矛盾`, `Conflicts with ${r.conflict}`)}</span>}
           <span className="muted">{r.note}</span>
@@ -304,7 +305,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
           ))}
         </ul>
         <IssueList issues={v.issues} />
-        {round.route && round.route.to !== 'done' && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
+        {round.route && round.route.to !== 'done' && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}{t('：', ': ')}{round.route.reason}</div>}
         {v.summary && <CopyRow text={v.summary} label={t('複製回覆', 'Copy reply')} />}
       </div>
     );
@@ -365,7 +366,7 @@ function Outcome({ run, agent, lastMessage }: { run: WorkflowRun; agent: AgentRu
             </ul>
           </div>
         )}
-        {round.route && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}：{round.route.reason}</div>}
+        {round.route && <div className="route small"><Ico i={CornerDownRight} size={14} /> {routeLabel(t, round.route.to)}{t('：', ': ')}{round.route.reason}</div>}
       </>
     );
     return (
@@ -454,19 +455,21 @@ function TurnFacts({ run, agent }: { run: WorkflowRun; agent: AgentRunInfo }) {
   const facts = [
     agent.startedAt ? t(`開始 ${fullTime(agent.startedAt)}`, `Started ${fullTime(agent.startedAt)}`) : '',
     agent.endedAt ? t(`結束 ${fullTime(agent.endedAt)}`, `ended ${fullTime(agent.endedAt)}`) : '',
-    took ? t(`用時 ${took}`, `took ${took}`) : '',
+    took ? t(`耗時 ${took}`, `took ${took}`) : '',
     agent.model ? t(`模型 ${agent.model}${agent.modelDefault ? '，供應商預設' : ''}`, `model ${agent.model}${agent.modelDefault ? ', the provider default' : ''}`) : t('供應商預設模型', 'provider default model'),
-    agent.effort ? t(`推理 ${agent.effort}`, `effort ${agent.effort}`) : '',
+    agent.effort ? t(`推理強度 ${agent.effort}`, `effort ${agent.effort}`) : '',
     agent.servedBy?.length ? t(`實際回答的模型 ${agent.servedBy.join('、')}`, `answered by ${agent.servedBy.join(', ')}`) : '',
   ].filter(Boolean);
   return (
     <div className="turn-facts">
-      <div>{facts.join(' · ')}</div>
+      {facts.map((f) => (
+        <div key={f}>{f}</div>
+      ))}
       {snap && (
         <div>
           {t(
-            `這一輪的設定（${new Date(snap.at).toLocaleTimeString()}）：模型 ${snap.model ?? '預設'}、推理 ${snap.effort ?? '預設'}、權限 ${snap.permission ?? 'auto'}、技能 ${snap.skills.length} 個、已收到 ${snap.userMessages} 則中途訊息`,
-            `Settings of this turn (${new Date(snap.at).toLocaleTimeString()}): model ${snap.model ?? 'default'}, effort ${snap.effort ?? 'default'}, permission ${snap.permission ?? 'auto'}, ${snap.skills.length} skills, ${snap.userMessages} mid-run messages received`,
+            `這一回合 ${new Date(snap.at).toLocaleTimeString()} 的設定：模型 ${snap.model ?? '預設'}、推理強度 ${snap.effort ?? '預設'}、權限 ${permissionLabel(t, snap.permission ?? 'auto')}、Skill ${snap.skills.length} 個、已收到 ${snap.userMessages} 則中途訊息`,
+            `Settings of this turn at ${new Date(snap.at).toLocaleTimeString()}: model ${snap.model ?? 'default'}, effort ${snap.effort ?? 'default'}, permission ${permissionLabel(t, snap.permission ?? 'auto')}, ${snap.skills.length} skills, ${snap.userMessages} mid-run messages received`,
           )}
         </div>
       )}
@@ -476,7 +479,7 @@ function TurnFacts({ run, agent }: { run: WorkflowRun; agent: AgentRunInfo }) {
           {agent.resumed && (
             <>
               {' · '}
-              <Ico i={RotateCw} size={12} /> {t('續接先前的對話', 'resumed session')}
+              <Ico i={RotateCw} size={12} /> {t('接續先前的對話', 'resumed session')}
             </>
           )}
         </div>
@@ -491,7 +494,7 @@ function TurnSkills({ agent, read, graphify }: { agent: AgentRunInfo; read: stri
   if (!agent.alwaysOn?.length && !agent.skillUses?.length && !read.length && !graphify) return null;
   return (
     <div className="block">
-      <div className="block-label">{t('技能與擴充', 'Skills and extensions')}</div>
+      <div className="block-label">{t('Skill 與擴充功能', 'Skills and extensions')}</div>
       <ul className="turn-skills small">
         {agent.alwaysOn?.map((a) => (
           <li key={a}>
@@ -501,14 +504,18 @@ function TurnSkills({ agent, read, graphify }: { agent: AgentRunInfo; read: stri
         {agent.skillUses?.map((u) => (
           <li key={u.name}>
             <Ico i={Wrench} size={13} /> {u.name} <span className={cx('state-word', u.verified ? 'ok' : 'warn')}>{u.verified ? t('已套用並驗證', 'applied and verified') : t('已套用，尚未驗證', 'applied, not verified yet')}</span>
-            <div className="muted">
-              {[`${t('原因', 'Why')}：${u.reason}`, u.deliverables && `${t('產出', 'Produced')}：${u.deliverables}`, u.verification && `${t('驗證', 'Checked by')}：${u.verification}`, u.version && `${t('版本', 'Version')} ${u.version}`].filter(Boolean).join(' · ')}
-            </div>
+            {[`${t('原因', 'Why')}：${u.reason}`, u.deliverables && `${t('產出', 'Produced')}：${u.deliverables}`, u.verification && `${t('驗證', 'Checked by')}：${u.verification}`, u.version && `${t('版本', 'Version')} ${u.version}`]
+              .filter(Boolean)
+              .map((x) => (
+                <div key={x as string} className="muted">
+                  {x}
+                </div>
+              ))}
           </li>
         ))}
         {read.length > 0 && (
           <li>
-            <Ico i={BookOpen} size={13} /> {read.join('、')} <span className="muted">· {t('只讀了，沒有回報套用（只讀不算遵循）', 'read but not reported as applied (reading is not following)')}</span>
+            <Ico i={BookOpen} size={13} /> {read.join('、')} <span className="muted">· {t('只讀了，沒有回報套用，只讀不算遵循', 'read but not reported as applied: reading is not following')}</span>
           </li>
         )}
         {graphify > 0 && (
@@ -545,7 +552,7 @@ function TurnDetails({ run, agent }: { run: WorkflowRun; agent: AgentRunInfo }) 
       {(agent.stats.filesChanged.length > 0 || (agent.stats.filesMaybeChanged?.length ?? 0) > 0) && (
         <div className="block">
           <div className="block-label">
-            {t('以編輯工具改動的檔案', 'Files edited with the edit tool')} <span className="block-hint">{t('終端指令寫入的檔案不在這裡，見結果下方的「檔案」', 'files written by terminal commands are not here: see Files under the result')}</span>
+            {t('改過的檔案', 'Files changed')} <span className="block-hint">{t('只算編輯工具的改動，終端指令寫入的見結果下方的「檔案」', 'edit-tool changes only; files written by terminal commands are under Files below the result')}</span>
           </div>
           <Files files={agent.stats.filesChanged} maybe={agent.stats.filesMaybeChanged} />
         </div>
@@ -589,7 +596,7 @@ function Notes({ run, agentId, against }: { run: WorkflowRun; agentId: string; a
             >
               <Ico i={handoff ? Handshake : Pin} size={14} className="note-pin" />
               {handoff ? <span className="state-word">{t('交接', 'Hand-off')}</span> : NOTE_KIND(t, n.kind) && <span className={cx('state-word', n.kind === 'fact' ? 'ok' : n.kind === 'decision' ? '' : 'warn')}>{NOTE_KIND(t, n.kind)}</span>}
-              <span className="note-text">{shown ? text : same ? t('筆記（與這張卡片的結果相同）', "Note (same as this card's result)") : text}</span>
+              <span className="note-text">{shown ? text : same ? t('筆記，與這張卡片的結果相同', "Note, the same as this card's result") : text}</span>
             </button>
             {shown && !handoff && <RememberButton runId={run.id} text={text} noteId={n.id} ts={n.ts} />}
           </div>
@@ -731,8 +738,8 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
   const snap = agent.snapshot;
   const snapText = snap
     ? t(
-        `這一輪的設定（${new Date(snap.at).toLocaleTimeString()}）：模型 ${snap.model ?? '預設'}、推理 ${snap.effort ?? '預設'}、權限 ${snap.permission ?? 'auto'}、技能 ${snap.skills.length} 個、已收到 ${snap.userMessages} 則中途訊息`,
-        `Settings of this turn (${new Date(snap.at).toLocaleTimeString()}): model ${snap.model ?? 'default'}, effort ${snap.effort ?? 'default'}, permission ${snap.permission ?? 'auto'}, ${snap.skills.length} skills, ${snap.userMessages} mid-run messages received`,
+        `這一回合 ${new Date(snap.at).toLocaleTimeString()} 的設定：模型 ${snap.model ?? '預設'}、推理強度 ${snap.effort ?? '預設'}、權限 ${permissionLabel(t, snap.permission ?? 'auto')}、Skill ${snap.skills.length} 個、已收到 ${snap.userMessages} 則中途訊息`,
+        `Settings of this turn (${new Date(snap.at).toLocaleTimeString()}): model ${snap.model ?? 'default'}, effort ${snap.effort ?? 'default'}, permission ${permissionLabel(t, snap.permission ?? 'auto')}, ${snap.skills.length} skills, ${snap.userMessages} mid-run messages received`,
       )
     : undefined;
   const skillsRead = ext.skills.filter((n) => !agent.skillUses?.some((u) => u.name === n));
@@ -752,7 +759,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
 
   // 「第 N 輪」 only when its stage went more than one round.
   const stage = agent.stage === 'verify' ? run.stages.verify : agent.stage ? run.stages[agent.stage] : undefined;
-  const roundText = agent.round && agent.role !== 'subagent' && agent.role !== 'advisor' && (stage?.rounds.length ?? 0) > 1 ? ` · ${t(`第 ${agent.round} 輪`, `round ${agent.round}`)}` : '';
+  const roundText = agent.round && agent.role !== 'subagent' && agent.role !== 'advisor' && (stage?.rounds.length ?? 0) > 1 ? ` ${t(`第 ${agent.round} 輪`, `round ${agent.round}`)}` : '';
   // How long it took, from ten seconds up (the clock times are its tooltip and in its activity log); a turn that is over
   // counts to its end, never on to now.
   const end = turnEnd(run, agent) ?? Date.now();
@@ -787,31 +794,37 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
   // the error line of a failed turn says — a stopped turn has none, so it keeps it).
   const summary = turnSummary(t, run, agent).filter((s, i) => !(i === 0 && (agent.status === 'failed' || agent.status === 'cancelled')) && !(agent.status === 'failed' && agent.error && agent.endedWithoutResult && s === t('沒有交出結果', 'no result handed in')));
   const verdict = !running && hasVerdict(run, agent);
+  // The one-line result shows its first two parts (how it ended, its checks); the rest (the files changed) is in its
+  // tooltip, with what 「改了」 counts.
+  const shown = summary.slice(0, 2);
+  const fileWords = t(`改了 ${agent.stats.filesChanged.length} 個檔案`, `${agent.stats.filesChanged.length} file(s) changed`);
+  const summaryTitle = [...summary.slice(2), agent.stats.filesChanged.length ? t('「改了」只算編輯工具的改動，終端指令寫入的見結果下方的「檔案」', '"Changed" counts edit-tool changes only; files written by terminal commands are under Files below the result') : ''].filter(Boolean).join('\n');
   // What it did, as the closed activity log says it, after its name ("活動紀錄 · 讀 3 個檔案、執行 2 個指令"). The files
   // its edit tool changed are said once: by the one-line result when it shows them, else here.
-  const filesSaid = !running && !verdict && agent.stats.filesChanged.length > 0 && summary.length > 0;
+  const filesSaid = !running && !verdict && agent.stats.filesChanged.length > 0 && shown.includes(fileWords);
   const activity = activityLabel(t, { ...counts, write: filesSaid ? 0 : agent.stats.filesChanged.length || counts.write }, noteCount);
   const sub = agent.role === 'subagent' || agent.role === 'advisor';
 
   return (
     <div data-agent-id={agent.id} className={cx('turn', sub && 'sub', agent.role === 'advisor' && 'advisor', running && 'live')}>
       <div className="turn-head">
-        <h3 className="turn-id">
+        {/* Who and in what role (round D: two parts, one 「·」); the model, what actually answered and the effort are in
+            its tooltip and, with the clock times, in the activity log. */}
+        <h3
+          className="turn-id"
+          title={[
+            agent.model ? `${agent.modelDefault ? t('預設模型：', 'Default model: ') : t('模型：', 'Model: ')}${agent.model}` : t('供應商預設模型', 'Provider default model'),
+            agent.servedBy?.length ? t(`實際回答的模型：${agent.servedBy.join('、')}`, `Models that actually answered: ${agent.servedBy.join(', ')}`) : '',
+            agent.effort ? t(`推理強度 ${agent.effort}`, `effort ${agent.effort}`) : '',
+            snapText,
+          ]
+            .filter(Boolean)
+            .join('\n')}
+        >
           <span className="turn-who">{name}</span>{' '}
           <span className="turn-role">
             {roleLabel(t, agent.role)}
             {roundText}
-          </span>{' '}
-          {/* Cut first in a narrow column: the model and its effort whole in its tooltip and in the activity log. */}
-          <span className="turn-model" title={[agent.model ? `${agent.modelDefault ? t('預設模型：', 'Default model: ') : ''}${agent.model}` : t('供應商預設模型', 'Provider default model'), agent.effort ? t(`推理 ${agent.effort}`, `effort ${agent.effort}`) : '', snapText].filter(Boolean).join('\n')}>
-            {!agent.model ? t('預設模型', 'default model') : agent.modelDefault ? `${t('預設模型', 'default model')} · ${modelLabel(agent.model)}` : modelLabel(agent.model)}
-            {agent.servedBy?.length ? (
-              <span className="turn-served" title={t(`實際回答的模型：${agent.servedBy.join('、')}`, `Models that actually answered: ${agent.servedBy.join(', ')}`)}>
-                {' → '}
-                {agent.servedBy.join('、')}
-              </span>
-            ) : null}
-            {agent.effort ? ` · ${t('推理', 'effort')} ${agent.effort}` : ''}
           </span>
         </h3>
         <span className="turn-meta" data-took-s={tookS}>
@@ -849,13 +862,13 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
                 </button>
               )}
               {((agent.role === 'subagent' && parentLive) || (agent.role !== 'subagent' && agent.role !== 'advisor' && running)) && (
-                <button className="icon-btn tiny" title={agent.role === 'subagent' ? t('用同樣的任務重跑（會通知上層 agent）', 'Run the same task again (its parent is told)') : t('停下並重新派發這個角色', 'Stop and re-dispatch this role')} onClick={() => act('agents.rerun')} aria-label={agent.role === 'subagent' ? t('重跑', 'Run again') : t('重新派發', 'Re-dispatch')}>
+                <button className="icon-btn tiny" title={agent.role === 'subagent' ? t('用同樣的任務重跑，上層 agent 會收到通知', 'Run the same task again; its parent is told') : t('停下並重新派發這個角色', 'Stop and re-dispatch this role')} onClick={() => act('agents.rerun')} aria-label={agent.role === 'subagent' ? t('重跑', 'Run again') : t('重新派發', 'Re-dispatch')}>
                   <Ico i={RotateCw} size={13} />
                 </button>
               )}
               {agent.role === 'subagent' && parentLive && <SwitchProvider compact workflowId={run.id} agentId={agent.id} urgent={agent.failure?.kind === 'quota' || agent.failure?.kind === 'rate_limit'} />}
               {agent.role === 'subagent' && !running && (
-                <button className="icon-btn tiny" title={t('關閉（從 agent 地圖隱藏，紀錄保留）', 'Close (hide from the agent map; records stay)')} onClick={() => act('agents.close')} aria-label={t('關閉', 'Close')}>
+                <button className="icon-btn tiny" title={t('關閉：從分工圖隱藏，紀錄保留', 'Close: hide from the agent map; records stay')} onClick={() => act('agents.close')} aria-label={t('關閉', 'Close')}>
                   <Ico i={X} size={13} />
                 </button>
               )}
@@ -889,8 +902,8 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
             </span>
           ))}
           {skillsRead.length > 0 && (
-            <span className="ext-chip muted" title={t(`只讀了，沒有回報套用：${skillsRead.join('、')}（只讀不算遵循）`, `Read but not reported as applied: ${skillsRead.join(', ')} (reading is not following)`)}>
-              <Ico i={BookOpen} size={13} /> {skillsRead.length === 1 ? skillsRead[0] : t(`讀了 ${skillsRead.length} 個技能`, `read ${skillsRead.length} skills`)}
+            <span className="ext-chip muted" title={t(`只讀了，沒有回報套用：${skillsRead.join('、')}。只讀不算遵循。`, `Read but not reported as applied: ${skillsRead.join(', ')}. Reading is not following.`)}>
+              <Ico i={BookOpen} size={13} /> {skillsRead.length === 1 ? skillsRead[0] : t(`讀了 ${skillsRead.length} 個 Skill`, `read ${skillsRead.length} skills`)}
             </span>
           )}
           {ext.graphify > 0 && (
@@ -925,7 +938,11 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
         ) : verdict ? (
           <VerdictLine run={run} agent={agent} />
         ) : (
-          summary.length > 0 && <div className="turn-summary">{summary.join(' · ')}</div>
+          shown.length > 0 && (
+            <div className="turn-summary" title={summaryTitle || undefined}>
+              {shown.join(' · ')}
+            </div>
+          )
         )}
         {/* What it waits for, in words (its head says that it waits). Your answer, an approval or a pause: its head says
             so and the card or the record line right below says what to do — not said a third time here. */}
@@ -942,7 +959,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
         {/* Settings changed after this turn started: said in view, with when they apply. */}
         {running && outdated.length > 0 && (
           <div className="turn-note warn">
-            <Ico i={TriangleAlert} size={14} /> {t(`設定未套用：這一回合開始後你改了${outdated.join('、')}，下一回合才會套用；要立刻套用，請在設定裡按「立即套用（重新派發）」`, `Settings pending: you changed ${outdated.join(', ')} after this turn started; it applies from the next turn. To apply now, press "Apply now (re-dispatch)" in the settings`)}
+            <Ico i={TriangleAlert} size={14} /> {t(`設定未套用：這一回合開始後你改了${outdated.join('、')}，下一回合才會套用；要立刻套用，請在設定裡按「立即重新派發」`, `Settings pending: you changed ${outdated.join(', ')} after this turn started; it applies from the next turn. To apply now, press "Re-dispatch now" in the settings`)}
           </div>
         )}
         {/* An approval this agent waits for: beside its work, not at the bottom of the page. */}
@@ -956,7 +973,11 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           <button type="button" className="activity-toggle" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
             <Ico i={expanded ? ChevronDown : ChevronRight} size={14} />
             <span className="activity-name">{t('活動紀錄', 'Activity log')}</span>
-            {activity && <span className="activity-what">· {activity}</span>}
+            {activity && (
+              <span className="activity-what" title={!filesSaid && (agent.stats.filesChanged.length || counts.write) ? t('「改了」只算編輯工具的改動', '"Changed" counts edit-tool changes only') : undefined}>
+                · {activity}
+              </span>
+            )}
           </button>
           {expanded && (
             <label className="toggle">
@@ -971,7 +992,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
             {!raw && internalCount + (agent.role !== 'advisor' ? noteCount : 0) > 0 && (
               <details className="internal-log">
                 <summary>
-                  <Ico i={ChevronRight} size={14} className="fold-chev" /> {t(`Aivenue 的紀錄、進度回報、筆記與交接（${internalCount + (agent.role !== 'advisor' ? noteCount : 0)}）`, `Aivenue's records, progress reports, notes and hand-offs (${internalCount + (agent.role !== 'advisor' ? noteCount : 0)})`)}
+                  <Ico i={ChevronRight} size={14} className="fold-chev" /> <span title={t('Aivenue 的紀錄、進度回報、筆記與交接', "Aivenue's records, progress reports, notes and hand-offs")}>{t(`紀錄與交接 · ${internalCount + (agent.role !== 'advisor' ? noteCount : 0)}`, `Records and hand-offs · ${internalCount + (agent.role !== 'advisor' ? noteCount : 0)}`)}</span>
                 </summary>
                 <Transcript events={events} internal />
                 {agent.role !== 'advisor' && <Notes run={run} agentId={agent.id} against={[]} />}
@@ -998,7 +1019,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
       )}
       {allChildren.some((c) => c.closed) && (
         <button type="button" className="link small" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
-          {showClosed ? t('隱藏已關閉的 sub agent', 'Hide closed sub-agents') : t(`顯示 ${allChildren.filter((c) => c.closed).length} 個已關閉的 sub agent`, `Show ${allChildren.filter((c) => c.closed).length} closed sub-agent(s)`)}
+          {showClosed ? t('隱藏已關閉的子 agent', 'Hide closed sub-agents') : t(`顯示 ${allChildren.filter((c) => c.closed).length} 個已關閉的子 agent`, `Show ${allChildren.filter((c) => c.closed).length} closed sub-agent(s)`)}
         </button>
       )}
     </div>
@@ -1026,7 +1047,7 @@ function BatchOverview({ run, parent, items, providers }: { run: WorkflowRun; pa
   return (
     <div className="subs batches">
       <div className="batch-head">
-        {t('子代理批次', 'Sub-agent batches')} ·{' '}
+        {t('子 agent 批次', 'Sub-agent batches')} ·{' '}
         {BATCH_ORDER.filter((s) => counts[s])
           .map((s) => `${label[s]} ${counts[s]}`)
           .join(t('、', ', '))}
@@ -1081,7 +1102,7 @@ function BatchRow({ run, b, providers, open, onToggle, parentLive }: { run: Work
         </button>
         {b.state === 'blocked' && parentLive && (
           <span className="batch-actions">
-            <button className="btn small" onClick={rerun} title={t('用同樣的任務、同一個模型再試一次（會通知上層 agent）', 'Try the same task again with the same model (its parent is told)')}>
+            <button className="btn small" onClick={rerun} title={t('用同樣的任務、同一個模型再試一次，上層 agent 會收到通知', 'Try the same task again with the same model; its parent is told')}>
               <Ico i={RotateCw} size={14} /> {t('重試', 'Retry')}
             </button>
             <SwitchProvider compact workflowId={run.id} agentId={a.id} urgent={a.failure?.kind === 'quota' || a.failure?.kind === 'rate_limit'} />

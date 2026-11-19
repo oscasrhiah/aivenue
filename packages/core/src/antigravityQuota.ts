@@ -135,7 +135,7 @@ export class AntigravityQuota {
       const monthly = assist.planInfo?.monthlyPromptCredits;
       const available = assist.availablePromptCredits;
       if (typeof monthly === 'number' && monthly > 0 && typeof available === 'number') {
-        windows.push({ minutes: 43200, usedPercent: round((1 - available / monthly) * 100), label: L(`每月額度（${available} / ${monthly} credits）`, `Monthly credits (${available} / ${monthly})`) });
+        windows.push({ minutes: 43200, usedPercent: round((1 - available / monthly) * 100), label: L(`每月額度 ${available} / ${monthly} credits`, `Monthly credits ${available} / ${monthly}`) });
       }
       // The quota buckets are the source of truth: Google leaves remainingFraction out when it is 0 (an exhausted
       // model), so a model listed with only a reset time is spent, not unknown.

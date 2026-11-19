@@ -184,7 +184,7 @@ export class CapabilityStore {
         if (typeof v === 'string') values[k] = v;
         else if ('ghToken' in v) {
           const token = await this.ghToken?.();
-          if (!token) throw new NeedsGithub(L('需要先在「能力 → GitHub」登入 GitHub', 'Sign in to GitHub first (Capabilities → GitHub)'));
+          if (!token) throw new NeedsGithub(L('需要先在能力頁的 GitHub 區塊登入 GitHub', 'Sign in to GitHub first, in the GitHub section of Capabilities'));
           values[k] = (v.prefix ?? '') + token;
           secret.push(k);
         } else {

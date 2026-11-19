@@ -69,16 +69,16 @@ function GeneralPane() {
         </section>
         <section className="setting">
           <div>
-            <div className="setting-title">{t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')}</div>
+            <div className="setting-title">{t('閒置後關閉', 'Close when idle')}</div>
             <Hint
               className="setting-desc"
               text={t(
-                '工作流結束後閒置超過這段時間才關閉，執行中一律不關。Claude Code、Antigravity 等會在對話中保持執行，下一輪不用重新讀取全部內容；工作流還沒結束時（例如等額度重置）一律不關。選「不自動關閉」時，關閉 Aivenue 才會關。',
-                'They close once idle this long after the workflow ends, never while it runs. Claude Code, Antigravity and similar CLIs stay running in a conversation so the next turn need not read everything again; while the workflow has not ended (e.g. waiting for a quota reset) they are never closed. With Never, they close when Aivenue closes.',
+                '常駐的 CLI 在工作流結束、閒置超過這段時間後關閉，執行中一律不關。Claude Code、Antigravity 等會在對話中保持執行，下一輪不用重新讀取全部內容；工作流還沒結束時（例如等額度重置）一律不關。選「不自動關閉」時，關閉 Aivenue 才會關。',
+                'Kept CLIs close once idle this long after the workflow ends, never while it runs. Claude Code, Antigravity and similar CLIs stay running in a conversation so the next turn need not read everything again; while the workflow has not ended (e.g. waiting for a quota reset) they are never closed. With Never, they close when Aivenue closes.',
               )}
             />
           </div>
-          <select aria-label={t('常駐 CLI 閒置多久後關閉', 'Close kept CLIs after idle')} value={String(s.cliIdleMinutes ?? 5)} onChange={(e) => saveSettings({ cliIdleMinutes: Number(e.target.value) })}>
+          <select aria-label={t('閒置後關閉', 'Close when idle')} value={String(s.cliIdleMinutes ?? 5)} onChange={(e) => saveSettings({ cliIdleMinutes: Number(e.target.value) })}>
             {[1, 5, 15, 30, 60, 180].map((m) => (
               <option key={m} value={m}>
                 {m < 60 ? t(`${m} 分鐘`, `${m} min`) : t(`${m / 60} 小時`, `${m / 60} h`)}
@@ -89,16 +89,16 @@ function GeneralPane() {
         </section>
         <section className="setting">
           <div>
-            <div className="setting-title">{t('重新啟動後自動接續', 'Resume after a restart')}</div>
+            <div className="setting-title">{t('重啟後接續', 'Resume after restart')}</div>
             <Hint
               className="setting-desc"
               text={t(
-                'Aivenue 更新或重新啟動時還在執行的工作流，啟動後從中斷的階段與輪次自動接著做。只接續一天內中斷的、每段對話最新的一則；暫停中的不會自動接續，按「繼續」才接著做。選「手動接續」時，自己按「接續」。',
+                'Aivenue 更新或重新啟動時還在執行的工作流，啟動後自動從中斷的階段與輪次接著做。只接續一天內中斷的、每段對話最新的一則；暫停中的不會自動接續，按「繼續」才接著做。選「手動接續」時，自己按「接續」。',
                 'Workflows still running when Aivenue was updated or restarted go on by themselves from the stage and round they stopped in. Only those interrupted within a day, the newest message of each conversation; paused ones wait until you press Continue. With Manual, press Resume yourself.',
               )}
             />
           </div>
-          <select aria-label={t('重新啟動後自動接續', 'Resume after a restart')} value={s.autoResume === false ? 'off' : 'on'} onChange={(e) => saveSettings({ autoResume: e.target.value === 'on' })}>
+          <select aria-label={t('重啟後接續', 'Resume after restart')} value={s.autoResume === false ? 'off' : 'on'} onChange={(e) => saveSettings({ autoResume: e.target.value === 'on' })}>
             <option value="on">{t('自動接續', 'Resume automatically')}</option>
             <option value="off">{t('手動接續', 'Manual')}</option>
           </select>

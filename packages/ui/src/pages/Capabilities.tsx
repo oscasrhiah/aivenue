@@ -21,7 +21,7 @@ const roleName = (t: T, r: InstructionRole) =>
     plan_reviewer: t('審查計畫', 'Plan reviewer'),
     executor: t('實作', 'Implementer'),
     code_reviewer: t('審查程式碼', 'Code reviewer'),
-    subagent: 'Sub agent',
+    subagent: t('子 agent', 'Sub-agent'),
   })[r];
 
 function useBusy() {
@@ -142,7 +142,7 @@ function KVEditor({ rows, onChange, keyLabel }: { rows: KV[]; onChange: (r: KV[]
             className="mono grow"
             type={r.secret ? 'password' : 'text'}
             disabled={!!r.gh}
-            placeholder={r.gh ? t('使用 GitHub 登入（啟動 agent 時自動帶入）', 'GitHub sign-in (filled in when an agent starts)') : r.secret && r.stored ? t('已加密保存（輸入以取代）', 'Stored encrypted (type to replace)') : t('值', 'value')}
+            placeholder={r.gh ? t('使用 GitHub 登入，啟動 agent 時自動帶入', 'GitHub sign-in, filled in when an agent starts') : r.secret && r.stored ? t('已加密保存，輸入即取代', 'Stored encrypted, type to replace') : t('值', 'value')}
             value={r.value}
             onChange={(e) => set(i, { value: e.target.value })}
             autoComplete="off"
@@ -449,7 +449,7 @@ function BrowserPresets({ servers }: { servers: McpServerConfig[] }) {
                 </div>
                 <div className="row gap crow-actions">
                   <button className="link link-icon tiny" onClick={() => hub.call('host.openExternal', { url: p.docsUrl })}>
-                    <Ico i={ExternalLink} size={14} /> {t('說明文件', 'Docs')}
+                    <Ico i={ExternalLink} size={14} /> {t('文件', 'Docs')}
                   </button>
                   {existing ? (
                     <StateWord icon={existing.enabled ? CircleCheck : CircleDashed} tone={existing.enabled ? 'ok' : undefined}>
@@ -572,7 +572,7 @@ function ReviewState({ r }: { r: SkillReview }) {
       : r.scan?.status === 'findings'
         ? t(`靜態掃描：${n} 處需要注意`, `Static scan: ${n} finding(s) to look at`)
         : r.scan?.status === 'clean'
-          ? t('靜態掃描：沒有發現需要注意的內容（不代表一定安全）', 'Static scan: nothing to look at found (not a guarantee of safety)')
+          ? t('靜態掃描：沒有發現需要注意的內容，但不保證安全', 'Static scan: nothing to look at found, which does not guarantee safety')
           : t('還沒掃描', 'Not scanned yet');
   const state =
     r.state === 'approved'
@@ -585,7 +585,7 @@ function ReviewState({ r }: { r: SkillReview }) {
         ? t('確認後檔案又變了：暫停載入，要重新確認這一版才會提供給 agent', 'The files changed after approval: not loaded until you approve this version')
         : r.state === 'failed'
           ? t('無法掃描，維持停用', 'Could not be scanned, so it stays off')
-          : t('待確認：還沒確認過這一版，暫停載入。打開開關，看過掃描結果後確認，才會提供給 agent', 'Waiting for approval: not loaded until you turn it on and approve this version after looking at the scan')
+          : t('待確認：還沒確認過這一版，暫停載入。開啟開關，看過掃描結果後確認，才會提供給 agent', 'Waiting for approval: not loaded until you turn it on and approve this version after looking at the scan')
   return (
     <div className={cx('skill-review', r.state)}>
       <StateWord icon={r.state === 'approved' ? CircleCheck : r.state === 'failed' ? CircleX : TriangleAlert} tone={r.state === 'approved' ? 'ok' : r.state === 'failed' ? 'err' : 'warn'} className="small skill-state">
@@ -756,11 +756,11 @@ function Skills() {
     <section className="cap">
       <div className="cap-head">
         <div>
-          <h3>{t('共用 Skills', 'Shared skills')}</h3>
+          <h3>{t('共用 Skill', 'Shared skills')}</h3>
           <Hint
             className="cap-desc"
             text={t(
-              '每個 agent 都會收到 skill 清單，需要時自己讀取 SKILL.md，任何能讀檔的 CLI 都能使用。格式是 Agent Skills：一個資料夾加一份 SKILL.md，清單裡是名稱與說明。匯入或手動放進資料夾的 skill 會先暫停載入：Aivenue 在本機做靜態掃描，不連網、不呼叫模型，你看過結果、確認這一版後才會提供給 agent；確認後檔案有變動，會再暫停。用「新增」或「編輯」在這裡寫的 skill 不受影響。',
+              '每個 agent 都會收到 Skill 清單，需要時自己讀取 SKILL.md，任何能讀檔的 CLI 都能使用。格式是 Agent Skills：一個資料夾加一份 SKILL.md，清單裡是名稱與說明。匯入或手動放進資料夾的 Skill 會先暫停載入：Aivenue 在本機做靜態掃描，不連網、不呼叫模型，你看過結果、確認這一版後才會提供給 agent；確認後檔案有變動，會再暫停。用「新增」或「編輯」在這裡寫的 skill 不受影響。',
               'Every agent gets the list of skills and reads SKILL.md when relevant, so any CLI that can read files can use them. The format is Agent Skills: a folder with SKILL.md; the list holds names and descriptions. Skills you import or put into the folder yourself are not loaded at first: Aivenue scans them locally, with no network and no model, and offers one to agents only after you looked at the result and approved that version; a later change to its files stops it again. Skills written here with Add or Edit are not affected.',
             )}
           />
@@ -781,16 +781,16 @@ function Skills() {
       </div>
       {error && <div className="note err">{error}</div>}
       <div className="clist">
-        {skills.length === 0 && <div className="empty-row muted small">{t('尚未加入 skill。可以從 Claude Code 的 ~/.claude/skills 匯入現有的 skill 資料夾。', 'No skills yet. You can import existing skill folders, e.g. from ~/.claude/skills.')}</div>}
+        {skills.length === 0 && <div className="empty-row muted small">{t('尚未加入 Skill。可以從 Claude Code 的 ~/.claude/skills 匯入現有的 Skill 資料夾。', 'No skills yet. You can import existing skill folders, e.g. from ~/.claude/skills.')}</div>}
         <ShowAll list={skills}>{(shown) => shown.map((s) => <SkillRow key={s.name} s={s} />)}</ShowAll>
       </div>
       {projectSkills.length > 0 && (
         <>
-          <h4 className="cap-sub">{t('工作資料夾裡的專案 skills', 'Project skills in working folders')}</h4>
+          <h4 className="cap-sub">{t('工作資料夾裡的專案 Skill', 'Project skills in working folders')}</h4>
           <Hint
             className="cap-desc"
             text={t(
-              'Aivenue 在工作資料夾的 .aivenue/skills 找到這些 skill，確認這一版之前不會提供給 agent。檔案留在原處；Aivenue 自己整理出的專案規則不受影響。',
+              'Aivenue 在工作資料夾的 .aivenue/skills 找到這些 Skill，確認這一版之前不會提供給 agent。檔案留在原處；Aivenue 自己整理出的專案規則不受影響。',
               'Aivenue found these in the .aivenue/skills of working folders; they are not offered to agents until you approve this version. Their files stay where they are; project rules Aivenue distilled itself are not affected.',
             )}
           />
@@ -817,7 +817,7 @@ const EXT_INFO: Record<ExtensionId, { name: string; zh: string; en: string; url:
   },
   'agent-skills': {
     name: 'Agent Skills',
-    zh: 'Addy Osmani 的 25 個工程技能：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能等，依角色提供。',
+    zh: 'Addy Osmani 的 25 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能等，依角色提供。',
     en: "Addy Osmani's 25 engineering skills: specs, task breakdown, TDD, debugging, code review, security, performance and more, per role.",
     url: 'https://github.com/addyosmani/agent-skills',
     license: 'MIT',
@@ -887,7 +887,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         {s.version && <span className="tag">v{s.version}</span>}
         {state}
         <span className="grow" />
-        <button className="btn small ghost ext-guide-btn link-icon" onClick={() => setGuide(true)} title={t('這是什麼、包含哪些技能', 'What it is and what it includes')} aria-label={t(`${info.name} 說明`, `About ${info.name}`)}>
+        <button className="btn small ghost ext-guide-btn link-icon" onClick={() => setGuide(true)} title={t('這是什麼、包含哪些 Skill', 'What it is and what it includes')} aria-label={t(`${info.name} 說明`, `About ${info.name}`)}>
           <Ico i={Info} size={14} /> {t('說明', 'About')}
         </button>
         <Switch label={info.name} checked={s.enabled} disabled={busy} onChange={(v) => void run(() => hub.call('extensions.setEnabled', { id: s.id, enabled: v }))} />
@@ -915,7 +915,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
               : s.level === 'ultra'
                 ? t('ultra：動手前先質疑需求裡沒必要的部分。', 'ultra: also pushes back on parts of the request the need does not justify.')
                 : t('full 是預設：最小但完整的改動。', 'full, the default: the smallest complete change.')}{' '}
-            {t('撰寫計畫、審查計畫、實作與 sub agent 一直套用主技能；審查程式碼套用 ponytail-review。', 'Planner, plan reviewer, implementer and sub-agents always follow the main skill; the code reviewer follows ponytail-review.')}
+            {t('撰寫計畫、審查計畫、實作與子 agent 一直套用主 Skill，審查程式碼套用 ponytail-review。', 'Planner, plan reviewer, implementer and sub-agents always follow the main skill; the code reviewer follows ponytail-review.')}
           </div>
         </>
       )}
@@ -923,13 +923,13 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
       {s.id === 'agent-skills' && s.enabled && (
         <>
           <div className="row gap wrap">
-            <span className="small">{t(`已開啟 ${on} / ${skills.length} 個技能`, `${on} of ${skills.length} skills on`)}</span>
+            <span className="small">{t(`已開啟 ${on} / ${skills.length} 個 Skill`, `${on} of ${skills.length} skills on`)}</span>
             <button className="btn small ghost" onClick={() => setOpen(true)}>
-              {t('選擇技能…', 'Choose skills…')}
+              {t('選擇 Skill…', 'Choose skills…')}
             </button>
           </div>
           {open && (
-            <ExtWindow title={t(`${info.name}：選擇技能，已開啟 ${on} / ${skills.length}`, `${info.name}: choose skills, ${on} of ${skills.length} on`)} onClose={() => setOpen(false)}>
+            <ExtWindow title={t(`${info.name}：選擇 Skill，已開啟 ${on} / ${skills.length}`, `${info.name}: choose skills, ${on} of ${skills.length} on`)} onClose={() => setOpen(false)}>
               <div className="ext-skills in-window">
                 {skills.map((k) => (
                   <label key={k.name} className="ext-skill" title={k.description}>
@@ -943,7 +943,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
               {error && <div className="note err">{error}</div>}
             </ExtWindow>
           )}
-          <div className="muted tiny">{t('agent 只會看到技能名稱與一句說明，用到才讀全文，幾乎不增加 token。', "Agents only see each skill's name and one-line description and read the rest when needed, so it costs almost no tokens.")}</div>
+          <div className="muted tiny">{t('agent 只會看到 Skill 名稱與一句說明，用到才讀全文，幾乎不增加 token。', "Agents only see each skill's name and one-line description and read the rest when needed, so it costs almost no tokens.")}</div>
         </>
       )}
 
@@ -951,7 +951,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         <Hint
           className="muted tiny"
           text={t(
-            '第一次打開會自動安裝 uv 與 graphify，uv 會自己帶 Python，不需要另外安裝。agent 需要了解大型專案時會用 graphify update . 建圖，寫到 graphify-out/，之後先查圖再讀檔。',
+            '第一次開啟會自動安裝 uv 與 graphify，uv 會自己帶 Python，不需要另外安裝。agent 需要了解大型專案時會用 graphify update . 建圖，寫到 graphify-out/，之後先查圖再讀檔。',
             'The first time it installs uv and graphify; uv brings its own Python. When agents need to understand a large project they build the graph with graphify update . into graphify-out/ and query it before reading files.',
           )}
         />
@@ -1005,7 +1005,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
             text={
               (s.omniroute && !s.omniroute.connections
                 ? t('下一步：按「連接免費供應商」接上至少一家，OmniRoute 內建的免登入模型太短，跑不動 agent。', 'Next: press "Connect free providers" and connect at least one; OmniRoute’s built-in no-sign-in models are too short to run an agent.')
-                : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型，自動指派只會把它用在 sub agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')) +
+                : t('在「供應商」頁和角色設定可以選 OmniRoute 的模型，自動指派只會把它用在子 agent 與壓縮。', 'Pick OmniRoute models on the Providers page and in role settings; automatic assignment only uses it for sub-agents and compaction.')) +
               ' ' +
               t('它只在這台電腦上執行，位址是 127.0.0.1，管理密碼是自動產生的亂數。', 'It runs on this computer only, at 127.0.0.1, with a generated dashboard password.')
             }
@@ -1067,7 +1067,7 @@ function Extensions() {
       <div className="cap-head">
         <div>
           <h3>{t('內建擴充', 'Built-in extensions')}</h3>
-          <Hint className="cap-desc" text={t('隨 Aivenue 附上，預設全部關閉，打開就能用。Graphify 與 OmniRoute 第一次打開時會自動下載需要的工具，OmniRoute 約 500 MB。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time, OmniRoute about 500 MB.')} />
+          <Hint className="cap-desc" text={t('隨 Aivenue 附上，預設全部關閉，開啟就能用。Graphify 與 OmniRoute 第一次開啟時會自動下載需要的工具，OmniRoute 約 500 MB。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time, OmniRoute about 500 MB.')} />
         </div>
       </div>
       <div className="clist ext-list">
@@ -1171,7 +1171,7 @@ function PackSkills() {
           <Hint
             className="cap-desc"
             text={t(
-              '隨 Aivenue 提供，預設全部關閉，開啟後就提供給列出的角色。每次都出現在它們的技能清單，由 agent 依任務決定要不要讀；Aivenue 不會先檢查變更的檔案才提供，也不會自己安裝工具或連網。',
+              '隨 Aivenue 提供，預設全部關閉，開啟後就提供給列出的角色。每次都出現在它們的 Skill 清單，由 agent 依任務決定要不要讀；Aivenue 不會先檢查變更的檔案才提供，也不會自己安裝工具或連網。',
               'Shipped with Aivenue and off by default; when one is on it is offered to the roles listed. It is in their skills index every time and the agent decides from the task whether to read it; Aivenue does not check the changed files first, and none installs tools or goes online.',
             )}
           />
@@ -1216,7 +1216,9 @@ function PackSkills() {
         })}
       </div>
       {error && <div className="note err">{error}</div>}
-      <div className="block-label">{t('設計參考（不會載入）', 'Design references (not loaded)')}</div>
+      <div className="block-label">
+        {t('設計參考', 'Design references')} <span className="block-hint">{t('不會載入', 'not loaded')}</span>
+      </div>
       <div className="clist builtin-skills design-refs">
         {DESIGN_REFS.map((d) => (
           <div key={d.name} className="crow">
@@ -1294,7 +1296,7 @@ export function CapabilitiesPane() {
       <div className="pane-head">
         <div>
           <h2>{t('能力', 'Capabilities')}</h2>
-          <div className="pane-desc">{t('所有供應商、所有角色共用的工具、技能與指示。', 'Tools, skills and instructions shared by every provider and role.')}</div>
+          <div className="pane-desc">{t('所有供應商、所有角色共用的工具、Skill 與指示。', 'Tools, skills and instructions shared by every provider and role.')}</div>
           <Overview />
         </div>
       </div>

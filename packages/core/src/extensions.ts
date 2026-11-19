@@ -784,7 +784,7 @@ export class ExtensionService {
   }
 
   private async omniAuth(): Promise<ProviderInfo['auth']> {
-    if (!this.cfg().omniroute?.enabled) return { state: 'logged_out', detail: L('在「能力 → 內建擴充」開啟 OmniRoute', 'Turn OmniRoute on under Capabilities → Built-in extensions') };
+    if (!this.cfg().omniroute?.enabled) return { state: 'logged_out', detail: L('在能力頁的「內建擴充」開啟 OmniRoute', 'Turn OmniRoute on in Built-in extensions on the Capabilities page') };
     if (!this.omni?.ready) return { state: 'logged_out', detail: this.work.get('omniroute')?.error ?? L('OmniRoute 尚未啟動', 'OmniRoute is not running') };
     if (!this.omni.connections.length) return { state: 'logged_out', detail: L('還沒有連接任何供應商：OmniRoute 內建的免登入免費模型每次最多約 6,000 字元，跑不動 coding agent。請到 OmniRoute 管理頁用自己的帳號連接免費供應商（例如 Gemini、Groq、OpenRouter）。', 'No provider connected yet: OmniRoute’s built-in no-sign-in free models take about 6,000 characters per request, too little for a coding agent. Connect free providers with your own accounts (e.g. Gemini, Groq, OpenRouter) in the OmniRoute dashboard.') };
     return { state: 'logged_in', detail: L(`已連接 ${this.omni.connections.length} 個供應商`, `${this.omni.connections.length} providers connected`) };

@@ -463,7 +463,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     turnEnded = undefined;
     const sessionId = parser.sessionId ?? (canResume ? o.resumeSessionId : tokens.newSessionId);
     let error = parser.error;
-    if (o.signal.aborted) error = L('已取消', 'Cancelled');
+    if (o.signal.aborted) error = L('已停止', 'Stopped');
     else if (outcome.exited && outcome.code !== 0 && !error) error = `${L('結束代碼', 'Exit code')} ${outcome.code}${stderrTail ? `: ${stderrTail.trim().split('\n').slice(-3).join(' / ')}` : ''}`;
     const alive = !outcome.exited && entry.child.exitCode === null && !o.signal.aborted && !!sessionId;
     if (alive) {
@@ -521,7 +521,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
   if (mcpFile) fs.rm(mcpFile, { force: true }, () => undefined);
 
   let error = parser.error;
-  if (o.signal.aborted) error = L('已取消', 'Cancelled');
+  if (o.signal.aborted) error = L('已停止', 'Stopped');
   else if (exitCode !== 0 && !error) error = `${L('結束代碼', 'Exit code')} ${exitCode}${stderrTail ? `: ${stderrTail.trim().split('\n').slice(-3).join(' / ')}` : ''}`;
   const presetSession = canResume ? o.resumeSessionId : JSON.stringify(spec.run.fresh ?? []).includes('{newSessionId}') ? tokens.newSessionId : undefined;
   return { lastSeq: seq, exitCode, sessionId: parser.sessionId ?? presetSession, resumed: canResume, finalText: parser.finalText(), error };

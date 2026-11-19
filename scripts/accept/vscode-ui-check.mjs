@@ -254,6 +254,21 @@ const INSPECT = `(() => {
   const SYMBOL = /[\\u{1F300}-\\u{1FAFF}]|[☰＋⚙«✎✏✕✓✗▾▸↑❚▶■⚠✦↓⋯⇄○✳⏸⏺⎿➜↺↻✻✋●◦⚡🛑❓↳✅]/u;
   const ownLabel = (e) => { const c = e.cloneNode(true); c.querySelectorAll('code, pre, .md, .tl-arg, .note-text, .check-cmd').forEach((x) => x.remove()); return c.textContent.trim(); };
   const leftovers = [...document.querySelectorAll('button, a.icon-btn, .pill-btn, .side-link, .ext-chip, .vstate, .badge')].map(ownLabel).filter((s) => SYMBOL.test(s));
+  // Round D (docs/terms.md): the copy in the side bar. No ＝ ≠ → in what Aivenue writes, no retired term in a label or
+  // in what is read aloud, no bracketed aside in a button. The side bar's chat titles and the agents' text are theirs.
+  // The same patterns as scripts/test-terms.mjs: 「用時」 not inside 「使用時」, "sub agent" as a word (not spawn_subagent).
+  const RETIRED = /完全\\s*Auto|Plan\\s*唯讀|Agent map|agent\\s*地圖|協作圖|\\b[Ss]ub[ -]?agents?\\b|子代理|達標|以編輯工具改|(?<!\\p{Script=Han})用時|程式審查|共享|共用記憶|中止|思考程度/u;
+  const own = [...document.querySelectorAll('button, a, label, h1, h2, h3, h4, [role=menuitem], [role=radio], .state-word, .vstate, .badge, .divider, .turn-summary, .pp-summary, .final-label')].filter((e) => e.getBoundingClientRect().width > 0 && !e.closest('.side-item-title, .title-text, .md, pre, code, .answer-choices, .decision-q, .user-msg'));
+  const copy = [];
+  // The retired terms are zh-TW ones (the English UI keeps "Agent map", "sub-agent").
+  const zhUi = document.documentElement.lang.startsWith('zh');
+  for (const e of zhUi ? own : []) {
+    const s = ownLabel(e).replace(/\\s+/g, ' ');
+    const named = [e.getAttribute('aria-label'), e.getAttribute('title')].filter(Boolean).join(' ');
+    if (/[＝≠→]/.test(s)) copy.push('symbol: ' + s.slice(0, 40));
+    if (RETIRED.test(s) || RETIRED.test(named)) copy.push('retired: ' + (RETIRED.exec(s) ?? RETIRED.exec(named))[0] + ' in "' + (s || named).slice(0, 40) + '"');
+    if (e.matches('button') && /[（）]/.test(s) && !e.closest('.side-row')) copy.push('bracket: ' + s.slice(0, 40));
+  }
   const btn = document.querySelector('.run-cwd-btn');
   const pathEl = document.querySelector('.run-cwd-path');
   return {
@@ -261,6 +276,7 @@ const INSPECT = `(() => {
     bg: getComputedStyle(document.body).backgroundColor,
     lucide: document.querySelectorAll('svg.lucide').length,
     leftovers: leftovers.slice(0, 8),
+    copy: [...new Set(copy)].slice(0, 8),
     states: [...document.querySelectorAll('.vstate-row')].map((r) => r.innerText.replace(/\\s+/g, ' ').trim()),
     selfTag: !!document.querySelector('.self-tag'),
     // The waiting state in the header's word for what it waits for: an agent's question here (「等你回答」; another
@@ -422,6 +438,7 @@ try {
       await shot(w, file);
       report.push({ place, theme, scene: name, file, ...r });
       check(`${place} · ${theme} · ${name}: Lucide icons, no symbol icon left in a button`, r.lucide >= 5 && r.leftovers.length === 0, { lucide: r.lucide, leftovers: r.leftovers });
+      check(`${place} · ${theme} · ${name}: copy in the terms of docs/terms.md (no retired term, no ＝ ≠ →, no bracket in a button)`, r.copy.length === 0, { copy: r.copy });
       check(`${place} · ${theme} · ${name}: nothing past the webview's ${r.width}px`, r.pastCount === 0 && !r.scrollX, r.past);
       check(`${place} · ${theme} · ${name}: no control cut by its box or drawn over another`, !r.cutControls.length && !r.overlaps.length, { cut: r.cutControls, over: r.overlaps });
       if (name === 'result') check(`${place} · ${theme} · result: verification states apart, with reasons; "agent 自述" tag`, r.states.length > 0 && r.selfTag && !r.states.some((s) => /未驗證/.test(s)), r.states);

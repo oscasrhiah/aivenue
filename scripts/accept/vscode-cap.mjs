@@ -119,8 +119,9 @@ const pack = find(either('可開關的內建 Skill', 'Built-in skills you can tu
 chk(`${at}: section "可開關的內建 Skill", its four skills`, pack?.lists[0] ?? null, ['improve-codebase-architecture + codebase-design', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines']);
 chk(`${at}: four switches, off by default and usable`, pack?.switches.map((x) => `${x.label}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`) ?? null, ['improve-codebase-architecture + codebase-design:off', 'diagnosing-bugs:off', 'gha-security-review:off', 'web-design-guidelines:off']);
 chk(`${at}: roles each one is offered to`, pack?.roles.map((r) => r.length) ?? null, [1, 2, 1, 1]);
-chk(`${at}: "設計參考（不會載入）", three names`, pack ? [either('設計參考（不會載入）', 'Design references (not loaded)')(pack.labels[0] ?? ''), pack.lists[1]] : null, [true, ['impeccable', 'frontend-testing-debugging', 'accessibility-inspect']]);
-chk(`${at}: "共用 Skills" still there`, Boolean(find(either('共用 Skills', 'Shared skills'))), true);
+// Round D: the label without brackets, 「不會載入」 a quiet note beside it.
+chk(`${at}: "設計參考 · 不會載入", three names`, pack ? [either('設計參考 不會載入', 'Design references not loaded')(pack.labels[0] ?? ''), pack.lists[1]] : null, [true, ['impeccable', 'frontend-testing-debugging', 'accessibility-inspect']]);
+chk(`${at}: "共用 Skill" still there`, Boolean(find(either('共用 Skill', 'Shared skills'))), true);
 chk(`${at}: no sideways scrolling (page, pane)`, [pane.pageOverflow <= 0, (pane.bodyOverflow ?? 0) <= 0], [true, true]);
 fs.writeFileSync(path.join(outDir, 'vscode-capabilities.json'), JSON.stringify({ hub, pane }, null, 1));
 console.log(`  ${fails ? 'FAIL' : 'PASS'}  vscode: ${fails} failed`);

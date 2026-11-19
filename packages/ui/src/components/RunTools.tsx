@@ -219,7 +219,7 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
   const exportRun = async () => {
     try {
       const r = await hub.call<{ path: string; bytes: number; masked: number }>('workflows.export', { id: run.id, mask: true });
-      setNote(t(`已匯出（${Math.ceil(r.bytes / 1024)} KB，遮罩了 ${r.masked} 處金鑰／信箱）：${r.path}。保存 30 天後自動刪除。`, `Exported (${Math.ceil(r.bytes / 1024)} KB, ${r.masked} keys / emails masked): ${r.path}. Deleted automatically after 30 days.`));
+      setNote(t(`已匯出 ${Math.ceil(r.bytes / 1024)} KB，遮罩了 ${r.masked} 處金鑰／信箱：${r.path}。保存 30 天後自動刪除。`, `Exported (${Math.ceil(r.bytes / 1024)} KB, ${r.masked} keys / emails masked): ${r.path}. Deleted automatically after 30 days.`));
       void hub.call('host.openPath', { path: r.path.replace(/[\\/][^\\/]+$/, '') }).catch(() => undefined);
     } catch (e) {
       setNote((e as Error).message);
@@ -240,7 +240,7 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
         items={[
           { label: t('重新命名', 'Rename'), icon: Pencil, onSelect: onRename },
           'sep',
-          { label: t('檢視共享上下文', 'View the shared context'), hint: t('agent 看到的內容', 'What agents see'), icon: Layers, onSelect: () => void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)) },
+          { label: t('檢視共用上下文', 'View the shared context'), hint: t('agent 看到的內容', 'What agents see'), icon: Layers, onSelect: () => void hub.call<string>('workflows.sharedContext', { id: run.id }).then(setShared, (e) => setNote((e as Error).message)) },
           { label: t('成本分解', 'Cost breakdown'), hint: t('token、時間、prompt 組成', 'Tokens, time, prompt makeup'), icon: ChartColumn, onSelect: () => setCost(true) },
           { label: t('專案記憶', 'Project memory'), hint: t('這次帶入了什麼、記憶模式', 'What this run was given, memory mode'), icon: Library, onSelect: () => setMemory(true) },
           { label: t('搜尋紀錄', 'Search records'), icon: Search, onSelect: () => setSearch(true) },
@@ -267,12 +267,12 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
         </Dialog>
       )}
       {shared !== undefined && (
-        <Dialog title={t('共享上下文', 'Shared context')} size="lg" onClose={() => setShared(undefined)} back="detail-back">
+        <Dialog title={t('共用上下文', 'Shared context')} size="lg" onClose={() => setShared(undefined)} back="detail-back">
           <Hint
             className="muted small"
             text={t(`agent 用 read_context 讀到的完整總覽，約 ${Math.round(shared.length / 4).toLocaleString()} tokens。內容有目標與差距、目前狀態（等待、GPU 鎖、背景程序）、審查與驗收、交接摘要、專案結構（Graphify），以及每個 agent 跑過的指令與結果。`, `The full overview agents read with read_context, about ${Math.round(shared.length / 4).toLocaleString()} tokens. It holds the goal and gap, current status (waits, GPU locks, background processes), reviews and verifications, hand-offs, project structure (Graphify), and every agent's commands and results.`)}
           />
-          <pre className="shared-view" tabIndex={0} aria-label={t('共享上下文全文', 'Shared context, full text')}>
+          <pre className="shared-view" tabIndex={0} aria-label={t('共用上下文全文', 'Shared context, full text')}>
             {shared}
           </pre>
         </Dialog>
@@ -335,10 +335,12 @@ function RecordSearch({ run, providers, onClose }: { run: WorkflowRun; providers
               return (
                 <div key={i} className="search-hit">
                   <div className="tiny muted">
-                    {a ? `${providerName(providers, a.provider)} · ${roleLabel(t, a.role)}` : h.agentId === 'user' ? t('你', 'You') : ''}
-                    {h.stage ? ` · ${h.stage}` : ''}
-                    {h.round ? ` · ${t(`第 ${h.round} 輪`, `round ${h.round}`)}` : ''} · <span className="mono">{h.kind}</span>
-                    {h.agentId && <span className="mono"> · {h.agentId.slice(0, 8)}</span>}
+                    {/* Who, then where; the record's kind and the agent's id in the tooltip. */}
+                    <span title={[h.kind, h.agentId?.slice(0, 8)].filter(Boolean).join('\n')}>
+                      {a ? `${providerName(providers, a.provider)} · ${roleLabel(t, a.role)}` : h.agentId === 'user' ? t('你', 'You') : ''}
+                      {h.stage || h.round ? t('，', ', ') : ''}
+                      {[h.stage, h.round ? t(`第 ${h.round} 輪`, `round ${h.round}`) : ''].filter(Boolean).join(' ')}
+                    </span>
                   </div>
                   <div className="small break">{h.text}</div>
                 </div>
@@ -403,7 +405,7 @@ export function SwitchProvider({ workflowId, agentId, compact, urgent }: { workf
       .call('agents.rerun', { workflowId, agentId, provider: id })
       .then(() => setList(undefined))
       .catch((e) => setErr((e as Error).message));
-  const title = t('改用另一家供應商重跑這個 sub agent 的任務（例如額度用完時）', 'Run this sub-agent\'s task again on another provider (e.g. when its quota ran out)');
+  const title = t('改用另一家供應商重跑這個子 agent 的任務，例如額度用完時', 'Run this sub-agent\'s task again on another provider (e.g. when its quota ran out)');
   return (
     <span className={cx('switch-prov', !compact && 'wide')} ref={ref}>
       {compact ? (

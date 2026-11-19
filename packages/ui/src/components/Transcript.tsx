@@ -80,7 +80,7 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
         <span className={cx('tl-dot', tool.status)}><Ico i={Circle} size={8} className="dot-fill" /></span>
         {use?.kind === 'skill' ? (
           <>
-            <span className="tl-verb"><Ico i={Wrench} size={13} /> {t('使用技能', 'Skill')}</span>
+            <span className="tl-verb"><Ico i={Wrench} size={13} /> {t('使用 Skill', 'Skill')}</span>
             <span className="tl-arg">{use.name}</span>
           </>
         ) : use?.kind === 'graphify' ? (
@@ -114,7 +114,7 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
           {/* The command exactly as it ran, then everything it printed. */}
           {(tool.title.length > 160 || tool.title.includes('\n')) && tool.title !== tool.input && <pre>{tool.title}</pre>}
           {tool.input && <pre>{tool.input}</pre>}
-          {tool.output ? <pre>{tool.output}</pre> : <div className="muted tiny">{t('（沒有輸出）', '(no output)')}</div>}
+          {tool.output ? <pre>{tool.output}</pre> : <div className="muted tiny">{t('沒有輸出', 'No output')}</div>}
         </div>
       )}
     </div>
@@ -163,7 +163,7 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
       return raw ? (
         <div className="tx-raw">
           <button type="button" className="tx-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
-            <Ico i={open ? ChevronDown : ChevronRight} size={14} /> {t('指示（提示詞）', 'Instructions (prompt)')}
+            <Ico i={open ? ChevronDown : ChevronRight} size={14} /> <span title={t('送給 agent 的提示詞', 'The prompt sent to the agent')}>{t('指示', 'Instructions')}</span>
           </button>
           {open && <pre>{e.text}</pre>}
         </div>
@@ -252,7 +252,7 @@ export function LiveFeed({ events, said = [], limit = 6, hideMessages = false }:
       {rows.map((r, i) =>
         'said' in r ? (
           <div key={`said${r.ts}${i}`} className="tx-said" title={clock(r.ts)}>
-            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')} <MsgTime ts={r.ts} /></span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你 · 執行中追加', 'You · sent while working')} <MsgTime ts={r.ts} /></span>
             {r.said.text && <div className="tx-said-text">{r.said.text}</div>}
             <Replies replies={r.said.replies} planUpdated={r.said.planUpdated} />
           </div>
@@ -262,7 +262,7 @@ export function LiveFeed({ events, said = [], limit = 6, hideMessages = false }:
             {r.item.type === 'group' ? (
               <GroupLine item={r.item} opened={opened} />
             ) : r.item.e.kind === 'message' && isSubmissionText(r.item.e.text) ? (
-              <div className="tx-text muted small">{t('（送出了結果，內容見下方）', '(handed in its result: see below)')}</div>
+              <div className="tx-text muted small">{t('送出了結果，內容見下方', 'Handed in its result, see below')}</div>
             ) : (
               <Line e={r.item.e} raw={false} opened={opened} />
             )}
@@ -289,7 +289,7 @@ export function Transcript({ events, raw = false, limit, said = [], internal = f
       {items.map((it, i) =>
         'said' in it ? (
           <div key={`said${it.ts}${i}`} className="tx-said" title={clock(it.ts)}>
-            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你（執行中追加）', 'You (sent while working)')} <MsgTime ts={it.ts} /></span>
+            <span className="tx-said-who"><Ico i={User} size={13} /> {t('你 · 執行中追加', 'You · sent while working')} <MsgTime ts={it.ts} /></span>
             {it.said.text && <div className="tx-said-text">{it.said.text}</div>}
             {!!it.said.attachments?.length && <div className="muted tiny"><Ico i={Paperclip} size={12} /> {it.said.attachments.map((a) => a.name).join('、')}</div>}
             <Replies replies={it.said.replies} planUpdated={it.said.planUpdated} />

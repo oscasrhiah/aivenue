@@ -79,7 +79,9 @@ function TestPanel({ providerId, onClose }: { providerId: string; onClose: () =>
               <StateWord icon={result.ok ? CircleCheck : CircleX} tone={result.ok ? 'ok' : 'err'}>
                 {result.ok ? t('連線成功', 'Connected') : (result.error ?? t('失敗', 'Failed'))}
               </StateWord>{' '}
-              · {elapsed(0, result.durationMs)} · {result.mcpCalled ? t('Aivenue 工具可用', 'Aivenue tools available') : t('未呼叫到 Aivenue 工具，無法當 sub agent 協作', 'Aivenue tools not called, so it cannot coordinate as a sub-agent')}
+              · {elapsed(0, result.durationMs)}
+              {t('，', ', ')}
+              {result.mcpCalled ? t('Aivenue 工具可用', 'Aivenue tools available') : t('未呼叫到 Aivenue 工具，無法當子 agent 協作', 'Aivenue tools not called, so it cannot coordinate as a sub-agent')}
             </>
           )}
           {error && <span className="err-text">{error}</span>}
@@ -322,7 +324,7 @@ function ProviderRow({ p, secure, drag, onMove, first, last }: { p: ProviderInfo
 
           {managed ? (
             <div className="row gap wrap">
-              <span className="muted small">{t('由「能力 → 內建擴充」管理：在那裡開關、開啟管理頁與連接供應商。', 'Managed under Capabilities → Built-in extensions: turn it on or off, open its dashboard and connect providers there.')}</span>
+              <span className="muted small">{t('由能力頁的「內建擴充」管理：在那裡開關、開啟管理頁與連接供應商。', 'Managed in Built-in extensions on the Capabilities page: turn it on or off, open its dashboard and connect providers there.')}</span>
               <a className="btn small ghost" href="#/settings/capabilities">
                 {t('前往', 'Open')}
               </a>
@@ -380,7 +382,7 @@ function ProviderRow({ p, secure, drag, onMove, first, last }: { p: ProviderInfo
               ) : (
                 <>
                   {s.apiKey?.note && <div className="muted small">{t(s.apiKey.note, en?.api ?? s.apiKey.note)}</div>}
-                  {!secure && <div className="note warn">{t('瀏覽器模式下金鑰未加密保存，建議使用桌面版或 VS Code 插件。', 'In browser mode keys are not encrypted; prefer the desktop app or the VS Code extension.')}</div>}
+                  {!secure && <div className="note warn">{t('瀏覽器模式下金鑰未加密保存，建議使用桌面版或 VS Code 擴充功能。', 'In browser mode keys are not encrypted; prefer the desktop app or the VS Code extension.')}</div>}
                   <div className="row gap">
                     <input type="password" className="grow" autoComplete="off" aria-label={t('API 金鑰', 'API key')} placeholder={p.hasApiKey ? t('已儲存，輸入新值以取代', 'Saved; type to replace') : s.apiKey?.env} value={key} onChange={(e) => setKey(e.target.value)} />
                     <button className="btn primary" disabled={!key.trim()} onClick={() => run('key', async () => (await hub.call('providers.setApiKey', { id: s.id, key }), setKey('')))}>
@@ -416,7 +418,7 @@ function ProviderRow({ p, secure, drag, onMove, first, last }: { p: ProviderInfo
               onChange={(v) => call('defaults', 'providers.setDefaults', { id: s.id, model: v.model, effort: v.effort })}
             />
           </div>
-          <div className="muted tiny">{t('沒有指定模型的角色會使用這組預設，包含自動指派與 sub agent。', 'Used by roles that do not pick a model, including auto assignment and sub-agents.')}</div>
+          <div className="muted tiny">{t('沒有指定模型的角色會使用這組預設，包含自動指派與子 agent。', 'Used by roles that do not pick a model, including auto assignment and sub-agents.')}</div>
 
           <div className="prow-field">
             <span className="prow-label">{t('顏色', 'Colour')}</span>
@@ -426,7 +428,7 @@ function ProviderRow({ p, secure, drag, onMove, first, last }: { p: ProviderInfo
                 className="color-pick"
                 aria-label={t(`${s.name} 的顏色`, `${s.name} colour`)}
                 value={toHex(providerColor(s.id))}
-                title={t('執行頁面、Agent map 與用量頁面都用這個顏色標示', 'Marks it on the run page, the agent map and the usage page')}
+                title={t('執行頁面、分工圖與用量頁面都用這個顏色標示', 'Marks it on the run page, the agent map and the usage page')}
                 onChange={(e) => void hub.call('providers.setColor', { id: s.id, color: e.target.value })}
               />
               {p.color && (
@@ -461,7 +463,7 @@ function AddAccount({ providerId, name }: { providerId: string; name: string }) 
       <div className="prow-label">{t(`再加一個 ${name} 帳號`, `Add another ${name} account`)}</div>
       <Hint
         className="muted tiny"
-        text={t('每個帳號有自己的登入資料，會變成獨立的供應商，加入後在新的那一列按「登入」。帳號可以同時指派到不同角色或當 sub agent；額度用完時自動指派也會換到另一個帳號。', 'Each account keeps its own sign-in and becomes a provider of its own; sign in on the new row after adding it. Several can work at the same time in different roles or as sub-agents; auto assignment also switches to another account when one runs out.')}
+        text={t('每個帳號有自己的登入資料，會變成獨立的供應商，加入後在新的那一列按「登入」。帳號可以同時指派到不同角色或當子 agent，額度用完時自動指派也會換到另一個帳號。', 'Each account keeps its own sign-in and becomes a provider of its own; sign in on the new row after adding it. Several can work at the same time in different roles or as sub-agents; auto assignment also switches to another account when one runs out.')}
       />
       <div className="row gap">
         <input className="grow" aria-label={t('帳號名稱', 'Account name')} placeholder={t('帳號名稱，例如「公司」或「第二個」', 'Account name, e.g. "Work" or "Second"')} value={value} onChange={(e) => setValue(e.target.value)} />
@@ -503,7 +505,7 @@ export function AgyWarning() {
     <div className="warn-text small agy-warning">
       <Ico i={TriangleAlert} size={14} /> <span>{t('Google 條款禁止第三方工具存取 Antigravity，帳號可能被停用。', 'Google’s terms forbid third-party access to Antigravity; the account may be suspended.')}</span>{' '}
       <button type="button" className="hint-more" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {open ? t('收起', 'Less') : t('詳情', 'Details')}
+        {open ? t('收起', 'Less') : t('說明', 'More')}
       </button>
       {open && (
         <div className="agy-full">

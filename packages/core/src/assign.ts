@@ -33,7 +33,7 @@ export function autoAssign(input: AssignInput): AssignmentResult {
   const name = (id: string) => input.providers.find((p) => p.spec.id === id)?.spec.name ?? id;
 
   let ready = input.providers.filter((p) => p.installed && p.auth.state === 'logged_in');
-  if (!ready.length) throw new Error(L('沒有可用的供應商：請先在「設定 → 供應商」登入至少一家', 'No provider is ready: sign in to at least one under Settings → Providers'));
+  if (!ready.length) throw new Error(L('沒有可用的供應商：請先在設定的「供應商與帳號」頁登入至少一家', 'No provider is ready: sign in to at least one on the Providers page in Settings'));
 
   // Providers that just hit their usage limit are skipped while others are available.
   const limited = new Set(input.usage.filter((u) => u.limitHit && Date.now() - u.limitHit.at < LIMIT_WINDOW).map((u) => u.providerId));
@@ -73,7 +73,7 @@ export function autoAssign(input: AssignInput): AssignmentResult {
   // Free routers of unknown strength (OmniRoute) only help: sub-agents and compaction, not the main roles.
   const helpers = ready.filter((p) => p.spec.profile?.helperOnly);
   if (helpers.length && helpers.length < ready.length) {
-    for (const p of helpers) notes.push(L(`${p.spec.name} 只用在 sub agent 與壓縮（免費模型能力不一定）`, `${p.spec.name} is only used for sub-agents and compaction (free models vary in strength)`));
+    for (const p of helpers) notes.push(L(`${p.spec.name} 只用在子 agent 與壓縮，免費模型能力不一定`, `${p.spec.name} is only used for sub-agents and compaction; free models vary in strength`));
     ready = ready.filter((p) => !p.spec.profile?.helperOnly);
   }
   const skill = (p: ProviderInfo, k: Kind) => p.spec.profile?.[k] ?? 3;
@@ -107,12 +107,12 @@ export function autoAssign(input: AssignInput): AssignmentResult {
     return `${kindLabel(k)} ${skill(p, k)}/5${L('，速度', ', speed')} ${p.spec.profile?.speed ?? 3}/5`;
   };
   notes.unshift(
-    L(`撰寫計畫 → ${name(planAuthor)}（${why(planAuthor, 'plan')}）`, `Plan → ${name(planAuthor)} (${why(planAuthor, 'plan')})`),
-    L(`審查計畫 → ${name(planReviewer)}（${why(planReviewer, 'review')}）`, `Plan review → ${name(planReviewer)} (${why(planReviewer, 'review')})`),
-    L(`實作 → ${name(codeAuthor)}（${why(codeAuthor, 'code')}）`, `Implement → ${name(codeAuthor)} (${why(codeAuthor, 'code')})`),
-    L(`審查程式碼 → ${name(codeReviewer)}（${why(codeReviewer, 'review')}）`, `Code review → ${name(codeReviewer)} (${why(codeReviewer, 'review')})`),
+    L(`撰寫計畫：${name(planAuthor)}，${why(planAuthor, 'plan')}`, `Plan: ${name(planAuthor)}, ${why(planAuthor, 'plan')}`),
+    L(`審查計畫：${name(planReviewer)}，${why(planReviewer, 'review')}`, `Plan review: ${name(planReviewer)}, ${why(planReviewer, 'review')}`),
+    L(`實作：${name(codeAuthor)}，${why(codeAuthor, 'code')}`, `Implement: ${name(codeAuthor)}, ${why(codeAuthor, 'code')}`),
+    L(`審查程式碼：${name(codeReviewer)}，${why(codeReviewer, 'review')}`, `Code review: ${name(codeReviewer)}, ${why(codeReviewer, 'review')}`),
   );
-  if (prefs.crossReview && ready.length === 1) notes.push(L('只有一家可用，審查者與撰寫者相同', 'Only one provider is ready, so the reviewer is the same as the author'));
+  if (prefs.crossReview && ready.length === 1) notes.push(L('只有一家可用，審查者與作者相同', 'Only one provider is ready, so the reviewer is the same as the author'));
 
   // Sub-agents: every ready provider, free helpers first, then fastest first in economy mode.
   const fastest = [...ready].sort((a, b) => (prefs.priority === 'economy' ? (b.spec.profile?.speed ?? 3) - (a.spec.profile?.speed ?? 3) : base(b, 'code') - base(a, 'code'))).map((p) => p.spec.id);

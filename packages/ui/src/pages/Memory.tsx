@@ -105,11 +105,11 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
           <div className="mem-text">{m.text}</div>
           {(m.conditions || m.environment || m.check) && (
             <div className="muted small mem-meta">
-              {m.conditions && <span>{t('條件', 'When')}：{m.conditions}</span>}
-              {m.environment && <span>{t('環境', 'Environment')}：{m.environment}</span>}
+              {m.conditions && <span>{t('條件', 'When')}{t('：', ': ')}{m.conditions}</span>}
+              {m.environment && <span>{t('環境', 'Environment')}{t('：', ': ')}{m.environment}</span>}
               {m.check && (
                 <span>
-                  {t('驗證指令', 'Check')}：<code>{m.check.command}</code>
+                  {t('驗證指令', 'Check')}{t('：', ': ')}<code>{m.check.command}</code>
                 </span>
               )}
             </div>
@@ -129,17 +129,18 @@ function MemoryCard({ m, projectId, onChanged }: { m: MemoryView; projectId: str
       )}
       <details className="mem-sources small">
         <summary className="muted">
-          <Ico i={ChevronRight} size={14} className="fold-chev" /> {t(`來源 ${m.sources.length} · 證據 ${m.evidence.length} · 帶入 ${m.injectedCount} 次`, `${m.sources.length} source(s) · ${m.evidence.length} evidence · given ${m.injectedCount} time(s)`)}
+          <Ico i={ChevronRight} size={14} className="fold-chev" /> {t(`來源 ${m.sources.length}、證據 ${m.evidence.length}、帶入 ${m.injectedCount} 次`, `${m.sources.length} source(s) · ${m.evidence.length} evidence · given ${m.injectedCount} time(s)`)}
         </summary>
         <ul>
           {m.sources.map((s, i) => (
             <li key={i}>
-              {new Date(s.ts).toLocaleString()} · {s.by ?? ''} · <a href={`#/run/${s.workflowId.replace(/^ui:/, '')}`}>{t('開啟工作流', 'Open workflow')}</a>
+              {new Date(s.ts).toLocaleString()}
+              {s.by ? `${t('，', ', ')}${s.by}` : ''} · <a href={`#/run/${s.workflowId.replace(/^ui:/, '')}`}>{t('開啟工作流', 'Open workflow')}</a>
             </li>
           ))}
           {m.evidence.map((e) => (
             <li key={e.eventRef} className="muted">
-              {e.kind}：{e.summary}
+              {e.kind}{t('：', ': ')}{e.summary}
               {e.files?.length ? ` · ${e.files.map((f) => f.path).join(', ')}` : ''}
             </li>
           ))}
@@ -275,7 +276,7 @@ export function MemoryPane() {
           </div>
           {project && (
             <div className="muted tiny mono" title={project.key}>
-              {project.kind === 'git' ? t('Git 儲存庫', 'Git repository') : t('資料夾', 'Folder')}：{shortPath(project.key)}
+              {project.kind === 'git' ? t('Git 儲存庫', 'Git repository') : t('資料夾', 'Folder')}{t('：', ': ')}{shortPath(project.key)}
             </div>
           )}
           <Seg className="mem-filter" label={t('記憶分類', 'Memory filter')} value={filter} onChange={setFilter} choices={tabs.map((x) => ({ value: x.id, label: x.label }))} />

@@ -10,10 +10,11 @@ import { Fold } from './Kit';
 
 const CUSTOM = '__custom__';
 
-/** "Claude Opus (claude-opus-5-5) · 1M · 免費" */
+/** "Claude Opus (claude-opus-5-5) · 1M，免費": the name, then what to know about it in one run (one 「·」). */
 export function modelOptionLabel(t: T, m: ModelInfo): string {
   const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
-  return [name, m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('不能呼叫工具', 'no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(' · ');
+  const facts = [m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('不能呼叫工具', 'no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(t('，', ', '));
+  return facts ? `${name} · ${facts}` : name;
 }
 
 /** What a model reads besides text ("圖片、影片"), or "只有文字"; empty when unknown. */
@@ -28,7 +29,7 @@ export function inputsLabel(t: T, m: ModelInfo): string {
 export function contextHint(t: T, m: ModelInfo): string {
   if (!m.context) return '';
   const from = m.contextSource === 'measured' ? t('CLI 執行時回報', 'reported by the CLI while running') : m.contextSource === 'cli' ? t('CLI 的模型清單', "the CLI's model list") : t('models.dev 模型目錄', 'the models.dev catalog');
-  return t(`最大上下文 ${m.context.toLocaleString()} tokens（來源：${from}）`, `Max context ${m.context.toLocaleString()} tokens (from ${from})`);
+  return t(`最大上下文 ${m.context.toLocaleString()} tokens，來源：${from}`, `Max context ${m.context.toLocaleString()} tokens, from ${from}`);
 }
 
 /** A small "1M" badge with the source on hover. */
@@ -88,7 +89,7 @@ export function ModelPicker({
         <input
           className="model"
           disabled={disabled}
-          placeholder={inheritLabel ?? t('模型（預設）', 'Model (default)')}
+          placeholder={inheritLabel ?? t('預設模型', 'Default model')}
           value={model ?? ''}
           onChange={(e) => onChange({ model: e.target.value || undefined, effort })}
         />
@@ -115,12 +116,12 @@ export function ModelPicker({
       {efforts.length > 0 && (
         <select aria-label={t('推理強度', 'Reasoning effort')} disabled={disabled} value={effort ?? ''} onChange={(e) => onChange({ model, effort: e.target.value || undefined })} title={t('推理強度', 'Reasoning effort')}>
           <option value="">
-            {t('預設推理', 'Default effort')}
-            {inheritEffort ?? current?.defaultEffort ? ` (${inheritEffort ?? current?.defaultEffort})` : ''}
+            {t('推理強度：預設', 'Effort: default')}
+            {inheritEffort ?? current?.defaultEffort ? ` · ${inheritEffort ?? current?.defaultEffort}` : ''}
           </option>
           {efforts.map((x) => (
             <option key={x} value={x}>
-              {t('推理', 'Effort')}: {x}
+              {t(`推理強度：${x}`, `Effort: ${x}`)}
             </option>
           ))}
         </select>

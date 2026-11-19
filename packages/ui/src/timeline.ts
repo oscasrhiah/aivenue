@@ -83,7 +83,7 @@ export function groupLabel(t: Tr, kind: ActKind, n: number): string {
     case 'search':
       return t(`搜尋 ${n} 次`, `${n} search(es)`);
     case 'write':
-      return t(`修改 ${n} 個檔案`, `Edited ${n} file(s)`);
+      return t(`改了 ${n} 個檔案`, `Changed ${n} file(s)`);
     case 'command':
       return t(`執行 ${n} 個指令`, `Ran ${n} command(s)`);
     default:
@@ -116,15 +116,15 @@ export function activityCounts(events: AgentEvent[]): ActivityCounts {
 }
 
 /**
- * An activity log's closed line, said as what happened: "讀 3 個檔案、執行 2 個指令、修改 3 個檔案" ("Read 3 files, ran 2
- * commands, edited 3 files"), and the notes it shared. Empty when it did none of these.
+ * An activity log's closed line, said as what happened: "讀 3 個檔案、執行 2 個指令、改了 3 個檔案" ("Read 3 files, ran 2
+ * commands, changed 3 files"), and the notes it shared. Empty when it did none of these.
  */
 export function activityLabel(t: Tr, c: ActivityCounts, notes = 0): string {
   const s = [
     c.read ? t(`讀 ${c.read} 個檔案`, `read ${c.read} file(s)`) : '',
     c.search ? t(`搜尋 ${c.search} 次`, `${c.search} search(es)`) : '',
     c.command ? t(`執行 ${c.command} 個指令`, `ran ${c.command} command(s)`) : '',
-    c.write ? t(`修改 ${c.write} 個檔案`, `edited ${c.write} file(s)`) : '',
+    c.write ? t(`改了 ${c.write} 個檔案`, `changed ${c.write} file(s)`) : '',
     c.other ? t(`其他 ${c.other} 個動作`, `${c.other} other action(s)`) : '',
     notes ? t(`${notes} 則筆記`, `${notes} note(s)`) : '',
   ]
@@ -158,14 +158,14 @@ export function verdictWords(t: Tr, r: Pick<Review, 'verdict' | 'issues' | 'inco
 }
 
 /**
- * Why work came back, counted as the verdict counts: "審查要求修改 2 個問題：R1、R2，另有 1 個既有問題" (the ids of the
+ * Why work came back, counted as the verdict counts: "審查退回 2 個問題：R1、R2，另有 1 個既有問題" (the ids of the
  * issues in the change; those outside it only counted).
  */
 export function reviseReason(t: Tr, r: Pick<Review, 'issues'>): string {
   const mine = r.issues.filter((i) => !i.preExisting);
   const ids = mine.map((i) => i.id);
   const named = ids.length > 6 ? `${ids.slice(0, 6).join(t('、', ', '))}…` : ids.join(t('、', ', '));
-  return [mine.length ? t(`審查要求修改 ${mine.length} 個問題：${named}`, `changes requested, ${mine.length} issue(s): ${named}`) : t('審查要求修改', 'changes requested'), preExistingText(t, r.issues.length - mine.length)]
+  return [mine.length ? t(`審查退回 ${mine.length} 個問題：${named}`, `changes requested, ${mine.length} issue(s): ${named}`) : t('審查要求修改', 'changes requested'), preExistingText(t, r.issues.length - mine.length)]
     .filter(Boolean)
     .join(t('，', ', '));
 }
@@ -204,15 +204,15 @@ const LINE = {
   reviewDone: /^(?:獨立審查完成：|Independent review done: )/,
   verify: /^(?:目標驗收 第 (\d+) 次（([\s\S]*)）|Goal verification · check (\d+) \(([\s\S]*)\))$/,
   question: /^(?:.+ 有問題要問你|.+ has a question for you)$/,
-  stopped: /^(?:你停止了 |You stopped |工作流已取消$|Workflow cancelled$)/,
+  stopped: /^(?:你停止了 |You stopped |工作流已取消$|工作流已停止$|Workflow cancelled$|Workflow stopped$)/,
   failed: /^(?:工作流失敗：|Workflow failed: )([\s\S]*)$/,
-  incomplete: /^(?:工作流未完成：([\s\S]*)。目標沒有達成，不算完成。|Workflow incomplete: ([\s\S]*)\. The goal was not met, so it is not done\.)$/,
+  incomplete: /^(?:工作流未完成：([\s\S]*?)。(?:目標沒有達成，不算完成。)?|Workflow incomplete: ([\s\S]*?)\.(?: The goal was not met, so it is not done\.)?)$/,
 };
 
 /**
  * The record's lines the chat shows, each thing said once. A stage gets one heading where it starts, restarts or resumes
- * (the round it starts with joins it: "實作 · 重新開始 · 第 2 輪循環 · 第 3 輪"), and one for each round after, joined
- * to the review that sent the work back ("第 2 輪 · 審查要求修改 2 個問題：R1、R2"). A "changes requested" line that
+ * (the round it starts with joins it: "實作 重新開始，第 2 輪循環，第 3 輪"), and one for each round after, joined
+ * to the review that sent the work back ("第 2 輪 · 審查退回 2 個問題：R1、R2"). A "changes requested" line that
  * stays apart (a decision of yours came between) is counted the same way. Left out: a review's approval (the reviewer's
  * turn says it), an independent review's verdict and "this round of the workflow is complete" when the result card below
  * says them (`resultShown`). The workflow's failure (or its end without meeting the goal) is said in a word when the
@@ -238,8 +238,12 @@ export function chatLines(t: Tr, run: WorkflowRun, resultShown: boolean, endNote
   // round it starts with.
   let sentBack: { at: number; stage: Stage; why?: string; n: number } | undefined;
   let opened: { at: number; stage: Stage } | undefined;
+  // While an agent's question waits, its card names who asks: the 「X 有問題要問你」 line right before it is not drawn
+  // (it comes back once answered, as the record of when it asked).
+  let asking = -1;
+  if (run.pending?.question) for (let k = run.log.length - 1; k >= 0 && asking < 0; k--) if (run.log[k].chat && /^.+ (?:有問題要問你|has a question for you)$/.test(run.log[k].text.trim())) asking = k;
   run.log.forEach((l, i) => {
-    if (!l.chat) return;
+    if (!l.chat || i === asking) return;
     const held = sentBack;
     const head = opened;
     sentBack = undefined;
@@ -253,7 +257,7 @@ export function chatLines(t: Tr, run: WorkflowRun, resultShown: boolean, endNote
     let m: RegExpExecArray | null;
     if ((m = LINE.start.exec(text))) return heading(stageOf(m[1]));
     if ((m = LINE.resumed.exec(text))) return heading(stageOf(m[1]), t('接續', 'resumed'));
-    if ((m = LINE.again.exec(text))) return heading(stageOf(m[1]), t(`重新開始 · 第 ${m[2] ?? m[3]} 輪循環`, `again · cycle ${m[2] ?? m[3]}`));
+    if ((m = LINE.again.exec(text))) return heading(stageOf(m[1]), t(`重新開始，第 ${m[2] ?? m[3]} 輪循環`, `again, cycle ${m[2] ?? m[3]}`));
     if ((m = LINE.round.exec(text))) {
       const n = Number(m[2] ?? m[3]);
       // The stage's heading starts its first round.
@@ -262,13 +266,14 @@ export function chatLines(t: Tr, run: WorkflowRun, resultShown: boolean, endNote
       const round = t(`第 ${n} 輪`, `round ${n}`);
       // Right after the stage's heading (a restart, a resumption): the round joins it.
       if (head?.stage === stage) {
-        out[head.at] = { ...out[head.at], detail: [out[head.at].detail, round].filter(Boolean).join(' · ') };
+        // In words, not a chain of 「·」 (「重新開始，第 2 輪循環，第 3 輪」).
+        out[head.at] = { ...out[head.at], detail: [out[head.at].detail, round].filter(Boolean).join(t('，', ', ')) };
         return;
       }
       if (held?.stage !== stage) return void out.push(line({ kind: 'stage', text: t(`第 ${n} 輪`, `Round ${n}`) }));
       // Sent back right before: one line for both, counted as the verdict counts (issues outside the change apart).
       const review = run.stages[stage]?.rounds.find((r) => r.n === n - 1)?.review;
-      const why = review?.verdict === 'revise' ? reviseReason(t, review) : (held.why ?? t(`審查要求修改 ${held.n} 個問題`, `changes requested, ${held.n} issue(s)`));
+      const why = review?.verdict === 'revise' ? reviseReason(t, review) : (held.why ?? t(`審查退回 ${held.n} 個問題`, `changes requested, ${held.n} issue(s)`));
       out[held.at] = line({ kind: 'stage', text: t(`第 ${n} 輪`, `Round ${n}`), detail: why });
       return;
     }
@@ -370,7 +375,7 @@ export function turnSummary(t: Tr, run: WorkflowRun, a: AgentRunInfo): string[] 
   const maybe = a.stats.filesMaybeChanged?.length ?? 0;
   // Only edits made with the edit tool are the agent's own record; a file written by a terminal command shows in the
   // workflow's file list, not here, so the line says which it counts.
-  const fileParts = [files ? t(`以編輯工具改了 ${files} 個檔案`, `${files} file(s) changed with the edit tool`) : '', maybe ? t(`${maybe} 個可能改動`, `${maybe} possibly changed`) : ''];
+  const fileParts = [files ? t(`改了 ${files} 個檔案`, `${files} file(s) changed`) : '', maybe ? t(`${maybe} 個可能改動`, `${maybe} possibly changed`) : ''];
   const ended = a.status === 'failed' ? t('失敗', 'Failed') : a.status === 'cancelled' ? t('已停止', 'Stopped') : '';
   let head = '';
   const extra: string[] = [];
@@ -395,7 +400,7 @@ export function turnSummary(t: Tr, run: WorkflowRun, a: AgentRunInfo): string[] 
       head = round?.submission ? t('實作完成', 'Implemented') : '';
       const c = checkCounts(round);
       // Every check once: passed and failed side by side (a pass is not hidden behind a failure, nor the reverse).
-      if (c) extra.push(c.passed || c.failed ? [c.passed ? t(`${c.passed} 項檢查通過`, `${c.passed} check(s) passed`) : '', c.failed ? t(`${c.failed} 項檢查失敗`, `${c.failed} check(s) failed`) : ''].filter(Boolean).join(t('、', ', ')) : c.all ? t('檢查要看輸出', 'checks: read the output') : t('尚未執行檢查', 'no check run'));
+      if (c) extra.push(c.passed || c.failed ? [c.passed ? t(`檢查通過 ${c.passed} 項`, `${c.passed} check(s) passed`) : '', c.failed ? t(`檢查失敗 ${c.failed} 項`, `${c.failed} check(s) failed`) : ''].filter(Boolean).join(t('、', ', ')) : c.all ? t('檢查要看輸出', 'checks: read the output') : t('尚未執行檢查', 'no check run'));
       break;
     }
     case 'verifier': {
@@ -404,19 +409,19 @@ export function turnSummary(t: Tr, run: WorkflowRun, a: AgentRunInfo): string[] 
       break;
     }
     case 'compactor':
-      head = a.status === 'completed' ? t('共用記憶已整理', 'Shared memory updated') : '';
+      head = a.status === 'completed' ? t('共用上下文已整理', 'Shared context updated') : '';
       break;
     default:
       head = a.status === 'completed' ? t('完成', 'Done') : '';
   }
   if (a.endedWithoutResult) extra.push(t('沒有交出結果', 'no result handed in'));
-  return [ended || head || t('已結束', 'Ended'), ...(ended && head ? [head] : []), ...fileParts, ...extra].filter(Boolean);
+  return [ended || head || t('已結束', 'Ended'), ...(ended && head ? [head] : []), ...extra, ...fileParts].filter(Boolean);
 }
 
 /**
  * Why this turn exists, when the work came back for a reason the chat does not say elsewhere: the goal verification that
  * routed it back ("目標驗收：…，開始第 2 輪實作"), or the route the round before it took. Work a review sent back has
- * none: the round's heading says that review ("第 2 輪 · 審查要求修改 2 個問題：R1、R2"), the review's issues are listed
+ * none: the round's heading says that review ("第 2 輪 · 審查退回 2 個問題：R1、R2"), the review's issues are listed
  * in its turn.
  */
 export function reworkLine(t: Tr, run: WorkflowRun, a: AgentRunInfo): string | undefined {
@@ -496,7 +501,7 @@ export function runOverview(t: Tr, run: WorkflowRun, titleOf: (a: AgentRunInfo) 
             : run.status === 'failed'
               ? t('本輪失敗', 'This round failed')
               : run.status === 'incomplete'
-                ? t('本輪結束，目標未達成', 'This round ended without meeting the goal')
+                ? t('本輪未完成', 'This round is incomplete')
                 : t('本輪已結束', 'This round has ended');
   const parts = [phase];
   const all = runBatches(Object.values(run.agents), titleOf);
@@ -504,7 +509,7 @@ export function runOverview(t: Tr, run: WorkflowRun, titleOf: (a: AgentRunInfo) 
     const c = batchCounts(all);
     parts.push(
       [
-        t(`子代理批次 ${c.done}/${all.length} 完成`, `sub-agent batches ${c.done}/${all.length} done`),
+        t(`子 agent 批次 ${c.done}/${all.length} 完成`, `sub-agent batches ${c.done}/${all.length} done`),
         c.running ? t(`${c.running} 執行中`, `${c.running} running`) : '',
         c.blocked ? t(`${c.blocked} 受阻`, `${c.blocked} blocked`) : '',
       ]
@@ -581,7 +586,7 @@ export function verificationStates(t: Tr, run: WorkflowRun): VerificationState[]
     if (failed.length)
       out.push({ kind: 'failed', cls: 'bad', label: t(`檢查失敗 ${failed.length} 項`, `${failed.length} check(s) failed`), detail: failedChanged ? t(`其中 ${failedChanged} 項之後有改檔，要重跑才知道現在的結果`, `${failedChanged} of them changed after: run again to know the result now`) : undefined });
     if (!checks.length)
-      out.push({ kind: 'not_run', cls: 'warn', label: t('尚未執行檢查', 'No check run'), detail: t('沒有看到任何檢查執行；結果裡的「通過」是 agent 自述', 'No check was seen running; any "passed" in the result is the agent\'s own account') });
+      out.push({ kind: 'not_run', cls: 'warn', label: t('尚未執行檢查', 'No check run'), detail: t('沒看到任何檢查執行，結果裡的「通過」是 agent 自述', 'No check was seen running; any "passed" in the result is the agent\'s own account') });
     if (recheck.length) {
       const sure = recheck.filter((c) => c.outdated).length;
       out.push({
@@ -664,9 +669,7 @@ export function checkRow(t: Tr, c: ObservedCheck): CheckRow {
         : c.outcome === 'output_failure'
           ? t('執行完成，但輸出回報失敗', 'ran; its output reports a failure')
           : c.outcome === 'may_not_run'
-            ? c.lineOk === false
-              ? t('不確定是否執行（整行失敗）', 'not known whether it ran (the line failed)')
-              : t('不確定是否執行（整行成功）', 'not known whether it ran (the line ended fine)')
+            ? t('不確定是否執行', 'not known whether it ran')
             : t('在較長的指令中執行，結果要看輸出', 'ran within a longer command; see its output');
   const changed = !!(c.outdated || c.maybeOutdated);
   // A failure stays a failure (a change after it is said with it); anything else with a change after it is not a result
@@ -674,6 +677,7 @@ export function checkRow(t: Tr, c: ObservedCheck): CheckRow {
   const kind: CheckRow['kind'] = failedLike(c.outcome) ? 'failed' : changed ? 'recheck' : c.outcome === 'passed' ? 'passed' : 'weak';
   const earlier = c.earlier ?? [];
   const notes: string[] = [];
+  if (c.outcome === 'may_not_run') notes.push(c.lineOk === false ? t('整行失敗', 'the line failed') : t('整行成功', 'the line ended fine'));
   if (earlier.some((e) => failedLike(e.outcome))) notes.push(c.outcome === 'passed' ? t('先前失敗，重跑通過', 'failed before, passed on rerun') : t(`重跑 ${earlier.length} 次`, `rerun ${earlier.length} time(s)`));
   // Why it is to be checked again, on the row (its state says that it is).
   const why = c.outdated ? t('之後有改檔', 'files changed after it') : c.maybeOutdated ? t('之後有失敗的編輯或寫檔指令，檔案可能已變', 'a failed edit or file-writing command came after it: files may have changed') : '';

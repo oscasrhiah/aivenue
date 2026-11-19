@@ -215,7 +215,7 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
     const portFile = path.join(profile, 'DevToolsActivePort');
     let endedAt = 0;
     for (let i = 0; i < 150 && !port; i++) {
-      if (r.signal?.aborted) throw new Error(L('已取消', 'Cancelled'));
+      if (r.signal?.aborted) throw new Error(L('已停止', 'Stopped'));
       port = readPort(portFile) ?? 0;
       if (port) break;
       if (child.exitCode !== null) {

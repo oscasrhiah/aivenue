@@ -74,25 +74,25 @@ function SecurityCheck({ draft, disabled, locked, onChange }: { draft: RoleDraft
       <label className="check">
         {/* Set before the workflow starts: a running one keeps what it started with (the hub does not take it mid-run). */}
         <input type="checkbox" disabled={disabled || locked} checked={on} onChange={(e) => onChange(e.target.checked)} />
-        {t('安全檢查：這次的程式審查者另外做安全審查', 'Security check: the code reviewer also reviews for security')}
+        {t('安全檢查', 'Security check')}
       </label>
       <Hint
         className="muted small"
         text={t(
-          '使用內建的 Cloudflare security-audit skill，只交給這次的程式審查者，依變更範圍讀取相關段落。只做靜態檢查：不執行程式；需要執行才能確認的項目會列為「待驗證」。只套用在這段對話，不會成為新對話的預設。',
-          'Uses the bundled Cloudflare security-audit skill, for this workflow\'s code reviewer only, reading the parts that fit the change. Static only: no code is run; what would need running to confirm is listed as "needs validation". For this conversation only, not a default for new ones.',
+          '這次的程式碼審查者另外做安全審查。使用內建的 Cloudflare security-audit skill，只交給這次的程式碼審查者，依變更範圍讀取相關段落。只做靜態檢查，不執行程式，需要執行才能確認的項目會列為「待驗證」。只套用在這段對話，不會成為新對話的預設。',
+          'The code reviewer also reviews for security. Uses the bundled Cloudflare security-audit skill, for this workflow\'s code reviewer only, reading the parts that fit the change. Static only: no code is run; what would need running to confirm is listed as "needs validation". For this conversation only, not a default for new ones.',
         )}
       />
       {locked && (
         <div className="note small">
           {on
-            ? t('這次工作流開始時已開啟安全檢查；執行中不能切換。結束後的追問會套用這裡的設定。', 'This workflow started with the security check on; it cannot be switched while it runs. A follow-up message after it ends uses the setting here.')
-            : t('這次工作流開始時沒有開啟安全檢查；執行中不能切換，只能在開始前設定。結束後的追問會套用這裡的設定。', 'This workflow started without the security check; it can only be set before a workflow starts. A follow-up message after it ends uses the setting here.')}
+            ? t('這次工作流開始時已開啟安全檢查，執行中不能切換。結束後的追問會套用這裡的設定。', 'This workflow started with the security check on; it cannot be switched while it runs. A follow-up message after it ends uses the setting here.')
+            : t('這次工作流開始時沒有開啟安全檢查，執行中不能切換，只能在開始前設定。結束後的追問會套用這裡的設定。', 'This workflow started without the security check; it can only be set before a workflow starts. A follow-up message after it ends uses the setting here.')}
         </div>
       )}
       {on && noReviewer && !locked && (
         <div className="err-text small">
-          {t('目前沒有程式審查者，安全檢查不會執行：請啟用「實作」並設定「審查程式碼」。', 'There is no code reviewer, so the security check will not run: turn on "Build" and set "Review the code".')}
+          {t('目前沒有程式碼審查者，安全檢查不會執行：請啟用「實作」並設定「審查程式碼」。', 'There is no code reviewer, so the security check will not run: turn on "Build" and set "Review the code".')}
         </div>
       )}
     </section>
@@ -158,7 +158,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   const setup = [
     standard ? t('標準模式', 'Standard mode') : '',
     auto ? `${t('自動指派', 'Auto assignment')} · ${priority}` : '',
-    `Sub agents：${!draft.subagents.enabled ? t('關閉', 'off') : unassigned ? t('未指派', 'not assigned') : subs.map(name).join(', ') || '—'}`,
+    `${t('子 agent', 'Sub-agents')}：${!draft.subagents.enabled ? t('關閉', 'off') : unassigned ? t('未指派', 'not assigned') : subs.map(name).join(', ') || '—'}`,
   ].filter(Boolean);
   // Everything lives in the settings window; the controls carry a hint and the full summary as a tooltip.
   const details = [
@@ -180,10 +180,12 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   // The same in words (a tooltip, a screen reader): the stages listed, without the arrow icons.
   const autoMark = auto ? t('自動', 'Auto') : '';
   const shortText = (draft.review ? [t('獨立審查', 'Review only'), name(reviewer)] : !plan.enabled ? [t('直接實作', 'No plan'), name(implement.author.provider)] : [[t('計畫', 'Plan'), implement.enabled ? t('實作', 'Build') : ''].filter(Boolean).join(t('、', ', ')), t(`${roles} 個角色`, `${roles} roles`)]).concat(autoMark ? [autoMark] : []);
+  // Round D: at most one 「·」 on the chip (its first two parts); the rest is in its tooltip and its icon.
+  const shortShown = shortText.slice(0, 2);
   const short = unassigned ? (
     <span className="wf-unassigned">{t('未指派', 'Not assigned')}</span>
   ) : draft.review || !plan.enabled ? (
-    shortText.join(' · ')
+    shortShown.join(' · ')
   ) : (
     <>
       {t('計畫', 'Plan')}
@@ -193,7 +195,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
           {t('實作', 'Build')}
         </>
       )}
-      {` · ${shortText.slice(1).join(' · ')}`}
+      {` · ${shortShown[1]}`}
     </>
   );
   const long = unassigned ? (
@@ -201,8 +203,6 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
   ) : draft.review ? (
     <>
       {t('獨立審查', 'Review only')} · {name(reviewer)}
-      {draft.review.commit ? ` · ${t('受審', 'commit')} ${draft.review.commit}` : ''}
-      {auto ? ` · ${t('自動指派', 'Auto')}` : ''}
     </>
   ) : (
     <>
@@ -221,9 +221,6 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
           {t('直接實作', 'No plan')} · {pair(implement)}
         </>
       )}
-      {standard ? ` · ${t('標準模式', 'Standard')}` : ''}
-      {auto ? ` · ${t('自動指派', 'Auto')}` : ''}
-      {draft.subagents.enabled && subs.length ? ` · ${t(`${subs.length} 個 sub agent`, `${subs.length} sub-agents`)}` : ''}
     </>
   );
   const folder = draft.cwd ? draft.cwd.split(/[\\/]/).filter(Boolean).slice(-1)[0] : t('選擇資料夾', 'Choose folder');
@@ -270,8 +267,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
         permission={permission}
         isolation={isolation}
         folder={folder}
-        short={short}
-        label={`${permissionLabel(t, permission)}${isolation ? ` · ${t('隔離模式', 'Isolation')}` : ''} · ${folder} · ${unassigned ? t('未指派', 'Not assigned') : shortText.join(' · ')}，${t('這則訊息的設定', 'settings for this message')}`}
+        label={`${permissionLabel(t, permission)}${isolation ? ` · ${t('隔離模式', 'Isolation')}` : ''} · ${folder} · ${unassigned ? t('未指派', 'Not assigned') : shortText.join(' · ')}${t('，這則訊息的設定', ', settings for this message')}`}
       >
         {(done) => controls(true, done)}
       </WfSummary>
@@ -286,7 +282,7 @@ export function RolePills({ draft, providers, onOpen, preview, compact, onSafety
  * advisor and workflow controls, each whole; the focus goes into it, Esc or a click outside closes it (not while one of
  * its own menus or dialogs is open) and the focus comes back.
  */
-function WfSummary({ permission, isolation, folder, short, label, children }: { permission: PermissionLevel; isolation: boolean; folder: string; short: ReactNode; label: string; children: (done: () => void) => ReactNode }) {
+function WfSummary({ permission, isolation, folder, label, children }: { permission: PermissionLevel; isolation: boolean; folder: string; label: string; children: (done: () => void) => ReactNode }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLSpanElement>(null);
@@ -327,10 +323,6 @@ function WfSummary({ permission, isolation, folder, short, label, children }: { 
           {' · '}
           {folder}
         </span>
-        <span className="wf-text wf-sum-rest">
-          {' · '}
-          {short}
-        </span>
         <Ico i={ChevronDown} size={14} className="wf-chev" />
       </button>
       {open && (
@@ -351,14 +343,14 @@ const busyIn = (el: HTMLElement | null) => !!el?.querySelector('[role="menu"], .
 export function ProviderSelect({ value, providers, onChange, disabled }: { value: RoleConfig | null; providers: ProviderInfo[]; onChange: (v: RoleConfig | null) => void; disabled?: boolean }) {
   const t = useT();
   const info = providers.find((p) => p.spec.id === value?.provider);
-  const inherit = info?.defaultModel || info?.defaultEffort ? t(`供應商預設（${[info.defaultModel, info.defaultEffort].filter(Boolean).join(' · ')}）`, `Provider default (${[info.defaultModel, info.defaultEffort].filter(Boolean).join(' · ')})`) : undefined;
+  const inherit = info?.defaultModel || info?.defaultEffort ? t(`供應商預設：${[info.defaultModel, info.defaultEffort].filter(Boolean).join('，')}`, `Provider default: ${[info.defaultModel, info.defaultEffort].filter(Boolean).join(', ')}`) : undefined;
   return (
     <div className="role-pick">
       <select disabled={disabled} value={value?.provider ?? ''} onChange={(e) => onChange(e.target.value ? { provider: e.target.value } : null)}>
         {providers.map((p) => (
           <option key={p.spec.id} value={p.spec.id}>
             {p.spec.name}
-            {p.auth.state === 'logged_in' ? '' : p.installed ? t('（未登入）', ' (signed out)') : t('（未安裝）', ' (not installed)')}
+            {p.auth.state === 'logged_in' ? '' : p.installed ? t(' · 未登入', ' · signed out') : t(' · 未安裝', ' · not installed')}
           </option>
         ))}
       </select>
@@ -383,7 +375,7 @@ function ReviewSection({ draft, providers, auto, disabled, onChange }: { draft: 
       <Hint
         className="muted small"
         text={t(
-          '受審提交留空時，審查工作資料夾目前的內容，含未提交的變更。受審提交不是工作資料夾目前的 HEAD 時，審查者用 git show／git diff 讀它，要執行就另外建立工作樹，不會切換你的資料夾。審查前後 Aivenue 會比對工作資料夾，有變動會寫在報告裡。',
+          '受審提交留空時，審查工作資料夾目前的內容，含未提交的變更。受審提交不是工作資料夾目前的 HEAD 時，審查者用 git show／git diff 讀它，要執行就另外建立一份 git worktree，不會切換你的資料夾。審查前後 Aivenue 會比對工作資料夾，有變動會寫在報告裡。',
           "An empty commit reviews the working folder as it is, uncommitted changes included. When the commit is not the folder's HEAD, the reviewer reads it with git show / git diff and runs it in a separate worktree, never switching your folder. Aivenue compares the working folder before and after the review and reports any change.",
         )}
       />
@@ -507,7 +499,7 @@ function GoalSection({ value, onChange, providers, disabled, auto, implementer }
       <div className="sect-head">
         <div>
           <h4 className="sect-title">{t('目標驗收', 'Goal verification')}</h4>
-          <Hint className="muted small" text={t('計畫者設定一定要通過的最終目標，也就是可量測的驗收指標。程式審查通過後再逐項量測：有缺陷或證據無效就退回實作者，目標沒達成就退回計畫者重新規劃，直到全部達標才結束。', 'The planner sets a final goal that must pass: measurable acceptance metrics. After the code review each metric is measured: defects or bad evidence go back to the implementer, a missed goal back to the planner to re-plan, until every metric is met.')} />
+          <Hint className="muted small" text={t('計畫者設定一定要通過的最終目標，也就是可量測的驗收指標。程式碼審查通過後再逐項量測：有缺陷或證據無效就退回實作者，目標沒達成就退回計畫者重新規劃，直到全部達成才結束。', 'The planner sets a final goal that must pass: measurable acceptance metrics. After the code review each metric is measured: defects or bad evidence go back to the implementer, a missed goal back to the planner to re-plan, until every metric is met.')} />
         </div>
         <Switch label={t('目標驗收', 'Goal verification')} disabled={disabled} checked={value.enabled} onChange={(on) => onChange({ ...value, enabled: on })} />
       </div>
@@ -591,7 +583,7 @@ function PreflightSection({ draft, onDryRun }: { draft: RoleDraft; onDryRun?: ()
       <div className="sect-head">
         <div>
           <h4 className="sect-title">{t('預檢與試跑', 'Preflight and dry run')}</h4>
-          <Hint className="muted small" text={t('送出時也會自動檢查，有錯誤會先告訴你。預檢會看供應商是否登入、模型與思考程度是否存在、資料夾能否寫入、git、GPU、磁碟與中斷恢復。', 'Sending runs it too and tells you about errors first. It checks that providers are signed in, models and efforts exist, folders are writable, and git, GPUs, disk and recovery.')} />
+          <Hint className="muted small" text={t('送出時也會自動檢查，有錯誤會先告訴你。預檢會看供應商是否登入、模型與推理強度是否存在、資料夾能否寫入、git、GPU、磁碟與中斷恢復。', 'Sending runs it too and tells you about errors first. It checks that providers are signed in, models and efforts exist, folders are writable, and git, GPUs, disk and recovery.')} />
         </div>
       </div>
       <div className="row gap">
@@ -615,7 +607,7 @@ const advisorModeHint = (t: ReturnType<typeof useT>, m: AdvisorConfig['mode']) =
   ({
     off: t('不使用顧問。', 'No advisor.'),
     claude: t('只對 Claude Code 的 agent 生效：使用 Claude 官方的 advisor，由 Claude 自己決定何時請教更強的模型。建議內容是加密的，看不到。', "Only for Claude Code agents: Claude's official advisor, which decides on its own when to consult a stronger model. The advice is encrypted and not shown."),
-    cross: t('agent 真的卡住時才呼叫 ask_advisor，請教你指定的模型（可以跨家，例如 Codex 做事、Claude Opus 當顧問）。顧問只負責判斷：查資料交給 sub agent，建議會顯示在對話中並記進共用筆記。', "Agents call ask_advisor only when truly stuck, consulting the model you pick (cross-vendor, e.g. Codex works while Claude Opus advises). The advisor only judges: sub-agents fetch the facts. The advice shows in the conversation and becomes a shared note."),
+    cross: t('agent 真的卡住時才呼叫 ask_advisor，請教你指定的模型，可以跨供應商，例如 Codex 做事、Claude Opus 當顧問。顧問只負責判斷：查資料交給子 agent，建議會顯示在對話中並記進共用筆記。', "Agents call ask_advisor only when truly stuck, consulting the model you pick (cross-vendor, e.g. Codex works while Claude Opus advises). The advisor only judges: sub-agents fetch the facts. The advice shows in the conversation and becomes a shared note."),
   })[m];
 
 /** Picking a mode fills in sensible defaults (Opus for Claude's advisor; a signed-in provider, Claude first, for cross mode). */
@@ -678,7 +670,7 @@ function ClaudeAdvisorModel({ value, onChange, disabled }: { value: AdvisorConfi
     const c = models.find((m) => m.id === id)?.context;
     return c ? ` · ${fmtContext(c)}` : '';
   };
-  const alias = (a: string) => t(`${a[0].toUpperCase()}${a.slice(1)}（最新版）`, `${a[0].toUpperCase()}${a.slice(1)} (latest)`) + ctx(a);
+  const alias = (a: string) => t(`${a[0].toUpperCase()}${a.slice(1)} 最新版`, `${a[0].toUpperCase()}${a.slice(1)}, latest`) + ctx(a);
   return (
     <div className="kv">
       <label>{t('顧問模型', 'Advisor model')}</label>
@@ -695,7 +687,7 @@ function ClaudeAdvisorModel({ value, onChange, disabled }: { value: AdvisorConfi
           value={current}
           onChange={(e) => (e.target.value === CUSTOM_ADVISOR ? setCustom(true) : onChange({ ...value, claudeModel: e.target.value }))}
         >
-          <optgroup label={t('別名（跟著 Claude Code 更新）', 'Aliases (follow Claude Code updates)')}>
+          <optgroup label={t('別名，跟著 Claude Code 更新', 'Aliases, following Claude Code updates')}>
             {ADVISOR_ALIASES.map((a) => (
               <option key={a} value={a}>
                 {alias(a)}
@@ -747,7 +739,7 @@ export function claudeMains(t: ReturnType<typeof useT>, draft: RoleDraft, provid
   }
   if (draft.subagents.enabled)
     for (const id of auto ? preview?.subagents ?? draft.subagents.allowed : draft.subagents.allowed)
-      if (isClaude(id)) out.push({ who: 'Sub agent', model: draft.subagents.models?.[id]?.model || info(id)?.defaultModel });
+      if (isClaude(id)) out.push({ who: t('子 agent', 'Sub-agent'), model: draft.subagents.models?.[id]?.model || info(id)?.defaultModel });
   return out;
 }
 
@@ -769,8 +761,8 @@ function AdvisorPairingNote({ advisor, mains }: { advisor: string; mains: Claude
         <div key={model}>
           {e.pairing === 'weaker'
             ? t(
-                `顧問 ${advisor} 比 ${e.who.join('、')} 使用的 ${model} 弱，Claude Code 會忽略它（這些 agent 不會有顧問）。請改選同級或更強的模型。`,
-                `The advisor ${advisor} is weaker than ${model} used by ${e.who.join(', ')}, so Claude Code ignores it (those agents get no advisor). Pick an equal or stronger model.`,
+                `顧問 ${advisor} 比 ${e.who.join('、')} 使用的 ${model} 弱，Claude Code 會忽略它，這些 agent 不會有顧問。請改選同級或更強的模型。`,
+                `The advisor ${advisor} is weaker than ${model} used by ${e.who.join(', ')}, so Claude Code ignores it and those agents get no advisor. Pick an equal or stronger model.`,
               )
             : e.pairing === 'not-advisor'
               ? t(`${advisor} 不能當顧問，請改選其他模型。`, `${advisor} cannot act as an advisor; pick another model.`)
@@ -796,12 +788,24 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
   return (
     <section className="sect">
       <h4 className="sect-title">{t('共用上下文的容量與壓縮', 'Shared context size & compaction')}</h4>
+      {/* One 說明 for the section: what each agent reads in and how the knowledge is organized are in it too (the
+          rows' own labels say the rest). */}
       <Hint
         className="muted small"
-        text={t(
-          'Aivenue 共用上下文最多累積多少，以及何時壓縮。共用上下文是筆記、各 agent 的結果與交接；輸入框旁的圓餅圖顯示目前用量。容量越大越少壓縮，但 agent 讀完整內容時花的 token 也越多。',
-          "How much Aivenue's shared context may hold, and when it is compacted. It holds notes and the agents' results and hand-offs; the pie next to the message box shows how full it is. A bigger size compacts less often, but agents reading all of it spend more tokens.",
-        )}
+        text={[
+          t(
+            '共用上下文是筆記、各 agent 的結果與交接，輸入框旁的圓餅圖顯示目前用量。容量越大越少壓縮，但 agent 讀完整內容時花的 token 也越多。',
+            "The shared context holds notes and the agents' results and hand-offs; the pie next to the message box shows how full it is. A bigger size compacts less often, but agents reading all of it spend more tokens.",
+          ),
+          t(
+            '每個 agent 依自己模型能容納的大小讀入共用上下文。目標、狀態與交接一律放最前面，其餘由新到舊放到這個比例為止，放不下的仍可查到；如果某個 CLI 曾在比模型上限更低的大小自己壓縮對話，就以那個大小計算。',
+            'Each agent reads the shared context in proportion to what its model holds. The goal, status and hand-offs always come first, the rest goes in newest first up to this share, and what does not fit can still be looked up; when a CLI has compacted its conversation below its model limit, that size counts instead.',
+          ),
+          t(
+            '整理共用知識：壓縮者模型把新的筆記與發現依主題整理成一份文件，主題有環境、資料、程式結構、已知問題、決策、不可行的做法與進度，每一條附出處，原本的筆記不變。',
+            'Organizing: the compactor model sorts new notes and findings by subject (environment, data, code structure, known problems, decisions, approaches that did not work, progress) into one document, each line with its source; the notes stay as they are.',
+          ),
+        ].join(' ')}
       />
       {summaryOnly && <div className="note small">{t('目前設為「只交摘要」，沒有共用上下文，這些設定暫時不會用到。', 'Sharing is set to summaries only, so these settings are not used right now.')}</div>}
       <div className="kv">
@@ -850,8 +854,8 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
         )}
       />
       <div className="kv">
-        <label>{t('agent 對話詢問', 'Ask about agents')}</label>
-        <select aria-label={t('agent 對話詢問', 'Ask about agents')} disabled={disabled} value={value.agentAskAt ?? 0.8} onChange={(e) => onChange({ ...value, agentAskAt: Number(e.target.value) })}>
+        <label>{t('詢問壓縮對話', 'Ask to compact')}</label>
+        <select aria-label={t('詢問壓縮對話', 'Ask to compact')} disabled={disabled} value={value.agentAskAt ?? 0.8} onChange={(e) => onChange({ ...value, agentAskAt: Number(e.target.value) })}>
           {withCurrent([0.7, 0.8, 0.9], value.agentAskAt ?? 0.8).filter((n) => n > 0).map((n) => (
             <option key={n} value={n}>
               {t(`對話用到 ${pct(n)} 時詢問是否壓縮`, `Ask to compact at ${pct(n)}`)}
@@ -885,20 +889,6 @@ function ContextSizeSection({ value, onChange, providers, disabled, summaryOnly 
           ))}
         </select>
       </div>
-      <Hint
-        className="muted tiny"
-        text={
-          t(
-            '每個 agent 依自己模型能容納的大小讀入共用上下文。目標、狀態與交接一律放最前面，其餘由新到舊放到這個比例為止，放不下的仍可查到；如果某個 CLI 曾在比模型上限更低的大小自己壓縮對話，就以那個大小計算。',
-            'Each agent reads the shared context in proportion to what its model holds. The goal, status and hand-offs always come first, the rest goes in newest first up to this share, and what does not fit can still be looked up; when a CLI has compacted its conversation below its model limit, that size counts instead.',
-          ) +
-          ' ' +
-          t(
-            '整理共用知識：壓縮者模型把新的筆記與 findings 依主題（環境、資料、程式結構、已知問題、決策、不可行的做法、進度）整理成一份文件，每一條附出處，原本的筆記不變。',
-            'Organizing: the compactor model sorts new notes and findings by subject (environment, data, code structure, known problems, decisions, approaches that did not work, progress) into one document, each line with its source; the notes stay as they are.',
-          )
-        }
-      />
     </section>
   );
 }
@@ -939,9 +929,9 @@ function FactRounds({ value, onChange, disabled }: { value: AdvisorConfig; onCha
       </div>
       <div className="muted tiny">
         {kind === 'unlimited'
-          ? t('顧問永遠不自己讀檔，資料一律由 sub agent 查，回報不夠就一直派到查清楚為止。', 'The advisor never reads the code itself: sub-agents fetch every fact, sent again until the facts are solid.')
+          ? t('顧問永遠不自己讀檔，資料一律由子 agent 查，回報不夠就一直派到查清楚為止。', 'The advisor never reads the code itself: sub-agents fetch every fact, sent again until the facts are solid.')
           : t(
-              `顧問先派 sub agent 查資料，回報不夠就再派；連續 ${value.factRounds || 3} 輪都查不到需要的資訊時，才自己讀那幾個檔案。`,
+              `顧問先派子 agent 查資料，回報不夠就再派，連續 ${value.factRounds || 3} 輪都查不到需要的資訊時，才自己讀那幾個檔案。`,
               `The advisor sends sub-agents to fetch facts and sends them again when a report falls short; only after ${value.factRounds || 3} rounds without the fact it needs does it read those files itself.`,
             )}
       </div>
@@ -1054,10 +1044,10 @@ function SubagentModels({ providers, models, onChange, disabled }: { providers: 
   if (!providers.length) return null;
   return (
     <div className="sub-models">
-      <div className="muted small">{t('當 sub agent 時使用的模型：不選就用供應商預設，指定後呼叫的 agent 也不能更改。', 'Model when used as a sub-agent: empty uses the provider default; once set, the calling agent cannot change it.')}</div>
+      <div className="muted small">{t('當子 agent 時使用的模型：不選就用供應商預設，指定後呼叫的 agent 也不能更改。', 'Model when used as a sub-agent: empty uses the provider default; once set, the calling agent cannot change it.')}</div>
       {providers.map((p) => {
         const v = models[p.spec.id] ?? {};
-        const inherit = p.defaultModel || p.defaultEffort ? t(`供應商預設（${[p.defaultModel, p.defaultEffort].filter(Boolean).join(' · ')}）`, `Provider default (${[p.defaultModel, p.defaultEffort].filter(Boolean).join(' · ')})`) : undefined;
+        const inherit = p.defaultModel || p.defaultEffort ? t(`供應商預設：${[p.defaultModel, p.defaultEffort].filter(Boolean).join('，')}`, `Provider default: ${[p.defaultModel, p.defaultEffort].filter(Boolean).join(', ')}`) : undefined;
         return (
           <div key={p.spec.id} className="kv">
             <label className="row gap-s">
@@ -1161,7 +1151,7 @@ export function RoleSettings({
         </>
       }
     >
-        {notice && <div className="note small">{notice}</div>}
+        {notice && <Hint className="note small" text={notice} />}
 
         {!readOnly && (
           <Seg
@@ -1197,7 +1187,7 @@ export function RoleSettings({
             />
             <label className="check">
               <input type="checkbox" checked={prefs.crossReview} onChange={(e) => setPrefs({ crossReview: e.target.checked })} />
-              {t('審查者一定和撰寫者不同家', 'Reviewer is always a different vendor than the author')}
+              {t('審查者一定和作者用不同供應商', 'Reviewer is always a different provider than the author')}
             </label>
             <label className="check">
               <input type="checkbox" checked={prefs.failover} onChange={(e) => setPrefs({ failover: e.target.checked })} />
@@ -1237,7 +1227,7 @@ export function RoleSettings({
                   hint: (
                     <Hint
                       text={t(
-                        `不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式審查者，最多 ${STANDARD_ROUNDS} 輪；不做目標驗收、不開 sub agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`,
+                        `不另開計畫階段，實作者先自己寫幾行計畫再動手；保留一位程式碼審查者，最多 ${STANDARD_ROUNDS} 輪，不做目標驗收、不開子 agent。換作者或審查者仍是標準模式；更改階段開關、審查輪數等流程設定後會變成「自訂」。`,
                         `No planning stage: the implementer writes a short plan itself first. One code reviewer, at most ${STANDARD_ROUNDS} rounds; no goal verification, no sub-agents. Changing who writes or reviews keeps it Standard; changing a stage switch, the review rounds or other flow settings makes it "Custom".`,
                       )}
                     />
@@ -1249,7 +1239,7 @@ export function RoleSettings({
                   hint: (
                     <Hint
                       text={t(
-                        '只審查、不實作：由下面的審查者以唯讀方式審查你指定的提交或工作資料夾，交出審查報告；不執行計畫、實作、目標驗收與 sub agent。之後的追問也一樣是審查。你貼上的實作者報告只當成要查證的材料，不會變成審查者的任務。只套用在這段對話，不會成為新對話的預設。',
+                        '只審查、不實作：由下面的審查者以唯讀方式審查你指定的提交或工作資料夾，交出審查報告，不執行計畫、實作、目標驗收與子 agent。之後的追問也一樣是審查。你貼上的實作者報告只當成要查證的材料，不會變成審查者的任務。只套用在這段對話，不會成為新對話的預設。',
                         'Review only, no implementation: the reviewer below, read-only, reviews the commit or working folder you name and hands in a review report; no planning, building, goal verification or sub-agents. Follow-up messages are reviews too. A report from the implementer that you paste is material to check, never a task for the reviewer. For this conversation only, not a default for new ones.',
                       )}
                     />
@@ -1258,7 +1248,7 @@ export function RoleSettings({
                 {
                   value: 'custom',
                   label: t('自訂', 'Custom'),
-                  hint: <Hint text={t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與 sub agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')} />,
+                  hint: <Hint text={t('使用下面自己設定的角色配置。選「標準」會改掉計畫、審查、輪數、驗收與子 agent 的設定。', 'Uses the role layout set below. Choosing "Standard" replaces the plan, review, rounds, verification and sub-agent settings.')} />,
                 },
               ]}
             />
@@ -1329,7 +1319,7 @@ export function RoleSettings({
             <StageSection
               disabled={readOnly}
               title={t('實作', 'Build')}
-              hint={t('依計畫實作；可以只做規劃時關掉，只要計畫不要動手', 'Implement the plan; turn it off when you only want a plan')}
+              hint={t('依計畫實作，只要計畫、不要動手時可以關掉', 'Implement the plan; turn it off when you only want a plan')}
               authorLabel={t('實作', 'Implementer')}
               reviewerLabel={t('審查程式碼', 'Review the code')}
               stage={draft.implement}
@@ -1351,7 +1341,7 @@ export function RoleSettings({
           <Hint
             className="muted small"
             text={t(
-              '過去工作流在這個專案留下的記憶，開始前就決定怎麼用。記憶在設定的「記憶」頁管理；執行中也能從對話「更多」選單的「專案記憶」切換。',
+              '過去工作流在這個專案留下的記憶，開始前就決定怎麼用。記憶在設定的記憶頁管理，執行中也能從對話「更多」選單的「專案記憶」切換。',
               "What earlier workflows left in this project's memory; decide before it starts. It is managed on the Memory page of Settings, and can be switched while running from Project memory in the chat's More menu.",
             )}
           />
@@ -1372,17 +1362,17 @@ export function RoleSettings({
           <section className="sect">
             <div className="sect-head">
               <div>
-                <h4 className="sect-title">Sub agents</h4>
+                <h4 className="sect-title">{t('子 agent', 'Sub-agents')}</h4>
                 <div className="muted small">{t('任何角色都能把子任務交給以下供應商', 'Any role may delegate sub-tasks to these providers')}</div>
               </div>
-              <Switch label="Sub agents" disabled={readOnly} checked={sub.enabled} onChange={(on) => set({ subagents: { ...sub, enabled: on } })} />
+              <Switch label={t('子 agent', 'Sub-agents')} disabled={readOnly} checked={sub.enabled} onChange={(on) => set({ subagents: { ...sub, enabled: on } })} />
             </div>
             {sub.enabled && (
               <div className="sect-body">
                 {auto ? (
-                  <div className="muted small">{t('自動：所有可用的供應商都能被調用。', 'Auto: every ready provider can be called.')}</div>
+                  <div className="muted small">{t('自動：所有可用的供應商都能使用。', 'Auto: every ready provider can be used.')}</div>
                 ) : (
-                  <div className="row gap wrap" role="group" aria-label={t('可以被調用的供應商', 'Providers that may be called')}>
+                  <div className="row gap wrap" role="group" aria-label={t('可以使用的供應商', 'Providers that may be used')}>
                     {providers.map((p) => (
                       <label key={p.spec.id} className={cx('chip-check', sub.allowed.includes(p.spec.id) && 'on')}>
                         <input
@@ -1427,7 +1417,7 @@ export function RoleSettings({
             value={draft.contextSharing ?? 'on_demand'}
             onChange={(m) => set({ contextSharing: m })}
             choices={[
-              { value: 'summary' as ContextSharing, label: t('只交摘要', 'Summaries'), hint: t('agent 之間只交接計畫、審查意見與摘要；最省 context。', 'Agents only hand over the plan, reviews and summaries; uses the least context.') },
+              { value: 'summary' as ContextSharing, label: t('只交摘要', 'Summaries'), hint: t('agent 之間只交接計畫、審查意見與摘要，最省上下文。', 'Agents only hand over the plan, reviews and summaries; uses the least context.') },
               {
                 value: 'on_demand' as ContextSharing,
                 label: t('摘要加查閱', 'Summaries and lookup'),
@@ -1436,7 +1426,7 @@ export function RoleSettings({
               {
                 value: 'full' as ContextSharing,
                 label: t('完整交接', 'Full hand-offs'),
-                hint: <Hint text={t('另外附上每個 agent 自己寫的完整交接，不只前一棒；細節較多，也會多用一些 context。這是 agent 寫的交接，不是原始對話；任何人的完整對話仍用 read_context 查。', "Also includes every agent's whole hand-off, not only the previous one; more detail for a bit more context. It is written by the agent itself rather than its raw conversation; anyone's whole conversation is still one read_context away.")} />,
+                hint: <Hint text={t('另外附上每個 agent 自己寫的完整交接，不只前一棒；細節較多，也會多用一些上下文。這是 agent 寫的交接，不是原始對話，任何人的完整對話仍用 read_context 查。', "Also includes every agent's whole hand-off, not only the previous one; more detail for a bit more context. It is written by the agent itself rather than its raw conversation; anyone's whole conversation is still one read_context away.")} />,
               },
             ]}
           />

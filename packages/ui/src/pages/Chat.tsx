@@ -152,7 +152,7 @@ function ProviderLine({ providers }: { providers: ProviderInfo[] }) {
     <div className="home-providers">
       <button type="button" className="home-prov-btn" aria-expanded={open} aria-controls="home-prov-list" title={providers.map((p) => `${p.spec.name}：${word[state(p)]}`).join('\n')} onClick={() => setOpen(!open)}>
         <Ico i={open ? ChevronDown : ChevronRight} size={14} />
-        {[t(`可用 ${ready} 家`, `${ready} available`), out ? t(`${out} 家未登入`, `${out} signed out`) : '', checking ? t('檢查登入狀態中…', 'Checking sign-ins…') : ''].filter(Boolean).join(' · ')}
+        {[t(`可用 ${ready} 家`, `${ready} available`), out ? t(`${out} 家未登入`, `${out} signed out`) : '', checking ? t('檢查登入狀態中…', 'Checking sign-ins…') : ''].filter(Boolean).join(t('，', ', '))}
       </button>
       <span className="home-sep" aria-hidden="true">
         ·
@@ -331,7 +331,7 @@ function Question({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
       <textarea
         rows={2}
         aria-label={own ? t('你的回答', 'Your answer') : t('補充說明', 'Anything to add')}
-        placeholder={own ? t('寫下你的回答（必填）', 'Write your answer (required)') : t('補充說明或額外條件（選填）', 'Anything to add, such as a condition (optional)')}
+        placeholder={own ? t('寫下你的回答，必填', 'Write your answer, required') : t('補充說明或額外條件，選填', 'Anything to add, such as a condition, optional')}
         value={text}
         onChange={(e) => {
           setText(e.target.value);
@@ -385,7 +385,7 @@ function Decision({ run, d }: { run: WorkflowRun; d: HumanDecision }) {
   return (
     <div className="decision">
       <div className="decision-q">{d.message}</div>
-      {d.allowText && <textarea rows={2} placeholder={t('（選填）給 agent 的意見…', '(Optional) a note for the agent…')} value={text} onChange={(e) => setText(e.target.value)} />}
+      {d.allowText && <textarea rows={2} placeholder={t('給 agent 的意見，選填', 'A note for the agent, optional')} value={text} onChange={(e) => setText(e.target.value)} />}
       <div className="row gap wrap">
         {d.options.map((o, i) =>
           o.id.startsWith('switch:') ? (
@@ -512,8 +512,8 @@ function compatWarnings(t: ReturnType<typeof useT>, files: Attachment[], targets
       if (seen.has(key)) continue;
       seen.add(key);
       const r = readability(a, profileForInputs(p?.spec.profile, models[r0.provider]?.find((m) => m.id === id)?.inputs));
-      const who = `${p?.spec.name ?? r0.provider}${id ? `（${modelLabel(id)}）` : ''}`;
-      if (!r.ok) out.push(t(`${who} 無法讀取 ${a.name}（${reasonText(t, r.reason!)}）`, `${who} cannot read ${a.name} (${reasonText(t, r.reason!)})`));
+      const who = `${p?.spec.name ?? r0.provider}${id ? ` ${modelLabel(id)}` : ''}`;
+      if (!r.ok) out.push(t(`${who} 無法讀取 ${a.name}：${reasonText(t, r.reason!)}`, `${who} cannot read ${a.name}: ${reasonText(t, r.reason!)}`));
     }
   }
   return out;
@@ -831,7 +831,7 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
           {!run.replacedBy && (
             <button
               className="link tiny user-edit"
-              title={active ? t('編輯後會中止目前的工作流，用新內容重新執行', 'Editing stops the current workflow and runs the new text') : t('編輯並重新送出', 'Edit and re-send')}
+              title={active ? t('編輯後會停止目前的工作流，用新內容重新執行', 'Editing stops the current workflow and runs the new text') : t('編輯並重新送出', 'Edit and re-send')}
               onClick={() => {
                 setValue(text);
                 setEditing(true);
@@ -866,7 +866,7 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
           if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) void submit();
         }}
       />
-      {active && <div className="note warn small">{t('送出後會立刻中止目前正在執行的 agent，再用新內容重新開始。已經改動的檔案不會自動還原。', 'Sending stops the agents that are working now, then starts over with the new text. Files already changed are not rolled back.')}</div>}
+      {active && <div className="note warn small">{t('送出後會立刻停止目前正在執行的 agent，再用新內容重新開始。已經改動的檔案不會自動還原。', 'Sending stops the agents that are working now, then starts over with the new text. Files already changed are not rolled back.')}</div>}
       {error && <div className="note err small">{error}</div>}
       <div className="row gap">
         <span className="grow muted tiny">{t('Ctrl+Enter 送出，Esc 取消', 'Ctrl+Enter to send, Esc to cancel')}</span>
@@ -874,7 +874,7 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
           {t('取消', 'Cancel')}
         </button>
         <button className="btn primary" disabled={busy || !value.trim() || value.trim() === text.trim()} onClick={() => void submit()}>
-          {busy ? t('處理中…', 'Working…') : active ? t('中止並重新執行', 'Stop and re-run') : t('重新送出', 'Re-send')}
+          {busy ? t('處理中…', 'Working…') : active ? t('停止並重新執行', 'Stop and re-run') : t('重新送出', 'Re-send')}
         </button>
       </div>
     </div>
@@ -945,7 +945,7 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
             {rows.slice(0, 8).map((r) => (
               <DeliverableRow key={r.path} run={run} row={r} />
             ))}
-            {rows.length > 8 && <span className="muted small">{t(`等 ${rows.length} 個（見下方檔案清單）`, `${rows.length} in all (file list below)`)}</span>}
+            {rows.length > 8 && <span className="muted small">{t(`共 ${rows.length} 個，完整清單在下方「檔案」`, `${rows.length} in all, the full list under Files below`)}</span>}
           </div>
         </div>
       )}
@@ -992,11 +992,15 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
       {lastVerification && (
         <details className="final-evidence">
           <summary className="small">
-            <Ico i={ChevronRight} size={14} className="fold-chev" /> {lastVerification.stale ? t('上次驗收的證據（之後有改動）', 'Evidence of the last verification (changed since)') : t('驗收證據', 'Verification evidence')}
+            <Ico i={ChevronRight} size={14} className="fold-chev" /> {lastVerification.stale ? t('上次驗收的證據 · 之後有改動', 'Evidence of the last verification · changed since') : t('驗收證據', 'Verification evidence')}
           </summary>
           {lastVerification.evidence && (
             <div className="muted tiny">
-              {t('量測於', 'Measured on')} {lastVerification.evidence.commit ? `commit ${lastVerification.evidence.commit} · ` : ''}tree {lastVerification.evidence.treeHash.slice(0, 8)} · {new Date(lastVerification.evidence.at).toLocaleString()}
+              {t('量測於版本', 'Measured on version')} {(lastVerification.evidence.commit ?? lastVerification.evidence.treeHash).slice(0, 8)}
+              {t('，', ', ')}
+              {lastVerification.evidence.commit ? `commit ${lastVerification.evidence.commit}${t('，', ', ')}` : ''}git tree {lastVerification.evidence.treeHash.slice(0, 8)}
+              {t('，', ', ')}
+              {new Date(lastVerification.evidence.at).toLocaleString()}
             </div>
           )}
           {lastVerification.metrics.map((m) => (
@@ -1046,13 +1050,13 @@ function DeliverableSource({ run, row }: { run: WorkflowRun; row: ReturnType<typ
   return (
     <div className="deliverable-body small">
       {row.editedBy.length ? (
-        <div>{t(`以編輯工具改動：${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join('、')}`, `Changed with the edit tool by: ${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join(', ')}`)}</div>
+        <div title={t('agent 用編輯工具改的', 'Changed with an edit tool')}>{t(`改動者：${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join('、')}`, `Changed by: ${row.editedBy.map((id) => roleLabel(t, run.agents[id]?.role ?? 'executor')).join(', ')}`)}</div>
       ) : (
         <div className="muted">{t('由資料夾比對發現：工作流結束時比對工作資料夾得知這個改動，紀錄裡沒有哪個 agent 用編輯工具改了這個檔案。', 'Found by comparing the folder: the working folder changed here when the workflow ended; no agent edited this file with the edit tool in the records.')}</div>
       )}
       {named.map((e) => (
         <div key={e.seq} className="deliverable-cmd">
-          <div className="muted tiny">{t(`指令文字提到這個檔名（活動紀錄第 ${e.seq} 筆；只是文字比對，不代表就是它寫的）`, `A command whose text has this file name (activity log event ${e.seq}; a text match, not proof that it wrote the file)`)}</div>
+          <div className="muted tiny">{t(`指令文字提到這個檔名，活動紀錄第 ${e.seq} 筆。只是文字比對，不一定是它寫的。`, `A command whose text has this file name, activity log event ${e.seq}. A text match only, not proof that it wrote the file.`)}</div>
           <pre>{e.tool!.title}</pre>
         </div>
       ))}
@@ -1320,7 +1324,7 @@ export function Chat({ id }: { id?: string }) {
   if (!shown)
     return draftError ? (
       <div className="center-fill">
-        <div className="err-text small">{t(`讀不到已存的工作流設定（${draftError}）。為了不覆蓋它，先不建立新的設定；連線恢復後會自動重試。`, `Could not read the saved workflow settings (${draftError}). So as not to overwrite them, no new settings are made yet; this retries when the connection is back.`)}</div>
+        <div className="err-text small">{t(`讀不到已存的工作流設定：${draftError}。為了不覆蓋它，先不建立新的設定，連線恢復後會自動重試。`, `Could not read the saved workflow settings: ${draftError}. So as not to overwrite them, no new settings are made yet; this retries when the connection is back.`)}</div>
         <button className="btn" onClick={() => void init.current!.retry()}>
           {t('重試', 'Retry')}
         </button>
@@ -1457,7 +1461,7 @@ export function Chat({ id }: { id?: string }) {
       <div className="chat">
         <div className="chat-deleted">
           <div className="note warn" role="status">
-            {t('這段對話已經刪除（可能是在另一個視窗刪的），不能再接續或操作。', 'This chat was deleted (perhaps in another window): it cannot be continued or changed.')}
+            {t('這段對話已刪除，可能是在另一個視窗刪的，不能再接續或操作。', 'This chat was deleted, perhaps in another window: it cannot be continued or changed.')}
           </div>
           <button className="btn primary" onClick={() => navigate('new')}>
             {t('開新對話', 'Start a new chat')}
@@ -1606,7 +1610,7 @@ export function Chat({ id }: { id?: string }) {
                       <UserMessage run={run} text={it.text} active={active} config={runDraft ? { ...run.config, ...runDraft } : run.config} />
                       {run.replacedBy && (
                         <div className="note small edit-link">
-                          {t('這則訊息已編輯並重新送出。', 'This message was edited and re-sent.')} <a href={`#/run/${run.replacedBy}`}>{t('前往新版本 →', 'Go to the new version →')}</a>
+                          {t('這則訊息已編輯並重新送出。', 'This message was edited and re-sent.')} <a href={`#/run/${run.replacedBy}`}>{t('前往新版本', 'Go to the new version')}</a>
                         </div>
                       )}
                       {run.assignment && (
@@ -1641,7 +1645,7 @@ export function Chat({ id }: { id?: string }) {
               )}
               {run.status === 'incomplete' && (
                 <div className="note warn">
-                  {t(`未完成：${run.incompleteReason ?? '目標沒有達成'}。這不是成功；可以在下方輸入訊息，用相同設定接續。`, `Incomplete: ${run.incompleteReason ?? 'the goal was not met'}. This is not a success; send a message below to continue with the same setup.`)}
+                  {t(`未完成：${run.incompleteReason ?? '目標沒有達成'}。可以在下方輸入訊息，用相同設定接續。`, `Incomplete: ${run.incompleteReason ?? 'the goal was not met'}. Send a message below to continue with the same setup.`)}
                 </div>
               )}
               {run.dryRun && run.preflight && <PreflightList items={run.preflight} showOk />}
@@ -1649,7 +1653,7 @@ export function Chat({ id }: { id?: string }) {
                 Object.values(run.stages).some((s) => s?.status === 'cancelled') &&
                 !summaries.some((s) => (s.threadId ?? s.id) === threadKey && s.createdAt > run.createdAt) && (
                   <div className="note">
-                    {t('這個工作流已停止。「接續原工作流」會從停下的階段與輪次繼續同一個工作流，計畫、步驟進度、審查與共用上下文都保留；在下方送出新訊息則會用相同設定開始下一段工作流（之後就不能再接續這一個）。', 'This workflow was stopped. "Resume this workflow" continues the same workflow from the stage and round it stopped in, keeping the plan, step progress, reviews and shared context; a new message below starts the next workflow with the same setup (after which this one can no longer be resumed).')}
+                    {t('這個工作流已停止。按「接續原工作流」會從停下的階段與輪次繼續，計畫、步驟進度、審查與共用上下文都保留。在下方送出新訊息會用相同設定開始下一段工作流，之後就不能再接續這一個。', 'This workflow was stopped. "Resume this workflow" continues it from the stage and round it stopped in, keeping the plan, step progress, reviews and shared context. A new message below starts the next workflow with the same setup, after which this one can no longer be resumed.')}
                     <div className="row gap" style={{ marginTop: 8 }}>
                       <button className="btn small" onClick={() => hub.call('workflows.resumeInterrupted', { id: run.id }).catch((e) => setError((e as Error).message))}>
                         {t('接續原工作流', 'Resume this workflow')}
@@ -1660,13 +1664,13 @@ export function Chat({ id }: { id?: string }) {
               {run.status === 'interrupted' && (
                 <div className="note warn">
                   {run.interruptedFrom === 'paused'
-                    ? t('這個工作流在 Aivenue 重新啟動（例如更新）前已暫停。按「繼續」會從暫停的地方接著做，計畫、步驟進度、審查與共用上下文都保留。', 'This workflow was paused before Aivenue restarted (e.g. an update). Continue picks up where it was paused; the plan, step progress, reviews and shared context are kept.')
+                    ? t('這個工作流在 Aivenue 重新啟動前已暫停，例如更新時。按「繼續」會從暫停的地方接著做，計畫、步驟進度、審查與共用上下文都保留。', 'This workflow was paused before Aivenue restarted, for example for an update. Continue picks up where it was paused; the plan, step progress, reviews and shared context are kept.')
                     : run.interruptedFrom
-                      ? t('Aivenue 重新啟動（例如更新）時這個工作流仍在執行，已中斷。按「接續」會從中斷的階段與輪次接著做，計畫、步驟進度、審查與共用上下文都保留。', 'Aivenue restarted (e.g. an update) while this workflow ran, so it was interrupted. Resume picks up from the stage and round it stopped in; the plan, step progress, reviews and shared context are kept.')
+                      ? t('Aivenue 重新啟動時這個工作流仍在執行，已中斷，例如更新時。按「接續」會從中斷的階段與輪次接著做，計畫、步驟進度、審查與共用上下文都保留。', 'Aivenue restarted, for example for an update, while this workflow ran, so it was interrupted. Resume picks up from the stage and round it stopped in; the plan, step progress, reviews and shared context are kept.')
                       : t('Aivenue 關閉時這個工作流仍在執行，已中斷。可以在下方輸入訊息，用相同設定接續。', 'Aivenue was closed while this workflow ran, so it was interrupted. Send a message below to continue with the same setup.')}
                   {(run.waits ?? []).some((w) => w.state === 'waiting' && w.timeoutAt > Date.now()) &&
                     t(
-                      ` 中斷時有 ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} 個條件等待（${(run.waits ?? []).filter((w) => w.state === 'waiting').map((w) => w.check.slice(0, 40)).join('、')}）：接續時會交給 agent 用同一個 wait_id 繼續等，原本的逾時時間不變。`,
+                      ` 中斷時有 ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} 個條件在等待：${(run.waits ?? []).filter((w) => w.state === 'waiting').map((w) => w.check.slice(0, 40)).join('、')}。接續時會交給 agent 用同一個 wait_id 繼續等，原本的逾時時間不變。`,
                       ` ${(run.waits ?? []).filter((w) => w.state === 'waiting').length} condition wait(s) were open; continuing hands them to the agents to keep waiting with the same wait_id and deadline.`,
                     )}
                   {!!run.sideEffects?.length && t(` 已做過的 ${run.sideEffects.length} 個對外動作不會重做。`, ` The ${run.sideEffects.length} external action(s) already done will not be repeated.`)}
@@ -1712,8 +1716,8 @@ export function Chat({ id }: { id?: string }) {
           notice={
             active
               ? t(
-                  '這段對話正在執行。生效時機：模型、思考程度、權限、驗收與限制 → 下一個開始的 agent 回合；技能與角色指示 → 新開的對話（接續中的對話不重送）；正在工作的 agent 不受影響。要立刻生效請按「立即套用」，受影響的 agent 會停下並用新設定重新派發。你中途送出的訊息則會立即送到正在工作的 agent。',
-                  'This conversation is running. When changes take effect: model, effort, permission, verification and limits → the next agent turn that starts; skills and role instructions → new conversations (a continued one is not sent them again); working agents keep theirs. Press "Apply now" to have affected agents stop and re-dispatch with the new settings. Messages you send mid-run reach the working agents right away.',
+                  '這段對話正在執行，改動在下一個開始的 agent 回合生效，按「立即重新派發」可馬上生效。模型、推理強度、權限、驗收與限制在下一個開始的 agent 回合生效，正在工作的 agent 不受影響。Skill 與角色指示要新開的對話才生效，接續中的對話不重送。按「立即重新派發」時，受影響的 agent 會停下並用新設定重新派發。你中途送出的訊息會立即送到正在工作的 agent。',
+                  'This conversation is running: changes apply from the next agent turn that starts, or now with "Re-dispatch now". Model, effort, permission, verification and limits apply from the next agent turn that starts; working agents keep theirs. Skills and role instructions apply to new conversations; a continued one is not sent them again. "Re-dispatch now" has affected agents stop and re-dispatch with the new settings. Messages you send mid-run reach the working agents right away.',
                 )
               : run
                 ? t('變更會套用到你在這段對話接著送出的訊息。', 'Changes apply to the next message you send in this conversation.')
@@ -1748,8 +1752,8 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
   const running = helpers.filter((a) => a.status === 'running' || a.status === 'queued').length;
   const alive = procs.filter((p) => p.alive !== false && !p.endedAt).length;
   const title = [
-    t('查看所有 agent 與 sub agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing'),
-    helpers.length ? t(`這則訊息的 sub agent／顧問：${running} 個執行中，共 ${helpers.length} 個`, `Sub-agents and advisors in this message: ${running} running of ${helpers.length}`) : '',
+    t('查看所有 agent 與子 agent：誰、用什麼模型、正在做什麼', 'See every agent and sub-agent: who, which model, what it is doing'),
+    helpers.length ? t(`這則訊息的子 agent 與顧問：${running} 個執行中，共 ${helpers.length} 個`, `Sub-agents and advisors in this message: ${running} running of ${helpers.length}`) : '',
     procs.length ? t(`背景程序：${alive} 個執行中，共 ${procs.length} 個`, `Background processes: ${alive} running of ${procs.length}`) : '',
   ]
     .filter(Boolean)
@@ -1760,11 +1764,11 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
     <button className="btn small am-open" onClick={onOpen} title={title}>
       <Ico i={Network} size={14} />
       {running > 0 && <span className="am-dot live" aria-hidden="true" />}
-      <span className="am-open-label">Agent map</span>
+      <span className="am-open-label">{t('分工圖', 'Agent map')}</span>
       {running > 0 && <span className="am-open-count muted">· {running}</span>}
       {alive > 0 && (
         <span className="am-open-count muted">
-          · <Ico i={Activity} size={14} /> {alive}
+          <Ico i={Activity} size={14} /> {alive}
         </span>
       )}
     </button>

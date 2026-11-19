@@ -35,7 +35,7 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
         ) : null}
         <span className={cx('out-path', gone && 'gone')}>
           {f.path.replace(/\\/g, '/')}
-          {f.count ? <span className="muted"> {t(`（${f.count.toLocaleString()} 個檔案）`, ` (${f.count.toLocaleString()} files)`)}</span> : null}
+          {f.count ? <span className="muted"> {t(` · ${f.count.toLocaleString()} 個檔案`, ` · ${f.count.toLocaleString()} files`)}</span> : null}
         </span>
         <span className="muted tiny">{fmt(f.size)}</span>
         {!gone && (
@@ -63,7 +63,7 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
           ) : (
             <pre>{preview.text}</pre>
           )}
-          {preview.truncated && <div className="muted tiny">{t('（只顯示前 200 KB）', '(first 200 KB only)')}</div>}
+          {preview.truncated && <div className="muted tiny">{t('只顯示前 200 KB', 'First 200 KB only')}</div>}
         </div>
       )}
     </div>

@@ -51,9 +51,9 @@ export const HUB_TITLES: Record<string, [string, string]> = {
   submit_verification: ['提交驗收結果', 'Submit verification'],
   submit_ruling: ['提交裁決', 'Submit ruling'],
   report_progress: ['回報進度', 'Report progress'],
-  spawn_subagent: ['派出 sub agent', 'Spawn sub-agent'],
-  wait_subagent: ['等待 sub agent', 'Wait for sub-agent'],
-  stop_subagent: ['停止 sub agent', 'Stop sub-agent'],
+  spawn_subagent: ['派出子 agent', 'Spawn sub-agent'],
+  wait_subagent: ['等待子 agent', 'Wait for sub-agent'],
+  stop_subagent: ['停止子 agent', 'Stop sub-agent'],
   list_providers: ['查詢可用供應商', 'List providers'],
   capture_screenshot: ['拍截圖', 'Take screenshot'],
   read_context: ['查閱其他 agent 的紀錄', 'Read shared context'],
@@ -63,7 +63,7 @@ export const HUB_TITLES: Record<string, [string, string]> = {
   ask_user: ['問你', 'Ask you'],
   reply_user: ['回覆你', 'Reply to you'],
   rename_chat: ['改對話名稱', 'Rename the conversation'],
-  report_skill_use: ['回報使用的技能', 'Report a skill used'],
+  report_skill_use: ['回報使用的 Skill', 'Report a skill used'],
   track_process: ['追蹤背景程序', 'Track a background process'],
   update_process: ['更新背景程序', 'Update a background process'],
   dismiss_launch: ['申報背景工作誤判或已結束', 'Close an unconfirmed launch'],
@@ -112,20 +112,20 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     const t = HUB_TITLES[lower];
     let title = t ? L(t[0], t[1]) : name;
     // What the call is about, when its arguments say: in OpenCode's code mode they are inside the agent's code, and the
-    // title is then the tool's name alone (not "Take screenshot: " or "Report progress: ? → ").
+    // title is then the tool's name alone (not "Take screenshot: " or "Report progress: ? to ").
     const about = (s: string | undefined, max = 80) => {
       if (s?.trim()) title += `: ${s.trim().slice(0, max)}`;
     };
     const step = pick('step_id');
     const status = pick('status');
     if (lower === 'spawn_subagent') about([pick('provider') ?? '', (pick('task') ?? '').slice(0, 80)].filter(Boolean).join(' — '), Infinity);
-    if (lower === 'report_progress') about(step || status ? `${step ?? '?'} → ${status ?? ''}` : undefined);
+    if (lower === 'report_progress') about(step || status ? L(`${step ?? '?'} 改成 ${status ?? ''}`, `${step ?? '?'} to ${status ?? ''}`) : undefined);
     if (lower === 'submit_review') about(pick('verdict'));
     if (lower === 'capture_screenshot') about(pick('target'), Infinity);
     if (lower === 'read_context') title += pick('agent_id') ? `: ${pick('agent_id')}` : L('：總覽', ': overview');
     if (lower === 'post_note') about(pick('text'));
     if (lower === 'ask_advisor') about(pick('question'));
-    if (lower === 'confirm_external_action') about(pick('kind') || pick('target') ? `${pick('kind') ?? ''} → ${(pick('target') ?? '').slice(0, 80)}` : undefined, Infinity);
+    if (lower === 'confirm_external_action') about(pick('kind') || pick('target') ? L(`${pick('kind') ?? ''}，對象 ${(pick('target') ?? '').slice(0, 80)}`, `${pick('kind') ?? ''} on ${(pick('target') ?? '').slice(0, 80)}`) : undefined, Infinity);
     if (lower === 'rename_chat') about(pick('title'));
     if (lower === 'ask_user') about(pick('question'));
     if (lower === 'reply_user') about(pick('text'));

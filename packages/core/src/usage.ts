@@ -205,7 +205,7 @@ export class UsageTracker {
       value = await readClaudeQuota(accountEnv(spec).CLAUDE_CONFIG_DIR).catch((e) => ((error = (e as Error).message), undefined));
     } else if (spec.quota?.reader === 'copilot') {
       // The gh sign-in belongs to the main account; extra Copilot accounts have no token Aivenue can read.
-      if (spec.accountOf) error = L('額外加入的 Copilot 帳號查不到官方額度：額度是用「設定 → GitHub」登入的帳號查詢的，只對應主帳號', "Extra Copilot accounts can't show the plan quota: it is read with the GitHub account signed in under Settings → GitHub, which is the main account");
+      if (spec.accountOf) error = L('額外加入的 Copilot 帳號查不到官方額度：額度是用設定的 GitHub 區塊登入的帳號查詢的，只對應主帳號', "Extra Copilot accounts can't show the plan quota: it is read with the GitHub account signed in under the GitHub section of Settings, which is the main account");
       else value = await readCopilotQuota(await this.githubToken?.()).catch((e) => ((error = (e as Error).message), undefined));
     } else if (spec.quota?.reader === 'codex-sessions') {
       // Ask Codex for the live numbers; its session logs only change when Codex runs.

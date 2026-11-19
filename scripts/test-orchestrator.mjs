@@ -2331,7 +2331,7 @@ test('安全檢查開啟但沒有程式審查者：不會執行，送出前的�
   assert.equal(prompts.code_reviewer, undefined);
   for (const [role, list] of Object.entries(prompts)) for (const text of list) assert.equal(times(text, 'SECURITY CHECK'), 0, role);
   const items = await orch.preflight(config(cwd, { verify: undefined, ...noReviewer }));
-  assert.ok(items.some((i) => i.level === 'warn' && /安全檢查已開啟，但這次沒有程式審查者|security check is on, but this workflow has no code reviewer/.test(i.message ?? i.text ?? '')), JSON.stringify(items));
+  assert.ok(items.some((i) => i.level === 'warn' && /安全檢查已開啟，但這次沒有程式碼審查者|security check is on, but this workflow has no code reviewer/.test(i.message ?? i.text ?? '')), JSON.stringify(items));
   // With a reviewer: no such warning.
   const fine = await orch.preflight(config(cwd, { verify: undefined, securityReview: true }));
   assert.ok(!fine.some((i) => /安全檢查已開啟|security check is on/.test(i.message ?? i.text ?? '')));
@@ -3681,7 +3681,7 @@ test('子代理批次回歸：同名的兩批是兩批（失敗的那批算受�
   // Without a re-run: two batches of the same name, the first one blocked — said in the completion note.
   assert.equal(outcomes.false.subs.length, 2);
   assert.ok(outcomes.false.subs.every((s) => !s.rerunOf));
-  assert.match(outcomes.false.log, /1 個子代理批次最後一次嘗試失敗|1 sub-agent batch\(es\) failed on their last attempt/);
+  assert.match(outcomes.false.log, /1 個子 agent 批次最後一次嘗試失敗|1 sub-agent batch\(es\) failed on their last attempt/);
   assert.match(outcomes.false.errors[0], /not one of your sub-agents/);
   assert.match(outcomes.false.errors[1], /not one of your sub-agents/);
   // With retry_of: the third attempt is joined to the first batch, and nothing is left blocked.

@@ -26,7 +26,7 @@ export function reviewMarkdown(t: T, r: Review, target?: ReviewTarget): string {
   const list = (title: string, items: string[]) => {
     if (items.length) out.push('', `### ${title}`, ...items.map((x) => `- ${inItem(x)}`));
   };
-  list(t('報告不完整（退回兩次後仍然如此）', 'Incomplete (still so after two refusals)'), r.incomplete ?? []);
+  list(t('報告不完整，退回兩次後仍然如此', 'Incomplete, still so after two refusals'), r.incomplete ?? []);
   list(t('審查期間工作資料夾有變動', 'The working folder changed during the review'), r.workspaceChanged ?? []);
   if (r.workspaceUnchecked) list(t('無法確認工作資料夾是否變動', 'Could not tell whether the working folder changed'), [r.workspaceUnchecked]);
   if (r.summary.trim()) out.push('', r.summary.trim());
@@ -44,16 +44,16 @@ export function reviewMarkdown(t: T, r: Review, target?: ReviewTarget): string {
     for (const d of r.decisions) {
       out.push(`- **${d.id}** ${inItem(d.question)}`, `  ${t('選擇', 'Choice')}${colon}${inItem(d.choice)}`);
       if (d.reasons) out.push(`  ${t('理由', 'Why')}${colon}${inItem(d.reasons)}`);
-      if (d.assumptions.length) out.push(`  ${t('前提（不成立時結論可能改變）', 'Assumes (the choice may change if not)')}${colon}`, ...d.assumptions.map((a) => `  - ${inItem(a, 4)}`));
+      if (d.assumptions.length) out.push(`  ${t('前提，不成立時結論可能改變', 'Assumes; the choice may change if these do not hold')}${colon}`, ...d.assumptions.map((a) => `  - ${inItem(a, 4)}`));
     }
-    out.push('', t('這是審查者的建議；要不要照做、是否合併，仍由你決定。', "This is the reviewer's recommendation; whether to act on it, or merge, is still yours to decide."));
+    out.push('', t('這是審查者的建議，要不要照做、是否合併，仍由你決定。', "This is the reviewer's recommendation; whether to act on it, or merge, is still yours to decide."));
   }
   list(t('查過', 'Checked'), r.report?.checked ?? []);
   list(t('沒查過', 'Not checked'), r.report?.notChecked ?? []);
   list(t('自己重現', 'Reproduced'), r.report?.reproduced ?? []);
-  list(t('採信（未重跑）', 'Taken on trust'), r.report?.trusted ?? []);
+  list(t('直接採信，未重跑', 'Taken on trust, not re-run'), r.report?.trusted ?? []);
   list(
-    t('待驗證（不是缺陷）', 'To validate (not defects)'),
+    t('待驗證，不算缺陷', 'To validate, not defects'),
     (r.needsValidation ?? []).map((v) => `**${v.id}** ${v.title}${v.location ? ` (${v.location})` : ''}${v.missing ? `${colon}${v.missing}` : ''}`),
   );
   return `${out.join('\n')}\n`;
