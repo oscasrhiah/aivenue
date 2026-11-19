@@ -81,18 +81,20 @@ export function FullAccessConfirm({ onConfirm, onCancel }: { onConfirm: () => vo
   const t = useT();
   const [ok, setOk] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  const id = useId();
   // Esc cancels, Tab and Shift+Tab stay in it, and the focus goes back to the option that asked (the shared dialog keys).
   useDialogKeys(box, onCancel);
   return (
     <div className="modal-back" onMouseDown={onCancel}>
-      <div ref={box} tabIndex={-1} className="modal full-confirm" role="alertdialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-        <h3><Ico i={ShieldAlert} size={18} /> {t('開啟完整電腦存取？', 'Allow whole-computer access?')}</h3>
-        <p>{t('這段對話中的 AI 將可以：', 'In this conversation the AI will be able to:')}</p>
-        <ul>
+      <div ref={box} tabIndex={-1} className="modal full-confirm" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-t`} aria-describedby={`${id}-a ${id}-l ${id}-s`} onMouseDown={(e) => e.stopPropagation()}>
+        {/* Named by its question, described by what it allows and what still holds: read out when the focus comes in. */}
+        <h3 id={`${id}-t`}><Ico i={ShieldAlert} size={18} /> {t('開啟完整電腦存取？', 'Allow whole-computer access?')}</h3>
+        <p id={`${id}-a`}>{t('這段對話中的 AI 將可以：', 'In this conversation the AI will be able to:')}</p>
+        <ul id={`${id}-l`}>
           <li>{t('讀取、修改、刪除電腦上任何檔案，不只工作資料夾', 'read, change and delete any file on this computer, not just the working folder')}</li>
           <li>{t('執行任何指令與程式，Codex 的沙箱也會拿掉', 'run any command or program (Codex’s sandbox is removed too)')}</li>
         </ul>
-        <p className="muted small">
+        <p id={`${id}-s`} className="muted small">
           {t(
             '仍然有效：計畫者、審查者、顧問維持唯讀；推送、PR、發布等對外動作要你核准；AI 被要求不碰登入憑證與系統設定、外部改動要列在回報中。這些要求是規則，不是技術上的鎖；隔離模式也只保護工作資料夾。只對這段對話有效，新對話會回到全自動。',
             'Still in place: planners, reviewers and advisors stay read-only; pushes, PRs, releases and other outside actions need your OK; the AI is told not to touch credentials or system settings and to list outside changes in its report. Those are rules, not locks, and isolation only protects the working folder. This conversation only; new conversations go back to Full auto.',

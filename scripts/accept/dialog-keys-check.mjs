@@ -66,7 +66,7 @@ const WHERE = `(() => {
   const top = all[all.length - 1];
   const a = document.activeElement;
   const what = !a || a === document.body ? 'body' : (a.getAttribute('aria-label') || a.innerText || a.value || a.placeholder || a.tagName).trim().replace(/\\s+/g, ' ').slice(0, 40);
-  return { modals: all.length, top: top?.className ?? null, inside: !!top && top.contains(a), self: a === top, what, tabIndex: a?.tabIndex ?? null };
+  return { modals: all.length, top: top?.className ?? null, inside: !!top && top.contains(a), self: a === top, what, tabIndex: a?.tabIndex ?? null, pageFocus: document.hasFocus() };
 })()`;
 const where = () => ev(WHERE);
 // Every focus a run of presses visits, and whether each was inside the dialog on top.
@@ -88,6 +88,8 @@ const shot = async (file) => {
 
 try {
   await send('Page.bringToFront');
+  // The window may be behind other windows while this runs: keys and focus behave as in the window in front.
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true });
   // 1. The workflow settings window, from the new-conversation page.
   await ev(`location.hash = '#/new'`);
   await sleep(1500);
@@ -114,9 +116,9 @@ try {
     return [...top.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')].filter((el) => el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length).length;
   })()`);
   const forward = await walk(stops + 3, false);
-  check(`Tab ${stops + 3} times (${stops} stops): the focus stays in the window and wraps around`, allInside(forward) && new Set(forward.map((s) => s.what)).size > 1, { out: out(forward), stops });
+  check(`Tab ${stops + 3} times (${stops} stops): the focus stays in the window and wraps around`, allInside(forward) && forward.every((s) => !s.self) && new Set(forward.map((s) => s.what)).size >= Math.min(stops, 10), { out: out(forward), stops });
   const back = await walk(stops + 3, true);
-  check(`Shift+Tab ${stops + 3} times: the focus stays in the window`, allInside(back), { out: out(back) });
+  check(`Shift+Tab ${stops + 3} times: the focus stays in the window and moves`, allInside(back) && back.every((s) => !s.self) && new Set(back.map((s) => s.what)).size >= Math.min(stops, 10), { out: out(back) });
   check('no Tab stop is a control with tabIndex -1', [...forward, ...back].every((s) => s.tabIndex >= 0), [...forward, ...back].filter((s) => s.tabIndex < 0).map((s) => s.what));
 
   // A control Tab skips placed after the last stop (an option the arrow keys reach, as in the segmented choices and
@@ -130,10 +132,10 @@ try {
   })()`);
   await tab(true);
   const last = await where();
-  check('with a tabIndex -1 control last: Shift+Tab from the window itself goes to the real last stop, not to that control', last.inside && last.what !== 'acc skipped option', last);
+  check('with a tabIndex -1 control last: Shift+Tab from the window itself goes to the real last stop, not to that control', last.inside && !last.self && last.what !== 'acc skipped option', last);
   await tab(false);
   const wrapped = await where();
-  check('with a tabIndex -1 control last: Tab from the real last stop wraps to the first, inside the window', wrapped.inside && wrapped.what !== 'acc skipped option', wrapped);
+  check('with a tabIndex -1 control last: Tab from the real last stop wraps to the first, inside the window', wrapped.inside && !wrapped.self && wrapped.what !== 'acc skipped option', wrapped);
   // The focus on that skipped control itself (a click or the arrow keys put it there): Tab and Shift+Tab stay inside.
   await ev(`document.getElementById('acc-skipped').focus()`);
   await tab(false);
@@ -141,7 +143,7 @@ try {
   await ev(`document.getElementById('acc-skipped').focus()`);
   await tab(true);
   const fromSkippedB = await where();
-  check('the focus on that tabIndex -1 control: Tab and Shift+Tab stay in the window', fromSkippedF.inside && fromSkippedB.inside && fromSkippedB.what !== 'acc skipped option', { tab: fromSkippedF, shiftTab: fromSkippedB });
+  check('the focus on that tabIndex -1 control: Tab and Shift+Tab stay in the window', fromSkippedF.inside && fromSkippedB.inside && ![fromSkippedF, fromSkippedB].some((x) => x.self || x.what === 'acc skipped option'), { tab: fromSkippedF, shiftTab: fromSkippedB });
   await ev(`document.getElementById('acc-skipped')?.remove()`);
 
   // An option of a radio list that is not the chosen one (tabIndex -1), focused: Tab goes on inside the window.
@@ -175,6 +177,17 @@ try {
   if (confirm === 'open') {
     const in0 = await where();
     check('the confirmation takes the focus', in0.inside && /full-confirm/.test(in0.top), in0);
+    // A screen reader names it by its question and reads what it allows and what still holds when the focus comes in.
+    const aria = await ev(`(() => {
+      const d = document.querySelector('.modal.full-confirm');
+      const text = (ids) => (ids ?? '').split(/\\s+/).filter(Boolean).map((i) => document.getElementById(i)?.innerText.trim() ?? null);
+      return { role: d.getAttribute('role'), name: text(d.getAttribute('aria-labelledby')), description: text(d.getAttribute('aria-describedby')) };
+    })()`);
+    check(
+      'the confirmation is an alertdialog named by its question and described by the risks and what still holds',
+      aria.role === 'alertdialog' && aria.name.length === 1 && /完整電腦存取|whole-computer/i.test(aria.name[0] ?? '') && aria.description.length === 3 && aria.description.every((d) => d && d.length > 5) && /仍然有效|Still in place/.test(aria.description[2]),
+      aria,
+    );
     const f = await walk(6, false);
     const b = await walk(6, true);
     check('in the confirmation, Tab and Shift+Tab never reach the window under it or the page', allInside(f) && allInside(b) && [...f, ...b].every((s) => /full-confirm/.test(s.top)), { out: out([...f, ...b]) });
