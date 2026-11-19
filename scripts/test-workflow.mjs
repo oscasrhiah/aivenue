@@ -33,10 +33,10 @@ const bundled = await build({
       export { draftInit, forNewConversations } from './packages/ui/src/draftInit';
       export { followUpGoal } from './packages/ui/src/followUp';
       export { reviewMarkdown } from './packages/ui/src/reviewText';
-      export { msgTime } from './packages/ui/src/util';
+      export { msgTime, duration } from './packages/ui/src/util';
       export { parseMarkdown, plain as mdPlain } from './packages/ui/src/markdown';
       export { resolveTarget as shotTarget, readPort, Cdp } from './packages/core/src/screenshot';
-      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates, resultText } from './packages/ui/src/timeline';
+      export { feed, preview as feedPreview, liveLine, turnSummary, reworkLine, plainPreview, stepState, isSubmissionText, groupLabel, groupCount, groupNames, checkRow, fullPath, errorPreview, isInternal, deliverableRows, batchesOf, batchCounts, runOverview, byFolder, shortTitle, deliverables, verificationStates, resultText, activityCounts, activityLabel, chatLines, issueCounts, verdictWords, reviseReason } from './packages/ui/src/timeline';
       export { actionsLink, ciDiagnosisBlock, diagnoseCi, failureSnippet, failureFocus, wantsCiDiagnosis } from './packages/core/src/ciDiagnose';
       export { storeCiLogs, ciLogPage, searchCiLogs } from './packages/core/src/ciLogs';
       export { fetchPrReviews, prReviewsBlock, wantsReviewComments } from './packages/core/src/prReviews';
@@ -3290,8 +3290,15 @@ test('時間線：連續的例行讀檔與搜尋收成一行；終端指令不�
   ];
   const f = W.feed(events);
   assert.deepEqual(f.map((x) => (x.type === 'group' ? `${x.kind}×${x.events.length}` : `${x.e.kind}:${x.e.tool?.status ?? ''}${x.important ? '!' : ''}`)), ['read×3', 'search×2', 'message:', 'tool:ok', 'tool:error!', 'tool:ok', 'tool:running!']);
-  assert.equal(W.groupLabel(tr, 'read', 3), 'Read 3 files');
-  assert.equal(W.groupLabel(tr, 'search', 2), '2 searches');
+  // In the words of the activity log's line: files read or edited (each file once), commands run, searches.
+  assert.equal(W.groupLabel(tr, 'read', 3), 'Read 3 file(s)');
+  assert.equal(W.groupLabel(tr, 'search', 2), '2 search(es)');
+  assert.equal(W.groupLabel((zh) => zh, 'read', 3), '讀 3 個檔案');
+  assert.equal(W.groupLabel((zh) => zh, 'command', 2), '執行 2 個指令');
+  assert.equal(W.groupLabel((zh) => zh, 'write', 1), '修改 1 個檔案');
+  assert.equal(W.groupCount('read', ['src/a.js', 'src/a.js', 'src/b.js']), 2);
+  assert.equal(W.groupCount('command', ['npm test', 'npm test']), 2);
+  assert.deepEqual(W.groupNames('read', ['src/a.js', 'src/a.js', 'src/b.js']), ['a.js', 'b.js']);
   // `cat` run in a shell stays a terminal command: only the event's own category says "read".
   assert.equal(f[3].e.tool.category, 'command');
   // The newest few, and the failure even when newer items would push it out.
@@ -3337,8 +3344,213 @@ test('時間線的一行結果與返工原因：只用紀錄裡的事實；送�
   assert.deepEqual(W.turnSummary(tr, run, agent({ id: 'r', role: 'code_reviewer', stats: { events: 1, tools: 1, commands: 0, filesChanged: [] } })), ['Changes requested · 2 issue(s)']);
   assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'running' })), []);
   assert.deepEqual(W.turnSummary(tr, run, agent({ status: 'failed', round: 2, stats: { events: 0, tools: 0, commands: 0, filesChanged: [] } })), ['Failed']);
-  assert.equal(W.reworkLine(tr, run, agent({ id: 'b', round: 2, status: 'running' })), 'The review found R1, R2 → implementation round 2');
+  // Work a review sent back: the round's heading says why (with the issue ids), the turn does not say it again.
+  assert.equal(W.reworkLine(tr, run, agent({ id: 'b', round: 2, status: 'running' })), undefined);
   assert.equal(W.reworkLine(tr, run, agent()), undefined, 'a first round came back from nothing');
+  // Work the goal verification sent back: its reason is said nowhere else, so the turn says it.
+  const verified = {
+    ...run,
+    agents: { v: { id: 'v', role: 'verifier', status: 'completed', endedAt: 5 } },
+    stages: { ...run.stages, implement: { status: 'running', rounds: [{ n: 1, authorAgentId: 'a', review: { verdict: 'approve', summary: 's', issues: [] } }, { n: 2, authorAgentId: 'b' }] }, verify: { rounds: [{ n: 1, reviewerAgentId: 'v', verification: { outcome: 'defect', summary: '', metrics: [], issues: [] }, route: { to: 'implementer', reason: 'M1 is 40%, the goal is 80%' } }] } },
+  };
+  assert.equal(W.reworkLine((zh) => zh, verified, agent({ id: 'b', round: 2, status: 'running', startedAt: 9 })), '目標驗收：M1 is 40%, the goal is 80%，開始第 2 輪實作');
+});
+
+test('一次失敗或被停下的嘗試，不把同一輪由別的 agent 交出的結果說成自己的（自動換手、重試、重新派發）', () => {
+  const stats = (files = []) => ({ events: 1, tools: 1, commands: 0, filesChanged: files });
+  const run = {
+    agents: {},
+    stages: {
+      implement: {
+        status: 'running',
+        rounds: [{ n: 1, authorAgentId: 'y', reviewerAgentId: 'r2', submission: { summary: 'done', checks: [{ command: 'npm test', agentId: 'y', by: 'y', ts: 1, outcome: 'passed' }] }, review: { verdict: 'revise', summary: '', issues: [{ id: 'R1', severity: 'major', title: 't' }] } }],
+      },
+    },
+  };
+  // X failed on its quota; Y took the round over and handed it in.
+  const x = { id: 'x', role: 'executor', status: 'failed', stage: 'implement', round: 1, stats: stats() };
+  const y = { id: 'y', role: 'executor', status: 'completed', stage: 'implement', round: 1, stats: stats(['src/a.js']) };
+  assert.deepEqual(W.turnSummary(tr, run, x), ['Failed']);
+  assert.deepEqual(W.turnSummary(tr, run, y), ['Implemented', '1 file(s) changed with the edit tool', '1 check(s) passed']);
+  // A reviewer stopped (re-dispatched) before the one that reviewed the round.
+  assert.deepEqual(W.turnSummary(tr, run, { id: 'r1', role: 'code_reviewer', status: 'cancelled', stage: 'implement', round: 1, stats: stats() }), ['Stopped']);
+  assert.deepEqual(W.turnSummary(tr, run, { id: 'r2', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats: stats() }), ['Changes requested · 1 issue(s)']);
+});
+
+test('審查的問題數只算這次變更裡的，既有問題另外說；沒有問題編號時寫「審查要求修改」', () => {
+  const stats = { events: 1, tools: 1, commands: 0, filesChanged: [] };
+  const review = { verdict: 'revise', summary: 's', issues: [{ id: 'R1', severity: 'major', title: 't' }, { id: 'R2', severity: 'minor', title: 'u', preExisting: true }] };
+  const run = { agents: {}, stages: { implement: { status: 'running', rounds: [{ n: 1, reviewerAgentId: 'r', review }, { n: 2, authorAgentId: 'b' }] } } };
+  assert.deepEqual(W.issueCounts(review), { inChange: 1, before: 1 });
+  assert.deepEqual(W.turnSummary(tr, run, { id: 'r', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats }), ['Changes requested · 1 issue(s)', '1 more pre-existing']);
+  // Why the work came back, as the round's heading says it: the ids of the issues in the change, those outside it counted.
+  assert.equal(W.reviseReason((zh) => zh, review), '審查要求修改 1 個問題：R1，另有 1 個既有問題');
+  assert.equal(W.reviseReason((zh) => zh, { issues: [] }), '審查要求修改');
+  // Only issues outside the change: never "0 個問題".
+  const outside = { verdict: 'revise', summary: 's', issues: [{ id: 'R9', severity: 'minor', title: 'old', preExisting: true }] };
+  assert.deepEqual(W.turnSummary((zh) => zh, { agents: {}, stages: { implement: { rounds: [{ n: 1, reviewerAgentId: 'r', review: outside }] } } }, { id: 'r', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats }), ['要求修改', '另有 1 個既有問題']);
+});
+
+test('審查結論在每個地方用同一套說法：獨立審查寫「建議通過」；報告不完整不算結論；沒有變更內的問題不寫「0 個問題」', () => {
+  const zh = (z) => z;
+  const stats = { events: 1, tools: 1, commands: 0, filesChanged: [] };
+  const approve = { verdict: 'approve', summary: 's', issues: [] };
+  const incomplete = { verdict: 'approve', summary: 's', issues: [], incomplete: ['沒有列出查過的項目'] };
+  assert.deepEqual(W.verdictWords(zh, approve, false), { kind: 'approve', label: '審查通過', count: '', before: '' });
+  assert.deepEqual(W.verdictWords(zh, approve, true), { kind: 'approve', label: '建議通過', count: '', before: '' });
+  assert.deepEqual(W.verdictWords(zh, incomplete, true), { kind: 'incomplete', label: '報告不完整，不算審查結果', count: '', before: '' });
+  assert.deepEqual(W.verdictWords(zh, { ...incomplete, verdict: 'revise', issues: [{ id: 'R1', severity: 'major', title: 't' }] }, true).kind, 'incomplete');
+  const turn = (review, independent) => W.turnSummary(zh, { agents: {}, config: independent ? { review: {} } : {}, stages: { implement: { rounds: [{ n: 1, reviewerAgentId: 'r', review }] } } }, { id: 'r', role: 'code_reviewer', status: 'completed', stage: 'implement', round: 1, stats });
+  assert.deepEqual(turn(approve, false), ['審查通過']);
+  assert.deepEqual(turn(approve, true), ['建議通過']);
+  assert.deepEqual(turn(incomplete, true), ['報告不完整，不算審查結果']);
+  // An incomplete report's points to validate are not a verdict's either.
+  assert.deepEqual(turn({ ...incomplete, needsValidation: [{ id: 'V1', title: 'x' }] }, true), ['報告不完整，不算審查結果']);
+});
+
+test('用時：十秒以上才寫，寫成「4 分 58 秒」「1 小時 5 分」，不寫 0s 或 4:58', () => {
+  const zh = (z) => z;
+  assert.equal(W.duration(zh, 1000, 9000), '');
+  assert.equal(W.duration(zh, 1000, 11000), '10 秒');
+  assert.equal(W.duration(zh, 1000, 1000 + 298000), '4 分 58 秒');
+  assert.equal(W.duration(zh, 1000, 1000 + 120000), '2 分');
+  assert.equal(W.duration(zh, 1000, 1000 + 3900000), '1 小時 5 分');
+  assert.equal(W.duration(zh, 1000, 1000 + 7200000), '2 小時');
+  assert.equal(W.duration(tr, 1000, 1000 + 298000), '4m 58s');
+  // In an activity log a short turn has its time too (never "0 秒").
+  assert.equal(W.duration(zh, 1000, 3000, 1), '2 秒');
+  assert.equal(W.duration(zh, 1000, 1200, 0), '');
+  assert.equal(W.duration(zh, undefined, 3000), '');
+});
+
+test('活動紀錄收合時的一行：依種類計數（讀的檔、執行的指令、改的檔），同一個呼叫只算一次，Aivenue 自己的呼叫不算', () => {
+  const zh = (z) => z;
+  const events = [
+    tev(1, 'read', 'src/a.js'), tev(2, 'read', 'src/a.js'), tev(3, 'read', 'src/b.js'),
+    // The same call, updated in place (running, then ended).
+    tev(4, 'command', 'npm test', 'running'), tev(4, 'command', 'npm test'),
+    tev(5, 'command', 'npm run lint', 'error'),
+    // A failed edit changed nothing that is known.
+    tev(6, 'edit', 'src/a.js'), tev(7, 'edit', 'src/c.js', 'error'),
+    tev(8, 'hub', 'submit_work'),
+    tev(9, 'search', 'grep slug'),
+    msg(10, 'done'),
+  ];
+  const c = W.activityCounts(events);
+  assert.deepEqual(c, { read: 2, search: 1, command: 2, write: 1, other: 0 });
+  assert.equal(W.activityLabel(zh, c), '讀 2 個檔案、搜尋 1 次、執行 2 個指令、修改 1 個檔案');
+  assert.equal(W.activityLabel(tr, c, 2), 'Read 2 file(s), 1 search(es), ran 2 command(s), edited 1 file(s), 2 note(s)');
+  assert.equal(W.activityLabel(zh, W.activityCounts([msg(1, 'only words')])), '');
+});
+
+test('時間線的紀錄行：每個階段開始一條標題，第 2 輪起接上退回的原因；審查通過、有結果卡時的「本輪完成」與獨立審查的結論不另成一行；其他紀錄照留', () => {
+  const zh = (z) => z;
+  const line = (text, level = 'info') => ({ ts: 1, text, level, chat: true });
+  const rows = (lines) => lines.map((l) => [l.kind, l.text, l.detail ?? '']);
+  const review = { verdict: 'revise', summary: '', issues: [{ id: 'R1', severity: 'major', title: 'a' }, { id: 'R2', severity: 'minor', title: 'b', preExisting: true }] };
+  const run = {
+    log: [
+      line('計畫階段開始'), line('計畫階段 第 1 輪'), line('計畫階段審查通過 ✅'),
+      line('實作階段開始'), line('實作階段 第 1 輪'), line('實作階段審查要求修改：2 個問題', 'warn'), line('實作階段 第 2 輪'),
+      { ts: 1, text: 'not for the chat', level: 'info' },
+      line('你停止了 Codex', 'warn'),
+      line('目標驗收 第 1 次（由計畫者：Claude Code）'), line('目標驗收 第 2 次（獨立驗收者：Codex）'),
+      line('本輪工作流完成 ✅'),
+    ],
+    stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, review }, { n: 2 }] } },
+  };
+  // The round's reason counted as the verdict counts it (the record's own line counted every issue), with the ids.
+  assert.deepEqual(rows(W.chatLines(zh, run, true)), [
+    ['stage', '計畫', ''],
+    ['stage', '實作', ''],
+    ['stage', '第 2 輪', '審查要求修改 1 個問題：R1，另有 1 個既有問題'],
+    ['event', '你停止了 Codex', ''],
+    ['stage', '驗收', '由計畫者：Claude Code'],
+    ['stage', '驗收', '第 2 次 · 獨立驗收者：Codex'],
+  ]);
+  // No result card below it: the end of the round is said here.
+  assert.deepEqual(rows(W.chatLines(zh, run, false)).at(-1), ['event', '本輪工作流完成 ✅', '']);
+  // With what is still running, it says more than the card: kept.
+  assert.equal(W.chatLines(zh, { ...run, log: [line('本輪工作流完成 ✅（背景程序 1 個仍在執行）')] }, true).length, 1);
+  // A record written in English.
+  const en = { log: [line('Planning started'), line('Planning · round 1'), line('Planning review requested changes: 3 issue(s)', 'warn'), line('Planning · round 2'), line('Planning approved ✅'), line('This round of the workflow is complete ✅ goal verified')], stages: { plan: { rounds: [] }, implement: { rounds: [] } } };
+  assert.deepEqual(rows(W.chatLines(tr, en, true)), [['stage', 'Plan', ''], ['stage', 'Round 2', 'changes requested, 3 issue(s)']]);
+  // Sent back with a decision of yours in between: each said, the round on its own. Without the review on record the
+  // line stays as written.
+  const apart = { log: [line('實作階段審查要求修改：1 個問題', 'warn'), line('你的決定: 再進行 2 輪'), line('實作階段 第 3 輪')], stages: { plan: { rounds: [] }, implement: { rounds: [] } } };
+  assert.deepEqual(rows(W.chatLines(zh, apart, false)), [['event', '實作階段審查要求修改：1 個問題', ''], ['event', '你的決定: 再進行 2 輪', ''], ['stage', '第 3 輪', '']]);
+  // …with the review on record, counted as its verdict counts (the record's "2 個問題" had the one outside the change too):
+  // the review its reviewer handed in before the line was written, not a later one.
+  const at = (ts, text, level = 'info') => ({ ts, text, level, chat: true });
+  const mixed = { verdict: 'revise', summary: '', issues: [{ id: 'R3', severity: 'major', title: 'a' }, { id: 'R4', severity: 'minor', title: 'b', preExisting: true }] };
+  const apart2 = {
+    agents: { r1: { id: 'r1', endedAt: 5 }, r2: { id: 'r2', endedAt: 15 }, r3: { id: 'r3', endedAt: 30 } },
+    log: [at(6, '實作階段審查要求修改：1 個問題', 'warn'), at(7, '實作階段 第 2 輪'), at(16, '實作階段審查要求修改：2 個問題', 'warn'), at(17, '你的決定: 再進行 2 輪'), at(18, '實作階段 第 3 輪')],
+    stages: { plan: { rounds: [] }, implement: { rounds: [{ n: 1, reviewerAgentId: 'r1', review: { verdict: 'revise', summary: '', issues: [{ id: 'R1', severity: 'major', title: 'x' }] } }, { n: 2, reviewerAgentId: 'r2', review: mixed }, { n: 3, reviewerAgentId: 'r3', review: { verdict: 'revise', summary: '', issues: [] } }] } },
+  };
+  const apartLines = W.chatLines(zh, apart2, false);
+  assert.deepEqual(rows(apartLines), [
+    ['stage', '第 2 輪', '審查要求修改 1 個問題：R1'],
+    ['event', '實作階段審查要求修改 1 個問題：R3，另有 1 個既有問題', ''],
+    ['event', '你的決定: 再進行 2 輪', ''],
+    ['stage', '第 3 輪', ''],
+  ]);
+  assert.deepEqual([apartLines[1].level, apartLines[1].tone], ['warn', 'revise']);
+  // An independent review: its start is the stage's heading (what is reviewed, and that nothing is implemented); its
+  // verdict is the report's.
+  const solo = { log: [line('獨立審查開始（不實作）：工作資料夾目前的內容，3 個變更的檔案'), line('獨立審查完成：要求修改，1 個問題（1 個阻擋或主要）', 'warn')], stages: { plan: { rounds: [] }, implement: { rounds: [] } } };
+  assert.deepEqual(rows(W.chatLines(zh, solo, true)), [['stage', '獨立審查', '不實作 · 工作資料夾目前的內容，3 個變更的檔案']]);
+  assert.equal(W.chatLines(zh, solo, false).length, 2);
+});
+
+test('時間線的紀錄行：階段重新開始或接續時，接著開始的輪次併進同一條標題（每個階段開頭只有一條）', () => {
+  const zh = (z) => z;
+  const line = (text, level = 'info') => ({ ts: 1, text, level, chat: true });
+  const rows = (lines) => lines.map((l) => [l.kind, l.text, l.detail ?? '']);
+  const stages = { plan: { rounds: [] }, implement: { rounds: [] } };
+  // The goal verification sent the work back: the planning restarts at its next round, numbered across the cycles.
+  const again = { stages, log: [line('目標驗收 第 1 次（由計畫者：Claude Code）'), line('計畫階段重新開始（第 2 輪循環）'), line('計畫階段 第 2 輪'), line('實作階段重新開始（第 2 輪循環）'), line('實作階段 第 3 輪')] };
+  assert.deepEqual(rows(W.chatLines(zh, again, false)), [
+    ['stage', '驗收', '由計畫者：Claude Code'],
+    ['stage', '計畫', '重新開始 · 第 2 輪循環 · 第 2 輪'],
+    ['stage', '實作', '重新開始 · 第 2 輪循環 · 第 3 輪'],
+  ]);
+  // Resumed after a stop: what you did, then the stage's one heading with the round it goes on with.
+  const resumed = { stages, log: [line('從停止的地方接續：實作階段'), line('實作階段接續'), line('實作階段 第 2 輪')] };
+  assert.deepEqual(rows(W.chatLines(zh, resumed, false)), [
+    ['event', '從停止的地方接續：實作階段', ''],
+    ['stage', '實作', '接續 · 第 2 輪'],
+  ]);
+  const en = { stages, log: [line('Implementation resumed'), line('Implementation · round 3')] };
+  assert.deepEqual(rows(W.chatLines((_z, e) => e, en, false)), [['stage', 'Implement', 'resumed · round 3']]);
+  // A round line of another stage, or one that does not follow the heading, stays its own heading.
+  const later = { stages, log: [line('實作階段接續'), line('你重新派發了 Codex'), line('實作階段 第 2 輪')] };
+  assert.deepEqual(rows(W.chatLines(zh, later, false)), [['stage', '實作', '接續'], ['event', '你重新派發了 Codex', ''], ['stage', '第 2 輪', '']]);
+});
+
+test('時間線的紀錄行：提問和停止說得安靜；工作流失敗或未完成時，下方的說明已寫原因，紀錄只寫一句（較早的訊息沒有那段說明，照留全文）', () => {
+  const zh = (z) => z;
+  const line = (text, level = 'info') => ({ ts: 1, text, level, chat: true });
+  const view = (lines) => lines.map((l) => [l.text, l.level, l.tone ?? '']);
+  const stages = { plan: { rounds: [] }, implement: { rounds: [] } };
+  const why = 'OpenCode 意外結束（結束代碼 134）：FATAL ERROR: Reached heap limit';
+  const failed = { status: 'failed', error: why, stages, log: [line('OpenCode · 實作 有問題要問你', 'warn'), line('你停止了 Codex · 審查程式碼', 'warn'), line('工作流已取消', 'warn'), line(`工作流失敗：${why}`, 'error')] };
+  assert.deepEqual(view(W.chatLines(zh, failed, false, true)), [
+    ['OpenCode · 實作 有問題要問你', 'info', 'question'],
+    ['你停止了 Codex · 審查程式碼', 'info', 'stopped'],
+    ['工作流已取消', 'warn', 'stopped'],
+    ['工作流失敗', 'error', 'failed'],
+  ]);
+  // An earlier message of the chat: no note at its end, the reason stays on its line.
+  assert.equal(W.chatLines(zh, failed, false, false).at(-1).text, `工作流失敗：${why}`);
+  // A failure line of an earlier attempt (another reason) keeps its reason.
+  assert.equal(W.chatLines(zh, { ...failed, error: 'something else' }, false, true).at(-1).text, `工作流失敗：${why}`);
+  // The error itself as the line (the isolated copy could not be made): said once, below.
+  assert.deepEqual(view(W.chatLines(zh, { status: 'failed', error: 'git worktree add failed', stages, log: [line('git worktree add failed', 'error')] }, false, true)), [['工作流失敗', 'error', 'failed']]);
+  // Ended without meeting the goal: the note below gives the reason.
+  const short = { status: 'incomplete', incompleteReason: '驗收 2 次仍未達標', stages, log: [line('工作流未完成：驗收 2 次仍未達標。目標沒有達成，不算完成。', 'warn')] };
+  assert.deepEqual(view(W.chatLines(zh, short, false, true)), [['工作流未完成', 'warn', '']]);
+  assert.equal(W.chatLines(zh, short, false, false)[0].text, '工作流未完成：驗收 2 次仍未達標。目標沒有達成，不算完成。');
 });
 
 test('時間線的結果預覽與提交 JSON：去掉 Markdown 語法與長路徑，只留可讀的文字；提交的 JSON 認得出來', () => {
@@ -3484,11 +3696,20 @@ test('最終結果附上交付物與驗證範圍：只用 Aivenue 的紀錄；�
     ['weak', 'warn', '2 with too little evidence', '1 not known whether they ran, 1 ran within a longer command: read the output'],
     ['goal', 'bad', 'goal 1/2', undefined],
   ]);
-  // A check's row says a change after it on the row itself, and a pass followed by a change is not shown as a plain pass.
+  // A check's row says a change after it on the row itself, and a pass followed by a change is not shown as a plain pass:
+  // its state is "re-check after changes" (as the verification's states count it), with why beside it.
   const en = (_zh, x) => x;
   const row = W.checkRow(en, { command: 'tsc', agentId: 'a', by: 'a', ts: 1, outcome: 'passed', outdated: true });
-  assert.deepEqual([row.cls, row.status, row.notes], ['warn', 'passed', ['re-check after changes']]);
+  assert.deepEqual([row.kind, row.cls, row.status, row.notes], ['recheck', 'warn', 'passed · re-check after changes', ['files changed after it']]);
   assert.deepEqual(W.checkRow(en, { command: 'tsc', agentId: 'a', by: 'a', ts: 1, outcome: 'passed' }).cls, 'ok');
+  // Each state its own kind (and icon), never one look for re-check, too little evidence and not run.
+  const kind = (o) => W.checkRow(en, { command: 'x', agentId: 'a', by: 'a', ts: 1, ...o }).kind;
+  assert.deepEqual(
+    [kind({ outcome: 'passed' }), kind({ outcome: 'failed' }), kind({ outcome: 'output_failure', outdated: true }), kind({ outcome: 'passed', maybeOutdated: true }), kind({ outcome: 'may_not_run' }), kind({ outcome: 'in_longer_command' }), kind({ outcome: 'in_longer_command', outdated: true })],
+    ['passed', 'failed', 'failed', 'recheck', 'weak', 'weak', 'recheck'],
+  );
+  const maybe = W.checkRow(en, { command: 'x', agentId: 'a', by: 'a', ts: 1, outcome: 'passed', maybeOutdated: true });
+  assert.deepEqual([maybe.status, maybe.notes], ['passed · re-check after changes', ['a failed edit or file-writing command came after it: files may have changed']]);
 });
 
 test('檢查判定回歸：node 執行測試腳本（node test.js、tests/、*.test.js）算檢查；node 跑其他腳本或只是讀測試檔不算', () => {
@@ -3805,7 +4026,7 @@ test('完成摘要：每項檢查一列，重跑與過期放在該列；legacy �
   // slug test passed after an earlier failure.
   const rows = checks.map((c) => W.checkRow(en, c));
   assert.deepEqual(rows.map((r) => [r.status, r.notes]), [
-    ['failed', ['re-check after changes']],
+    ['failed', ['files changed after it: re-check after changes']],
     ['passed', ['failed before, passed on rerun']],
   ]);
   // The later file change is said on the legacy row and explained in its details; both runs of the slug test are behind its row.

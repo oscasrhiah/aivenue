@@ -18,7 +18,7 @@ export function Clamp({ children, height = 120, more, less, className }: { child
         {children}
       </div>
       {long && (
-        <button className="link small clamp-toggle" onClick={() => setOpen(!open)}>
+        <button type="button" className="link small clamp-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? (less ?? t('收起', 'Show less')) : (more ?? t('展開全文', 'Show all'))}
         </button>
       )}

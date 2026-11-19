@@ -18,10 +18,9 @@ export function Replies({ replies, planUpdated, pending }: { replies?: Reply[]; 
         <div key={i} className="reply" title={r.auto ? t('這個 agent 沒有用 reply_user 回覆：這是它讀到訊息後說的第一段話', 'This agent did not answer with reply_user: these are its first words after reading the message') : undefined}>
           <span className="reply-who"><Ico i={CornerDownRight} size={13} /> {r.who}</span>
           <span className="reply-text">{r.text}</span>
-          {r.changesPlan && <span className="pill warn">{t('會更新計畫', 'changes the plan')}</span>}
+          {r.changesPlan && <span className="state-word warn">{t('會更新計畫', 'changes the plan')}</span>}
           <MsgTime ts={r.ts} />
           <CopyButton text={r.text} label={t('複製回覆', 'Copy reply')} icon />
-
         </div>
       ))}
       {planUpdated && <div className="reply plan-updated"><Ico i={Check} size={13} /> {t('計畫已依這則訊息更新', 'The plan was updated for this message')}</div>}

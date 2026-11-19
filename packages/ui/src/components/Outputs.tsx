@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Ico } from '../icons';
 import type { OutputFile, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub } from '../api';
@@ -28,16 +28,20 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
     <div className="out-row">
       <div className="out-head">
         <span className={cx('out-status', f.status)}>{label}</span>
-        {isImg && !gone ? <img className="out-thumb" src={fileUrl(f.abs)} alt="" onClick={() => onImage(fileUrl(f.abs))} /> : null}
+        {isImg && !gone ? (
+          <button type="button" className="out-thumb-btn" onClick={() => onImage(fileUrl(f.abs))} aria-label={t(`放大 ${f.path}`, `Enlarge ${f.path}`)}>
+            <img className="out-thumb" src={fileUrl(f.abs)} alt="" />
+          </button>
+        ) : null}
         <span className={cx('out-path', gone && 'gone')}>
-          {f.path}
+          {f.path.replace(/\\/g, '/')}
           {f.count ? <span className="muted"> {t(`（${f.count.toLocaleString()} 個檔案）`, ` (${f.count.toLocaleString()} files)`)}</span> : null}
         </span>
         <span className="muted tiny">{fmt(f.size)}</span>
         {!gone && (
           <span className="out-actions">
             {!isImg && !f.count && (
-              <button className="link" onClick={toggle}>
+              <button className="link" onClick={toggle} aria-expanded={!!preview}>
                 {preview ? t('收起', 'Hide') : t('預覽', 'Preview')}
               </button>
             )}
@@ -66,7 +70,10 @@ function Row({ f, onImage }: { f: OutputFile; onImage: (src: string) => void }) 
   );
 }
 
-/** Files the agents created / changed / deleted in the working folder during this run. */
+/**
+ * Files the agents created / changed / deleted in the working folder during this run: one quiet row under the result
+ * ("檔案 · 修改 2"), a button that opens the list in place (Tab, Enter, Space).
+ */
 export function Outputs({ run, onImage }: { run: WorkflowRun; onImage: (src: string) => void }) {
   const t = useT();
   const [all, setAll] = useState(false);
@@ -77,20 +84,26 @@ export function Outputs({ run, onImage }: { run: WorkflowRun; onImage: (src: str
   const n = (status: OutputFile['status']) => list.filter((f) => f.status === status).reduce((sum, f) => sum + (f.count ?? 1), 0);
   const counts = { added: n('added'), modified: n('modified'), deleted: n('deleted') };
   return (
-    <div className="outputs">
-      <div className="outputs-head fold-head" onClick={() => setOpen(!open)}>
-        <span>
-          <Ico i={open ? ChevronDown : ChevronRight} size={14} className="chev" /> <Ico i={Folder} /> {t('這次產生或修改的檔案', 'Files created or changed in this run')}
-        </span>
-        <span className="muted small">
+    <div className={cx('outputs', open && 'open')}>
+      <button type="button" className="outputs-head" aria-expanded={open} onClick={() => setOpen(!open)} title={t('這次產生或修改的檔案', 'Files created or changed in this run')}>
+        <Ico i={open ? ChevronDown : ChevronRight} size={14} className="chev" />
+        <span className="outputs-title">{t('檔案', 'Files')}</span>{' '}
+        <span className="outputs-counts">
           {[counts.added && t(`新增 ${counts.added}`, `${counts.added} added`), counts.modified && t(`修改 ${counts.modified}`, `${counts.modified} modified`), counts.deleted && t(`刪除 ${counts.deleted}`, `${counts.deleted} deleted`)].filter(Boolean).join(' · ')}
         </span>
-      </div>
-      {open && shown.map((f) => <Row key={f.path} f={f} onImage={onImage} />)}
-      {open && list.length > shown.length && (
-        <button className="link" onClick={() => setAll(true)}>
-          {t(`顯示全部 ${list.length} 個`, `Show all ${list.length}`)}
-        </button>
+      </button>
+      {open && (
+        <div className="outputs-list">
+          <div className="outputs-caption muted small">{t('這次產生或修改的檔案', 'Files created or changed in this run')}</div>
+          {shown.map((f) => (
+            <Row key={f.path} f={f} onImage={onImage} />
+          ))}
+          {list.length > shown.length && (
+            <button className="link" onClick={() => setAll(true)}>
+              {t(`顯示全部 ${list.length} 個`, `Show all ${list.length}`)}
+            </button>
+          )}
+        </div>
       )}
       {run.outputsTruncated && <div className="muted tiny">{t('資料夾檔案太多，只比對了前 5 萬個檔案。', 'Folder too large; only the first 50,000 files were compared.')}</div>}
     </div>

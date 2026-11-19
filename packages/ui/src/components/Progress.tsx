@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Lock, Minus, Pause, Target, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, CircleCheck, CircleDashed, CircleDot, CircleHelp, CircleMinus, CircleX, Lock, Pause, RefreshCw, Target, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AgentRole, ProviderInfo, StageKey, Verification, WorkflowRun } from '../../../core/src/types';
 import { useT } from '../i18n';
 import { cx, modelLabel, providerName, subTitle } from '../util';
-import { runOverview, stepState } from '../timeline';
+import { batchCounts, runBatches, runOverview, stepState, verdictWords } from '../timeline';
 import { AgentWindow, GpuWindow, ProcessWindow, Window } from './DetailWindows';
 
 type ItemState = 'done' | 'active' | 'pending' | 'failed' | 'skipped' | 'unreported';
@@ -39,16 +39,10 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
     const failed = st.status === 'failed' || st.status === 'cancelled';
     const stateOf = (isRunning: boolean, isDone: boolean): ItemState => (isRunning ? 'active' : isDone ? 'done' : failed || (ended && st.status !== 'approved') ? 'failed' : 'pending');
 
-    // Independent review: nobody implements; the one item is the review and its verdict.
+    // Independent review: nobody implements; the one item is the review and its verdict (in the words of its report).
     if (key === 'implement' && run.config.review) {
-      const verdict =
-        round?.review && !running(reviewerRole)
-          ? round.review.incomplete?.length
-            ? t('報告不完整，不算審查結果', 'incomplete report, not a result')
-            : round.review.verdict === 'approve'
-              ? t('建議通過', 'approve')
-              : t(`要求修改，${round.review.issues.filter((i) => !i.preExisting).length} 個問題`, `changes requested, ${round.review.issues.filter((i) => !i.preExisting).length} issue(s)`)
-          : undefined;
+      const w = round?.review && !running(reviewerRole) ? verdictWords(t, round.review, true) : undefined;
+      const verdict = w && [w.label, w.count].filter(Boolean).join(t('，', ', '));
       items.push({
         key: 'review-only',
         label: t('獨立審查（不實作）', 'Independent review (no implementation)'),
@@ -110,6 +104,104 @@ function buildItems(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<t
   return items;
 }
 
+/**
+ * A workflow whose progress has nothing more to say: it completed, every stage and plan step was reported done (or
+ * skipped), no sub-agent batch is blocked or still running and no background process is alive. Its result then carries
+ * the progress as a quiet "進度 7/7" button instead of a panel of its own.
+ */
+export function progressSettled(run: WorkflowRun, providers: ProviderInfo[], t: ReturnType<typeof useT>): boolean {
+  if (run.status !== 'completed') return false;
+  const items = buildItems(run, providers, t);
+  const batches = batchCounts(runBatches(Object.values(run.agents), subTitle));
+  return items.length > 0 && items.every((i) => i.state === 'done' || i.state === 'skipped') && !batches.blocked && !batches.running && !(run.processes ?? []).some((p) => p.alive);
+}
+
+const STATE_ICON: Record<ItemState, LucideIcon> = { done: CircleCheck, active: CircleDot, pending: Circle, failed: CircleX, skipped: CircleMinus, unreported: CircleHelp };
+
+/** The checklist rows: stages, review loops and the plan's steps, each with its state (a line icon in its colour, named). */
+function ProgressItems({ items }: { items: Item[] }) {
+  const t = useT();
+  const name: Record<ItemState, string> = { done: t('完成', 'done'), active: t('進行中', 'in progress'), pending: t('尚未開始', 'not started'), failed: t('失敗', 'failed'), skipped: t('略過', 'skipped'), unreported: t('未回報完成', 'not reported done') };
+  return (
+    <div className="pp-list">
+      {items.map((i) => (
+        <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
+          <span className={cx('pp-icon', i.state)}>
+            <Ico i={STATE_ICON[i.state]} size={i.sub ? 14 : 16} label={name[i.state]} />
+          </span>
+          <span className="pp-label">{i.label}</span>
+          {i.meta && <span className="pp-meta">{i.meta}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Why a goal reading is to be checked again, beside 「變更後需重驗」 wherever it is said. */
+const staleWhy = (t: ReturnType<typeof useT>) => t('量測之後程式碼改過', 'the code changed after it was measured');
+
+/** The goal's progress as a button that opens every metric (target, latest measurement, evidence). */
+function GoalButton({ run }: { run: WorkflowRun }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const gap = goalGap(run);
+  if (!gap.rows.length) return null;
+  return (
+    <>
+      <button type="button" className={cx('pp-goal-btn', gap.met === gap.rows.length && 'ok', gap.stale && 'warn')} onClick={() => setOpen(true)} title={t('點一下查看每個驗收目標的目標值、最新量測與證據', 'Click to see each acceptance metric: target, latest measurement and evidence')}>
+        <Ico i={Target} size={14} /> {t('目標', 'Goal')} {gap.met}/{gap.rows.length}
+        {gap.stale && (
+          <>
+            <span className="state-word warn">
+              <Ico i={RefreshCw} size={13} /> {t('變更後需重驗', 'Re-check after changes')}
+            </span>
+            <span className="pp-goal-why">{staleWhy(t)}</span>
+          </>
+        )}
+      </button>
+      {open && <GoalWindow run={run} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+/** The checklist's count: steps done, of all; the skipped ones said apart (a skipped step is not a done one). */
+function stepCount(t: ReturnType<typeof useT>, items: Item[]): string {
+  const done = items.filter((i) => i.state === 'done').length;
+  const skipped = items.filter((i) => i.state === 'skipped').length;
+  return [`${done}/${items.length}`, skipped ? t(`略過 ${skipped}`, `${skipped} skipped`) : ''].filter(Boolean).join(' · ');
+}
+
+/**
+ * "進度 7/7" ("進度 5/7 · 略過 2"): a settled workflow's progress, from its result's header (the list opens in the result,
+ * see ProgressList). A workflow of one step has nothing to list that its result card does not say (who did it, how it
+ * ended).
+ */
+export function ProgressToggle({ run, providers, open, onToggle }: { run: WorkflowRun; providers: ProviderInfo[]; open: boolean; onToggle: () => void }) {
+  const t = useT();
+  const items = buildItems(run, providers, t);
+  if (items.length < 2 && !goalGap(run).rows.length) return null;
+  return (
+    <button type="button" className="progress-toggle" aria-expanded={open} onClick={onToggle}>
+      <Ico i={open ? ChevronDown : ChevronRight} size={14} /> {t('進度', 'Progress')} {stepCount(t, items)}
+    </button>
+  );
+}
+
+/** A settled workflow's progress, opened in its result: the same checklist as the panel, the batches, the goal. */
+export function ProgressList({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
+  const t = useT();
+  const items = buildItems(run, providers, t);
+  // What the panel's line said besides "complete": the delegated batches (all done here).
+  const more = runOverview(t, run, subTitle).slice(1);
+  return (
+    <div className="progress-list">
+      {more.length > 0 && <div className="muted small">{more.join(' · ')}</div>}
+      <ProgressItems items={items} />
+      <GoalButton run={run} />
+    </div>
+  );
+}
+
 export const outcomeText = (t: ReturnType<typeof useT>, v: Verification) =>
   ({ met: t('達標', 'met'), not_met: t('目標未達成 → 重新規劃', 'goal missed → re-plan'), invalid_evidence: t('證據無效 → 重新驗證', 'invalid evidence → re-test'), defect: t('有缺陷 → 退回修正', 'defects → back to fix') })[v.outcome];
 
@@ -147,15 +239,24 @@ export function GoalWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
             : t('還沒有驗收過', 'Not verified yet')}
         {gap.byReview && gap.last && t(` · 上次驗收：${outcomeText(t, gap.last)}`, ` · last verification: ${outcomeText(t, gap.last)}`)}
         {(run.cycles ?? 0) > 0 && t(` · 第 ${(run.cycles ?? 0) + 1} 輪循環`, ` · cycle ${(run.cycles ?? 0) + 1}`)}
-        {gap.stale && <span className="badge warn">{t('程式碼在量測之後改過，要重新驗證', 'Code changed since; needs checking again')}</span>}
       </div>
+      {gap.stale && (
+        <div className="gw-stale">
+          <span className="state-word warn">
+            <Ico i={RefreshCw} size={14} /> {t('變更後需重驗', 'Re-check after changes')}
+          </span>{' '}
+          <span className="muted small">{staleWhy(t)}</span>
+        </div>
+      )}
       <div className="gw-list">
         {gap.rows.map((m) => (
           <div key={m.id} className={cx('gw-metric', m.met === true ? 'ok' : m.met === false ? 'no' : 'todo')}>
+            {/* Its state as an icon and a coloured word (no box): met, not met, not measured yet. */}
             <div className="gw-head">
-              <span className="pp-icon">{m.met === true ? <Ico i={Check} size={11} /> : m.met === false ? <Ico i={X} size={11} /> : '·'}</span>
               <b>{m.id}</b> {m.name || (m.id.startsWith('U') ? t('你的驗收標準', 'your criterion') : '')}
-              <span className={cx('badge', m.met === true ? 'ok' : m.met === false ? 'err' : undefined)}>{m.met === true ? t('達標', 'met') : m.met === false ? t('未達標', 'not met') : t('尚未量測', 'not measured')}</span>
+              <span className={cx('state-word', m.met === true ? 'ok' : m.met === false ? 'err' : undefined)}>
+                <Ico i={m.met === true ? CircleCheck : m.met === false ? CircleX : CircleDashed} size={14} /> {m.met === true ? t('達標', 'met') : m.met === false ? t('未達標', 'not met') : t('尚未量測', 'not measured')}
+              </span>
             </div>
             {m.target && (
               <div className="gw-row">
@@ -203,7 +304,12 @@ export function blockers(run: WorkflowRun, providers: ProviderInfo[], t: ReturnT
   return out;
 }
 
-export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
+/**
+ * The workflow's progress above the input: open while it runs, folded to its one line once it ended. When it completed
+ * with every step done and a result card is shown (`resultShown`), there is nothing left to say here: the panel goes, and
+ * the result's header carries the same list behind a quiet "進度 7/7" (ProgressToggle).
+ */
+export function ProgressPanel({ run, providers, resultShown = false }: { run: WorkflowRun; providers: ProviderInfo[]; resultShown?: boolean }) {
   const t = useT();
   const isLive = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
   const [open, setOpen] = useState(isLive);
@@ -215,13 +321,11 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
     wasLive.current = isLive;
   }, [isLive]);
   // A detail window opened from a tag: an agent, the GPUs or a background process.
-  const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number } | { goal: true }>();
+  const [detail, setDetail] = useState<{ agent: string } | { gpu: true } | { pid: number }>();
   const items = buildItems(run, providers, t);
-  if (!items.length) return null;
-  const done = items.filter((i) => i.state === 'done' || i.state === 'skipped').length;
+  if (!items.length || (resultShown && progressSettled(run, providers, t))) return null;
   const unreported = items.filter((i) => i.state === 'unreported').length;
   const current = items.find((i) => i.state === 'active');
-  const gap = goalGap(run);
   const live = run.status === 'running' || run.status === 'paused' || run.status === 'waiting_human';
   const block = live ? blockers(run, providers, t) : [];
   const working = live ? Object.values(run.agents).filter((a) => a.status === 'running' && a.role !== 'compactor') : [];
@@ -236,7 +340,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             {/* This round, the delegated batches and background processes, each said apart; the count is the
                 workflow's own steps (stages and plan steps), named as such. */}
             {runOverview(t, run, subTitle).join(' · ')}
-            {live && ` · ${t('工作流步驟', 'workflow steps')} ${done}/${items.length}`}
+            {live && ` · ${t('工作流步驟', 'workflow steps')} ${stepCount(t, items)}`}
             {!live && unreported > 0 && t(` · ${unreported} 個步驟未回報完成`, ` · ${unreported} step(s) not reported done`)}
             {live && !open && block.length ? (
               <>
@@ -246,12 +350,7 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
             ) : live && !open && current ? ` · ${current.label}` : ''}
           </span>
         </button>
-        {gap.rows.length > 0 && (
-          <button className={cx('pp-goal-btn', gap.met === gap.rows.length && 'ok', gap.stale && 'warn')} onClick={() => setDetail({ goal: true })} title={t('點一下查看每個驗收目標的目標值、最新量測與證據', 'Click to see each acceptance metric: target, latest measurement and evidence')}>
-            <Ico i={Target} size={14} /> {t('目標', 'Goal')} {gap.met}/{gap.rows.length}
-            {gap.stale && <span className="badge warn">{t('過期', 'stale')}</span>}
-          </button>
-        )}
+        <GoalButton run={run} />
       </div>
       {open && (
         // The expanded part scrolls inside itself, so the message box never moves however much is in it.
@@ -301,18 +400,9 @@ export function ProgressPanel({ run, providers }: { run: WorkflowRun; providers:
           )}
         </div>
       )}
-        <div className="pp-list">
-          {items.map((i) => (
-            <div key={i.key} className={cx('pp-item', i.state, i.sub && 'sub')}>
-              <span className={cx('pp-icon', i.state)}>{i.state === 'done' ? <Ico i={Check} size={11} /> : i.state === 'failed' ? <Ico i={X} size={11} /> : i.state === 'skipped' ? <Ico i={Minus} size={11} /> : i.state === 'unreported' ? '?' : ''}</span>
-              <span className="pp-label">{i.label}</span>
-              {i.meta && <span className="pp-meta">{i.meta}</span>}
-            </div>
-          ))}
-        </div>
+        <ProgressItems items={items} />
         </div>
       )}
-      {detail && 'goal' in detail && <GoalWindow run={run} onClose={() => setDetail(undefined)} />}
       {detail && 'agent' in detail && <AgentWindow run={run} agentId={detail.agent} providers={providers} onClose={() => setDetail(undefined)} />}
       {detail && 'gpu' in detail && <GpuWindow run={run} providers={providers} onClose={() => setDetail(undefined)} />}
       {detail && 'pid' in detail && <ProcessWindow run={run} pid={detail.pid} providers={providers} onClose={() => setDetail(undefined)} />}

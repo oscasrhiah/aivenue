@@ -74,6 +74,21 @@ export function providerName(providers: ProviderInfo[], id: string): string {
   return providers.find((p) => p.spec.id === id)?.spec.name ?? id;
 }
 
+/**
+ * How long something took, as a person says it: "45 秒", "4 分 58 秒", "1 小時 5 分" ("45s", "4m 58s", "1h 5m"). Empty
+ * under `min` seconds (10 by default: a turn that short needs no time on it), never "0s" or "4:58".
+ */
+export function duration(t: T, from?: number, to?: number, min = 10): string {
+  if (!from) return '';
+  const s = Math.max(0, Math.round(((to ?? Date.now()) - from) / 1000));
+  if (s < Math.max(1, min)) return '';
+  if (s < 60) return t(`${s} 秒`, `${s}s`);
+  const m = Math.floor(s / 60);
+  if (m < 60) return s % 60 ? t(`${m} 分 ${s % 60} 秒`, `${m}m ${s % 60}s`) : t(`${m} 分`, `${m}m`);
+  const h = Math.floor(m / 60);
+  return m % 60 ? t(`${h} 小時 ${m % 60} 分`, `${h}h ${m % 60}m`) : t(`${h} 小時`, `${h}h`);
+}
+
 /** Compact elapsed time like 1:05 or 12s. */
 export function elapsed(from?: number, to?: number): string {
   if (!from) return '';
@@ -147,7 +162,7 @@ export function saidOwner(run: WorkflowRun, ts: number): string | undefined {
   return working.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0]?.id;
 }
 
-/** The colour group of a role (left bar of its card): plan, build, verify, or helpers. A reviewer shares its author's group. */
+/** The colour group of a role (its node on the agent map): plan, build, verify, or helpers. A reviewer shares its author's group. */
 export function roleTone(r: AgentRole): string {
   if (r === 'planner' || r === 'plan_reviewer') return 'rc-plan';
   if (r === 'executor' || r === 'code_reviewer') return 'rc-build';

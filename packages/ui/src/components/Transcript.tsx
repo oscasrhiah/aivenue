@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { Circle, CircleX, CornerDownRight, Network, Paperclip, User, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, CircleX, CornerDownRight, Network, Paperclip, User, Wrench } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AgentEvent, Attachment } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
-import { clock, cx, elapsed, fmtTokens } from '../util';
-import { actKind, errorPreview, feed, groupLabel, groupNames, isInternal, isSubmissionText, preview as feedPreview, shortTitle, type FeedItem } from '../timeline';
+import { clock, cx, duration, fmtTokens } from '../util';
+import { actKind, errorPreview, feed, groupCount, groupLabel, groupNames, isInternal, isSubmissionText, preview as feedPreview, shortTitle, type FeedItem } from '../timeline';
 import { Markdown } from './Markdown';
 import { MsgTime } from './MsgTime';
 import { Clamp } from './Clamp';
@@ -12,24 +12,25 @@ import { CopyButton } from './CopyButton';
 import { Replies, type Reply } from './Replies';
 import { extensionUse } from '../extensionUse';
 
+/** What a call did, in the language of the page (one language per log, the tool's own name only when nothing fits). */
 function toolVerb(t: T, e: AgentEvent): string {
   const tool = e.tool!;
   switch (tool.category) {
     case 'read':
-      return 'Read';
+      return t('讀取', 'Read');
     case 'edit':
-      return tool.name === 'apply_patch' ? 'Patch' : /write|create/i.test(tool.name) ? 'Write' : 'Edit';
+      return tool.name === 'apply_patch' ? t('修補', 'Patch') : /write|create/i.test(tool.name) ? t('寫入', 'Write') : t('編輯', 'Edit');
     case 'command':
       // Which shell ran it is not in the event (Codex reports PowerShell commands the same way): a terminal command.
       return t('終端', 'Terminal');
     case 'search':
-      return 'Search';
+      return t('搜尋', 'Search');
     case 'web':
-      return 'Web';
+      return t('網頁', 'Web');
     case 'hub':
       return 'Aivenue';
     case 'agent':
-      return 'Task';
+      return t('子任務', 'Task');
     case 'todo':
       return t('待辦', 'Todo');
     default:
@@ -74,7 +75,8 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
   const action = (a: string) => ({ update: t('建立／更新圖譜', 'build / update the graph'), query: t('查詢', 'query'), path: t('找關聯', 'path'), explain: t('解釋', 'explain') })[a] ?? a;
   return (
     <div className={cx('tl', tool.status, use && 'tl-ext')}>
-      <div className="tl-head" onClick={() => setOpen(!open)}>
+      {/* The call's line is a button: its command and output open in place (Tab, Enter, Space). */}
+      <button type="button" className="tl-head" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className={cx('tl-dot', tool.status)}><Ico i={Circle} size={8} className="dot-fill" /></span>
         {use?.kind === 'skill' ? (
           <>
@@ -98,8 +100,8 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
           </>
         )}
         {/* The call that runs now, in place: it turns into ok / failed here when it ends. */}
-        {tool.status === 'running' && <span className="tl-running">{t('執行中', 'running')} · {elapsed(e.ts)}</span>}
-      </div>
+        {tool.status === 'running' && <span className="tl-running">{[t('執行中', 'running'), duration(t, e.ts, undefined, 1)].filter(Boolean).join(' · ')}</span>}
+      </button>
       {/* Only the first line by default (the command or file); output on click, except an error's first lines. */}
       {!open && pv && tool.status === 'error' && (
         <div className="tl-out">
@@ -148,8 +150,10 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
       );
     case 'thinking':
       return (
-        <div className="tx-think" onClick={() => setOpen(!open)}>
-          <span>∴ {t('思考', 'Thinking')}</span>
+        <div className="tx-think">
+          <button type="button" className="tx-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
+            <Ico i={open ? ChevronDown : ChevronRight} size={14} /> {t('思考', 'Thinking')}
+          </button>
           {open && <div className="tx-think-body">{e.text}</div>}
         </div>
       );
@@ -157,16 +161,18 @@ function Line({ e, raw, opened }: { e: AgentEvent; raw: boolean; opened?: Opened
       return <div className="tx-err"><Ico i={CircleX} size={14} /> {e.text}</div>;
     case 'prompt':
       return raw ? (
-        <div className="tx-raw" onClick={() => setOpen(!open)}>
-          › {t('指示（提示詞）', 'Instructions (prompt)')} {open ? '' : '…'}
+        <div className="tx-raw">
+          <button type="button" className="tx-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
+            <Ico i={open ? ChevronDown : ChevronRight} size={14} /> {t('指示（提示詞）', 'Instructions (prompt)')}
+          </button>
           {open && <pre>{e.text}</pre>}
         </div>
       ) : null;
     case 'session':
-      return raw ? <div className="tx-raw">› session {e.sessionId ?? ''} {e.text ? `· ${e.text}` : ''}</div> : null;
+      return raw ? <div className="tx-raw">session {e.sessionId ?? ''} {e.text ? `· ${e.text}` : ''}</div> : null;
     case 'info':
-      if (e.usage) return raw ? <div className="tx-raw">› tokens in {fmtTokens(e.usage.input ?? 0)} · cached {fmtTokens(e.usage.cached ?? 0)} · out {fmtTokens(e.usage.output ?? 0)}</div> : null;
-      return raw ? <div className="tx-raw">› {e.text}</div> : null;
+      if (e.usage) return raw ? <div className="tx-raw">tokens in {fmtTokens(e.usage.input ?? 0)} · cached {fmtTokens(e.usage.cached ?? 0)} · out {fmtTokens(e.usage.output ?? 0)}</div> : null;
+      return raw ? <div className="tx-raw">{e.text}</div> : null;
     case 'stderr':
       return raw ? <div className="tx-raw mono">{e.text}</div> : null;
     case 'result':
@@ -198,11 +204,11 @@ function GroupLine({ item, opened }: { item: Extract<FeedItem, { type: 'group' }
   const names = groupNames(item.kind, item.events.map((e) => e.tool!.title));
   return (
     <div className="tl ok tl-group">
-      <div className="tl-head" onClick={() => (opened ? opened.toggle(key) : setOwn(!own))}>
+      <button type="button" className="tl-head" aria-expanded={open} onClick={() => (opened ? opened.toggle(key) : setOwn(!own))}>
         <span className="tl-dot ok"><Ico i={Circle} size={8} className="dot-fill" /></span>
-        <span className="tl-verb">{groupLabel(t, item.kind, item.events.length)}</span>
+        <span className="tl-verb">{groupLabel(t, item.kind, groupCount(item.kind, item.events.map((e) => e.tool!.title)))}</span>
         {!open && <span className="tl-arg">{names.slice(0, 3).join(', ')}{names.length > 3 ? ' …' : ''}</span>}
-      </div>
+      </button>
       {open && (
         <div className="tl-group-list">
           {item.events.map((e) => (

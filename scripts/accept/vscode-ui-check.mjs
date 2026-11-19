@@ -14,7 +14,8 @@
 //  - agents' Markdown drawn: no raw table rows or code fences; a table in the reply is a table;
 //  - the waiting state and its question in view: the agent's answers to pick from, "Other", a box, nothing sent yet;
 //  - the folder path: a button the keyboard reaches; when cut, it opens to the whole path;
-//  - every message's time shown (the user's, the timeline's lines, each agent's turn);
+//  - every message's time shown (the user's, the timeline's lines); an agent's turn shows how long it took from 10 s up,
+//    its start and end in that time's tooltip and its activity log;
 //  - nothing past the webview's width, no control cut by its box or drawn over another;
 //  - the hub killed while a follow-up is being written: the extension starts it again, the page connects to the new
 //    port by itself, is not reloaded, and keeps the unsent text and the chat shown.
@@ -247,9 +248,11 @@ const INSPECT = `(() => {
       if (!r || !q) continue;
       if (Math.min(r.right, q.right) - Math.max(r.left, q.left) > 2 && Math.min(r.bottom, q.bottom) - Math.max(r.top, q.top) > 2) overlaps.push(nameOf(a) + ' over ' + nameOf(b));
     }
-  // Symbols that used to be icons: none should be left in a button or a pill.
+  // Symbols that used to be icons: none should be left in the label of a button or a pill. What a button only shows of
+  // an agent's work (a command, a path, a note, code) is the agent's text, not the button's label: left out.
   const SYMBOL = /[\\u{1F300}-\\u{1FAFF}]|[☰＋⚙«✎✏✕✓✗▾▸↑❚▶■⚠✦↓⋯⇄○✳⏸⏺⎿➜↺↻✻✋●◦⚡🛑❓↳✅]/u;
-  const leftovers = [...document.querySelectorAll('button, a.icon-btn, .pill-btn, .side-link, .ext-chip, .vstate, .badge')].map((e) => e.textContent.trim()).filter((s) => SYMBOL.test(s));
+  const ownLabel = (e) => { const c = e.cloneNode(true); c.querySelectorAll('code, pre, .md, .tl-arg, .note-text, .check-cmd').forEach((x) => x.remove()); return c.textContent.trim(); };
+  const leftovers = [...document.querySelectorAll('button, a.icon-btn, .pill-btn, .side-link, .ext-chip, .vstate, .badge')].map(ownLabel).filter((s) => SYMBOL.test(s));
   const btn = document.querySelector('.run-cwd-btn');
   const pathEl = document.querySelector('.run-cwd-path');
   return {
@@ -278,8 +281,29 @@ const INSPECT = `(() => {
     // Agents' Markdown drawn, not shown as source: no table delimiter row or code fence left in the text.
     rawMarkdown: [...document.querySelectorAll('.md')].map((e) => e.innerText).filter((t) => /^\\s*\\|?\\s*:?-{3,}:?\\s*\\|/m.test(t) || /^\\s*\`\`\`/m.test(t)).map((t) => t.slice(0, 60)),
     tables: document.querySelectorAll('.md table').length,
-    // Every message shows when it was said: the user's, the timeline's lines, each agent's turn.
-    times: { user: document.querySelectorAll('.user-actions time.msg-time').length, lines: document.querySelectorAll('.divider time.msg-time').length, agents: document.querySelectorAll('.turn-meta time.msg-time').length, turns: document.querySelectorAll('.turn-meta').length },
+    // Every message shows when it was said: the user's, the timeline's lines. An agent's turn shows how long it took from
+    // 10 s up — "4 分 58 秒", never "0s", a clock-like "4:58" or "用時" — with its start (and end) as that time's tooltip;
+    // a shorter turn shows none. Each turn's head carries its length in seconds (data-took-s), so every turn is checked.
+    times: (() => {
+      const heads = [...document.querySelectorAll('.turn-meta')];
+      const bad = [];
+      let shown = 0;
+      for (const h of heads) {
+        const s = h.dataset.tookS === undefined ? undefined : Number(h.dataset.tookS);
+        const tm = h.querySelector('time.turn-time');
+        if (/\\b0s\\b|\\b\\d{1,2}:\\d{2}\\b|用時|(^|\\D)0 秒/.test(h.textContent)) bad.push('head: ' + h.textContent.trim().slice(0, 60));
+        if (tm) {
+          shown++;
+          const iso = tm.getAttribute('datetime') ?? '';
+          if (!/^PT\\d+S$/.test(iso) || (s !== undefined && iso !== 'PT' + s + 'S')) bad.push('datetime ' + iso + ' for ' + s + ' s');
+          if (!/開始|Started/.test(tm.title)) bad.push('title: ' + tm.title);
+          if (!/^\\d+ (秒|分|小時)|^\\d+[smh]\\b/.test(tm.textContent.trim())) bad.push('text: ' + tm.textContent.trim());
+        }
+        if (s !== undefined && s >= 10 && !tm) bad.push('no time on a turn of ' + s + ' s');
+        if (s !== undefined && s < 10 && tm) bad.push('a time on a turn of ' + s + ' s');
+      }
+      return { user: document.querySelectorAll('.user-actions time.msg-time').length, lines: document.querySelectorAll('.divider time.msg-time').length, turns: heads.length, measured: heads.filter((h) => h.dataset.tookS !== undefined).length, shown, bad: bad.slice(0, 8) };
+    })(),
     scrollX: document.documentElement.scrollWidth > W,
   };
 })()`;
@@ -401,7 +425,10 @@ try {
       if (name !== 'new') check(`${place} · ${theme} · ${name}: agents' Markdown drawn (no raw table rows or code fences)`, r.rawMarkdown.length === 0, { tables: r.tables, raw: r.rawMarkdown });
       if (name === 'result' && agentTable) check(`${place} · ${theme} · result: the agent's Markdown table is drawn as a table`, r.tables > 0, r.tables);
       if (name === 'waiting') check(`${place} · ${theme} · waiting: "等待你的決定" and the question in view`, r.waiting);
-      if (name !== 'new') check(`${place} · ${theme} · ${name}: every message shows its time (the user's, the timeline's, each agent's)`, r.times.user > 0 && r.times.lines > 0 && r.times.agents === r.times.turns && r.times.turns > 0, r.times);
+      // An agent's turn no longer shows a clock time: how long it took, from 10 s up, with its start as the tooltip. Every
+      // turn that started is measured (one not started yet has no length); none has a time it should not have, or lacks
+      // one it should.
+      if (name !== 'new') check(`${place} · ${theme} · ${name}: every message shows its time (the user's, the timeline's); each agent turn shows how long it took from 10 s up, its start in the tooltip`, r.times.user > 0 && r.times.lines > 0 && r.times.turns > 0 && r.times.measured > 0 && r.times.bad.length === 0, r.times);
       if (name === 'waiting')
         check(
           `${place} · ${theme} · waiting: the question lists the agent's answers and "Other", with a box; nothing sent before a pick`,

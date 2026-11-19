@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, CircleCheck, CircleDashed, CircleHelp, CircleX, RefreshCw, Target, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, CircleCheck, CircleDashed, CircleHelp, CircleStop, CircleX, MessageCircleQuestionMark, RefreshCw, Target, Undo2, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, Trash2, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
@@ -15,15 +15,15 @@ import { Replies, type Reply } from '../components/Replies';
 import { Outputs } from '../components/Outputs';
 import { Approvals, FullAccessBanner, OutsideChanges, WorktreeCard } from '../components/Safety';
 import { CompactFailedAsk, ContextAsk, ContextPie } from '../components/ContextPie';
-import { ProgressPanel } from '../components/Progress';
+import { ProgressList, ProgressPanel, ProgressToggle, progressSettled } from '../components/Progress';
 import { RenameInput } from '../components/Rename';
 import { defaultDraft, isAuto, RolePills, RoleSettings, useAssignPreview, type RoleDraft } from '../components/RoleSettings';
-import { saveSettings, useAppSettings, useT } from '../i18n';
+import { saveSettings, useAppSettings, useT, type T } from '../i18n';
 import { draftInit, forNewConversations, type DraftInit } from '../draftInit';
 import { followUpGoal } from '../followUp';
-import { deliverableRows, resultText, verificationStates, type VerificationState } from '../timeline';
+import { chatLines, deliverableRows, resultText, verificationStates, type ChatLine, type VerificationState } from '../timeline';
 import { CheckRows } from '../components/Checks';
-import { ReviewResult } from '../components/ReviewResult';
+import { FinalWho, ReviewResult, reviewShown } from '../components/ReviewResult';
 import { cx, elapsed, modelLabel, providerName, roleLabel, saidOwner, wfStatus } from '../util';
 import { Markdown } from '../components/Markdown';
 import { CopyButton } from '../components/CopyButton';
@@ -31,15 +31,21 @@ import { ask } from '../components/Ask';
 import { RememberButton } from '../components/Memory';
 import { MsgTime } from '../components/MsgTime';
 
-type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; text: string; level: string });
+type Item = { ts: number; key: string } & ({ type: 'user'; text: string; midRun?: boolean; files?: Attachment[]; delivered?: number; replies?: Reply[]; planUpdated?: boolean } | { type: 'agent'; agent: AgentRunInfo } | { type: 'divider'; line: ChatLine });
 
-function timeline(run: WorkflowRun): Item[] {
+/** Whether a result card closes this message's thread: the final result (or plan), or an independent review's report. */
+const resultShown = (run: WorkflowRun) => !!finalText(run) || reviewShown(run);
+
+/**
+ * The thread of a message. `endNote`: the latest message, whose end gives the failure's or the unmet goal's reason in a
+ * note of its own (an earlier message has none there: its record line keeps the reason).
+ */
+function timeline(run: WorkflowRun, t: T, endNote: boolean): Item[] {
   // A follow-up's goal carries the earlier task as context; show only what the user wrote.
   const items: Item[] = [{ type: 'user', text: run.config.goal.replace(/\n\n\(Context: this continues[\s\S]*$/, ''), ts: run.createdAt, key: 'goal' }];
   for (const a of Object.values(run.agents)) if (!a.parentId) items.push({ type: 'agent', agent: a, ts: a.startedAt ?? run.updatedAt, key: a.id });
-  run.log.forEach((l, i) => {
-    if (l.chat) items.push({ type: 'divider', text: l.text, level: l.level, ts: l.ts, key: `log${i}` });
-  });
+  // The record's lines, each said once: a heading where a stage starts, the events nothing else on the page says.
+  for (const line of chatLines(t, run, resultShown(run), endNote)) items.push({ type: 'divider', line, ts: line.ts, key: line.key });
   // A message sent while an agent worked shows among that agent's steps; one sent between agents stands alone.
   (run.userMessages ?? []).forEach((m, i) => {
     if (!saidOwner(run, m.ts)) items.push({ type: 'user', text: m.text, ts: m.ts, key: `say${i}`, midRun: true, files: m.attachments, delivered: m.deliveredTo?.length, replies: m.replies, planUpdated: m.planUpdated });
@@ -94,6 +100,33 @@ function logText(text: string): ReactNode {
   return text.split('✅').flatMap((part, i) => (i ? [<Ico key={i} i={CircleCheck} size={14} className="ok" />, part] : [part]));
 }
 
+/** An event's icon: what it is about (a question to you, a stop, work sent back, a failure), else a warning's or an error's. */
+const lineIcon = (line: ChatLine): LucideIcon | undefined =>
+  line.tone === 'question' ? MessageCircleQuestionMark : line.tone === 'stopped' ? CircleStop : line.tone === 'revise' ? Undo2 : line.tone === 'failed' || line.level === 'error' ? CircleX : line.level === 'warn' ? TriangleAlert : undefined;
+
+/**
+ * A line of the workflow's record in the thread: a stage's heading (「計畫」「實作」「驗收」, another round with why it
+ * came back) at the left with its time and a rule, or an event in a sentence, quiet unless it is a warning or an error;
+ * the icon says what it is about.
+ */
+function ChatLineView({ line }: { line: ChatLine }) {
+  const icon = lineIcon(line);
+  return line.kind === 'stage' ? (
+    <h2 className="divider stage">
+      <span className="stage-name">{line.text}</span>
+      {line.detail && <span className="stage-detail">{line.detail}</span>}
+      <MsgTime ts={line.ts} />
+    </h2>
+  ) : (
+    <div className={cx('divider', 'event', line.level)}>
+      {icon && <Ico i={icon} size={14} />}
+      <span>
+        {logText(line.text)} <MsgTime ts={line.ts} />
+      </span>
+    </div>
+  );
+}
+
 /** A message sent while the agents were working: handed to them right away. */
 function MidRunMessage({ runId, ts, text, files, onImage, delivered, replies, planUpdated }: { runId: string; ts: number; text: string; files?: Attachment[]; onImage: (src: string) => void; delivered?: number; replies?: Reply[]; planUpdated?: boolean }) {
   const t = useT();
@@ -136,7 +169,8 @@ function ownAttachments(run: WorkflowRun, before: WorkflowRun[]): Attachment[] {
 
 /** An earlier message of the same conversation, read-only above the latest one. */
 function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun; before: WorkflowRun[]; providers: ProviderInfo[]; onImage: (src: string) => void }) {
-  const items = useMemo(() => timeline(run), [run]);
+  const t = useT();
+  const items = useMemo(() => timeline(run, t, false), [run, t]);
   const own = ownAttachments(run, before);
   return (
     <div className="earlier-msg">
@@ -160,20 +194,16 @@ function EarlierMessage({ run, before, providers, onImage }: { run: WorkflowRun;
             </div>
           </div>
         ) : it.type === 'divider' ? (
-          <div key={it.key} className={cx('divider', it.level)}>
-            <span>
-              {logText(it.text)} <MsgTime ts={it.ts} />
-            </span>
-          </div>
+          <ChatLineView key={it.key} line={it.line} />
         ) : (
           <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />
         ),
       )}
       <FinalResult run={run} providers={providers} />
       <ReviewResult run={run} providers={providers} />
+      <Outputs run={run} onImage={onImage} />
       <DeniedActions run={run} providers={providers} />
       <OutsideChanges run={run} />
-      <Outputs run={run} onImage={onImage} />
     </div>
   );
 }
@@ -350,15 +380,27 @@ function readBase64(file: File): Promise<string> {
 }
 
 export function AttachmentChip({ name, size, src, status, error, onRemove, onOpen, icon }: { name: string; size: number; src?: string; status?: Pending['status']; error?: string; onRemove?: () => void; onOpen?: () => void; icon?: LucideIcon }) {
+  const t = useT();
   return (
     <div className={cx('att', status === 'error' && 'bad')} title={error ?? name}>
-      {src && isImg(name) ? <img src={src} alt="" onClick={onOpen} /> : <span className="att-icon"><Ico i={icon ?? FileText} size={18} /></span>}
+      {/* A picture sent with a message: a button that enlarges it (Tab, Enter, Space). */}
+      {src && isImg(name) ? (
+        onOpen ? (
+          <button type="button" className="att-open" onClick={onOpen} aria-label={t(`放大 ${name}`, `Enlarge ${name}`)}>
+            <img src={src} alt="" />
+          </button>
+        ) : (
+          <img src={src} alt="" />
+        )
+      ) : (
+        <span className="att-icon"><Ico i={icon ?? FileText} size={18} /></span>
+      )}
       <span className="att-meta">
         <span className="att-name">{name}</span>
         <span className="att-size">{status === 'uploading' ? '…' : status === 'error' ? <Ico i={CircleX} size={12} /> : fmtSize(size)}</span>
       </span>
       {onRemove && (
-        <button className="att-x" onClick={onRemove} aria-label="remove">
+        <button type="button" className="att-x" onClick={onRemove} aria-label={t(`移除 ${name}`, `Remove ${name}`)}>
           <Ico i={X} size={12} />
         </button>
       )}
@@ -769,41 +811,62 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
   );
 }
 
+/** The last main agent of a role that completed (the one whose words the result repeats). */
+function lastMain(run: WorkflowRun, role: AgentRunInfo['role']): AgentRunInfo | undefined {
+  return Object.values(run.agents)
+    .filter((a) => a.depth === 0 && a.status === 'completed' && a.role === role)
+    .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
+}
+
+/** What a completed workflow's result card repeats: the last implementer's account, or the plan when only planning ran. */
+function finalText(run: WorkflowRun): string | undefined {
+  if (run.status !== 'completed') return undefined;
+  const exec = lastMain(run, 'executor');
+  const implRound = run.stages.implement.rounds.at(-1);
+  return exec ? resultText(exec.finalText, implRound?.submission?.summary) : run.plan ? run.plan.markdown?.trim() || run.plan.summary : undefined;
+}
+
 /**
- * The answer, repeated at the bottom once the workflow is done, so nobody has to scroll back up past
- * the reviews: the last implementer's reply (or the plan when only planning ran) plus the final verdict.
+ * The answer, repeated at the bottom once the workflow is done, so nobody has to scroll back up past the reviews: the
+ * last implementer's reply (or the plan when only planning ran) plus the final verdict. The one framed card of a finished
+ * conversation, its frame neutral: colour only on the states (the review in the header, each verification state).
  */
 function FinalResult({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
-  if (run.status !== 'completed') return null;
-  const main = Object.values(run.agents).filter((a) => a.depth === 0 && a.status === 'completed');
-  const last = (role: AgentRunInfo['role']) => main.filter((a) => a.role === role).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))[0];
-  const exec = last('executor');
-  const implRound = run.stages.implement.rounds[run.stages.implement.rounds.length - 1];
-  const planRound = run.stages.plan.rounds[run.stages.plan.rounds.length - 1];
-  const text = exec ? resultText(exec.finalText, implRound?.submission?.summary) : run.plan ? run.plan.markdown?.trim() || run.plan.summary : undefined;
+  const [progress, setProgress] = useState(false);
+  const text = finalText(run);
   if (!text) return null;
-  const author = exec ?? last('planner');
+  const exec = lastMain(run, 'executor');
+  const implRound = run.stages.implement.rounds.at(-1);
+  const planRound = run.stages.plan.rounds.at(-1);
+  const author = exec ?? lastMain(run, 'planner');
   const review = (exec ? implRound : planRound)?.review;
   const rows = deliverableRows(run);
   const states = verificationStates(t, run);
   const checks = exec ? implRound?.submission?.checks : undefined;
   const lastVerification = [...(run.stages.verify?.rounds ?? [])].reverse().find((r) => r.verification)?.verification;
+  // Its steps all done: the progress panel above the input gives way, its list opens here.
+  const settled = progressSettled(run, providers, t);
   return (
     <div className="final-result">
+      {/* Title and the review first (who did it gives way in a narrow column, whole in its tooltip and its turn above);
+          the progress, time and copy button after, on a line of their own when they do not fit. */}
       <div className="final-head">
-        <span className="final-title">{exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}</span>
-        {author && (
-          <span className="muted small">
-            {providerName(providers, author.provider)}
-            {author.model ? ` · ${modelLabel(author.model)}` : ''}
+        <h2 className="final-title">{exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}</h2>
+        {review && (
+          <span className={cx('state-word', review.verdict === 'approve' ? 'ok' : 'warn')}>
+            <Ico i={review.verdict === 'approve' ? CircleCheck : TriangleAlert} size={14} /> {review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}
           </span>
         )}
-        {review && <span className={cx('pill', review.verdict === 'approve' ? 'ok' : 'warn')}>{review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}</span>}
-        <MsgTime ts={run.endedAt} className="final-time" />
-        {/* The result as written (Markdown), as shown below. */}
-        <CopyButton text={text} label={exec ? t('複製結果', 'Copy result') : t('複製計畫', 'Copy plan')} className="final-copy" />
+        {author && <FinalWho text={`${providerName(providers, author.provider)}${author.model ? ` · ${modelLabel(author.model)}` : ''}`} />}
+        <span className="final-tools">
+          {settled && <ProgressToggle run={run} providers={providers} open={progress} onToggle={() => setProgress(!progress)} />}
+          <MsgTime ts={run.endedAt} className="final-time" />
+          {/* The result as written (Markdown), as shown below. */}
+          <CopyButton text={text} label={exec ? t('複製結果', 'Copy result') : t('複製計畫', 'Copy plan')} className="final-copy" />
+        </span>
       </div>
+      {settled && progress && <ProgressList run={run} providers={providers} />}
       {/* What was delivered, from the workflow's file list (not an agent's account): each file with where it came from. */}
       {rows.length > 0 && (
         <div className="final-row">
@@ -817,14 +880,15 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         </div>
       )}
       {/* How far it was checked, each state apart and with its reason in view: a failed check, no check run, a
-          re-check after a change and too little evidence are different things to the reader. */}
+          re-check after a change and too little evidence are different things to the reader. Each its own icon and
+          colour, as text (no box). */}
       {states.length > 0 && (
         <div className="final-row">
           <span className="final-label">{t('驗證範圍', 'Checked')}</span>
           <div className="vstates">
             {states.map((v) => (
               <div key={v.kind + v.label} className="vstate-row">
-                <span className={cx('vstate', v.cls)}>
+                <span className={cx('vstate', 'state-word', v.cls)}>
                   <Ico i={V_ICON[v.kind]} size={14} /> {v.label}
                 </span>
                 {v.detail && <span className="vstate-detail">{v.detail}</span>}
@@ -845,7 +909,8 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         <div className="final-text-label">
           {exec ? (
             <>
-              {t('實作者的說明', "The implementer's account")} <span className="self-tag">{t('agent 自述', 'its own words')}</span>
+              {t('實作者的說明', "The implementer's account")}{' '}
+              <span className="self-tag">{t('agent 自述', 'its own words')}</span>
             </>
           ) : (
             t('計畫', 'Plan')
@@ -856,7 +921,9 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
       {/* The goal verification's own evidence, kept even when it is out of date (what was measured, on what). */}
       {lastVerification && (
         <details className="final-evidence">
-          <summary className="small">{lastVerification.stale ? t('上次驗收的證據（之後有改動）', 'Evidence of the last verification (changed since)') : t('驗收證據', 'Verification evidence')}</summary>
+          <summary className="small">
+            <Ico i={ChevronRight} size={14} className="fold-chev" /> {lastVerification.stale ? t('上次驗收的證據（之後有改動）', 'Evidence of the last verification (changed since)') : t('驗收證據', 'Verification evidence')}
+          </summary>
           {lastVerification.evidence && (
             <div className="muted tiny">
               {t('量測於', 'Measured on')} {lastVerification.evidence.commit ? `commit ${lastVerification.evidence.commit} · ` : ''}tree {lastVerification.evidence.treeHash.slice(0, 8)} · {new Date(lastVerification.evidence.at).toLocaleString()}
@@ -876,17 +943,24 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
 
 const V_ICON: Record<VerificationState['kind'], LucideIcon> = { failed: CircleX, not_run: CircleDashed, recheck: RefreshCw, weak: CircleHelp, passed: CircleCheck, goal: Target };
 
-/** A delivered file: added or modified, and — on click — whether an agent's edit tool changed it, or only the folder's comparison found it (then the commands that name it). */
+/**
+ * A delivered file: added or modified (a quiet word), its path, and — behind the row, a button — whether an agent's edit
+ * tool changed it, or only the folder's comparison found it (then the commands that name it).
+ */
 function DeliverableRow({ run, row }: { run: WorkflowRun; row: ReturnType<typeof deliverableRows>[number] }) {
   const t = useT();
   const [open, setOpen] = useState(false);
   return (
     <div className={cx('deliverable', open && 'open')}>
-      <span className="deliverable-head" onClick={() => setOpen(!open)} title={t('點一下看這個檔案的來源', 'Click to see where this file came from')}>
+      {/* The chevron in a column of its own: a wrapped path stays beside it, under its first line. */}
+      <button type="button" className="deliverable-head" aria-expanded={open} onClick={() => setOpen(!open)} title={t('這個檔案的來源', 'Where this file came from')}>
         <Ico i={open ? ChevronDown : ChevronRight} size={14} className="check-caret" />
-        <span className={cx('pill', row.status === 'added' ? 'ok' : '')}>{row.status === 'added' ? t('新增', 'added') : t('修改', 'modified')}</span> <code>{row.path}</code>
-        {row.count ? <span className="muted small"> · {t(`${row.count} 個檔案`, `${row.count} files`)}</span> : null}
-      </span>
+        <span className="row-main">
+          <span className="deliverable-kind">{row.status === 'added' ? t('新增', 'added') : t('修改', 'modified')}</span>
+          <code>{row.path.replace(/\\/g, '/')}</code>
+          {row.count ? <span className="muted small">{t(`${row.count} 個檔案`, `${row.count} files`)}</span> : null}
+        </span>
+      </button>
       {open && <DeliverableSource run={run} row={row} />}
     </div>
   );
@@ -916,11 +990,41 @@ function DeliverableSource({ run, row }: { run: WorkflowRun; row: ReturnType<typ
   );
 }
 
+/** The file name an image's address (fileUrl) points at, for its text alternative. */
+function imageName(src: string): string {
+  try {
+    return (new URL(src).searchParams.get('path') ?? '').split(/[\\/]/).pop() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * An image enlarged over the page: a click, Enter, Space or Esc closes it. It takes the focus when it opens and keeps it
+ * while open (Tab does not move behind it); closed, the focus goes back to what opened it (the thumbnail or attachment).
+ */
 function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  const t = useT();
+  const [opener] = useState(() => (document.activeElement instanceof HTMLElement ? document.activeElement : null));
+  const close = () => {
+    onClose();
+    opener?.focus();
+  };
+  const name = imageName(src) || t('圖片', 'image');
   return (
-    <div className="lightbox" onClick={onClose}>
-      <img src={src} alt="" />
-    </div>
+    <button
+      type="button"
+      className="lightbox"
+      autoFocus
+      onClick={close}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') close();
+        else if (e.key === 'Tab') e.preventDefault();
+      }}
+      aria-label={t(`關閉放大的圖片：${name}`, `Close the enlarged image: ${name}`)}
+    >
+      <img src={src} alt={name} />
+    </button>
   );
 }
 
@@ -996,7 +1100,7 @@ export function Chat({ id }: { id?: string }) {
     return () => clearInterval(timer);
   }, [run?.status]);
 
-  const items = useMemo(() => (run ? timeline(run) : []), [run]);
+  const items = useMemo(() => (run ? timeline(run, t, true) : []), [run, t]);
   const preview = useAssignPreview(run ? null : draft, providers);
 
   // Content that grows on its own (a card's records arriving, a live step) keeps a following view at the bottom.
@@ -1367,21 +1471,15 @@ export function Chat({ id }: { id?: string }) {
                       )}
                     </div>
                   );
-                if (it.type === 'divider')
-                  return (
-                    <div key={it.key} className={cx('divider', it.level)}>
-                      <span>
-                        {logText(it.text)} <MsgTime ts={it.ts} />
-                      </span>
-                    </div>
-                  );
+                if (it.type === 'divider') return <ChatLineView key={it.key} line={it.line} />;
                 return <AgentTurn key={it.key} run={run} agent={it.agent} providers={providers} />;
               })}
               <FinalResult run={run} providers={providers} />
               <ReviewResult run={run} providers={providers} />
+              {/* The files, one quiet row right under the result. */}
+              <Outputs run={run} onImage={setLightbox} />
               <DeniedActions run={run} providers={providers} />
               <OutsideChanges run={run} />
-              <Outputs run={run} onImage={setLightbox} />
               <Approvals run={run} providers={providers} unclaimed />
               <WorktreeCard run={run} />
               <ContextAsk run={run} providers={providers} />
@@ -1429,15 +1527,19 @@ export function Chat({ id }: { id?: string }) {
                 </div>
               )}
             </div>
-            {away && (
-              <button className="to-latest" onClick={toLatest}>
-                <Ico i={ArrowDown} size={14} /> {t('回到最新', 'Back to latest')}
-              </button>
-            )}
           </div>
           <div className="dock">
             <div className="column">
-              <ProgressPanel key={run.id} run={run} providers={providers} />
+              {/* Back to the newest entries: a small button at the thread's right edge, above the input, never over the
+                  text (it takes a line of its own while the reader is away from the end). */}
+              {away && (
+                <div className="to-latest-row">
+                  <button type="button" className="to-latest" onClick={toLatest}>
+                    <Ico i={ArrowDown} size={14} /> {t('回到最新', 'Back to latest')}
+                  </button>
+                </div>
+              )}
+              <ProgressPanel key={run.id} run={run} providers={providers} resultShown={resultShown(run)} />
               {composer}
             </div>
           </div>

@@ -556,10 +556,11 @@ p {
   padding: var(--sp-6) 0;
 }
 
+/* Turns 16px apart; a stage starts 32px below what came before (its heading's own margin). */
 .thread .column {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-6);
+  gap: var(--sp-4);
 }
 
 .user-msg {
@@ -573,56 +574,230 @@ p {
   color: var(--text);
 }
 
+/*
+ * The workflow's record in the thread (Chat.tsx ChatLineView). A stage's heading: its name, what it is about and its
+ * time at the left, a rule to the right. Any other line: a sentence at the left, quiet (warnings and errors in their
+ * colour, with their icon).
+ */
 .divider {
   display: flex;
-  align-items: center;
-  gap: var(--sp-3);
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin: calc(var(--sp-1) * -1) 0;
   color: var(--muted);
   font-size: var(--fs-12);
-  margin: calc(var(--sp-2) * -1) 0;
+  font-weight: 400;
+  line-height: var(--lh-ui);
 }
 
-.divider::before,
-.divider::after {
+.divider.stage {
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 2px;
+  margin: var(--sp-4) 0 0;
+}
+
+.divider.stage::after {
   content: '';
-  flex: 1;
+  flex: 1 1 var(--sp-6);
   height: 1px;
   background: var(--line);
 }
 
+.stage-name {
+  color: var(--text);
+}
+
+.stage-detail {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The icon beside a line's first line, however many it wraps to (as an error line's). */
+.divider.event > .ico {
+  align-self: flex-start;
+  margin-top: calc((1lh - 14px) / 2);
+}
+
+.divider.warn,
 .divider.warn span {
   color: var(--warn);
 }
 
+.divider.error,
 .divider.error span {
   color: var(--err);
 }
 
-/* ---- agent turn ---- */
+/* ---- agent turn: one line of who (name · role · model, the model cut first), its state and time at the right ---- */
 .turn-head {
   display: flex;
-  align-items: center;
-  gap: var(--sp-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-3);
+  min-width: 0;
   font-size: var(--fs-14);
   margin-bottom: var(--sp-1);
 }
 
+/* When the line is short the model is cut first (its full name is in the tooltip and the activity log): it takes only the
+   room the name and the role leave (a basis of 0). Only when they do not fit either are they cut too. Below about 180px
+   the state and time go to the next line instead. */
+.turn-id {
+  display: flex;
+  align-items: baseline;
+  flex: 1 1 180px;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Name · role · model: the dots drawn here (screen readers hear the words apart, by the spaces between them). */
+.turn-id > span + span::before {
+  content: '·' / '';
+  margin: 0 6px;
+}
+
+.turn-id > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .turn-who {
+  flex: 0 1 auto;
   font-weight: 600;
   color: var(--text);
 }
 
 .turn-role {
+  flex: 0 1 auto;
+  color: var(--muted);
+}
+
+.turn-model {
+  flex: 1 1 0;
   color: var(--muted);
 }
 
 .turn-meta {
   margin-left: auto;
   display: flex;
-  gap: var(--sp-2);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px var(--sp-2);
   color: var(--muted);
   font-size: var(--fs-12);
   font-variant-numeric: tabular-nums;
+}
+
+.turn-time {
+  white-space: nowrap;
+}
+
+/* A state said with an icon and a coloured word (no box), in the size of its line: a turn's, a check's, a verdict's, the
+   result's review. (The provider list's own `.state` is another class.) */
+.state-word {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.state-word .ico {
+  vertical-align: 0;
+}
+
+.state-word.ok {
+  color: var(--ok);
+}
+
+.state-word.warn {
+  color: var(--warn);
+}
+
+.state-word.err,
+.state-word.bad {
+  color: var(--err);
+}
+
+.state-word.run {
+  color: var(--accent-text);
+}
+
+/* What opens more in place (the activity log, the full plan, the review, a thought, the progress list): a quiet text
+   button with its chevron, 24px tall, no underline. */
+.fold-btn,
+.activity-toggle,
+.progress-toggle,
+.tx-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  align-self: flex-start;
+  min-height: 24px;
+  margin-left: calc(var(--sp-1) * -1);
+  padding: 2px var(--sp-1);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-12);
+  line-height: var(--lh-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fold-btn:hover,
+.activity-toggle:hover,
+.progress-toggle:hover,
+.tx-fold:hover {
+  color: var(--text);
+  background: var(--hover-bg);
+}
+
+/* The activity log's button: its name, then what the turn did (that part wraps in a narrow column, the chevron and the
+   name stay on the first line). */
+.activity-toggle {
+  align-items: flex-start;
+}
+
+.activity-toggle > .ico {
+  margin-top: calc((1lh - 14px) / 2);
+}
+
+.activity-name {
+  flex: none;
+  white-space: nowrap;
+}
+
+.activity-what {
+  min-width: 0;
+}
+
+/* Native disclosures drawn the same way: the chevron turns when open (no ▶ marker). */
+:is(.final-evidence, .raw-submission, .internal-log, .review-issue) > summary {
+  list-style: none;
+}
+
+:is(.final-evidence, .raw-submission, .internal-log, .review-issue) > summary::-webkit-details-marker {
+  display: none;
+}
+
+.fold-chev {
+  color: var(--muted);
+  transition: transform var(--dur-1);
+}
+
+details[open] > summary .fold-chev {
+  transform: rotate(90deg);
 }
 
 /* A chat deleted while its page was open: the note, and the way to a new chat. */
@@ -648,10 +823,6 @@ p {
 
 .divider .msg-time {
   margin-left: var(--sp-1);
-}
-
-.final-head .final-time {
-  margin-left: auto;
 }
 
 .reply .msg-time {
@@ -750,7 +921,9 @@ p {
 }
 
 .spark.lucide-pause,
-.spark.lucide-hand {
+.spark.lucide-hand,
+.spark.lucide-hourglass,
+.spark.lucide-message-circle-question-mark {
   color: var(--warn);
 }
 
@@ -767,14 +940,27 @@ p {
   color: var(--text);
 }
 
+/* A call's line: a button that opens its command and output in place. */
 .tl-head {
   display: flex;
   gap: var(--sp-2);
   align-items: baseline;
-  cursor: pointer;
+  width: 100%;
+  min-width: 0;
+  padding: 1px 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: inherit;
   font-family: var(--mono);
   font-size: var(--fs-13);
-  min-width: 0;
+  line-height: var(--lh-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.tl-head:hover {
+  background: var(--hover-bg);
 }
 
 .tl-dot {
@@ -846,7 +1032,10 @@ p {
   font-size: var(--fs-13);
   color: var(--muted);
   font-style: italic;
-  cursor: pointer;
+}
+
+.tx-raw .tx-fold {
+  font-family: var(--sans);
 }
 
 .tx-think-body {
@@ -966,7 +1155,7 @@ p {
   margin-top: var(--sp-1);
 }
 
-/* A code block with its copy button in the top corner, always in full (not only on hover). */
+/* A code block with its copy button in the top corner, always in full (not only on hover): outlined, over the code. */
 .md .md-code {
   position: relative;
 }
@@ -974,16 +1163,18 @@ p {
   position: absolute;
   top: 4px;
   right: 4px;
+  border-color: var(--line);
   background: var(--surface);
 }
 
-/* Copy buttons (components/CopyButton.tsx). */
+/* Copy buttons (components/CopyButton.tsx): quiet text buttons, icon and label (the label alone says what is copied). */
 .copy-btn {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: var(--sp-1) var(--sp-2);
-  border: 1px solid var(--line);
+  min-height: 24px;
+  padding: 2px var(--sp-1);
+  border: 1px solid transparent;
   border-radius: var(--r-md);
   background: transparent;
   color: var(--muted);
@@ -994,11 +1185,11 @@ p {
   white-space: nowrap;
 }
 .copy-btn.icon-only {
-  padding: var(--sp-1) 6px;
+  padding: 2px 6px;
 }
 .copy-btn:hover {
   color: var(--text);
-  border-color: var(--faint);
+  background: var(--hover-bg);
 }
 .copy-btn:focus-visible {
   outline: 2px solid var(--focus);
@@ -1006,19 +1197,24 @@ p {
 }
 .copy-btn.copied {
   color: var(--ok);
-  border-color: var(--ok-line);
 }
 .copy-btn.failed {
   color: var(--err);
-  border-color: var(--err-line);
 }
 .copy-btn:disabled {
   cursor: progress;
 }
+/* At the end of the text it copies; what opens more of that text (the full plan, the review) at the start. */
 .copy-row {
   display: flex;
-  justify-content: flex-end;
-  margin-top: var(--sp-1);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  margin-top: 2px;
+}
+.copy-row > .copy-btn {
+  margin-left: auto;
+  margin-right: calc(var(--sp-1) * -1);
 }
 .sr-only {
   position: absolute;
@@ -1111,15 +1307,19 @@ p {
   border-bottom: none;
 }
 
-/* ---- outcome blocks ---- */
+/* ---- outcome blocks: a turn's plan, review, verification or summary, flat under its first line (no box in a box) ---- */
 .block {
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
+  min-width: 0;
   margin-top: var(--sp-1);
+}
+
+/* What a label is about, after it: quiet, never in brackets. */
+.block-hint::before {
+  content: '·' / '';
+  margin-right: 6px;
 }
 
 .block-label {
@@ -1162,51 +1362,109 @@ p {
   font: var(--fs-14)/var(--lh-body) var(--sans);
 }
 
+/* A review's or verification's conclusion as the turn's first line: the state as an icon and a coloured word, then its
+   counts and what it was measured on. */
 .verdict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-14);
+  color: var(--text-2);
+}
+
+.verdict > .state-word {
   font-weight: 600;
 }
 
-.verdict.ok {
-  color: var(--ok);
+/* Its parts apart by a dot at the end of each (a wrapped line never starts with one). */
+.verdict > :not(:last-child)::after {
+  content: '·' / '';
+  margin-left: var(--sp-2);
+  color: var(--muted);
+  font-weight: 400;
 }
 
-.verdict.warn {
-  color: var(--warn);
+/* The state word lays its icon and word out with a gap already: the dot after it takes only the rest. */
+.verdict > .state-word:not(:last-child)::after {
+  margin-left: var(--sp-1);
 }
 
-.issue {
-  padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
-  border-left: 2px solid var(--line);
+/* 「變更後需重驗」 starts with its own icon: no dot before it (none left hanging at a line's end when it wraps). */
+.verdict > :has(+ .verdict-stale)::after {
+  content: none;
 }
 
-.issue.blocker {
-  border-color: var(--err);
+.verdict-stale {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-12);
 }
 
-.issue.major {
-  border-color: var(--warn);
+.verdict-why,
+.verdict-version {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
 }
 
-/* Needs validation: not a defect, so no severity color — a dashed line instead. */
+/* Issues: one item each, its id, severity word (in its colour), title and place on a line, the detail under it. */
+.issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.issue-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+}
+
+.issue-title {
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.issue-loc {
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+
+.issue-detail {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+
+/* Needs validation: not a defect, so no severity colour. */
 .needs-validation {
-  margin-top: var(--sp-2);
-}
-
-.issue.nv {
-  border-left-style: dashed;
-  border-color: var(--faint);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
 }
 
 .issue-id {
   font-family: var(--mono);
   font-size: var(--fs-12);
   color: var(--muted);
-  margin-right: var(--sp-2);
 }
 
 .sev {
   font-size: var(--fs-12);
-  margin-right: var(--sp-2);
   color: var(--muted);
 }
 
@@ -1312,24 +1570,58 @@ p {
   color: var(--muted);
 }
 
-/* ---- outputs ---- */
+/* ---- outputs: one quiet row under the result ("檔案 · 修改 2"), the list in place when opened ---- */
 .outputs {
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: var(--sp-3) var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
-  background: var(--surface);
+  min-width: 0;
+}
+
+/* Right under the result card, as part of it. */
+:is(.final-result, .review-result) + .outputs {
+  margin-top: calc(var(--sp-2) - var(--sp-4));
 }
 
 .outputs-head {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  align-self: flex-start;
+  max-width: 100%;
+  min-height: 24px;
+  margin-left: calc(var(--sp-1) * -1);
+  padding: 2px var(--sp-1);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-13);
+  line-height: var(--lh-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.outputs-head:hover {
+  color: var(--text);
+  background: var(--hover-bg);
+}
+
+.outputs-title {
+  color: var(--text-2);
+}
+
+.outputs-counts::before {
+  content: '·' / '';
+  margin-right: 6px;
+}
+
+.outputs-list {
   display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  font-weight: 600;
-  margin-bottom: var(--sp-1);
-  gap: var(--sp-3);
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
 }
 
 .out-row {
@@ -1340,7 +1632,8 @@ p {
   border-top: 1px solid var(--line);
 }
 
-.out-row:first-of-type {
+.out-row:first-of-type,
+.outputs-caption + .out-row {
   border-top: none;
 }
 
@@ -1351,25 +1644,26 @@ p {
   min-width: 0;
 }
 
+/* How a file changed, as a quiet word; a deletion in the error colour. */
 .out-status {
   font-size: var(--fs-12);
   line-height: var(--lh-ui);
-  padding: 0 6px;
-  border-radius: var(--r-sm);
-  border: 1px solid currentColor;
+  color: var(--muted);
   flex-shrink: 0;
-}
-
-.out-status.added {
-  color: var(--ok);
-}
-
-.out-status.modified {
-  color: var(--warn);
 }
 
 .out-status.deleted {
   color: var(--err);
+}
+
+.out-thumb-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  cursor: zoom-in;
 }
 
 .out-path {
@@ -1644,10 +1938,10 @@ p {
   flex-shrink: 1;
 }
 
+/* A step's state: a line icon in its colour (no filled disc or ring around it); the one in progress breathes. */
 .pp-icon {
   width: 17px;
   height: 17px;
-  border-radius: var(--r-full);
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -1655,6 +1949,7 @@ p {
   font-size: var(--fs-12);
   font-weight: 400;
   line-height: 1;
+  color: var(--muted);
 }
 
 .pp-item.sub .pp-icon {
@@ -1664,33 +1959,23 @@ p {
 }
 
 .pp-icon.done {
-  background: var(--text-2);
-  color: var(--surface);
+  color: var(--ok);
 }
 
-/* In progress: an accent ring with a pulsing dot. */
 .pp-icon.active {
-  border: 1.5px solid var(--accent-text);
+  color: var(--accent-text);
 }
 
-.pp-icon.active::after {
-  content: '';
-  width: 45%;
-  height: 45%;
-  border-radius: var(--r-full);
-  background: var(--accent-text);
+.pp-icon.active .ico {
   animation: var(--pulse);
 }
 
-.pp-icon.pending,
-.pp-icon.skipped {
-  border: 1.5px dashed var(--faint);
-  color: var(--muted);
+.pp-icon.failed {
+  color: var(--err);
 }
 
-.pp-icon.failed {
-  background: var(--err);
-  color: var(--surface);
+.pp-icon.unreported {
+  color: var(--warn);
 }
 
 .composer {
@@ -1858,6 +2143,15 @@ p {
   border-radius: var(--r-sm);
   cursor: zoom-in;
   background: var(--surface);
+}
+
+.att-open {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
 }
 
 .att-icon {
@@ -2114,26 +2408,83 @@ p {
   font-size: var(--fs-12);
 }
 
-/* The answer repeated at the bottom of a finished conversation. */
+/* The answer repeated at the bottom of a finished conversation: its one framed card, the frame neutral. */
 .final-result {
   border: 1px solid var(--line);
   background: var(--surface);
   border-radius: var(--r-lg);
   padding: var(--sp-4);
   margin: var(--sp-2) 0;
+  min-width: 0;
 }
 
+/*
+ * Title, the review as an icon and a coloured word, who did it; the progress, its time and the copy button at the right.
+ * In a narrow column the title and the review keep the first line: who did it takes what room is left (cut, whole in
+ * its tooltip), the tools go to a line of their own.
+ */
 .final-head {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: var(--sp-1) var(--sp-2);
   flex-wrap: wrap;
   margin-bottom: var(--sp-2);
 }
 
 .final-title {
+  margin: 0;
   font-weight: 600;
   font-size: var(--fs-16);
+  line-height: var(--lh-ui);
+}
+
+.final-who {
+  flex: 1 1 0;
+  min-width: 4em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+/* What the verdict says besides its count (another review's issues outside the change). */
+.final-more {
+  color: var(--muted);
+  font-size: var(--fs-12);
+}
+
+.final-head > .state-word {
+  font-size: var(--fs-13);
+}
+
+.final-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.final-tools .copy-btn {
+  margin-right: calc(var(--sp-1) * -1);
+}
+
+/* A settled workflow's progress, opened from the result's header. */
+.progress-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin: 0 0 var(--sp-3);
+  padding-bottom: var(--sp-3);
+  border-bottom: 1px solid var(--line);
+}
+
+.progress-list .pp-list {
+  align-self: stretch;
+  max-height: none;
+  overflow: visible;
+  padding: 0;
 }
 
 /* Shared notes an agent posted for the others. */
@@ -2174,6 +2525,15 @@ p {
   border-radius: var(--r-lg);
   overflow: hidden;
   background: var(--surface);
+}
+
+/* The screenshot is a button that enlarges it. */
+.shot-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
   cursor: zoom-in;
 }
 
@@ -2201,10 +2561,15 @@ p {
   color: var(--text-2);
 }
 
+/* An enlarged image: the whole overlay is the button that closes it (click, Enter, Space, Esc). */
 .lightbox {
   position: fixed;
   inset: 0;
   z-index: 30;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
   background: var(--scrim-strong);
   display: grid;
   place-items: center;
@@ -4755,14 +5120,15 @@ textarea.code {
   background: var(--accent-text);
 }
 
-/* Skills and Graphify an agent used, on its header and in its transcript. */
+/* Skills and Graphify an agent used: quiet words under its head (icon and name; in full in its activity log). */
 .turn-ext {
-  display: inline-flex;
-  gap: var(--sp-1);
+  display: flex;
   flex-wrap: wrap;
-  margin-left: var(--sp-1);
+  gap: 2px var(--sp-3);
+  margin: -2px 0 var(--sp-1);
 }
 
+/* A small outlined state word: a skill's review state in Settings → 能力 (Capabilities.tsx). */
 .ext-chip {
   font-size: var(--fs-12);
   line-height: var(--lh-ui);
@@ -4774,13 +5140,23 @@ textarea.code {
   cursor: help;
 }
 
-/* A message the user sent while the agent worked, among its steps. */
+/* In a turn, the skills and Graphify it used are quiet words (icon and name), no box. */
+.turn-ext .ext-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  cursor: default;
+}
+
+/* A message the user sent while the agent worked, among its steps: on the same tint as their own messages. */
 .tx-said {
   margin: var(--sp-2) 0;
   padding: var(--sp-2) var(--sp-3);
-  border-left: 3px solid var(--faint);
   background: var(--user-bg);
-  border-radius: 0 var(--r-md) var(--r-md) 0;
+  border-radius: var(--r-md);
 }
 
 .tx-said-who {
@@ -4790,23 +5166,6 @@ textarea.code {
 
 .tx-said-text {
   white-space: pre-wrap;
-}
-
-/* Final result and file list fold to one line until clicked. */
-.fold-head {
-  cursor: pointer;
-  user-select: none;
-}
-
-.fold-head .chev {
-  display: inline-block;
-  width: 14px;
-  color: var(--muted);
-}
-
-.final-result.folded {
-  padding-top: var(--sp-3);
-  padding-bottom: var(--sp-3);
 }
 
 .fold-preview {
@@ -5228,17 +5587,17 @@ textarea.code {
   color: var(--muted);
 }
 
-/* verification card */
+/* verification: one item per metric (met or not, its value and evidence), no box around each */
 .metrics {
+  list-style: none;
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
-  margin: var(--sp-2) 0;
+  margin: var(--sp-1) 0;
+  padding: 0;
 }
 .metric {
-  padding: var(--sp-2) var(--sp-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
+  padding: 0;
 }
 .metric-head {
   display: flex;
@@ -5281,19 +5640,18 @@ textarea.code {
   gap: var(--sp-1);
   margin-top: var(--sp-1);
 }
-.handoff-body .pill {
+.handoff-body .state-word {
   margin-right: var(--sp-1);
 }
 
-/* agent card actions */
+/* agent card actions (24px targets) */
 .turn-actions {
   display: inline-flex;
   gap: 2px;
-  margin-left: var(--sp-1);
 }
 .turn-actions .icon-btn {
-  min-width: 22px;
-  height: 22px;
+  min-width: 24px;
+  height: 24px;
   font-size: var(--fs-12);
 }
 
@@ -5437,9 +5795,9 @@ textarea.code {
   border-color: var(--warn-line);
 }
 
-/* ---------- Telling blocks apart: who (role bar) and what counts (results stand out, narration steps back) ---------- */
-/* Who wrote a turn is said in its head (name and role). The rule beside every turn is the same quiet line for every
-   role: colour is kept for states (ok, warn, err, running). */
+/* ---------- Telling blocks apart: who (the head says it) and what counts (results stand out, narration steps back) ---------- */
+/* Who wrote a turn is said in its head (name, role, model). No rule or colour beside it: colour is kept for states (ok,
+   warn, err, running). The agent map's nodes keep the role groups (one quiet line for every role). */
 .rc-plan,
 .rc-build,
 .rc-verify,
@@ -5447,14 +5805,15 @@ textarea.code {
   --role: var(--line);
 }
 .turn {
-  border-left: 3px solid var(--role, var(--line));
-  padding-left: var(--sp-3);
+  border-left: 0;
+  padding-left: 0;
 }
 .turn-body {
   padding-left: 0;
 }
+/* A turn's helpers (advisors, sub-agent batches) sit under it, indented. */
 .subs {
-  margin-left: var(--sp-1);
+  margin-left: var(--sp-4);
   padding-left: 0;
   border-left: 0;
 }
@@ -5463,11 +5822,7 @@ textarea.code {
   font-size: var(--fs-14);
   color: var(--text-2);
 }
-/* Results (plan, verdict, verification, summary): the one framed card of a turn. */
-.turn .block {
-  background: var(--surface);
-  border-color: var(--line);
-}
+/* Results (plan, verdict, verification, summary): the reading text of a turn, flat under its first line. */
 .turn .block .prose,
 .turn .block .md {
   color: var(--text);
@@ -5479,15 +5834,32 @@ textarea.code {
   font-weight: 400;
   color: var(--muted);
 }
-/* Shared notes: one quiet line each, full text on click. */
+/* Shared notes: one quiet line each, a button that opens the full text. */
 .note-line {
   display: flex;
   gap: var(--sp-2);
   align-items: center;
   font-size: var(--fs-13);
   color: var(--muted);
-  cursor: pointer;
   min-width: 0;
+}
+.note-toggle {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.note-line.open .note-toggle {
+  align-items: flex-start;
 }
 .note-line .note-text {
   overflow: hidden;
@@ -5512,8 +5884,9 @@ textarea.code {
   font-weight: 400;
   color: var(--text);
 }
-.turn-task .link {
-  margin-left: var(--sp-2);
+.turn-task .link,
+.turn-task .fold-btn {
+  margin-left: var(--sp-1);
 }
 .turn-brief {
   white-space: pre-wrap;
@@ -5807,10 +6180,14 @@ textarea.code {
   white-space: nowrap;
 }
 .pp-goal-btn {
-  flex: none;
+  /* Gives way in a narrow column only when it says why it is to be checked again (it then wraps inside). */
+  flex: 0 1 auto;
+  min-width: 0;
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 6px;
+  text-align: left;
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   background: transparent;
@@ -5826,6 +6203,10 @@ textarea.code {
 }
 .pp-goal-btn.ok {
   color: var(--ok);
+}
+/* Why the goal is to be checked again, beside 「變更後需重驗」. */
+.pp-goal-why {
+  color: var(--muted);
 }
 .pp-body {
   max-height: min(42vh, 440px);
@@ -5874,8 +6255,16 @@ textarea.code {
   gap: var(--sp-2);
   flex-wrap: wrap;
 }
-.gw-head .badge {
+.gw-head .state-word {
   margin-left: auto;
+}
+/* The goal measured on code that changed since: said with why, above the metrics. */
+.gw-stale {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-2);
+  margin: calc(var(--sp-2) * -1) 0 var(--sp-3);
 }
 .gw-row {
   display: grid;
@@ -6145,17 +6534,9 @@ textarea.code {
   align-self: center;
 }
 
-/* the checks Aivenue saw run, on an implementation result */
+/* A skill whose review failed (Settings → 能力, Capabilities.tsx). */
 .ext-chip.bad {
   color: var(--err);
-}
-.checks-seen {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-}
-.check-seen code {
-  overflow-wrap: anywhere;
 }
 
 /* skill review before loading */
@@ -6184,9 +6565,6 @@ textarea.code {
   font-size: var(--fs-14);
   color: var(--text-2);
 }
-.turn-summary.bad {
-  color: var(--err);
-}
 .tl-running {
   margin-left: auto;
   flex-shrink: 0;
@@ -6200,12 +6578,45 @@ textarea.code {
 .tx-gap {
   margin: 2px 0;
 }
-.activity-toggle {
-  font-size: var(--fs-12);
-}
 .turn-foot {
   flex-wrap: wrap;
   row-gap: var(--sp-1);
+}
+/* A line the head's state needs said in words: settings that apply only next turn, what to do about a failure. */
+.turn-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  font-size: var(--fs-13);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.turn-note .ico {
+  align-self: flex-start;
+  margin-top: calc((1lh - 14px) / 2);
+}
+.turn-note.warn {
+  color: var(--warn);
+}
+.turn-note.muted {
+  color: var(--muted);
+}
+/* When it ran and on what, first in its activity log. */
+.turn-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.turn-skills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
 }
 .turn-details {
   margin-top: var(--sp-2);
@@ -6234,20 +6645,29 @@ textarea.code {
   overflow-wrap: anywhere;
   margin: var(--sp-2) 0 var(--sp-1);
 }
+/* Back to the newest entries: a small button on a line of its own above the input, at the thread's right edge (it never
+   covers the conversation). */
+.to-latest-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-1);
+}
 .to-latest {
-  position: sticky;
-  bottom: 12px;
-  display: block;
-  margin: 0 auto;
-  padding: 6px var(--sp-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 24px;
+  padding: 2px var(--sp-2);
   border-radius: var(--r-md);
   border: 1px solid var(--line);
   background: var(--surface);
   color: var(--text-2);
   font-size: var(--fs-12);
+  line-height: var(--lh-ui);
   cursor: pointer;
-  box-shadow: var(--shadow-menu);
-  z-index: 5;
+}
+.to-latest:hover {
+  background: var(--hover-bg);
 }
 .batches {
   display: flex;
@@ -6326,18 +6746,29 @@ textarea.code {
   flex-direction: column;
   gap: var(--sp-2);
 }
+/* A row of the result: its label in a column of its own (the values start at the same place), above them when narrow. */
 .final-row {
-  display: flex;
-  gap: var(--sp-3);
+  display: grid;
+  grid-template-columns: 5.5em minmax(0, 1fr);
+  gap: var(--sp-1) var(--sp-3);
   align-items: baseline;
-  flex-wrap: wrap;
   margin-top: var(--sp-2);
   font-size: var(--fs-13);
+}
+@media (max-width: 360px) {
+  .final-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
 }
 .final-label {
   color: var(--muted);
   font-size: var(--fs-12);
   flex-shrink: 0;
+}
+.final-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .final-files {
   display: inline-flex;
@@ -6385,27 +6816,9 @@ textarea.code {
 .topbar-title {
   flex: 1 1 140px;
 }
-/* Cards in a narrow column (a sub-agent attempt inside a batch, VS Code's side bar): the head wraps, nothing scrolls
-   sideways. */
-.turn-head {
-  flex-wrap: wrap;
-  row-gap: 2px;
-  min-width: 0;
-}
-.turn-who {
-  white-space: nowrap;
-}
-.turn-role {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.turn-meta {
-  flex-wrap: wrap;
-  row-gap: 2px;
-}
-.turn-meta .badge {
-  white-space: nowrap;
-}
+/* Cards in a narrow column (a sub-agent attempt inside a batch, VS Code's side bar): who stays on one line and is cut
+   at its end (the model first; the full names are in the activity log), the state and time go to the next line when
+   they do not fit; nothing scrolls sideways. */
 .turn {
   min-width: 0;
 }
@@ -6434,19 +6847,50 @@ textarea.code {
   min-width: 0;
   flex: 1 1 260px;
 }
+/*
+ * A check's row is a button: state, command and notes, the runs behind it. Its chevron has a column of its own and stays
+ * beside the first line; what wraps (a long state, the command, the notes) wraps in the column after it, under its start.
+ */
 .check-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--sp-2);
-  cursor: pointer;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--sp-1);
+  width: 100%;
   min-width: 0;
+  min-height: 24px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.check-head:hover .check-cmd {
+  color: var(--text);
 }
 .check-caret {
   color: var(--muted);
-  font-size: var(--fs-12);
-  width: 10px;
   flex-shrink: 0;
+  margin-top: calc((1lh - 14px) / 2);
+}
+/* The row's state, command and notes, wrapping beside the chevron. */
+.row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+}
+/* A long state word wraps too, its icon by its first line (it never pushes the row wider than its column). */
+.row-main > .state-word {
+  white-space: normal;
+  align-items: flex-start;
+  min-width: 0;
+}
+.row-main > .state-word > .ico {
+  margin-top: calc((1lh - 14px) / 2);
 }
 .check-cmd {
   overflow-wrap: anywhere;
@@ -6481,13 +6925,31 @@ textarea.code {
   align-items: flex-start;
   flex: 1 1 260px;
 }
+/* As a check's row: the chevron in its own column, a wrapped path under its first line. */
 .deliverable-head {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--sp-2);
-  cursor: pointer;
+  display: inline-grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--sp-1);
+  max-width: 100%;
   min-width: 0;
+  min-height: 24px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.deliverable-head code {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+/* Added or modified: a quiet word, not a coloured box (green is for what passed). */
+.deliverable-kind {
+  color: var(--muted);
+  font-size: var(--fs-12);
 }
 .deliverable-body {
   margin: var(--sp-1) 0 var(--sp-2) var(--sp-4);
@@ -6833,13 +7295,11 @@ textarea.code {
   min-width: 0;
 }
 
+/* Each state its own icon, colour and word (no box), its reason beside it. */
 .vstate {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
-  padding: 2px var(--sp-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
   font-size: var(--fs-13);
   line-height: var(--lh-ui);
   white-space: nowrap;
@@ -6851,17 +7311,14 @@ textarea.code {
 
 .vstate.ok {
   color: var(--ok);
-  border-color: var(--ok-line);
 }
 
 .vstate.warn {
   color: var(--warn);
-  border-color: var(--warn-line);
 }
 
 .vstate.bad {
   color: var(--err);
-  border-color: var(--err-line);
 }
 
 .vstate-detail {
@@ -6877,16 +7334,15 @@ textarea.code {
   margin-bottom: 2px;
 }
 
-/* "agent 自述": the account below is the agent's own, said as a tag (not a parenthesis). */
+/* "agent 自述": the account below is the agent's own, said in the label (not a box, not a parenthesis). */
 .self-tag {
-  display: inline-block;
-  margin-left: var(--sp-1);
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
   font-size: var(--fs-12);
-  line-height: var(--lh-ui);
   color: var(--muted);
+}
+
+.self-tag::before {
+  content: '·' / '';
+  margin: 0 6px 0 2px;
 }
 
 /* ============ secondary actions without a mouse ============ */
@@ -6995,10 +7451,8 @@ textarea.code {
   }
 }
 
-/* Independent review: the reviewer's report is the result (components/ReviewResult.tsx). */
-.review-result.revise {
-  border-color: var(--warn-line);
-}
+/* Independent review: the reviewer's report is the result (components/ReviewResult.tsx). Its frame is neutral like the
+   final result's: the verdict's colour is on its word in the header. */
 .review-changed {
   margin-top: var(--sp-2);
   padding: var(--sp-2) var(--sp-3);
@@ -7018,36 +7472,43 @@ textarea.code {
   gap: var(--sp-2);
   margin-top: var(--sp-3);
 }
+/* Each issue: its line a disclosure (chevron, severity word in its colour, id, title, place), why it blocks under it. */
 .review-issue {
-  padding: var(--sp-1) 0 var(--sp-1) var(--sp-3);
-  border-left: 2px solid var(--line);
   font-size: var(--fs-13);
 }
-.review-issue.blocker {
-  border-color: var(--err);
-}
-.review-issue.major {
-  border-color: var(--warn);
-}
 /* Each problem's title line reads at 14px, so its id keeps the heavy weight; its details below are smaller. */
-.review-issue summary {
+.review-issue > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
   cursor: pointer;
   overflow-wrap: anywhere;
   font-size: var(--fs-14);
 }
+.review-issue > summary .fold-chev {
+  align-self: center;
+}
+.review-issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0 calc(14px + var(--sp-2));
+}
 .review-decisions {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-3);
   margin-top: var(--sp-3);
   font-size: var(--fs-13);
 }
+/* A decision left to the reviewer: flat, apart from the next by a rule. */
 .review-decision {
-  padding: var(--sp-2) var(--sp-3);
-  border-left: 2px solid var(--faint);
-  border-radius: 0 var(--r-md) var(--r-md) 0;
-  background: var(--sunken);
   overflow-wrap: anywhere;
+}
+.review-decision + .review-decision {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
 }
 .review-decision ul {
   margin: 2px 0 0;
@@ -7102,15 +7563,8 @@ textarea.code {
 .review-target-fields textarea.review-decide {
   min-height: 56px;
 }
-/* A problem outside the reviewed change: listed, not part of the verdict. */
-.review-issue.pre-existing {
-  border-left-style: dashed;
-}
+/* A problem outside the reviewed change: listed, not part of the verdict (a quiet word on its line). */
 .pre-tag {
-  margin-left: var(--sp-2);
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
   font-size: var(--fs-12);
   line-height: var(--lh-ui);
   color: var(--muted);

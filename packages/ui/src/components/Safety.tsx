@@ -117,7 +117,7 @@ export function OutsideChanges({ run }: { run: WorkflowRun }) {
       <div className="outside-groups">
         {groups.map((g) => (
           <div key={g.dir} className="outside-group">
-            <button className="link mono small" title={g.dir} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
+            <button type="button" className="link mono small" title={g.dir} aria-expanded={open.has(g.dir)} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
               <Ico i={open.has(g.dir) ? ChevronDown : ChevronRight} size={14} /> {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
             </button>
             {/* Only a hint: the request's own text names this folder (Aivenue does not know it was meant as the output). */}
@@ -254,7 +254,7 @@ export function Approvals({ run, providers, agentId, unclaimed }: { run: Workflo
           </div>
           <div className="approval-summary mono">{a.summary}</div>
           {a.input && (
-            <button className="link" onClick={() => setOpen(open === a.id ? undefined : a.id)}>
+            <button type="button" className="link" aria-expanded={open === a.id} onClick={() => setOpen(open === a.id ? undefined : a.id)}>
               {open === a.id ? t('收起細節', 'Hide details') : t('查看細節', 'Details')}
             </button>
           )}
