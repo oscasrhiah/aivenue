@@ -80,6 +80,8 @@ export const RECORDED_WITH_RUN = new Set([
  */
 export const SAME_TWICE = new Set([
   'settings.set',
+  // Sets the desktop window's icon to the light or the dark one.
+  'host.appearance',
   'quota.antigravity.disconnect',
   'attachments.discard',
   'capabilities.saveServer',

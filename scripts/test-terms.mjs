@@ -10,7 +10,7 @@
 // What is sent to agents (prompts, tool descriptions) is left out, as are the places where a word means something else
 // (代理伺服器: a network proxy).
 //   node --test scripts/test-terms.mjs
-import { test } from 'node:test';
+import { test } from './lib/test-shard.mjs';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
