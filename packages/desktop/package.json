@@ -4,6 +4,7 @@
   "version": "0.4.2",
   "description": "Aivenue desktop app",
   "main": "dist/main.cjs",
+  "desktopName": "aivenue.desktop",
   "author": "Aivenue",
   "scripts": {
     "start": "electron .",

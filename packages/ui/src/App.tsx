@@ -1,15 +1,21 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import { CircleX, Hand, LoaderCircle, Menu, MessageCircleQuestionMark, PanelLeftClose, Pause, Pencil, Plus, Settings as SettingsIcon, Signpost, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { useConnection, useHostInfo, useSettings, useThreads, type ThreadSummary } from './api';
-import logo from './assets/logo.svg';
+import logoLight from './assets/logo.svg';
+import logoDark from './assets/logo-dark.svg';
 import { AskHost } from './components/Ask';
 import { RenameInput } from './components/Rename';
 import { deleteConversation, MoreMenu } from './components/RunTools';
-import { saveSettings, SettingsProvider, useT } from './i18n';
+import { saveSettings, SettingsProvider, useDarkTheme, useT } from './i18n';
 import { Chat } from './pages/Chat';
 import { Settings } from './pages/Settings';
 import { attention, attentionLabel, cx, relativeDay, summaryWait, waitWord, wfStatus, type WaitKind } from './util';
 import { Ico } from './icons';
+
+/** The app's logo: blue on a light page, the orange one on a dark page (the window icon matches, see i18n.tsx). */
+function Logo() {
+  return <img className="logo" src={useDarkTheme() ? logoDark : logoLight} alt="" />;
+}
 
 type SettingsTab = 'general' | 'providers' | 'capabilities' | 'usage' | 'memory';
 type Route = { page: 'new' } | { page: 'run'; id: string } | { page: 'settings'; tab: SettingsTab };
@@ -63,7 +69,7 @@ function CompactBar({ route, open, onMenu, menuRef, threads }: { route: Route; o
           </span>
         )}
       </button>
-      <img className="logo" src={logo} alt="" />
+      <Logo />
       <span className="wordmark">Aivenue</span>
       <span className="grow" />
       <a className="icon-btn" href="#/new" title={t('新對話', 'New chat')} aria-label={t('新對話', 'New chat')}>
@@ -208,7 +214,7 @@ function Sidebar({ route, open, drawer, onHide, workflows }: { route: Route; ope
   return (
     <aside id="side-drawer" ref={ref} className={cx('sidebar', open && 'open')} aria-label={t('對話紀錄', 'Chat history')} inert={drawer && !open ? true : undefined}>
       <div className="side-top">
-        <img className="logo" src={logo} alt="" />
+        <Logo />
         <span className="wordmark">Aivenue</span>
         <span className="grow" />
         <button className="icon-btn side-hide" title={t('收合側欄', 'Hide the sidebar')} aria-label={t('收合側欄', 'Hide the sidebar')} onClick={onHide}>

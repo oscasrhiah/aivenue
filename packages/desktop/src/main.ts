@@ -1,9 +1,16 @@
-import { app, BrowserWindow, dialog, Menu, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, nativeTheme, safeStorage, shell } from 'electron';
 import * as path from 'node:path';
 import { defaultDataDir, FileSecretStore, HubBusyError, startHub, type Hub } from '@aivenue/core';
 
 let hub: Hub | undefined;
 let win: BrowserWindow | undefined;
+
+/**
+ * The window and taskbar icon follows the theme the page shows: the blue logo on a light page, the orange one on a dark
+ * page (the files the UI build ships). Before the page says, the system's light or dark setting decides.
+ */
+const iconFor = (dark: boolean) => path.join(__dirname, 'ui', dark ? 'icon-dark.png' : 'icon.png');
+let iconDark: boolean | undefined;
 
 // Files that external processes (agent CLIs) must execute cannot live inside app.asar.
 const unpacked = (p: string) => p.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
@@ -48,6 +55,11 @@ if (!app.requestSingleInstanceLock()) {
             await shell.openPath(p);
           },
           openExternal: (url) => shell.openExternal(url),
+          setAppearance: ({ dark }) => {
+            if (dark === iconDark) return;
+            iconDark = dark;
+            win?.setIcon(iconFor(dark));
+          },
         },
       });
     } catch (e) {
@@ -64,7 +76,7 @@ if (!app.requestSingleInstanceLock()) {
       minWidth: 960,
       minHeight: 600,
       title: 'Aivenue',
-      icon: path.join(__dirname, 'ui', 'icon.png'),
+      icon: iconFor(iconDark ?? nativeTheme.shouldUseDarkColors),
       backgroundColor: '#0f1117',
       autoHideMenuBar: true,
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },

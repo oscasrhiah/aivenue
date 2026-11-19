@@ -1,13 +1,41 @@
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { AppSettings, Locale } from '../../core/src/types';
 import { hub, useSettings } from './api';
 
 export type T = (zh: string, en: string) => string;
 
-const Ctx = createContext<{ settings: AppSettings; t: T }>({
+const Ctx = createContext<{ settings: AppSettings; t: T; dark: boolean }>({
   settings: { locale: 'zh-TW', theme: 'system', accent: '#3156c6' },
   t: (zh) => zh,
+  dark: false,
 });
+
+const darkQuery = () => (typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : undefined);
+
+/** Whether the page is dark as shown: the theme setting, or for "system" the system's light or dark setting (live). */
+function useResolvedDark(theme: AppSettings['theme']): boolean {
+  const [systemDark, setSystemDark] = useState(() => !!darkQuery()?.matches);
+  useEffect(() => {
+    const q = darkQuery();
+    if (!q) return;
+    // Read again whenever the setting changes too (not only on the system's change event).
+    setSystemDark(q.matches);
+    const on = () => setSystemDark(q.matches);
+    q.addEventListener('change', on);
+    return () => q.removeEventListener('change', on);
+  }, [theme]);
+  return theme === 'dark' || (theme === 'system' && systemDark);
+}
+
+/**
+ * The logo follows the theme: blue on a light page, the orange one on a dark page. The tab icon changes with it, and
+ * the desktop app is told so its window and taskbar icon match (VS Code draws its own icons: nothing to tell there).
+ */
+function applyLogo(dark: boolean) {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (link) link.href = dark ? './icon-dark.svg' : './icon.svg';
+  if (document.documentElement.dataset.host !== 'vscode') void hub.call('host.appearance', { dark }).catch(() => undefined);
+}
 
 /**
  * The accent colours offered in Settings → 一般 (any other one through the colour picker). Blue is the default and takes
@@ -37,12 +65,19 @@ function applyAppearance(s: AppSettings) {
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const settings = useSettings();
   useEffect(() => applyAppearance(settings), [settings]);
+  const dark = useResolvedDark(settings.theme);
+  useEffect(() => applyLogo(dark), [dark]);
   const t: T = (zh, en) => (settings.locale === 'en' ? en : zh);
-  return <Ctx.Provider value={{ settings, t }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ settings, t, dark }}>{children}</Ctx.Provider>;
 }
 
 export function useT(): T {
   return useContext(Ctx).t;
+}
+
+/** Whether the page is dark as shown (the theme setting, or the system's when it follows the system). */
+export function useDarkTheme(): boolean {
+  return useContext(Ctx).dark;
 }
 
 export function useAppSettings(): AppSettings {

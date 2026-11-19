@@ -43,6 +43,8 @@ export interface HostHooks {
   /** Run an install / sign-in line in the host's own terminal (VS Code); without it a terminal window opens. */
   openTerminal?: (req: { title: string; cwd: string; line: string; env: Record<string, string> }) => void;
   openExternal?: (url: string) => Promise<void> | void;
+  /** The page's theme as shown (light or dark, after "system" is resolved): the desktop app matches its window icon. */
+  setAppearance?: (a: { dark: boolean }) => void;
 }
 
 export interface HubOptions {
@@ -245,6 +247,9 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'host.openExternal': (p: { url: string }) => {
       if (!/^https?:\/\//.test(p.url)) throw new Error('only http(s) links can be opened');
       return opts.hooks.openExternal?.(p.url);
+    },
+    'host.appearance': (p: { dark?: boolean }) => {
+      opts.hooks.setAppearance?.({ dark: p?.dark === true });
     },
     'settings.get': () => settings.get(),
     'settings.set': (p: { patch: Partial<AppSettings> }) => {

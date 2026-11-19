@@ -393,7 +393,7 @@ if ! { mkdir -p "$BIN" "$APPS" "$ICONS" && ln -sf "$DEST/aivenue.sh" "$BIN/aiven
 Name=Aivenue
 Comment=Run AI coding CLIs together: plan, review, implement, verify
 Exec=$DEST/aivenue.sh %U
-Icon=aivenue
+Icon=$DEST/aivenue.png
 Terminal=false
 Type=Application
 Categories=Development;
@@ -403,6 +403,10 @@ EOF
   refuse "Aivenue is installed in $DEST, but the command ($BIN/aivenue) or the menu entry could not be set up. Fix the cause and run install.sh again (it keeps the install)."
 fi
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$APPS" >/dev/null 2>&1 || true
+# The menu entry names its icon by full path (a stale icon cache of the user's icon theme cannot hide it); the copy in
+# the icon theme is for launchers that look it up by name. A cache of that folder (if one was made) is refreshed.
+touch "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -f "$HOME/.local/share/icons/hicolor/icon-theme.cache" ] && gtk-update-icon-cache -q -t -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
 
 echo
 echo "Done. Start Aivenue from the application menu, or run: aivenue"
