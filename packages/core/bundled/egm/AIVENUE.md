@@ -4,6 +4,10 @@ Aivenue's own adaptation of the Elephant-Goldfish Model (EGM, google/elephant-go
 skills and personas in this folder are unchanged; where they assume a particular CLI, a person answering questions, or
 files the design author writes, follow this file instead. It wins over the upstream text wherever the two disagree.
 
+Paths in the skills such as `resources/execution_instructions.md`, `resources/document_standards/…` and
+`agents/<file>.md` are relative to this folder (the one holding this file), not to the skill's own folder. The
+`docs/claude.md`, `docs/codex.md` and `docs/harnesses.md` they mention are not shipped: this file replaces them.
+
 ## Who is who
 
 - **Elephant = the plan author** (role `planner`). It keeps the long context: it explores the project and writes the
