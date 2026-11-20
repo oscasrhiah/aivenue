@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { capture } from './proc';
 import { L } from './i18n';
 import { addGitExclude, driveOrHome } from './graphify';
-import type { CodeGraphStatus } from './types';
+import type { CodeGraphStatus, GraphLink, GraphNode, GraphPayload } from './types';
 
 export type { CodeGraphStatus };
 
@@ -45,6 +45,13 @@ const MAX_OUTPUT = 16000;
 const keyOf = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const indexFile = (cwd: string) => path.join(cwd, '.codegraph', 'codegraph.db');
+const indexTime = (cwd: string) => {
+  try {
+    return fs.statSync(indexFile(cwd)).mtimeMs;
+  } catch {
+    return undefined;
+  }
+};
 
 
 export interface CodeGraphOptions {
@@ -102,8 +109,72 @@ export function codegraphArgs(tool: CodeGraphTool, a: Record<string, unknown>, c
  * The CodeGraph index of the folders workflows work in: built when missing (`codegraph init -y`), brought up to date
  * otherwise (`codegraph sync`), one run at a time per folder, requests made during one folded into a single follow-up.
  */
+/**
+ * Read CodeGraph's SQLite index read-only (node:sqlite, built into Node 22.13+ and Electron 38) and map it to the graph
+ * window's shape. Never writes: the database is opened read-only, and a busy one (CodeGraph writing it) is waited for
+ * briefly, then reported.
+ */
+export async function readCodegraphDb(file: string): Promise<{ nodes: GraphNode[]; links: GraphLink[]; communities: number; version?: string }> {
+  let sqlite: typeof import('node:sqlite');
+  try {
+    sqlite = await import('node:sqlite');
+  } catch {
+    throw new Error(L('這個執行環境的 Node.js 沒有內建 SQLite（需要 22.13 以上），讀不到 CodeGraph 索引', 'This Node.js has no built-in SQLite (22.13 or later is needed), so the CodeGraph index cannot be read'));
+  }
+  let db: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    db = new sqlite.DatabaseSync(file, { readOnly: true });
+    db.exec('PRAGMA busy_timeout = 5000');
+    type Row = Record<string, string | number | null>;
+    const rows = db.prepare("SELECT id, kind, name, qualified_name, file_path, start_line FROM nodes WHERE kind <> 'import'").all() as Row[];
+    const edges = db.prepare('SELECT source, target, kind FROM edges').all() as Row[];
+    let version: string | undefined;
+    try {
+      version = (db.prepare("SELECT value FROM project_metadata WHERE key = 'indexed_with_version'").get() as Row | undefined)?.value as string | undefined;
+    } catch {
+      // an index without that table
+    }
+    const ids = new Set(rows.map((r) => String(r.id)));
+    const links: GraphLink[] = [];
+    const degree = new Map<string, number>();
+    for (const e of edges) {
+      const source = String(e.source);
+      const target = String(e.target);
+      if (!ids.has(source) || !ids.has(target) || source === target) continue;
+      links.push({ source, target, relation: String(e.kind) });
+      degree.set(source, (degree.get(source) ?? 0) + 1);
+      degree.set(target, (degree.get(target) ?? 0) + 1);
+    }
+    // Each file is a group (CodeGraph has no grouping of its own); numbered in path order so the colours stay put.
+    const files = [...new Set(rows.map((r) => String(r.file_path)))].sort();
+    const group = new Map(files.map((f, i) => [f, i]));
+    const nodes: GraphNode[] = rows.map((r) => {
+      const kind = String(r.kind);
+      const name = String(r.name);
+      const qualified = String(r.qualified_name ?? name);
+      return {
+        id: String(r.id),
+        label: kind === 'method' && qualified.includes('::') ? qualified.split('::').slice(-2).join('.') : name,
+        community: group.get(String(r.file_path)),
+        community_name: String(r.file_path),
+        file_type: kind,
+        source_file: String(r.file_path),
+        source_location: r.start_line === null || r.start_line === undefined ? undefined : `L${r.start_line}`,
+        degree: degree.get(String(r.id)) ?? 0,
+      };
+    });
+    return { nodes, links, communities: files.length, version };
+  } catch (e) {
+    const msg = (e as Error).message;
+    throw new Error(/busy|locked/i.test(msg) ? L('CodeGraph 正在寫入索引，請稍後再開', 'CodeGraph is writing its index: open it again in a moment') : L(`讀不到 CodeGraph 索引：${msg}`, `Could not read the CodeGraph index: ${msg}`));
+  } finally {
+    db?.close();
+  }
+}
+
 export class CodeGraphService {
   private folders = new Map<string, Folder>();
+  private parsed = new Map<string, { key: string; nodes: GraphNode[]; links: GraphLink[]; communities: number; version?: string }>();
 
   constructor(private o: CodeGraphOptions) {}
 
@@ -130,7 +201,8 @@ export class CodeGraphService {
       active: this.o.active(),
       indexed: this.indexed(cwd),
       state: f?.state ?? 'idle',
-      indexedAt: f?.indexedAt,
+      // Built before this hub started: the index file's time.
+      indexedAt: f?.indexedAt ?? indexTime(cwd),
       files: f?.files,
       symbols: f?.symbols,
       edges: f?.edges,
@@ -263,6 +335,29 @@ export class CodeGraphService {
     if (r.code === 0) return text || 'CodeGraph has no answer for this. Fall back to normal source search (rg / grep / reading files).';
     const why = Date.now() - t0 >= LOOKUP_TIMEOUT_MS ? `CodeGraph did not answer within ${LOOKUP_TIMEOUT_MS / 1000} s` : r.error ?? `CodeGraph exited with code ${r.code}`;
     return `${why}.${text ? `\n${clip(text, 2000)}` : ''}\nFall back to normal source search (rg / grep / reading files) and say in your report that CodeGraph was not used.`;
+  }
+
+  /**
+   * The index as a graph for the graph window, in the same shape as Graphify's (graphify.graph): read straight from
+   * .codegraph/codegraph.db, read-only (CodeGraph 1.6.2 has no export; its browser viewer is unreleased). Its symbols
+   * are the nodes (import statements left out), its edges the links (calls, contains, references…), and each file is
+   * a group. A graph of more than `max` nodes is sent as its most connected ones, and says so.
+   */
+  async graph(cwd: string, max = 2000): Promise<GraphPayload> {
+    const file = indexFile(cwd);
+    if (!fs.existsSync(file)) throw new Error(L('這個資料夾還沒有 CodeGraph 索引', 'This folder has no CodeGraph index yet'));
+    const st = fs.statSync(file);
+    const key = `${keyOf(cwd)}|${st.mtimeMs}|${st.size}`;
+    let read = this.parsed.get(keyOf(cwd));
+    if (read?.key !== key) {
+      read = { key, ...(await readCodegraphDb(file)) };
+      this.parsed.set(keyOf(cwd), read);
+    }
+    const capped = read.nodes.length > max;
+    const nodes = capped ? [...read.nodes].sort((a, b) => b.degree - a.degree).slice(0, max) : read.nodes;
+    const keep = new Set(nodes.map((n) => n.id));
+    const links = capped ? read.links.filter((l) => keep.has(l.source) && keep.has(l.target)) : read.links;
+    return { cwd: path.resolve(cwd), nodes, links, totalNodes: read.nodes.length, totalLinks: read.links.length, communities: read.communities, builtAt: this.folders.get(keyOf(cwd))?.indexedAt ?? st.mtimeMs, graphifyVersion: read.version ? `CodeGraph ${read.version}` : undefined, capped };
   }
 
   shutdown(): void {

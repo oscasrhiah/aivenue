@@ -7,7 +7,7 @@ import { snapshot } from './outputs';
 import { issueKey } from './router';
 
 /** Files that do not change what a test or review measured (Aivenue's own folder, generated graphs). */
-const NOT_CODE = /^(\.aivenue|graphify-out)([\\/]|$)/;
+const NOT_CODE = /^(\.aivenue|graphify-out|\.codegraph)([\\/]|$)/;
 
 /**
  * Which version of the work a result applies to: git commit (if any), a hash of every file's path, size and

@@ -18,14 +18,15 @@ const load = async (contents, plugins = []) => {
   return mod.exports;
 };
 const real = await load(
-  `export { CodeGraphService, codegraphArgs, CODEGRAPH_ENV, CODEGRAPH_TOOLS, CODEGRAPH_VERSION } from './packages/core/src/codegraph';
+  `export { readCodegraphDb, CodeGraphService, codegraphArgs, CODEGRAPH_ENV, CODEGRAPH_TOOLS, CODEGRAPH_VERSION } from './packages/core/src/codegraph';
    export { Orchestrator } from './packages/core/src/orchestrator';
    export { RunStore } from './packages/core/src/store';
    export { graphUsage, graphLookupsByTool } from './packages/core/src/graphUsage';
+   export { snapshot } from './packages/core/src/outputs';
    export { extensionSummary, extensionUse } from './packages/ui/src/extensionUse';`,
   [{ name: 'stand-in agent', setup(b) { b.onLoad({ filter: /[\\/]agentRunner\.ts$/ }, () => ({ contents: 'export async function runAgent(o) { return globalThis.__fakeAgent(o); }' })); } }],
 );
-const { CodeGraphService, codegraphArgs, CODEGRAPH_ENV, CODEGRAPH_TOOLS, CODEGRAPH_VERSION, Orchestrator, RunStore, graphUsage, graphLookupsByTool, extensionSummary, extensionUse } = real;
+const { readCodegraphDb, snapshot, CodeGraphService, codegraphArgs, CODEGRAPH_ENV, CODEGRAPH_TOOLS, CODEGRAPH_VERSION, Orchestrator, RunStore, graphUsage, graphLookupsByTool, extensionSummary, extensionUse } = real;
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-codegraph-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -245,7 +246,7 @@ test('開啟 CodeGraph：用 npm 把固定版本裝進 Aivenue 的工具資料�
   await assert.rejects(s.uninstall('graphify'), /CodeGraph/);
 });
 
-test('agent 的規則：有索引才提到 CodeGraph；和 Graphify 圖譜都在時說明分工，並保留退路', async () => {
+test('agent 的規則：有索引才提到 CodeGraph；和 Graphify 圖譜都在時兩套工具都給、各說一句擅長什麼，讓 agent 自己選，並保留退路', async () => {
   const cfg = { graphify: { enabled: true }, codegraph: { enabled: true } };
   const { s, caps, shim } = extension(cfg);
   fs.mkdirSync(path.dirname(shim), { recursive: true });
@@ -265,8 +266,10 @@ test('agent 的規則：有索引才提到 CodeGraph；和 Graphify 圖譜都在
   fs.mkdirSync(path.join(cwd, 'graphify-out'));
   fs.writeFileSync(path.join(cwd, 'graphify-out', 'graph.json'), '{}');
   const both = caps.extraRules('code_reviewer', cwd);
-  assert.match(both, /both CodeGraph and a Graphify graph: use CodeGraph for precise code relations/);
-  assert.match(both, /Graphify \(graph_query, graph_path, graph_explain\) for the overview/);
+  assert.match(both, /both CodeGraph and a Graphify graph, and you have both tool sets/);
+  assert.match(both, /CodeGraph \(codegraph_\*\) is good at callers, callees/);
+  assert.match(both, /Graphify \(graph_query, graph_path, graph_explain\) is good at the overview/);
+  assert.match(both, /Pick whichever fits the question/);
   assert.match(both, /fall back to normal source search/);
 });
 
@@ -336,4 +339,75 @@ test('agent 只在 CodeGraph 開著且資料夾有索引時拿到 CodeGraph 工�
   active = false;
   await finished(orch.start(config).id);
   assert.deepEqual(offered.at(-1), []);
+});
+
+test('索引與圖譜不算工作流產生的檔案（.codegraph/、graphify-out/）', () => {
+  const dir = tmp();
+  for (const f of ['.codegraph/codegraph.db', '.codegraph/.gitignore', 'graphify-out/graph.json', 'src/a.ts']) {
+    fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+    fs.writeFileSync(path.join(dir, f), 'x');
+  }
+  assert.deepEqual([...snapshot(dir).files.keys()].map((k) => k.replace(/\\/g, '/')), ['src/a.ts']);
+});
+
+/** A small CodeGraph index with the 1.6.2 tables the graph window reads. */
+async function fixtureDb(dir, n = 3) {
+  const { DatabaseSync } = await import('node:sqlite');
+  fs.mkdirSync(path.join(dir, '.codegraph'), { recursive: true });
+  const file = path.join(dir, '.codegraph', 'codegraph.db');
+  const db = new DatabaseSync(file);
+  db.exec(`CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, qualified_name TEXT NOT NULL, file_path TEXT NOT NULL, language TEXT NOT NULL, start_line INTEGER NOT NULL);
+    CREATE TABLE edges (id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, target TEXT NOT NULL, kind TEXT NOT NULL);
+    CREATE TABLE project_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
+  const node = db.prepare('INSERT INTO nodes VALUES (?, ?, ?, ?, ?, ?, ?)');
+  node.run('file:b.ts', 'file', 'b.ts', 'b.ts', 'b.ts', 'typescript', 1);
+  node.run('file:a.ts', 'file', 'a.ts', 'a.ts', 'a.ts', 'typescript', 1);
+  node.run('fn:start', 'function', 'start', 'start', 'a.ts', 'typescript', 10);
+  node.run('m:run', 'method', 'run', 'a.ts::Hub::run', 'a.ts', 'typescript', 20);
+  node.run('imp:1', 'import', 'react', 'react', 'a.ts', 'typescript', 1);
+  for (let i = 0; i < n; i++) node.run(`fn:b${i}`, 'function', `b${i}`, `b${i}`, 'b.ts', 'typescript', 30 + i);
+  const edge = db.prepare('INSERT INTO edges (source, target, kind) VALUES (?, ?, ?)');
+  edge.run('file:a.ts', 'fn:start', 'contains');
+  edge.run('file:a.ts', 'imp:1', 'contains');
+  edge.run('fn:start', 'm:run', 'calls');
+  edge.run('fn:start', 'fn:start', 'calls');
+  edge.run('fn:start', 'gone', 'calls');
+  for (let i = 0; i < n; i++) edge.run('m:run', `fn:b${i}`, 'calls');
+  db.prepare('INSERT INTO project_metadata VALUES (?, ?, ?)').run('indexed_with_version', '1.6.2', 0);
+  db.close();
+  return file;
+}
+
+test('CodeGraph 索引轉成圖譜視窗的圖：唯讀讀取、略過 import、每個檔案一群、太大時只送連結最多的節點', async () => {
+  const dir = tmp();
+  const file = await fixtureDb(dir, 3);
+  const before = fs.readFileSync(file);
+  const g = await readCodegraphDb(file);
+  assert.equal(g.version, '1.6.2');
+  assert.equal(g.communities, 2);
+  assert.deepEqual(g.nodes.map((n) => n.id).sort(), ['file:a.ts', 'file:b.ts', 'fn:b0', 'fn:b1', 'fn:b2', 'fn:start', 'm:run']);
+  const start = g.nodes.find((n) => n.id === 'fn:start');
+  assert.deepEqual({ ...start }, { id: 'fn:start', label: 'start', community: 0, community_name: 'a.ts', file_type: 'function', source_file: 'a.ts', source_location: 'L10', degree: 2 });
+  assert.equal(g.nodes.find((n) => n.id === 'm:run').label, 'Hub.run');
+  assert.equal(g.nodes.find((n) => n.id === 'fn:b0').community, 1);
+  // Links to the import, to itself and to a node that is gone are left out.
+  assert.deepEqual(g.links.map((l) => `${l.source}>${l.target}:${l.relation}`).sort(), ['file:a.ts>fn:start:contains', 'fn:start>m:run:calls', 'm:run>fn:b0:calls', 'm:run>fn:b1:calls', 'm:run>fn:b2:calls']);
+  // Read-only: the database is exactly as it was, and no journal was left.
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.existsSync(`${file}-wal`), false);
+  const { s } = service();
+  const all = await s.graph(dir);
+  assert.equal(all.capped, false);
+  assert.equal(all.totalNodes, 7);
+  assert.equal(all.graphifyVersion, 'CodeGraph 1.6.2');
+  const part = await s.graph(dir, 3);
+  assert.equal(part.capped, true);
+  assert.equal(part.nodes.length, 3);
+  assert.equal(part.totalNodes, 7);
+  assert.ok(part.nodes.some((n) => n.id === 'm:run'));
+  const kept = new Set(part.nodes.map((n) => n.id));
+  assert.ok(part.links.every((l) => kept.has(l.source) && kept.has(l.target)));
+  await assert.rejects(s.graph(tmp()), /還沒有 CodeGraph 索引|no CodeGraph index yet/);
+  fs.writeFileSync(path.join(dir, '.codegraph', 'codegraph.db'), 'not a database');
+  await assert.rejects(s.graph(dir), /讀不到 CodeGraph 索引|Could not read the CodeGraph index/);
 });

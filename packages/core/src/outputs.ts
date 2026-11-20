@@ -2,8 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { OutputFile } from './types';
 
-// graphify-out: the Graphify graph Aivenue rebuilds around agent turns (graphify.ts), not something an agent produced.
-const SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.gradle', '.idea', '.next', '.nuxt', '.turbo', '.cache', '.aivenue', '.playwright-mcp', 'graphify-out']);
+// graphify-out and .codegraph: the Graphify graph and the CodeGraph index Aivenue rebuilds around agent turns
+// (graphify.ts, codegraph.ts), not something an agent produced.
+const SKIP = new Set(['.git', 'node_modules', '.venv', 'venv', '__pycache__', '.gradle', '.idea', '.next', '.nuxt', '.turbo', '.cache', '.aivenue', '.playwright-mcp', 'graphify-out', '.codegraph']);
 const MAX_FILES = 50000;
 
 export interface Snapshot {

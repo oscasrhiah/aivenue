@@ -124,9 +124,9 @@ const GRAPH_FIRST =
 const CODEGRAPH_FIRST =
   'Use the Aivenue tools codegraph_explore (how X works, how X reaches Y, an area: relevant source and call paths in one call), codegraph_callers / codegraph_callees (who calls X, what X calls), codegraph_impact (what a change to X affects), codegraph_search (find a symbol by name) and codegraph_node (one symbol with its source, or a file with line numbers) before grep. Use grep / rg / file reads for exact lines only after a tool pointed you to a file, or when it has no answer; if it did not help, say so briefly in your report.';
 
-/** Both on: who answers what. */
+/** Both on: what each is good at; the agent picks. */
 const GRAPH_DIVISION =
-  'This folder has both CodeGraph and a Graphify graph: use CodeGraph for precise code relations (who calls X, what X calls, what a change to X affects, finding a symbol) and Graphify (graph_query, graph_path, graph_explain) for the overview of the project, its communities, docs and how concepts connect.';
+  'This folder has both CodeGraph and a Graphify graph, and you have both tool sets: CodeGraph (codegraph_*) is good at callers, callees, the impact of a change and finding a symbol; Graphify (graph_query, graph_path, graph_explain) is good at the overview of the project, its communities, the path between two concepts and docs. Pick whichever fits the question; either way, look it up there before grep.';
 
 const CODEGRAPH_FALLBACK = 'If a CodeGraph tool fails, times out or returns nothing useful, do not stop or retry it repeatedly: use the other graph if there is one, else normal source search.';
 
@@ -585,8 +585,8 @@ export class ExtensionService {
   }
 
   /**
-   * CodeGraph's rule (only with an index): its tools for precise code relations; with a Graphify graph as well, which
-   * of the two answers what.
+   * CodeGraph's rule (only with an index): its tools for precise code relations; with a Graphify graph as well, one line
+   * on what each is good at, and the agent picks.
    */
   private codegraphRules(cwd?: string): string {
     if (!this.codegraphIndexed(cwd)) return '';

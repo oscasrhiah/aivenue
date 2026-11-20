@@ -119,7 +119,7 @@ const READ_ONLY = new Set([
   'extensions.list', 'extensions.packSkills', 'github.status', 'skills.read', 'providers.list', 'providers.templates', 'providers.models',
   'catalog.list', 'presets.list', 'assign.preview', 'workflows.list', 'workflows.get', 'agents.events', 'workflows.search',
   'workflows.preflight', 'workflows.memory', 'workflows.cost', 'workflows.sharedContext', 'memory.projects', 'memory.list',
-  'resources.gpus', 'resources.gpuDetail', 'processes.inspect', 'graphify.status', 'graphify.graph',
+  'resources.gpus', 'resources.gpuDetail', 'processes.inspect', 'graphify.status', 'graphify.graph', 'codegraph.status', 'codegraph.graph',
 ]);
 
 /** Constant-time token check. */
@@ -495,6 +495,15 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'graphify.status': (p: { cwd: string }) => graphify.status(graphFolder(p?.cwd)),
     'graphify.graph': (p: { cwd: string }) => graphify.graph(graphFolder(p?.cwd)),
     // Started, not awaited: the status pushes say how it goes (a big project takes minutes).
+    // CodeGraph's index of the same folders: its state, its graph for the window (read-only), and a rebuild.
+    'codegraph.status': (p: { cwd: string }) => codegraph.status(graphFolder(p?.cwd)),
+    'codegraph.graph': (p: { cwd: string }) => codegraph.graph(graphFolder(p?.cwd)),
+    'codegraph.rebuild': (p: { cwd: string }) => {
+      const cwd = graphFolder(p?.cwd);
+      if (!codegraph.active()) throw new Error(L('CodeGraph 沒有開啟或還沒安裝好', 'CodeGraph is off or not installed yet'));
+      void codegraph.ensure(cwd, 'rebuild');
+      return codegraph.status(cwd);
+    },
     'graphify.rebuild': (p: { cwd: string }) => {
       const cwd = graphFolder(p?.cwd);
       if (!graphify.active()) throw new Error(L('Graphify 沒有開啟或還沒安裝好', 'Graphify is off or not installed yet'));
