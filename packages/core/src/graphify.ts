@@ -46,6 +46,40 @@ const graphFile = (cwd: string) => path.join(cwd, 'graphify-out', 'graph.json');
 const keyOf = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
+/** A whole drive or the home folder: no index or graph is built there (it would mean parsing everything on it). */
+export function driveOrHome(cwd: string, home = os.homedir()): 'drive' | 'home' | undefined {
+  const p = path.resolve(cwd);
+  if (keyOf(p) === keyOf(path.parse(p).root)) return 'drive';
+  if (keyOf(p) === keyOf(home)) return 'home';
+  return undefined;
+}
+
+/**
+ * In a git repository: `entry` (e.g. graphify-out/) in its local exclude file (`git rev-parse --git-path info/exclude`,
+ * which a worktree shares with its repository), unless a line already says it. .gitignore is the project's own and is
+ * never touched. Nothing happens outside git.
+ */
+export async function addGitExclude(cwd: string, entry: string, what: string, log?: (line: string) => void): Promise<void> {
+  try {
+    const r = await capture('git', ['rev-parse', '--git-path', 'info/exclude'], { cwd, timeoutMs: 15000 });
+    const rel = r.stdout.trim();
+    if (r.code !== 0 || !rel) return;
+    const file = path.resolve(cwd, rel);
+    let text = '';
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch {
+      // not there yet
+    }
+    const name = entry.replace(/\/$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`^/?${name}/?\\s*$`, 'm').test(text)) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}# Aivenue: ${what}\n${entry}\n`);
+  } catch (e) {
+    log?.(`[git exclude] ${cwd}: could not add ${entry}: ${(e as Error).message}`);
+  }
+}
+
 /** "[graphify watch] Rebuilt: 581 nodes, 2484 edges, 20 communities" → the three numbers. */
 export function parseRebuilt(out: string): { nodes: number; edges: number; communities?: number } | undefined {
   const m = /Rebuilt:\s*(\d+)\s*nodes?,\s*(\d+)\s*edges?(?:,\s*(\d+)\s*communit)?/i.exec(out);
@@ -132,9 +166,9 @@ export class GraphifyService {
   /** Why Aivenue builds no graph here: a whole drive or the home folder would mean parsing everything on it. */
   private refusal(cwd: string): string | undefined {
     const p = path.resolve(cwd);
-    const root = path.parse(p).root;
-    if (keyOf(p) === keyOf(root)) return L(`不為整個磁碟建立圖譜（${p}）：請開啟專案資料夾`, `No graph for a whole drive (${p}): open a project folder`);
-    if (keyOf(p) === keyOf(this.o.home ?? os.homedir())) return L(`不為家目錄建立圖譜（${p}）：請開啟專案資料夾`, `No graph for the home folder (${p}): open a project folder`);
+    const where = driveOrHome(p, this.o.home);
+    if (where === 'drive') return L(`不為整個磁碟建立圖譜（${p}）：請開啟專案資料夾`, `No graph for a whole drive (${p}): open a project folder`);
+    if (where === 'home') return L(`不為家目錄建立圖譜（${p}）：請開啟專案資料夾`, `No graph for the home folder (${p}): open a project folder`);
     return undefined;
   }
 
@@ -247,33 +281,13 @@ export class GraphifyService {
     return this.status(f.cwd);
   }
 
-  /**
-   * In a git repository: graphify-out/ in its local exclude file (`git rev-parse --git-path info/exclude`, which a
-   * worktree shares with its repository), once. .gitignore is the project's own and is never touched.
-   */
+  /** graphify-out/ in the repository's local exclude file, once per folder (addGitExclude). */
   private async exclude(cwd: string): Promise<void> {
     const key = keyOf(cwd);
     if (this.excluded.has(key)) return;
     this.excluded.add(key);
-    try {
-      const r = await capture('git', ['rev-parse', '--git-path', 'info/exclude'], { cwd, timeoutMs: 15000 });
-      const rel = r.stdout.trim();
-      if (r.code !== 0 || !rel) return;
-      const file = path.resolve(cwd, rel);
-      let text = '';
-      try {
-        text = fs.readFileSync(file, 'utf8');
-      } catch {
-        // not there yet
-      }
-      if (/^\/?graphify-out\/?\s*$/m.test(text)) return;
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, `${text && !text.endsWith('\n') ? '\n' : ''}# Aivenue: the Graphify graph it builds\ngraphify-out/\n`);
-    } catch (e) {
-      this.o.log?.(`[graphify] ${cwd}: could not add graphify-out/ to the git exclude file: ${(e as Error).message}`);
-    }
+    await addGitExclude(cwd, 'graphify-out/', 'the Graphify graph it builds', this.o.log);
   }
-
   /** graph.json read and trimmed to what the window shows, kept until the file changes. */
   private async read(cwd: string): Promise<Parsed> {
     const file = graphFile(cwd);

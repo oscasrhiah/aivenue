@@ -10,6 +10,7 @@ import type { ProviderRegistry } from './providers/registry';
 import { BUILTIN_PROVIDERS } from './providers/builtin';
 import type { SecretStore } from './secrets';
 import { L } from './i18n';
+import { CODEGRAPH_ENV, CODEGRAPH_PACKAGE, CODEGRAPH_VERSION, codegraphDir, codegraphShim } from './codegraph';
 
 const isWin = process.platform === 'win32';
 const WRITERS: InstructionRole[] = ['planner', 'executor', 'subagent'];
@@ -119,6 +120,16 @@ interface OmniModel {
 const GRAPH_FIRST =
   'Look things up in the graph FIRST: where X is defined, what calls or uses X, what a change to X affects, how A reaches B. Use the Aivenue tools graph_query, graph_path and graph_explain (or `graphify query "<question>"`, `graphify path "<A>" "<B>"`, `graphify explain "<X>"` in the shell). Use grep / rg / file reads for the exact lines only after the graph pointed you to a file, or when the graph has no answer; if the graph did not help, say so briefly in your report.';
 
+/** With a CodeGraph index: its tools for exact relations. */
+const CODEGRAPH_FIRST =
+  'Use the Aivenue tools codegraph_explore (how X works, how X reaches Y, an area: relevant source and call paths in one call), codegraph_callers / codegraph_callees (who calls X, what X calls), codegraph_impact (what a change to X affects), codegraph_search (find a symbol by name) and codegraph_node (one symbol with its source, or a file with line numbers) before grep. Use grep / rg / file reads for exact lines only after a tool pointed you to a file, or when it has no answer; if it did not help, say so briefly in your report.';
+
+/** Both on: who answers what. */
+const GRAPH_DIVISION =
+  'This folder has both CodeGraph and a Graphify graph: use CodeGraph for precise code relations (who calls X, what X calls, what a change to X affects, finding a symbol) and Graphify (graph_query, graph_path, graph_explain) for the overview of the project, its communities, docs and how concepts connect.';
+
+const CODEGRAPH_FALLBACK = 'If a CodeGraph tool fails, times out or returns nothing useful, do not stop or retry it repeatedly: use the other graph if there is one, else normal source search.';
+
 /** A graph is a shortcut, never a dependency: when it fails, the work goes on with plain search. */
 const GRAPH_FALLBACK = 'If a graphify command fails, times out or returns nothing useful, do not stop or retry it repeatedly: fall back to normal source search (rg / grep / glob, reading files) and say in your report that the graph was not used.';
 
@@ -133,6 +144,8 @@ export class ExtensionService {
   private toolsDir: string;
   private work = new Map<ExtensionId, { message?: string; error?: string; since?: number }>();
   private graphifyVersion?: string;
+  /** The installed CodeGraph's version (it lives in Aivenue's tools folder). */
+  private codegraphVersion?: string;
   private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string> };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
@@ -165,6 +178,7 @@ export class ExtensionService {
     for (const id of ['ponytail', 'agent-skills', 'graphify'] as const) if (this.cfg()[id]?.enabled) this.syncSkills(id);
     for (const id of Object.keys(PACK_SKILLS) as PackSkillId[]) if (this.cfg().packSkills?.[id]) this.syncSkills(id);
     if (this.cfg().graphify?.enabled) void this.checkGraphify().then(() => this.changed());
+    if (this.cfg().codegraph?.enabled) void this.checkCodegraph().then(() => this.changed());
     if (this.cfg().omniroute?.enabled) void this.startOmni().catch(() => undefined);
   }
 
@@ -188,7 +202,7 @@ export class ExtensionService {
     const st = (id: ExtensionId, ready: boolean, extra: Partial<ExtensionStatus> = {}): ExtensionStatus => {
       const w = this.work.get(id);
       const enabled = !!c[id]?.enabled;
-      const notReady = id === 'graphify' ? L('graphify 尚未安裝', 'graphify is not installed') : L('OmniRoute 沒有在執行', 'OmniRoute is not running');
+      const notReady = id === 'graphify' ? L('graphify 尚未安裝', 'graphify is not installed') : id === 'codegraph' ? L('CodeGraph 尚未安裝', 'CodeGraph is not installed') : L('OmniRoute 沒有在執行', 'OmniRoute is not running');
       return {
         id,
         enabled,
@@ -203,6 +217,7 @@ export class ExtensionService {
       st('ponytail', true, { level: c.ponytail?.level ?? 'full', skills: this.skillList('ponytail') }),
       st('agent-skills', true, { skills: this.skillList('agent-skills') }),
       st('graphify', !!this.graphifyVersion, { version: this.graphifyVersion }),
+      st('codegraph', !!this.codegraphVersion, { version: this.codegraphVersion, installed: this.codegraphInstalled() }),
       st('omniroute', !!omni?.ready, {
         version: this.omniVersion(),
         omniroute: omni?.ready
@@ -224,12 +239,28 @@ export class ExtensionService {
     return !!this.cfg().graphify?.enabled && !!this.graphifyVersion;
   }
 
+  /** CodeGraph is on and installed: Aivenue may index folders and offer its tools (codegraph.ts). */
+  codegraphReady(): boolean {
+    return !!this.cfg().codegraph?.enabled && !!this.codegraphVersion;
+  }
+
+  /** The script that starts the installed CodeGraph. */
+  codegraphCommand(): string {
+    return codegraphShim(this.toolsDir);
+  }
+
+  private codegraphInstalled(): boolean {
+    return fs.existsSync(this.codegraphCommand());
+  }
+
   async setEnabled(id: ExtensionId, enabled: boolean): Promise<ExtensionStatus[]> {
     const c = this.cfg();
     this.save({ ...c, [id]: { ...c[id], enabled } });
     if (id === 'omniroute') {
       if (enabled) void this.startOmni().catch(() => undefined);
       else this.stopOmni(true);
+    } else if (id === 'codegraph') {
+      if (enabled) void this.installCodegraph();
     } else if (enabled) {
       this.syncSkills(id);
       if (id === 'graphify') void this.installGraphify();
@@ -477,10 +508,67 @@ export class ExtensionService {
     }
   }
 
+  // ---------- CodeGraph ----------
+
+  private async checkCodegraph(): Promise<boolean> {
+    if (!this.codegraphInstalled()) return !!(this.codegraphVersion = undefined);
+    const r = await capture(this.codegraphCommand(), ['--version'], { timeoutMs: 60000, env: CODEGRAPH_ENV });
+    this.codegraphVersion = r.code === 0 ? (/(\d+\.\d+\.\d+)/.exec(r.stdout + r.stderr)?.[1] ?? 'installed') : undefined;
+    return !!this.codegraphVersion;
+  }
+
+  /**
+   * npm install of the pinned version into Aivenue's tools folder (needs Node.js and npm; no admin, no PATH change), then
+   * its telemetry turned off in its own settings too. `codegraph install` (which writes the agents' global MCP configs
+   * and CLAUDE.md / AGENTS.md sections) is never run: Aivenue hands CodeGraph to its agents itself, per run.
+   */
+  private async installCodegraph(): Promise<void> {
+    if (this.work.get('codegraph')?.message) return;
+    const step = (message: string) => (this.work.set('codegraph', { message, since: Date.now() }), this.changed());
+    try {
+      step(L('檢查 CodeGraph…', 'Checking CodeGraph…'));
+      if (!(await this.checkCodegraph())) {
+        const node = findNode();
+        if (!node) throw new Error(L('需要 Node.js 與 npm：請先安裝 Node.js', 'CodeGraph is installed with npm: install Node.js first'));
+        step(L(`用 npm 安裝 CodeGraph ${CODEGRAPH_VERSION}（約 270 MB，需要一兩分鐘）…`, `Installing CodeGraph ${CODEGRAPH_VERSION} with npm (about 270 MB, a minute or two)…`));
+        fs.mkdirSync(codegraphDir(this.toolsDir), { recursive: true });
+        const npmCli = path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+        const args = ['install', '--prefix', codegraphDir(this.toolsDir), `${CODEGRAPH_PACKAGE}@${CODEGRAPH_VERSION}`, '--save-exact', '--no-audit', '--no-fund', '--loglevel', 'http'];
+        const r = fs.existsSync(npmCli) ? await this.live('codegraph', node, [npmCli, ...args], 15 * 60000, NPM_EST) : await this.live('codegraph', 'npm', args, 15 * 60000, NPM_EST);
+        if (!(await this.checkCodegraph())) throw new Error(L(`CodeGraph 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install CodeGraph: ${tail(r.stderr || r.stdout || r.error)}`));
+      }
+      // Off in its own settings as well (~/.codegraph), not only by the environment Aivenue gives it.
+      await capture(this.codegraphCommand(), ['telemetry', 'off'], { timeoutMs: 60000, env: CODEGRAPH_ENV });
+      this.work.delete('codegraph');
+    } catch (e) {
+      this.work.set('codegraph', { error: (e as Error).message });
+    } finally {
+      if (!this.work.get('codegraph')?.error) this.work.delete('codegraph');
+      this.changed();
+    }
+  }
+
+  /**
+   * Remove what Aivenue installed (its tools folder) and turn the extension off. The projects' .codegraph/ indexes stay:
+   * they are the user's; `codegraph uninit` or deleting the folder removes one.
+   */
+  async uninstall(id: ExtensionId): Promise<ExtensionStatus[]> {
+    if (id !== 'codegraph') throw new Error(L('只有 CodeGraph 可以從這裡解除安裝', 'Only CodeGraph can be uninstalled here'));
+    if (this.work.get('codegraph')?.message) throw new Error(L('CodeGraph 正在安裝，請等它完成', 'CodeGraph is being installed: wait for it to finish'));
+    const c = this.cfg();
+    this.save({ ...c, codegraph: { ...c.codegraph, enabled: false } });
+    fs.rmSync(codegraphDir(this.toolsDir), { recursive: true, force: true });
+    this.codegraphVersion = undefined;
+    this.work.delete('codegraph');
+    this.changed();
+    return this.list();
+  }
+
   /** Retry a failed install (or start one for an extension that needs a tool). */
   async retry(id: ExtensionId): Promise<ExtensionStatus[]> {
     this.work.delete(id);
     if (id === 'graphify') void this.installGraphify();
+    if (id === 'codegraph') void this.installCodegraph();
     if (id === 'omniroute') void this.startOmni().catch(() => undefined);
     this.changed();
     return this.list();
@@ -488,7 +576,22 @@ export class ExtensionService {
 
   /** Graphify's rule: query the graph when the folder has one; otherwise say how to build one. */
   private rulesFor(role: AgentRole, cwd?: string): string {
-    return this.packRules(role) + this.graphifyRules(role, cwd);
+    return this.packRules(role) + this.graphifyRules(role, cwd) + this.codegraphRules(cwd);
+  }
+
+  /** The folder has a CodeGraph index agents can query (CodeGraph on and installed, index built). */
+  private codegraphIndexed(cwd?: string): boolean {
+    return this.codegraphReady() && !!cwd && fs.existsSync(path.join(cwd, '.codegraph', 'codegraph.db'));
+  }
+
+  /**
+   * CodeGraph's rule (only with an index): its tools for precise code relations; with a Graphify graph as well, which
+   * of the two answers what.
+   */
+  private codegraphRules(cwd?: string): string {
+    if (!this.codegraphIndexed(cwd)) return '';
+    const both = this.cfg().graphify?.enabled && this.graphifyVersion && !!cwd && fs.existsSync(path.join(cwd, 'graphify-out', 'graph.json'));
+    return `\nCODEGRAPH (precise code index of this folder: symbols, calls, imports): ${CODEGRAPH_FIRST}${both ? `\n${GRAPH_DIVISION}` : ''}\n${CODEGRAPH_FALLBACK}`;
   }
 
   /** How Aivenue adapts the bundled skills turned on for this role (what their upstream text assumes and Aivenue does not have). */

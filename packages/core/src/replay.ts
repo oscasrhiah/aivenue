@@ -88,6 +88,8 @@ export const SAME_TWICE = new Set([
   'capabilities.deleteServer',
   'capabilities.setInstructions',
   'extensions.setEnabled',
+  // Removes the copy Aivenue installed and turns the extension off: twice leaves the same.
+  'extensions.uninstall',
   'extensions.setOptions',
   'extensions.setPackSkill',
   'extensions.refresh',

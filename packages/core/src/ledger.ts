@@ -165,7 +165,8 @@ export interface ReadEntry {
  */
 const FAILED = /\bexit(?: code)?[=: ]+[1-9]|\bExited with code [1-9]|\b\w*Error \[ERR_[A-Z0-9_]+\]|\bFAIL(ED)?\b|\b[1-9]\d* (failed|failing)\b|Traceback|\bError:|ParserError|\w+Exception\b|FullyQualifiedErrorId|command not found|No such file or directory|is not recognized as/;
 
-const GRAPH = /\bgraphify\s+(query|path|explain|update|build|report)\b/i;
+// Graphify and CodeGraph commands an agent ran in a shell (their answers are shared like graph tool results).
+const GRAPH = /\b(graphify\s+(query|path|explain|update|build|report)|codegraph(\.cmd|\.exe)?\s+(explore|node|query|callers|callees|impact|files|status))\b/i;
 
 /**
  * Commands (and Graphify lookups) of every agent but `selfId` (or only of `onlyIds`), plus the files changed and read,
@@ -226,7 +227,8 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
       // A lookup with Aivenue's graph tools: shared like the same graphify command run in a shell.
       // (Also called from the code of an OpenCode code-mode call, whose event carries the code as its input.)
       if (graphToolCalls(t) > 0) {
-        const what = evenOut(GRAPH_TOOL.test(t.name ?? '') ? `${t.name.replace(/^.*?(graph_\w+)$/, '$1')} ${flat(t.title)}` : clip(flat(t.input), 300));
+        const own = GRAPH_TOOL.exec(t.name ?? '');
+        const what = evenOut(own ? `${own[2]} ${flat(t.title)}` : clip(flat(t.input), 300));
         entries.push({ ts: e.ts, agent: a, kind: 'graph', what, command: what, ok: t.status === 'ok', result: clip(flat(t.output), 2000) });
         continue;
       }

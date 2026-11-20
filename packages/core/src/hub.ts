@@ -16,6 +16,7 @@ import { probeMcpServer } from './mcpProbe';
 import { MCP_PRESETS } from './mcpPresets';
 import { ExtensionService } from './extensions';
 import { GraphifyService } from './graphify';
+import { CodeGraphService } from './codegraph';
 import { loadCatalog } from './catalog';
 import { setLocale } from './i18n';
 import { SettingsStore } from './settings';
@@ -206,6 +207,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   void extensions.init().catch(() => undefined);
   // The Graphify graph of the folders workflows work in, built by Aivenue while Graphify is on and installed.
   const graphify = new GraphifyService({ active: () => extensions.graphifyReady(), onChange: (data) => push({ topic: 'graphify', data }), log: (line) => console.warn(line) });
+  // The CodeGraph index of those folders, while CodeGraph is on and installed (its own copy in Aivenue's tools folder).
+  const codegraph = new CodeGraphService({ active: () => extensions.codegraphReady(), command: () => extensions.codegraphCommand(), onChange: (data) => push({ topic: 'codegraph', data }), log: (line) => console.warn(line) });
   let baseUrl = '';
   const orchestrator = new Orchestrator({
     registry,
@@ -222,6 +225,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     ghFixCi: () => extensions.ghFixCiSkill(),
     ghAddressComments: () => extensions.ghAddressCommentsSkill(),
     graphify,
+    codegraph,
     servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
   });
   attachments.owns = (runId) => orchestrator.runs.has(runId);
@@ -306,6 +310,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.packSkills': () => extensions.packSkills(),
     'extensions.setPackSkill': (p: { id: PackSkillId; on: boolean }) => extensions.setPackSkill(p.id, !!p.on),
     'extensions.retry': (p: { id: ExtensionId }) => extensions.retry(p.id),
+    'extensions.uninstall': (p: { id: ExtensionId }) => extensions.uninstall(p.id),
     'extensions.refresh': () => extensions.refreshOmni(true),
     'extensions.omniPassword': () => extensions.omniPassword(),
     'extensions.omniCandidates': (p: { model: string }) => extensions.omniCandidates(p.model),
@@ -685,6 +690,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         orchestrator.shutdown();
         extensions.shutdown();
         graphify.shutdown();
+        codegraph.shutdown();
         for (const c of clients) c.close();
         // Every connection ends with the hub, VS Code windows' control channels too: else the server waits on them.
         for (const c of wss.clients) c.terminate();

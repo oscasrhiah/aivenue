@@ -96,6 +96,7 @@ import * as P from './prompts';
 import { advisorPairing } from './advisorPairing';
 import { taskTitle } from './taskTitle';
 import type { GraphifyService } from './graphify';
+import { CODEGRAPH_TOOLS, type CodeGraphService, type CodeGraphStatus, type CodeGraphTool } from './codegraph';
 
 export interface OrchestratorDeps {
   registry: ProviderRegistry;
@@ -128,6 +129,8 @@ export interface OrchestratorDeps {
   gpuSmi?: (args: string[]) => string;
   /** The Graphify graph of the working folder, kept up to date while Graphify is on (graphify.ts). */
   graphify?: Pick<GraphifyService, 'active' | 'ensure' | 'schedule' | 'lookup'>;
+  /** The CodeGraph index of the working folder, kept up to date while CodeGraph is on (codegraph.ts). */
+  codegraph?: Pick<CodeGraphService, 'active' | 'ensure' | 'schedule' | 'lookup' | 'indexed'>;
   /** How long a workflow's start waits for the graph update before agents begin anyway (default 120 s; tests set less). */
   graphifyWaitMs?: number;
 }
@@ -1885,6 +1888,8 @@ export class Orchestrator {
     const tools = toolsForRole(info.role, this.canSpawn(run, info), sharingOf(run) !== 'summary', this.crossAdvisor(run), this.hasGpu());
     // The graph lookups: only while Graphify is on and the folder the agents work in has a graph.
     if (info.role !== 'compactor' && this.d.graphify?.active() && fs.existsSync(path.join(run.config.cwd, 'graphify-out', 'graph.json'))) tools.push(...GRAPH_TOOLS.map((n) => TOOL_DEFS[n]));
+    // CodeGraph's: only while CodeGraph is on and the folder has its index.
+    if (info.role !== 'compactor' && this.d.codegraph?.active() && this.d.codegraph.indexed(run.config.cwd)) tools.push(...CODEGRAPH_TOOLS.map((n) => TOOL_DEFS[n]));
     return s.permission === 'ask' ? [...tools, TOOL_DEFS.approval_prompt] : tools;
   }
 
@@ -2294,6 +2299,16 @@ export class Orchestrator {
         const r = await g.lookup(run.config.cwd, name === 'graph_query' ? ['query', String(args.question ?? '')] : name === 'graph_path' ? ['path', String(args.from ?? ''), String(args.to ?? '')] : ['explain', String(args.node ?? '')]);
         return r;
       }
+      case 'codegraph_explore':
+      case 'codegraph_node':
+      case 'codegraph_search':
+      case 'codegraph_callers':
+      case 'codegraph_callees':
+      case 'codegraph_impact': {
+        const cg = this.d.codegraph;
+        if (!cg) throw new Error('CodeGraph is not available');
+        return cg.lookup(run.config.cwd, name as CodeGraphTool, args);
+      }
       case 'rename_chat': {
         // The same rename as the sidebar's (the conversation's first message carries the name), said in the timeline.
         const name = this.rename(run.id, String(args.title ?? '')).title;
@@ -2606,21 +2621,32 @@ export class Orchestrator {
   }
 
   /**
-   * Before the first agent: the Graphify graph of the folder the agents work in (the isolated copy, in isolation) is
-   * brought up to date, so agents query the current code. Waited for at most graphifyWaitMs; a longer build goes on in
-   * the background and the agents start anyway (it never holds up the work for long, nor stops it when it fails).
+   * Before the first agent: the Graphify graph and the CodeGraph index of the folder the agents work in (the isolated
+   * copy, in isolation) are brought up to date, side by side, so agents query the current code. Waited for at most
+   * graphifyWaitMs; a longer build goes on in the background and the agents start anyway (it never holds up the work
+   * for long, nor stops it when it fails).
    */
   private async graphifyStart(run: WorkflowRun) {
-    const g = this.d.graphify;
-    if (!g?.active()) return;
+    const g = this.d.graphify?.active() ? this.d.graphify : undefined;
+    const cg = this.d.codegraph?.active() ? this.d.codegraph : undefined;
+    if (!g && !cg) return;
     const cwd = run.config.cwd;
-    this.log(run, L('更新專案圖譜…', 'Updating the project graph…'));
-    const build = g.ensure(cwd, 'start');
+    const jobs: { build: Promise<unknown>; done: (s: never) => void; late: string }[] = [];
+    if (g) {
+      this.log(run, L('更新專案圖譜…', 'Updating the project graph…'));
+      jobs.push({ build: g.ensure(cwd, 'start'), done: (s: GraphifyStatus) => this.graphifyResult(run, s), late: L('專案圖譜還在更新，agent 先開始；更新完成後 agent 查到的就是新的圖', 'The project graph is still updating: agents start now and get the new graph once it is done') });
+    }
+    if (cg) {
+      this.log(run, L('更新 CodeGraph 索引…', 'Updating the CodeGraph index…'));
+      jobs.push({ build: cg.ensure(cwd, 'start'), done: (s: CodeGraphStatus) => this.codegraphResult(run, s), late: L('CodeGraph 索引還在建立，agent 先開始；建好後 agent 才拿得到 CodeGraph 工具', 'The CodeGraph index is still being built: agents start now; its tools come with the next agent turn once it is done') });
+    }
+    const settled = new Set<number>();
+    jobs.forEach((j, i) => void j.build.then((s) => (settled.add(i), j.done(s as never))));
     let timer: NodeJS.Timeout | undefined;
     let stop: (() => void) | undefined;
     const signal = this.aborts.get(run.id)?.signal;
-    const waited = await Promise.race([
-      build,
+    await Promise.race([
+      Promise.all(jobs.map((j) => j.build)).then(() => new Promise((r) => setImmediate(r))),
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), this.d.graphifyWaitMs ?? 120000);
         stop = () => resolve(undefined);
@@ -2629,10 +2655,8 @@ export class Orchestrator {
     ]);
     clearTimeout(timer);
     if (stop) signal?.removeEventListener('abort', stop);
-    if (waited) return this.graphifyResult(run, waited);
     if (signal?.aborted) return;
-    this.log(run, L('專案圖譜還在更新，agent 先開始；更新完成後 agent 查到的就是新的圖', 'The project graph is still updating: agents start now and get the new graph once it is done'));
-    void build.then((s) => this.graphifyResult(run, s));
+    jobs.forEach((j, i) => !settled.has(i) && this.log(run, j.late));
   }
 
   private graphifyResult(run: WorkflowRun, s: GraphifyStatus) {
@@ -2641,22 +2665,27 @@ export class Orchestrator {
     else if (s.state === 'failed') this.log(run, L(`專案圖譜更新失敗，agent 改用一般搜尋：${s.lastError ?? ''}`, `The project graph could not be updated; agents use plain search: ${s.lastError ?? ''}`), 'warn');
   }
 
-  /** An agent changed files: the graph is updated in the background a little later (turns close together make one update). */
+  private codegraphResult(run: WorkflowRun, s: CodeGraphStatus) {
+    if (s.state === 'idle' && s.indexed) this.log(run, L(`CodeGraph 索引已更新：${s.symbols ?? '?'} 個符號，${s.files ?? '?'} 個檔案`, `CodeGraph index updated: ${s.symbols ?? '?'} symbols in ${s.files ?? '?'} files`));
+    else if (s.state === 'failed') this.log(run, L(`CodeGraph 索引更新失敗，agent 不使用 CodeGraph：${s.lastError ?? ''}`, `The CodeGraph index could not be updated; agents work without CodeGraph: ${s.lastError ?? ''}`), 'warn');
+  }
+
+  /** An agent changed files: the graph and the index are updated in the background a little later (turns close together make one update). */
   private graphifyAfterTurn(run: WorkflowRun, info: AgentRunInfo) {
-    const g = this.d.graphify;
-    if (!g?.active() || run.config.dryRun) return;
+    if (run.config.dryRun) return;
     if (!info.stats.filesChanged.length && !info.stats.filesMaybeChanged?.length) return;
-    g.schedule(run.config.cwd, 'edit');
+    if (this.d.graphify?.active()) this.d.graphify.schedule(run.config.cwd, 'edit');
+    if (this.d.codegraph?.active()) this.d.codegraph.schedule(run.config.cwd, 'edit');
   }
 
-  /** The workflow ended after files changed: one last update, in the background. */
+  /** The workflow ended after files changed: one last update of each, in the background. */
   private graphifyEnd(run: WorkflowRun) {
-    const g = this.d.graphify;
-    if (!g?.active() || run.config.dryRun) return;
+    if (run.config.dryRun) return;
     const changed = !!run.outputs?.length || Object.values(run.agents).some((a) => a.workflowId === run.id && (a.stats.filesChanged.length || a.stats.filesMaybeChanged?.length));
-    if (changed) void g.ensure(run.config.cwd, 'end');
+    if (!changed) return;
+    if (this.d.graphify?.active()) void this.d.graphify.ensure(run.config.cwd, 'end');
+    if (this.d.codegraph?.active()) void this.d.codegraph.ensure(run.config.cwd, 'end');
   }
-
   /**
    * plan → implement (with code review) → goal verification, until the goal is met. The controller routes on the
    * structured results: defects and bad evidence go back to the implementer, a missed goal (or the same problem

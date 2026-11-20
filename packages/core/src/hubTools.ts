@@ -559,6 +559,37 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     description: 'One node of the Graphify graph of the working folder in plain words: what it is, where it lives (file and line) and what it is connected to.',
     inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'A function, class, file or concept name.' } }, required: ['node'] },
   },
+  // CodeGraph (offered when the working folder has its index): answered by its CLI, the same text its MCP tools return.
+  codegraph_explore: {
+    name: 'codegraph_explore',
+    description: 'CodeGraph: answer a question about the code of the working folder in one call — how X works, how X reaches Y, or an area — with the relevant symbols\' source grouped by file, the call paths between them and what depends on them.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'The question, naming the symbols or files you know, e.g. "how does startHub create the orchestrator".' } }, required: ['query'] },
+  },
+  codegraph_node: {
+    name: 'codegraph_node',
+    description: 'CodeGraph: one symbol with its source, location and callers/callees, or a file with line numbers and what depends on it.',
+    inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'A symbol name, or a file path.' }, file: { type: 'string', description: 'Optional: the file the symbol is in (to tell same-named symbols apart).' } }, required: ['name'] },
+  },
+  codegraph_search: {
+    name: 'codegraph_search',
+    description: 'CodeGraph: find symbols (functions, classes, methods, types…) by name in the working folder, with where they are.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'A name or part of one.' }, kind: { type: 'string', description: 'Optional: function, class, method, interface…' }, limit: { type: 'number', description: 'At most this many (default 20).' } }, required: ['query'] },
+  },
+  codegraph_callers: {
+    name: 'codegraph_callers',
+    description: 'CodeGraph: every function or method that calls a symbol, with file and line.',
+    inputSchema: { type: 'object', properties: { symbol: { type: 'string' }, file: { type: 'string', description: 'Optional: the file the symbol is defined in.' }, limit: { type: 'number', description: 'Per definition (default 30).' } }, required: ['symbol'] },
+  },
+  codegraph_callees: {
+    name: 'codegraph_callees',
+    description: 'CodeGraph: what a function or method calls, with file and line.',
+    inputSchema: { type: 'object', properties: { symbol: { type: 'string' }, file: { type: 'string', description: 'Optional: the file the symbol is defined in.' }, limit: { type: 'number', description: 'Per definition (default 30).' } }, required: ['symbol'] },
+  },
+  codegraph_impact: {
+    name: 'codegraph_impact',
+    description: 'CodeGraph: what is affected by changing a symbol (its blast radius), by file.',
+    inputSchema: { type: 'object', properties: { symbol: { type: 'string' }, file: { type: 'string', description: 'Optional: the file the symbol is defined in.' }, depth: { type: 'number', description: 'How many caller hops (1–5, default 2).' } }, required: ['symbol'] },
+  },
   rename_chat: {
     name: 'rename_chat',
     description:

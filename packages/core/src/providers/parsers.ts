@@ -66,6 +66,12 @@ export const HUB_TITLES: Record<string, [string, string]> = {
   graph_query: ['查圖譜', 'Query the graph'],
   graph_path: ['查圖譜路徑', 'Graph path'],
   graph_explain: ['查圖譜節點', 'Explain a graph node'],
+  codegraph_explore: ['CodeGraph 探索', 'CodeGraph explore'],
+  codegraph_node: ['CodeGraph 看符號', 'CodeGraph node'],
+  codegraph_search: ['CodeGraph 找符號', 'CodeGraph search'],
+  codegraph_callers: ['CodeGraph 誰呼叫', 'CodeGraph callers'],
+  codegraph_callees: ['CodeGraph 呼叫了誰', 'CodeGraph callees'],
+  codegraph_impact: ['CodeGraph 影響範圍', 'CodeGraph impact'],
   report_skill_use: ['回報使用的 Skill', 'Report a skill used'],
   track_process: ['追蹤背景程序', 'Track a background process'],
   update_process: ['更新背景程序', 'Update a background process'],
@@ -140,6 +146,9 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     if (lower === 'graph_query') about(pick('question'), 200);
     if (lower === 'graph_path') about(pick('from') || pick('to') ? `${pick('from') ?? '?'} — ${pick('to') ?? '?'}` : undefined, 200);
     if (lower === 'graph_explain') about(pick('node'), 200);
+    if (lower === 'codegraph_explore' || lower === 'codegraph_search') about(pick('query'), 200);
+    if (lower === 'codegraph_node') about(pick('name'), 200);
+    if (lower === 'codegraph_callers' || lower === 'codegraph_callees' || lower === 'codegraph_impact') about(pick('symbol'), 200);
     return { category: 'hub', title, name };
   }
   if (READ.has(lower)) return { category: 'read', title: rel(pick('file_path', 'path', 'absolute_path', 'filePath', 'AbsolutePath', 'TargetFile')) ?? name, name };
