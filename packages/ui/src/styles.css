@@ -8539,8 +8539,95 @@ textarea.code {
 
 /* What took the most of the prompts: the bars in a column of their own, so every label starts at the same place. */
 .cost-blocks li {
-  flex-wrap: nowrap;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  column-gap: var(--sp-3);
   align-items: center;
+}
+
+/* By model: the model and its roles wrap as text, the figures stay on one line each. */
+.cost-models td:nth-child(2),
+.cost-models th:nth-child(2) {
+  text-align: left;
+}
+
+.cost-models td:first-child {
+  white-space: nowrap;
+}
+
+.cost-models td.cost-roles {
+  white-space: normal;
+  min-width: 14em;
+}
+
+/* A narrow window: each row of the cost tables becomes a card, its name on top and every figure on a line of its own
+   with its column's name, instead of a table to scroll sideways. */
+@media (max-width: 520px) {
+  .cost-cards,
+  .cost-cards tbody,
+  .cost-cards tr,
+  .cost-cards td {
+    display: block;
+    width: 100%;
+  }
+
+  .cost-cards thead {
+    display: none;
+  }
+
+  .cost-cards tr {
+    padding: var(--sp-2) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  /* Its name on the left; the figure and its bracketed part kept together on the right. */
+  .cost-cards td {
+    display: flex;
+    justify-content: flex-end;
+    align-items: baseline;
+    padding: 2px 0;
+    border: 0;
+    white-space: normal;
+    text-align: right;
+  }
+
+  .cost-cards td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    text-align: left;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    margin-right: auto;
+    padding-right: var(--sp-3);
+  }
+
+  .cost-cards td:first-child {
+    display: block;
+    color: var(--text);
+    text-align: left;
+    padding-bottom: var(--sp-1);
+  }
+
+  .cost-cards td:first-child::before,
+  .cost-cards td.cost-empty {
+    display: none;
+  }
+
+  .cost-models td.cost-roles {
+    min-width: 0;
+  }
+
+  .cost-blocks li {
+    grid-template-columns: 48px minmax(0, 1fr);
+    row-gap: 2px;
+  }
+
+  .cost-blocks li > :last-child {
+    grid-column: 2;
+    margin-left: 0;
+    text-align: left;
+    white-space: normal;
+  }
 }
 
 .cost-track {

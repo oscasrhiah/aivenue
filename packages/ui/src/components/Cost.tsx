@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentRole, CostBreakdown, CostModelRow, ObservedTotals, WorkflowRun } from '../../../core/src/types';
-import { hub } from '../api';
+import { hub, useProviders } from '../api';
 import { useT, type T } from '../i18n';
-import { fmtTokens, roleLabel } from '../util';
+import { fmtTokens, modelLabel, providerName, roleLabel } from '../util';
 import { Dialog, Hint } from './Kit';
 
 const BLOCK_LABEL = (t: T, key: string) =>
   ({
+    // A prompt not split into parts (Aivenue's own upkeep calls send their instructions whole).
+    role: t('角色 prompt', 'Role prompt'),
     'role.goal': t('任務文字：你的訊息', 'Task text: your message'),
     'role.plan': t('計畫', 'Plan'),
     'role.goalSpec': t('驗收目標與指標', 'Goal and metrics'),
@@ -60,9 +62,9 @@ function TokenCells({ o }: { o: ObservedTotals }) {
   const t = useT();
   return (
     <>
-      <td>{fmtTokens(o.uncachedInput)}</td>
-      <td>{fmtTokens(o.cachedInput)}</td>
-      <td>
+      <td data-label={t('未快取輸入', 'Uncached in')}>{fmtTokens(o.uncachedInput)}</td>
+      <td data-label={t('快取輸入', 'Cached in')}>{fmtTokens(o.cachedInput)}</td>
+      <td data-label={t('拆分未知的輸入', 'Input, split unknown')} className={o.unsplit ? undefined : 'cost-empty'}>
         {o.unsplit ? (
           <>
             {fmtTokens(o.unsplit.input)}
@@ -72,11 +74,11 @@ function TokenCells({ o }: { o: ObservedTotals }) {
           <span className="muted">—</span>
         )}
       </td>
-      <td>
+      <td data-label={t('輸出含推理', 'Output with reasoning')}>
         {fmtTokens(o.output)}
         {o.reasoning !== undefined && <span className="muted">{t('（', '(')}{fmtTokens(o.reasoning)}{t('）', ')')}</span>}
       </td>
-      <td>
+      <td data-label={t('花費', 'Cost')}>
         <Cost o={o} />
       </td>
     </>
@@ -86,11 +88,13 @@ function TokenCells({ o }: { o: ObservedTotals }) {
 /** One model row's first cell: provider / model, 「預設」 for the provider's default, a mark when a model changed mid-run. */
 function ModelName({ m }: { m: CostModelRow }) {
   const t = useT();
+  const providers = useProviders();
+  // The names used everywhere else (the account's own name for an extra account); the ids in the tooltip.
   return (
     <>
-      <span className="mono">
-        {m.provider}
-        {m.model ? ` / ${m.model}` : ''}
+      <span title={`${m.provider}${m.model ? ` / ${m.model}` : ''}`}>
+        {providerName(providers, m.provider)}
+        {m.model ? ` · ${modelLabel(m.model)}` : ''}
       </span>
       {m.modelDefault && <span className="muted">{t('，預設', ', default')}</span>}
       {m.changed && (
@@ -144,7 +148,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
               <section className="mem-section">
                 <h4 className="dw-heading">{t('依角色與階段', 'By role and stage')}</h4>
                 <div className="cost-table-wrap">
-                  <table className="cost-table small">
+                  <table className="cost-table cost-cards small">
                     <thead>
                       <tr>
                         <th>{t('角色', 'Role')}</th>
@@ -162,10 +166,10 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                       {[...data.rows, { key: '__total', role: 'total', agents: data.rows.reduce((n, r) => n + r.agents, 0), agentMs: data.agentMs, observed: data.total, promptTokens: data.rows.reduce((n, r) => n + r.promptTokens, 0), turns: data.rows.reduce((n, r) => n + r.turns, 0) }].map((r) => (
                         <tr key={r.key} className={r.key === '__total' ? 'cost-total' : undefined}>
                           <td>{r.key === '__total' ? t('合計', 'Total') : label(r.key, r.role, 'stage' in r ? (r.stage as string | undefined) : undefined)}</td>
-                          <td>{r.agents}</td>
-                          <td>{ms(r.agentMs)}</td>
+                          <td data-label={t('次數', 'Runs')}>{r.agents}</td>
+                          <td data-label={t('耗時', 'Time')}>{ms(r.agentMs)}</td>
                           <TokenCells o={r.observed} />
-                          <td>
+                          <td data-label={t('組裝 prompt 估算', 'Assembled prompt (est.)')}>
                             {fmtTokens(r.promptTokens)}
                             <span className="muted"> / {r.turns}</span>
                           </td>
@@ -186,7 +190,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                 <section className="mem-section">
                   <h4 className="dw-heading">{t('依模型', 'By model')}</h4>
                   <div className="cost-table-wrap">
-                    <table className="cost-table small">
+                    <table className="cost-table cost-cards cost-models small">
                       <thead>
                         <tr>
                           <th>{t('模型', 'Model')}</th>
@@ -206,17 +210,17 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                             <td>
                               <ModelName m={m} />
                             </td>
-                            <td>{m.roles.map((r) => `${label(r.key, r.role)} ×${r.count}`).join(t('、', ', '))}</td>
-                            <td>{m.agents}</td>
-                            <td>{ms(m.agentMs)}</td>
+                            <td className="cost-roles" data-label={t('擔任的角色', 'Roles')}>{m.roles.map((r) => `${label(r.key, r.role)} ×${r.count}`).join(t('、', ', '))}</td>
+                            <td data-label={t('agent 數', 'Agents')}>{m.agents}</td>
+                            <td data-label={t('耗時', 'Time')}>{ms(m.agentMs)}</td>
                             <TokenCells o={m.observed} />
                           </tr>
                         ))}
                         <tr className="cost-total">
                           <td>{t('合計', 'Total')}</td>
-                          <td />
-                          <td>{data.models.reduce((n, m) => n + m.agents, 0)}</td>
-                          <td>{ms(data.agentMs)}</td>
+                          <td className="cost-empty" />
+                          <td data-label={t('agent 數', 'Agents')}>{data.models.reduce((n, m) => n + m.agents, 0)}</td>
+                          <td data-label={t('耗時', 'Time')}>{ms(data.agentMs)}</td>
                           <TokenCells o={data.total} />
                         </tr>
                       </tbody>

@@ -25,7 +25,7 @@ const out = await build({
       name: 'no hub',
       setup(b) {
         b.onResolve({ filter: /^\.\.?\/(api|Ask)$/ }, (a) => ({ path: a.path, namespace: 'stub' }));
-        b.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({ contents: 'export const hub = { call: async () => undefined, on: () => () => undefined }; export const useSettings = () => undefined; export const ask = async () => false;', loader: 'js' }));
+        b.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({ contents: 'export const hub = { call: async () => undefined, on: () => () => undefined }; export const useSettings = () => undefined; export const useProviders = () => []; export const ask = async () => false;', loader: 'js' }));
       },
     },
   ],
