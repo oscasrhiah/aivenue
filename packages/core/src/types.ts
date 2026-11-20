@@ -1948,6 +1948,24 @@ export interface CostRow {
   turns: number;
 }
 
+/** One model's share of a workflow's cost breakdown: every agent that ran on it (its last model, see `changed`). */
+export interface CostModelRow {
+  /** provider|model|default */
+  key: string;
+  /** The provider id as the run names it, account included (e.g. "codex~oscarhshiah"). */
+  provider: string;
+  model?: string;
+  /** It ran the provider's default model (no model was chosen). */
+  modelDefault?: boolean;
+  /** The roles it played and how many agents each: a role, or "compaction" / "librarian" for Aivenue's upkeep. */
+  roles: { key: string; role: AgentRole; count: number }[];
+  agents: number;
+  agentMs: number;
+  observed: ObservedTotals;
+  /** Some agent's model changed during its run: all its tokens are under its last model (they cannot be split). */
+  changed?: boolean;
+}
+
 /** A workflow's cost breakdown (A2, observation only). */
 export interface CostBreakdown {
   /** Wall-clock time from start to end (or now). */
@@ -1957,6 +1975,8 @@ export interface CostBreakdown {
   /** Time waiting on the user: decisions, approvals, pauses. */
   waitingMs: number;
   rows: CostRow[];
+  /** The same agents grouped by provider and model. */
+  models: CostModelRow[];
   total: ObservedTotals;
   /** The prompt blocks that took the most, over every turn (Aivenue's own estimate). */
   blocks: { key: string; chars: number; tokens: number; turns: number }[];

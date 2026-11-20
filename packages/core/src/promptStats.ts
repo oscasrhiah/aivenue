@@ -1,5 +1,5 @@
 import { estimateTokens } from './agentContext';
-import type { CostBreakdown, CostRow, ObservedTotals, PromptTotals, PromptTurn, TokenUsage, WorkflowRun } from './types';
+import type { CostBreakdown, CostModelRow, CostRow, ObservedTotals, PromptTotals, PromptTurn, TokenUsage, WorkflowRun } from './types';
 
 /**
  * What a prompt Aivenue sent was made of (docs/workflow-efficiency-plan.md A1). Observation only: nothing here changes
@@ -170,6 +170,7 @@ const sumObserved = (a: ObservedTotals, b: ObservedTotals | undefined): Observed
 /** A workflow's cost by role and stage, its times, and the prompt blocks that took the most over the whole run (A2). */
 export function costBreakdown(run: WorkflowRun, at = Date.now()): CostBreakdown {
   const rows = new Map<string, CostRow>();
+  const models = new Map<string, CostModelRow>();
   const blocks = new Map<string, { key: string; chars: number; tokens: number; turns: number }>();
   const cut = new Map<string, number>();
   let agentMs = 0;
@@ -202,6 +203,18 @@ export function costBreakdown(run: WorkflowRun, at = Date.now()): CostBreakdown 
       for (const [k, n] of Object.entries(p.cut)) cut.set(k, (cut.get(k) ?? 0) + n);
     }
     rows.set(key, row);
+    // By model: the model it ran last (a change mid-run cannot be split; the row says so).
+    const mkey = `${a.provider}|${a.model ?? ''}|${a.modelDefault ? 'default' : ''}`;
+    const m = models.get(mkey) ?? { key: mkey, provider: a.provider, model: a.model, modelDefault: a.modelDefault || undefined, roles: [], agents: 0, agentMs: 0, observed: EMPTY() };
+    const roleKey = a.role === 'compactor' ? key : a.role;
+    const r = m.roles.find((x) => x.key === roleKey);
+    if (r) r.count++;
+    else m.roles.push({ key: roleKey, role: a.role, count: 1 });
+    m.agents++;
+    m.agentMs += ms;
+    m.observed = sumObserved(m.observed, a.observed);
+    if (a.snapshot?.model && a.model && a.snapshot.model !== a.model) m.changed = true;
+    models.set(mkey, m);
   }
   const t = run.timing;
   const waitingMs = (t?.waitingMs ?? 0) + (t?.waitingSince !== undefined ? Math.max(0, at - t.waitingSince) : 0);
@@ -210,6 +223,7 @@ export function costBreakdown(run: WorkflowRun, at = Date.now()): CostBreakdown 
     agentMs,
     waitingMs,
     rows: [...rows.values()],
+    models: [...models.values()].sort((a, b) => b.agentMs - a.agentMs || a.key.localeCompare(b.key)),
     total,
     blocks: [...blocks.values()].sort((a, b) => b.tokens - a.tokens),
     cut: [...cut.entries()].map(([key, chars]) => ({ key, chars })).sort((a, b) => b.chars - a.chars),

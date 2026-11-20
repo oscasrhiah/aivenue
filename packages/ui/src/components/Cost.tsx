@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { AgentRole, CostBreakdown, ObservedTotals, WorkflowRun } from '../../../core/src/types';
+import type { AgentRole, CostBreakdown, CostModelRow, ObservedTotals, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
 import { useT, type T } from '../i18n';
 import { fmtTokens, roleLabel } from '../util';
@@ -55,6 +55,53 @@ function Cost({ o }: { o: ObservedTotals }) {
   return <span>{o.costUsd === 0 ? t('$0，價格為 0', '$0, priced at 0') : `$${o.costUsd.toFixed(4)}`}</span>;
 }
 
+/** The token and cost cells of one row: the same columns in the role table and the model table. */
+function TokenCells({ o }: { o: ObservedTotals }) {
+  const t = useT();
+  return (
+    <>
+      <td>{fmtTokens(o.uncachedInput)}</td>
+      <td>{fmtTokens(o.cachedInput)}</td>
+      <td>
+        {o.unsplit ? (
+          <>
+            {fmtTokens(o.unsplit.input)}
+            <span className="muted">{t('（', '(')}{fmtTokens(o.unsplit.cached)}{t('）', ')')}</span>
+          </>
+        ) : (
+          <span className="muted">—</span>
+        )}
+      </td>
+      <td>
+        {fmtTokens(o.output)}
+        {o.reasoning !== undefined && <span className="muted">{t('（', '(')}{fmtTokens(o.reasoning)}{t('）', ')')}</span>}
+      </td>
+      <td>
+        <Cost o={o} />
+      </td>
+    </>
+  );
+}
+
+/** One model row's first cell: provider / model, 「預設」 for the provider's default, a mark when a model changed mid-run. */
+function ModelName({ m }: { m: CostModelRow }) {
+  const t = useT();
+  return (
+    <>
+      <span className="mono">
+        {m.provider}
+        {m.model ? ` / ${m.model}` : ''}
+      </span>
+      {m.modelDefault && <span className="muted">{t('，預設', ', default')}</span>}
+      {m.changed && (
+        <span className="badge muted" title={t('有 agent 在執行中換過模型：它的 token 全部算在最後的模型，無法依模型拆開', 'An agent changed model during its run: all its tokens count under its last model and cannot be split by model')}>
+          {t('中途換過模型', 'Model changed mid-run')}
+        </span>
+      )}
+    </>
+  );
+}
+
 /** Where a workflow's tokens and time went (docs/workflow-efficiency-plan.md A2). */
 export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => void }) {
   const t = useT();
@@ -72,6 +119,8 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
   return createPortal(
     <Dialog title={t('成本分解', 'Cost breakdown')} onClose={onClose} size="xl" className="mem-window cost-window" back="detail-back">
         <div className="mem-body">
+          {/* The window is one workflow's; the Settings usage page counts every workflow. */}
+          <div className="muted tiny">{t('只計算這個工作流', 'This workflow only')}</div>
           {error && <div className="err-text small">{error}</div>}
           {data && (
             <>
@@ -115,25 +164,7 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                           <td>{r.key === '__total' ? t('合計', 'Total') : label(r.key, r.role, 'stage' in r ? (r.stage as string | undefined) : undefined)}</td>
                           <td>{r.agents}</td>
                           <td>{ms(r.agentMs)}</td>
-                          <td>{fmtTokens(r.observed.uncachedInput)}</td>
-                          <td>{fmtTokens(r.observed.cachedInput)}</td>
-                          <td>
-                            {r.observed.unsplit ? (
-                              <>
-                                {fmtTokens(r.observed.unsplit.input)}
-                                <span className="muted">{t('（', '(')}{fmtTokens(r.observed.unsplit.cached)}{t('）', ')')}</span>
-                              </>
-                            ) : (
-                              <span className="muted">—</span>
-                            )}
-                          </td>
-                          <td>
-                            {fmtTokens(r.observed.output)}
-                            {r.observed.reasoning !== undefined && <span className="muted">{t('（', '(')}{fmtTokens(r.observed.reasoning)}{t('）', ')')}</span>}
-                          </td>
-                          <td>
-                            <Cost o={r.observed} />
-                          </td>
+                          <TokenCells o={r.observed} />
                           <td>
                             {fmtTokens(r.promptTokens)}
                             <span className="muted"> / {r.turns}</span>
@@ -151,6 +182,48 @@ export function CostWindow({ run, onClose }: { run: WorkflowRun; onClose: () => 
                   )}
                 />
               </section>
+              {!!data.models.length && (
+                <section className="mem-section">
+                  <h4 className="dw-heading">{t('依模型', 'By model')}</h4>
+                  <div className="cost-table-wrap">
+                    <table className="cost-table small">
+                      <thead>
+                        <tr>
+                          <th>{t('模型', 'Model')}</th>
+                          <th>{t('擔任的角色', 'Roles')}</th>
+                          <th>{t('agent 數', 'Agents')}</th>
+                          <th>{t('耗時', 'Time')}</th>
+                          <th>{t('未快取輸入', 'Uncached in')}</th>
+                          <th>{t('快取輸入', 'Cached in')}</th>
+                          <th>{t('拆分未知的輸入', 'Input, split unknown')}</th>
+                          <th>{t('輸出含推理', 'Output with reasoning')}</th>
+                          <th>{t('花費', 'Cost')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.models.map((m) => (
+                          <tr key={m.key}>
+                            <td>
+                              <ModelName m={m} />
+                            </td>
+                            <td>{m.roles.map((r) => `${label(r.key, r.role)} ×${r.count}`).join(t('、', ', '))}</td>
+                            <td>{m.agents}</td>
+                            <td>{ms(m.agentMs)}</td>
+                            <TokenCells o={m.observed} />
+                          </tr>
+                        ))}
+                        <tr className="cost-total">
+                          <td>{t('合計', 'Total')}</td>
+                          <td />
+                          <td>{data.models.reduce((n, m) => n + m.agents, 0)}</td>
+                          <td>{ms(data.agentMs)}</td>
+                          <TokenCells o={data.total} />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )}
               {!!data.blocks.length && (
                 <section className="mem-section">
                   <h4 className="dw-heading">{t('prompt 中佔最多的部分', 'What took the most of the prompts')}</h4>
