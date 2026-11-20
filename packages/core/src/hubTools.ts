@@ -543,6 +543,22 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
       required: ['target'],
     },
   },
+  graph_query: {
+    name: 'graph_query',
+    description:
+      'Ask the Graphify graph of the working folder (code parsed into functions, classes, files and who calls, imports or contains what) a question: where is X, what calls or uses X, what does a change to X affect. Answers with the matching nodes, their files and lines and their neighbours. Use it before grep or reading files to find where to look; then read only those lines.',
+    inputSchema: { type: 'object', properties: { question: { type: 'string', description: 'The question or the names to look for, e.g. "what calls startHub" or "graphify status push".' } }, required: ['question'] },
+  },
+  graph_path: {
+    name: 'graph_path',
+    description: 'How one part of the code reaches another in the Graphify graph of the working folder: the shortest chain of calls, imports or containment from A to B.',
+    inputSchema: { type: 'object', properties: { from: { type: 'string', description: 'A function, class, file or concept name.' }, to: { type: 'string', description: 'Another one.' } }, required: ['from', 'to'] },
+  },
+  graph_explain: {
+    name: 'graph_explain',
+    description: 'One node of the Graphify graph of the working folder in plain words: what it is, where it lives (file and line) and what it is connected to.',
+    inputSchema: { type: 'object', properties: { node: { type: 'string', description: 'A function, class, file or concept name.' } }, required: ['node'] },
+  },
   rename_chat: {
     name: 'rename_chat',
     description:
@@ -563,6 +579,9 @@ export const TOOL_DEFS: Record<string, ToolDef> = {
     },
   },
 };
+
+/** The Graphify lookups, offered when the working folder has a graph and Graphify is on (orchestrator toolsFor). */
+export const GRAPH_TOOLS = ['graph_query', 'graph_path', 'graph_explain'] as const;
 
 export function toolsForRole(role: AgentRole, canSpawn: boolean, shareContext = false, advisor = false, gpu = true): ToolDef[] {
   const names: string[] = [];

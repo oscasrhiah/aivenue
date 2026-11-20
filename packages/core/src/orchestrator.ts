@@ -44,6 +44,7 @@ import type {
   RunMemoryView,
   ProjectMemory,
   SharedNote,
+  GraphifyStatus,
 } from './types';
 import { runAgent, type BridgeLaunch, type RunAgentResult } from './agentRunner';
 import { capture, findNode } from './proc';
@@ -61,7 +62,7 @@ import { batchCounts, runBatches } from './batches';
 import type { ProviderRegistry } from './providers/registry';
 import { RunStore } from './store';
 import { differsFromCommit, normalizeReview, resolveReviewTarget, workspaceChanges, workspaceState, workspaceUnknown } from './reviewTarget';
-import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
+import { extractJson, parsePlan, parseReview, parseRulings, parseSkillUse, parseVerification, parseWork, planFromText, GRAPH_TOOLS, TOOL_DEFS, toolsForRole, unclassifiedNotice, OPTIONAL_CORRECTION, type ToolDef } from './hubTools';
 import { disputedIssues, limitHit, nextPhase, repeatedIssues, routeVerification } from './router';
 import { buildHandoff, evidenceStamp, markStale, searchRecords, type RecordQuery } from './records';
 import { killPid, pidAlive, ResourceManager } from './resources';
@@ -94,6 +95,7 @@ import { applyWorktree, createWorktree, gitStamp, keepWorktree, removeWorktree, 
 import * as P from './prompts';
 import { advisorPairing } from './advisorPairing';
 import { taskTitle } from './taskTitle';
+import type { GraphifyService } from './graphify';
 
 export interface OrchestratorDeps {
   registry: ProviderRegistry;
@@ -124,6 +126,10 @@ export interface OrchestratorDeps {
   gpuQuery?: () => string;
   /** nvidia-smi with any arguments (tests). */
   gpuSmi?: (args: string[]) => string;
+  /** The Graphify graph of the working folder, kept up to date while Graphify is on (graphify.ts). */
+  graphify?: Pick<GraphifyService, 'active' | 'ensure' | 'schedule' | 'lookup'>;
+  /** How long a workflow's start waits for the graph update before agents begin anyway (default 120 s; tests set less). */
+  graphifyWaitMs?: number;
 }
 
 class Cancelled extends Error {
@@ -1877,6 +1883,8 @@ export class Orchestrator {
     const info = run?.agents[s.agentId];
     if (!run || !info) return [];
     const tools = toolsForRole(info.role, this.canSpawn(run, info), sharingOf(run) !== 'summary', this.crossAdvisor(run), this.hasGpu());
+    // The graph lookups: only while Graphify is on and the folder the agents work in has a graph.
+    if (info.role !== 'compactor' && this.d.graphify?.active() && fs.existsSync(path.join(run.config.cwd, 'graphify-out', 'graph.json'))) tools.push(...GRAPH_TOOLS.map((n) => TOOL_DEFS[n]));
     return s.permission === 'ask' ? [...tools, TOOL_DEFS.approval_prompt] : tools;
   }
 
@@ -2278,6 +2286,14 @@ export class Orchestrator {
       }
       case 'capture_screenshot':
         return this.screenshot(run, info, args);
+      case 'graph_query':
+      case 'graph_path':
+      case 'graph_explain': {
+        const g = this.d.graphify;
+        if (!g) throw new Error('Graphify is not available');
+        const r = await g.lookup(run.config.cwd, name === 'graph_query' ? ['query', String(args.question ?? '')] : name === 'graph_path' ? ['path', String(args.from ?? ''), String(args.to ?? '')] : ['explain', String(args.node ?? '')]);
+        return r;
+      }
       case 'rename_chat': {
         // The same rename as the sidebar's (the conversation's first message carries the name), said in the timeline.
         const name = this.rename(run.id, String(args.title ?? '')).title;
@@ -2398,6 +2414,17 @@ export class Orchestrator {
     for (const r of this.runs.values()) {
       if (r.outputs?.some((o) => o.status !== 'deleted' && (path.resolve(o.abs) === p || (!!o.count && isInside(path.resolve(o.abs), p))))) return true;
       if (r.screenshots?.some((s) => path.resolve(s.path) === p)) return true;
+    }
+    return false;
+  }
+
+  /** True when the folder is one a workflow works in (its folder, or the isolated copy its agents work in). */
+  isRunFolder(abs: string): boolean {
+    const key = (p: string) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));
+    const p = key(abs);
+    for (const r of this.runs.values()) {
+      if (key(r.config.cwd) === p) return true;
+      if (r.worktree && (key(r.worktree.origCwd) === p || key(r.worktree.cwd) === p)) return true;
     }
     return false;
   }
@@ -2524,6 +2551,7 @@ export class Orchestrator {
         this.dryRun(run);
         return;
       }
+      await this.graphifyStart(run);
       await this.memoryStart(run, !from);
       this.startWatchdog(run);
       await this.cycle(run, from);
@@ -2565,6 +2593,7 @@ export class Orchestrator {
       // The idle countdown of the CLIs it kept starts now.
       this.pool.ownerEnded(run.id);
       this.updateOutputs(run);
+      this.graphifyEnd(run);
       this.baselines.delete(run.id);
       run.pending = undefined;
       run.endedAt = now();
@@ -2574,6 +2603,58 @@ export class Orchestrator {
       // Not a reason to keep the process alive (a hub that is stopping has nothing left to release).
       setTimeout(() => this.d.store.release(run.id), 60000).unref?.();
     }
+  }
+
+  /**
+   * Before the first agent: the Graphify graph of the folder the agents work in (the isolated copy, in isolation) is
+   * brought up to date, so agents query the current code. Waited for at most graphifyWaitMs; a longer build goes on in
+   * the background and the agents start anyway (it never holds up the work for long, nor stops it when it fails).
+   */
+  private async graphifyStart(run: WorkflowRun) {
+    const g = this.d.graphify;
+    if (!g?.active()) return;
+    const cwd = run.config.cwd;
+    this.log(run, L('更新專案圖譜…', 'Updating the project graph…'));
+    const build = g.ensure(cwd, 'start');
+    let timer: NodeJS.Timeout | undefined;
+    let stop: (() => void) | undefined;
+    const signal = this.aborts.get(run.id)?.signal;
+    const waited = await Promise.race([
+      build,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), this.d.graphifyWaitMs ?? 120000);
+        stop = () => resolve(undefined);
+        signal?.addEventListener('abort', stop, { once: true });
+      }),
+    ]);
+    clearTimeout(timer);
+    if (stop) signal?.removeEventListener('abort', stop);
+    if (waited) return this.graphifyResult(run, waited);
+    if (signal?.aborted) return;
+    this.log(run, L('專案圖譜還在更新，agent 先開始；更新完成後 agent 查到的就是新的圖', 'The project graph is still updating: agents start now and get the new graph once it is done'));
+    void build.then((s) => this.graphifyResult(run, s));
+  }
+
+  private graphifyResult(run: WorkflowRun, s: GraphifyStatus) {
+    if (s.state === 'idle' && s.nodes !== undefined) this.log(run, L(`專案圖譜已更新：${s.nodes} 個節點`, `Project graph updated: ${s.nodes} nodes`));
+    else if (s.state === 'refused') this.log(run, L(`專案圖譜沒有更新：${s.lastError ?? ''}`, `The project graph was not updated: ${s.lastError ?? ''}`), 'warn');
+    else if (s.state === 'failed') this.log(run, L(`專案圖譜更新失敗，agent 改用一般搜尋：${s.lastError ?? ''}`, `The project graph could not be updated; agents use plain search: ${s.lastError ?? ''}`), 'warn');
+  }
+
+  /** An agent changed files: the graph is updated in the background a little later (turns close together make one update). */
+  private graphifyAfterTurn(run: WorkflowRun, info: AgentRunInfo) {
+    const g = this.d.graphify;
+    if (!g?.active() || run.config.dryRun) return;
+    if (!info.stats.filesChanged.length && !info.stats.filesMaybeChanged?.length) return;
+    g.schedule(run.config.cwd, 'edit');
+  }
+
+  /** The workflow ended after files changed: one last update, in the background. */
+  private graphifyEnd(run: WorkflowRun) {
+    const g = this.d.graphify;
+    if (!g?.active() || run.config.dryRun) return;
+    const changed = !!run.outputs?.length || Object.values(run.agents).some((a) => a.workflowId === run.id && (a.stats.filesChanged.length || a.stats.filesMaybeChanged?.length));
+    if (changed) void g.ensure(run.config.cwd, 'end');
   }
 
   /**
@@ -3357,6 +3438,7 @@ export class Orchestrator {
     this.endAgentResources(run, info);
     this.cancelChildren(run, info.id);
     this.updateOutputs(run);
+    this.graphifyAfterTurn(run, info);
     this.refreshShared(run);
     this.maybeOrganize(run);
     this.checkContextAsk(run, info);
@@ -3824,6 +3906,7 @@ export class Orchestrator {
         this.endAgentResources(run, child);
         this.cancelChildren(run, child.id);
         this.updateOutputs(run);
+        this.graphifyAfterTurn(run, child);
         if (child.status === 'failed') this.notifyParent(run, child, `sub-agent ${child.id} (${child.provider}) FAILED${child.failure ? ` [${child.failure.kind}]` : ''}: ${(child.error ?? '').slice(0, 300)}`);
         else if (child.status === 'cancelled' && this.stoppedByUser.has(child.id) && !this.aborted(run)) this.notifyParent(run, child, `sub-agent ${child.id} (${child.provider}) was STOPPED before it finished; its work may be partial.`);
       });

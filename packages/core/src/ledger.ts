@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentEvent, AgentRunInfo, ObservedCheck, WorkflowRun } from './types';
 import { withoutHeredocs } from './procdetect';
+import { GRAPH_TOOL } from './graphUsage';
 
 /**
  * What every agent did, built from their recorded events (no model call), for the shared context:
@@ -220,6 +221,12 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
       if (o.onlyIds ? !o.onlyIds.has(a.id) : a.id === o.selfId) continue;
       if (t.category === 'read') {
         addRead(rel(flat(t.title)), e.ts, a, t.output);
+        continue;
+      }
+      // A lookup with Aivenue's graph tools: shared like the same graphify command run in a shell.
+      if (t.category === 'hub' && GRAPH_TOOL.test(t.name ?? '')) {
+        const what = evenOut(`${t.name.replace(/^.*?(graph_\w+)$/, '$1')} ${flat(t.title)}`);
+        entries.push({ ts: e.ts, agent: a, kind: 'graph', what, command: what, ok: t.status === 'ok', result: clip(flat(t.output), 2000) });
         continue;
       }
       if (t.category !== 'command' && t.category !== 'search') continue;

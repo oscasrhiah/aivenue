@@ -365,6 +365,62 @@ export interface ExtensionStatus {
   };
 }
 
+/**
+ * The Graphify graph of one folder (graphify.ts): whether Aivenue may build it (`active`: Graphify on and installed),
+ * whether graphify-out/graph.json is there, and the last build. `refused`: graphify kept the old graph because the new
+ * one had fewer nodes (it only overwrites that with --force, which Aivenue never passes by itself).
+ */
+export interface GraphifyStatus {
+  cwd: string;
+  active: boolean;
+  exists: boolean;
+  state: 'idle' | 'building' | 'failed' | 'refused';
+  /** When the graph on disk was written (the file's time when this hub did not build it). */
+  builtAt?: number;
+  nodes?: number;
+  edges?: number;
+  communities?: number;
+  /** Why the last build failed or was refused, or why this folder is not built (a drive root, the home folder). */
+  lastError?: string;
+  /** What asked for the build: start, edit, end, rebuild. */
+  reason?: string;
+  /** While building: since when. */
+  startedAt?: number;
+}
+
+/** A graph node as the graph window gets it (graphify.graph). */
+export interface GraphNode {
+  id: string;
+  label: string;
+  community?: number;
+  community_name?: string;
+  file_type?: string;
+  source_file?: string;
+  source_location?: string;
+  /** Links to and from it in the whole graph. */
+  degree: number;
+}
+
+export interface GraphLink {
+  source: string;
+  target: string;
+  relation: string;
+}
+
+/** The graph for the window: every node, or the most connected `maxNodes` of them with the totals said. */
+export interface GraphPayload {
+  cwd: string;
+  nodes: GraphNode[];
+  links: GraphLink[];
+  totalNodes: number;
+  totalLinks: number;
+  communities: number;
+  builtAt?: number;
+  graphifyVersion?: string;
+  /** True when only part of the graph is sent (more than maxNodes nodes). */
+  capped: boolean;
+}
+
 export interface SkillInfo {
   name: string;
   description: string;
@@ -1694,6 +1750,7 @@ export type PushMessage =
   | { topic: 'capabilities'; data: { config: CapabilitiesConfig; skills: SkillInfo[] } }
   | { topic: 'extensions'; data: ExtensionStatus[] }
   | { topic: 'packSkills'; data: PackSkillStatus[] }
+  | { topic: 'graphify'; data: GraphifyStatus }
   | { topic: 'test'; data: { testId: string; providerId: string; event?: AgentEvent; isUpdate?: boolean; result?: TestResult } };
 
 export interface TestResult {

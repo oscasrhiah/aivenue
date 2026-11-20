@@ -63,6 +63,9 @@ export const HUB_TITLES: Record<string, [string, string]> = {
   ask_user: ['問你', 'Ask you'],
   reply_user: ['回覆你', 'Reply to you'],
   rename_chat: ['改對話名稱', 'Rename the conversation'],
+  graph_query: ['查圖譜', 'Query the graph'],
+  graph_path: ['查圖譜路徑', 'Graph path'],
+  graph_explain: ['查圖譜節點', 'Explain a graph node'],
   report_skill_use: ['回報使用的 Skill', 'Report a skill used'],
   track_process: ['追蹤背景程序', 'Track a background process'],
   update_process: ['更新背景程序', 'Update a background process'],
@@ -134,6 +137,9 @@ export function classifyTool(rawName: string, input: unknown, cwd: string): { ca
     if (lower === 'track_process' || lower === 'update_process') about([inp.pid === undefined ? '' : String(inp.pid), pick('purpose') ?? ''].filter(Boolean).join(' — '));
     if (lower === 'dismiss_launch') about([pick('launch') ?? '', pick('reason') ?? ''].filter(Boolean).join(' — '));
     if (lower === 'stop_subagent') about(pick('subagent_id'));
+    if (lower === 'graph_query') about(pick('question'), 200);
+    if (lower === 'graph_path') about(pick('from') || pick('to') ? `${pick('from') ?? '?'} — ${pick('to') ?? '?'}` : undefined, 200);
+    if (lower === 'graph_explain') about(pick('node'), 200);
     return { category: 'hub', title, name };
   }
   if (READ.has(lower)) return { category: 'read', title: rel(pick('file_path', 'path', 'absolute_path', 'filePath', 'AbsolutePath', 'TargetFile')) ?? name, name };

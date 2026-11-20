@@ -121,4 +121,6 @@ export const SAME_TWICE = new Set([
   'memory.delete',
   'memory.relink',
   'agents.switchTargets',
+  // Builds the folder's graph again: twice gives the same graph (a build asked for during one is folded into one more).
+  'graphify.rebuild',
 ]);

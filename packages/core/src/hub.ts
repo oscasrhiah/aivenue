@@ -15,6 +15,7 @@ import { AntigravityQuota } from './antigravityQuota';
 import { probeMcpServer } from './mcpProbe';
 import { MCP_PRESETS } from './mcpPresets';
 import { ExtensionService } from './extensions';
+import { GraphifyService } from './graphify';
 import { loadCatalog } from './catalog';
 import { setLocale } from './i18n';
 import { SettingsStore } from './settings';
@@ -117,7 +118,7 @@ const READ_ONLY = new Set([
   'extensions.list', 'extensions.packSkills', 'github.status', 'skills.read', 'providers.list', 'providers.templates', 'providers.models',
   'catalog.list', 'presets.list', 'assign.preview', 'workflows.list', 'workflows.get', 'agents.events', 'workflows.search',
   'workflows.preflight', 'workflows.memory', 'workflows.cost', 'workflows.sharedContext', 'memory.projects', 'memory.list',
-  'resources.gpus', 'resources.gpuDetail', 'processes.inspect',
+  'resources.gpus', 'resources.gpuDetail', 'processes.inspect', 'graphify.status', 'graphify.graph',
 ]);
 
 /** Constant-time token check. */
@@ -203,6 +204,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
   const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }) });
   void extensions.init().catch(() => undefined);
+  // The Graphify graph of the folders workflows work in, built by Aivenue while Graphify is on and installed.
+  const graphify = new GraphifyService({ active: () => extensions.graphifyReady(), onChange: (data) => push({ topic: 'graphify', data }), log: (line) => console.warn(line) });
   let baseUrl = '';
   const orchestrator = new Orchestrator({
     registry,
@@ -218,6 +221,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     securityAudit: () => extensions.securityAuditSkill(),
     ghFixCi: () => extensions.ghFixCiSkill(),
     ghAddressComments: () => extensions.ghAddressCommentsSkill(),
+    graphify,
     servedBy: (provider, model, from, to) => (provider === 'omniroute' ? extensions.servedBy(model ?? registry.defaults(provider).model, from, to) : Promise.resolve(undefined)),
   });
   attachments.owns = (runId) => orchestrator.runs.has(runId);
@@ -226,6 +230,11 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   // Workflows an update or a restart cut off go on by themselves (Settings → General can turn it off).
   if (settings.get().autoResume !== false) setTimeout(() => orchestrator.autoResume(), 3000);
   void registry.checkAll();
+
+  const graphFolder = (cwd: unknown): string => {
+    if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || !orchestrator.isRunFolder(cwd)) throw new Error(L('這不是任何對話的工作資料夾', 'Not the working folder of any chat'));
+    return cwd;
+  };
 
   const methods: Record<string, (p: any) => unknown> = {
     'host.info': (): HostInfo => ({
@@ -477,6 +486,16 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'resources.gpuDetail': () => orchestrator.gpuDetail(),
     'processes.inspect': (p: { workflowId: string; pid: number }) => orchestrator.inspectProcess(p.workflowId, p.pid),
     'workflows.sharedContext': (p: { id: string }) => orchestrator.sharedContext(p.id),
+    // A workflow's folder only (as files.read takes only a run's outputs): no other folder is read or built.
+    'graphify.status': (p: { cwd: string }) => graphify.status(graphFolder(p?.cwd)),
+    'graphify.graph': (p: { cwd: string }) => graphify.graph(graphFolder(p?.cwd)),
+    // Started, not awaited: the status pushes say how it goes (a big project takes minutes).
+    'graphify.rebuild': (p: { cwd: string }) => {
+      const cwd = graphFolder(p?.cwd);
+      if (!graphify.active()) throw new Error(L('Graphify 沒有開啟或還沒安裝好', 'Graphify is off or not installed yet'));
+      void graphify.ensure(cwd, 'rebuild');
+      return graphify.status(cwd);
+    },
   };
 
   const readBody = (req: http.IncomingMessage) =>
@@ -665,6 +684,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
         clearInterval(usageTimer);
         orchestrator.shutdown();
         extensions.shutdown();
+        graphify.shutdown();
         for (const c of clients) c.close();
         // Every connection ends with the hub, VS Code windows' control channels too: else the server waits on them.
         for (const c of wss.clients) c.terminate();

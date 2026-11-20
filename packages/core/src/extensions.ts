@@ -112,6 +112,13 @@ interface OmniModel {
   pricing?: { prompt?: string; input?: number };
 }
 
+/**
+ * With a graph: look things up there first (Aivenue's graph tools, or the same graphify commands in the shell), and
+ * grep or read for the exact lines it pointed to. A strong default, not a block.
+ */
+const GRAPH_FIRST =
+  'Look things up in the graph FIRST: where X is defined, what calls or uses X, what a change to X affects, how A reaches B. Use the Aivenue tools graph_query, graph_path and graph_explain (or `graphify query "<question>"`, `graphify path "<A>" "<B>"`, `graphify explain "<X>"` in the shell). Use grep / rg / file reads for the exact lines only after the graph pointed you to a file, or when the graph has no answer; if the graph did not help, say so briefly in your report.';
+
 /** A graph is a shortcut, never a dependency: when it fails, the work goes on with plain search. */
 const GRAPH_FALLBACK = 'If a graphify command fails, times out or returns nothing useful, do not stop or retry it repeatedly: fall back to normal source search (rg / grep / glob, reading files) and say in your report that the graph was not used.';
 
@@ -210,6 +217,11 @@ export class ExtensionService {
           : undefined,
       }),
     ];
+  }
+
+  /** Graphify is on and its command answered: Aivenue may build graphs (graphify.ts). */
+  graphifyReady(): boolean {
+    return !!this.cfg().graphify?.enabled && !!this.graphifyVersion;
   }
 
   async setEnabled(id: ExtensionId, enabled: boolean): Promise<ExtensionStatus[]> {
@@ -492,10 +504,10 @@ export class ExtensionService {
     if (graph && fs.existsSync(graph)) {
       const rule = readText(path.join(this.skillsRoot, 'graphify', 'always-on.md')) || readText(path.join(this.o.bundledDir, 'graphify', 'always-on.md'));
       // The /graphify line is for chat apps; Aivenue agents read the skill file instead.
-      return `\nGRAPHIFY (knowledge graph of this folder):\n${rule.replace(/^## graphify\s*/m, '').replace(/^When the user types `\/graphify`.*$/m, '').trim()}\n${GRAPH_FALLBACK}`;
+      return `\nGRAPHIFY (knowledge graph of this folder):\n${rule.replace(/^## graphify\s*/m, '').replace(/^When the user types `\/graphify`.*$/m, '').trim()}\n${GRAPH_FIRST}\n${GRAPH_FALLBACK}`;
     }
     if (role === 'plan_reviewer' || role === 'code_reviewer') return '';
-    return '\nGRAPHIFY: the `graphify` command is installed. Before exploring a large or unfamiliar codebase you may build a code graph with `graphify update .` (local parsing, no API cost; it writes graphify-out/ — add that folder to .gitignore unless the project already tracks it), then use `graphify query "<question>"`, `graphify path "<A>" "<B>"` and `graphify explain "<concept>"` instead of broad greps. Only build it when you are allowed to write files.\n' + GRAPH_FALLBACK;
+    return '\nGRAPHIFY: the `graphify` command is installed. Before exploring a large or unfamiliar codebase you may build a code graph with `graphify update .` (local parsing, no API cost; it writes graphify-out/, which must not be committed — Aivenue lists it in the local git exclude file of the repository after it builds a graph, so do not edit .gitignore for it), then use `graphify query "<question>"`, `graphify path "<A>" "<B>"` and `graphify explain "<concept>"` instead of broad greps. Only build it when you are allowed to write files.\n' + GRAPH_FALLBACK;
   }
 
   // ---------- OmniRoute ----------
