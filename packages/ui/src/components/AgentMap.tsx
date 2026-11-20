@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { graphUsage } from '../../../core/src/graphUsage';
+import { graphLookupsByTool, graphUsage } from '../../../core/src/graphUsage';
 import { ArrowLeft, CircleCheck, CircleDashed, CircleStop, CircleX, CornerDownRight, Hourglass, LoaderCircle, Pause, RotateCw, Square, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import { Dialog } from './Kit';
@@ -240,6 +240,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
   const tokens = agent.tokens;
   const steps = visible(events, raw);
   const usage = useMemo(() => graphUsage(events), [events]);
+  const lookups = useMemo(() => graphLookupsByTool(events), [events]);
   const answer = agent.finalText?.trim();
   return (
     <>
@@ -319,7 +320,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             </div>
           )}
           {/* How much it used the project graph (graphUsage.ts counts like the user's graphify-usage script). */}
-          <div title={t('graphify query、path、explain 指令與 Aivenue 的查圖工具', 'graphify query, path and explain commands and Aivenue graph tools')}>
+          <div title={[t('Graphify 與 CodeGraph 的查詢：指令與查圖工具', 'Graphify and CodeGraph lookups: commands and graph tools'), ...lookups.map(([n, k]) => ` × `)].join('\n')}>
             <dt>{t('查圖', 'Graph lookups')}</dt>
             <dd className="num">{usage.graph}</dd>
           </div>
@@ -332,7 +333,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             <dd className="num">{usage.graph ? usage.before : '—'}</dd>
           </div>
           {usage.build > 0 && (
-            <div title={t('graphify update 指令', 'graphify update commands')}>
+            <div title={t('graphify update 與 codegraph init、index、sync 指令', 'graphify update and codegraph init, index and sync commands')}>
               <dt>{t('建圖', 'Graph builds')}</dt>
               <dd className="num">{usage.build}</dd>
             </div>

@@ -829,6 +829,13 @@ const EXT_INFO: Record<ExtensionId, { name: string; zh: string; en: string; url:
     url: 'https://github.com/Graphify-Labs/graphify',
     license: 'Apache-2.0',
   },
+  codegraph: {
+    name: 'CodeGraph',
+    zh: '在專案裡建立程式碼索引：哪個函式呼叫誰、改一個地方會影響哪裡。agent 用它查精確的程式碼關係，不用整個專案 grep。在本機解析，不呼叫 API。',
+    en: 'Builds a code index of the project: which function calls which, and what a change affects. Agents use it for exact code relations instead of grepping the whole project. Parsed locally, no API calls.',
+    url: 'https://github.com/colbymchenry/codegraph',
+    license: 'MIT',
+  },
   omniroute: {
     name: 'OmniRoute',
     zh: '本機 AI 閘道，接上數百家供應商；auto/best-free 會自動挑選現在能用的免費模型，額度用完就換下一家。',
@@ -957,6 +964,16 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         />
       )}
 
+      {s.id === 'codegraph' && s.enabled && (
+        <Hint
+          className="muted tiny"
+          text={t(
+            '第一次開啟會用 npm 把 CodeGraph 裝進 Aivenue 自己的工具資料夾（約 270 MB，需要 Node.js），不改 PATH，也不改你的 agent 設定。每個工作流開始前，Aivenue 會在工作資料夾建立或更新 .codegraph/ 索引，agent 改檔後也會在背景更新，agent 拿到 CodeGraph 的查詢工具。Aivenue 啟動的 CodeGraph 一律關閉使用統計。',
+            "The first time it installs CodeGraph with npm into Aivenue's own tools folder (about 270 MB, needs Node.js); your PATH and agent settings are not changed. Before each workflow Aivenue builds or updates the .codegraph/ index in the working folder, and again in the background after agents change files; agents get CodeGraph's lookup tools. Usage statistics are always off for the CodeGraph Aivenue runs.",
+          )}
+        />
+      )}
+
       {s.id === 'omniroute' && s.enabled && (
         <>
           {s.omniroute && (
@@ -1018,10 +1035,22 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         </>
       )}
 
-      {s.enabled && s.state === 'error' && (s.id === 'graphify' || s.id === 'omniroute') && (
+      {s.enabled && s.state === 'error' && (s.id === 'graphify' || s.id === 'codegraph' || s.id === 'omniroute') && (
         <button className="btn small" disabled={busy} onClick={() => run(() => hub.call('extensions.retry', { id: s.id }))}>
           {t('重試', 'Retry')}
         </button>
+      )}
+      {s.id === 'codegraph' && s.installed && s.state !== 'working' && (
+        <div className="row gap wrap">
+          <button
+            className="btn small ghost danger"
+            disabled={busy}
+            title={t('刪除 Aivenue 裝的 CodeGraph 並關閉它；專案裡的 .codegraph/ 索引不會刪除', "Removes the CodeGraph Aivenue installed and turns it off; the projects' .codegraph/ indexes stay")}
+            onClick={() => void run(() => hub.call('extensions.uninstall', { id: 'codegraph' }))}
+          >
+            {t('解除安裝', 'Uninstall')}
+          </button>
+        </div>
       )}
       {error && <div className="note err">{error}</div>}
       {guide && <ExtensionGuide id={s.id} onClose={() => setGuide(false)} />}
@@ -1067,7 +1096,7 @@ function Extensions() {
       <div className="cap-head">
         <div>
           <h3>{t('內建擴充', 'Built-in extensions')}</h3>
-          <Hint className="cap-desc" text={t('隨 Aivenue 附上，預設全部關閉，開啟就能用。Graphify 與 OmniRoute 第一次開啟時會自動下載需要的工具，OmniRoute 約 500 MB。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify and OmniRoute download the tools they need the first time, OmniRoute about 500 MB.')} />
+          <Hint className="cap-desc" text={t('隨 Aivenue 附上，預設全部關閉，開啟就能用。Graphify、CodeGraph 與 OmniRoute 第一次開啟時會自動下載需要的工具，CodeGraph 約 270 MB、OmniRoute 約 500 MB。', 'Shipped with Aivenue and off by default; turn one on and it works. Graphify, CodeGraph and OmniRoute download the tools they need the first time: CodeGraph about 270 MB, OmniRoute about 500 MB.')} />
         </div>
       </div>
       <div className="clist ext-list">

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Circle, CircleX, CornerDownRight, Network, Paperclip, User, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, Circle, CircleX, CornerDownRight, Network, Paperclip, User, Wrench, Braces } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AgentEvent, Attachment } from '../../../core/src/types';
 import { useT, type T } from '../i18n';
@@ -72,7 +72,7 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
   const total = (tool.output ?? '').replace(/\r/g, '').split('\n').filter((l) => l.trim()).length;
   const pv = tool.status === 'error' ? (err.length ? `${err.join('\n')}${total > err.length ? `\n… ${t(`共 ${total} 行，點一下看全部`, `${total} lines in all: click for all`)}` : ''}` : undefined) : preview(tool.output, tool.category === 'command' ? 2 : 1);
   const use = extensionUse(e);
-  const action = (a: string) => ({ update: t('建立／更新圖譜', 'build / update the graph'), query: t('查詢', 'query'), path: t('找關聯', 'path'), explain: t('解釋', 'explain') })[a] ?? a;
+  const action = (a: string) => ({ update: t('建立／更新圖譜', 'build / update the graph'), query: t('查詢', 'query'), path: t('找關聯', 'path'), explain: t('解釋', 'explain'), init: t('建立索引', 'build the index'), index: t('建立索引', 'build the index'), sync: t('更新索引', 'update the index'), search: t('找符號', 'search'), callers: t('誰呼叫', 'callers'), callees: t('呼叫了誰', 'callees'), impact: t('影響範圍', 'impact'), node: t('看符號', 'node'), status: t('索引狀態', 'status') })[a] ?? a;
   return (
     <div className={cx('tl', tool.status, use && 'tl-ext')}>
       {/* The call's line is a button: its command and output open in place (Tab, Enter, Space). */}
@@ -83,12 +83,12 @@ function ToolLine({ e, opened }: { e: AgentEvent; opened?: Opened }) {
             <span className="tl-verb"><Ico i={Wrench} size={13} /> {t('使用 Skill', 'Skill')}</span>
             <span className="tl-arg">{use.name}</span>
           </>
-        ) : use?.kind === 'graphify' ? (
+        ) : use?.kind === 'graphify' || use?.kind === 'codegraph' ? (
           <>
-            <span className="tl-verb"><Ico i={Network} size={13} /> Graphify</span>
+            <span className="tl-verb">{use.kind === 'graphify' ? <><Ico i={Network} size={13} /> Graphify</> : <><Ico i={Braces} size={13} /> CodeGraph</>}</span>
             <span className="tl-arg">
               {action(use.action)}
-              {use.arg && use.action !== 'update' ? ` "${use.arg}"` : ''}
+              {use.arg && !['update', 'init', 'index', 'sync'].includes(use.action) ? ` "${use.arg}"` : ''}
             </span>
           </>
         ) : (

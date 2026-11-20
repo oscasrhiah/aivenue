@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { BookOpen, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleStop, CircleX, CornerDownRight, Hand, Handshake, Hourglass, LoaderCircle, MessageCircleQuestionMark, Network, Pause, Pin, RefreshCw, RotateCw, Ribbon, Square, TriangleAlert, Undo2, Wrench, X, type LucideIcon } from 'lucide-react';
+import { BookOpen, ChevronDown, ChevronRight, CircleCheck, CircleDashed, CircleHelp, CircleStop, CircleX, CornerDownRight, Hand, Handshake, Hourglass, LoaderCircle, MessageCircleQuestionMark, Network, Pause, Pin, RefreshCw, RotateCw, Ribbon, Square, TriangleAlert, Undo2, Wrench, X, type LucideIcon, Braces } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AgentRunInfo, FailureKind, Handoff, IssueResponse, ObservedCheck, ProviderInfo, ReviewIssue, Round, WorkflowRun } from '../../../core/src/types';
 import { fileUrl, hub, useAgentEvents } from '../api';
@@ -489,9 +489,9 @@ function TurnFacts({ run, agent }: { run: WorkflowRun; agent: AgentRunInfo }) {
 }
 
 /** The skills it applied or only read, and Graphify, with what each tooltip on the head says, in its activity log. */
-function TurnSkills({ agent, read, graphify }: { agent: AgentRunInfo; read: string[]; graphify: number }) {
+function TurnSkills({ agent, read, graphify, codegraph }: { agent: AgentRunInfo; read: string[]; graphify: number; codegraph?: { count: number; tools: string[] } }) {
   const t = useT();
-  if (!agent.alwaysOn?.length && !agent.skillUses?.length && !read.length && !graphify) return null;
+  if (!agent.alwaysOn?.length && !agent.skillUses?.length && !read.length && !graphify && !codegraph?.count) return null;
   return (
     <div className="block">
       <div className="block-label">{t('Skill 與擴充功能', 'Skills and extensions')}</div>
@@ -521,6 +521,11 @@ function TurnSkills({ agent, read, graphify }: { agent: AgentRunInfo; read: stri
         {graphify > 0 && (
           <li>
             <Ico i={Network} size={13} /> {t(`執行了 ${graphify} 次 graphify 指令`, `Ran graphify ${graphify} times`)}
+          </li>
+        )}
+        {!!codegraph?.count && (
+          <li>
+            <Ico i={Braces} size={13} /> {t(`查了 ${codegraph.count} 次 CodeGraph`, `Looked things up in CodeGraph ${codegraph.count} times`)} <span className="muted">· {codegraph.tools.join(t('、', ', '))}</span>
           </li>
         )}
       </ul>
@@ -877,7 +882,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
         </span>
       </div>
       {/* Skills and Graphify it used: quiet words under the head (what each means, in full, in its activity log). */}
-      {(agent.alwaysOn?.length || ext.skills.length || agent.skillUses?.length || ext.graphify > 0) && (
+      {(agent.alwaysOn?.length || ext.skills.length || agent.skillUses?.length || ext.graphify > 0 || ext.codegraph > 0) && (
         <div className="turn-ext">
           {agent.alwaysOn?.map((a) => (
             <span key={a} className="ext-chip" title={t(`整個任務都套用：${a}`, `Applied for the whole task: ${a}`)}>
@@ -909,6 +914,11 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
           {ext.graphify > 0 && (
             <span className="ext-chip" title={t(`執行了 ${ext.graphify} 次 graphify 指令`, `Ran graphify ${ext.graphify} times`)}>
               <Ico i={Network} size={13} /> Graphify × {ext.graphify}
+            </span>
+          )}
+          {ext.codegraph > 0 && (
+            <span className="ext-chip" title={t(`查了 ${ext.codegraph} 次 CodeGraph：${ext.codegraphTools.join('、')}`, `Looked things up in CodeGraph ${ext.codegraph} times: ${ext.codegraphTools.join(', ')}`)}>
+              <Ico i={Braces} size={13} /> CodeGraph × {ext.codegraph}
             </span>
           )}
         </div>
@@ -999,7 +1009,7 @@ export function AgentTurn({ run, agent, providers }: { run: WorkflowRun; agent: 
               </details>
             )}
             <Screenshots run={run} agentId={agent.id} />
-            <TurnSkills agent={agent} read={skillsRead} graphify={ext.graphify} />
+            <TurnSkills agent={agent} read={skillsRead} graphify={ext.graphify} codegraph={{ count: ext.codegraph, tools: ext.codegraphTools }} />
             <TurnDetails run={run} agent={agent} />
           </div>
         )}

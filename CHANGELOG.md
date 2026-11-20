@@ -4,6 +4,15 @@
 
 ## 未發布
 
+- **新的內建擴充 CodeGraph（預設關閉）**：
+  - **原本的問題**：Graphify 擅長專案概觀與群組，但「誰呼叫這個函式、改它會影響哪裡」這類精確的程式碼關係，agent 常常還是整個專案 grep。
+  - **現在**：
+    - 能力頁的內建擴充多了 CodeGraph。開啟時，Aivenue 用 npm 把固定版本 1.6.2 裝進自己的工具資料夾，不改 PATH，也不執行 `codegraph install`，所以不會改 agent 的全域設定或 CLAUDE.md、AGENTS.md；卡片上可以「解除安裝」。
+    - 每個工作流開始前，Aivenue 在工作資料夾建立或更新 `.codegraph/` 索引（和 Graphify 一起最多等 2 分鐘），agent 改檔後約 10 秒在背景更新，結束時最後更新一次；`.codegraph/` 加進 git 本機的 exclude 檔。
+    - 有索引時，每家供應商的 agent 都拿到 `codegraph_explore`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_search`、`codegraph_node`。兩個擴充都開時，agent 用 CodeGraph 查精確的程式碼關係，用 Graphify 看概觀；都保留改用一般搜尋的退路。
+    - Aivenue 啟動的 CodeGraph 一律關閉使用統計（環境變數與它自己的設定都關）。
+    - 分工圖的「查圖」也算 CodeGraph 的查詢，提示會列出用了哪些工具；agent 的標題列另外標出 CodeGraph × N。
+
 - **找不到新版 OpenCode Desktop 附的 OpenCode**：
   - **原本的問題**：OpenCode Desktop 現在裝在 `%LOCALAPPDATA%\Programs\ai.opencode.desktop`，Aivenue 只會到舊的 `@opencodedesktop` 資料夾找它附的 `opencode-cli.exe`，所以 OpenCode 不在 PATH 上時，供應商頁顯示沒有安裝。
   - **現在**：先找新的資料夾，再找舊的資料夾和官方安裝程式的 `~/.opencode/bin`。

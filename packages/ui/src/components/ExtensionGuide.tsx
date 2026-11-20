@@ -87,6 +87,26 @@ const GUIDES: Record<ExtensionId, Guide> = {
       ['文件、圖片、影片的語意分析需要模型（graphify Skill 會說明），單純的程式碼圖譜不需要。', 'Meaning extraction from docs, images and video needs a model (the graphify skill explains how); the plain code graph does not.'],
     ],
   },
+  codegraph: {
+    title: 'CodeGraph',
+    intro: [
+      ['把專案的程式碼解析成索引：每個函式、類別、方法在哪裡，誰呼叫它、它呼叫誰，改一個地方會影響哪些程式碼。agent 問這類問題時查索引，拿到的是精確的位置與原始碼，不用整個專案 grep。', 'Parses the project\'s code into an index: where every function, class and method is, who calls it, what it calls, and what a change affects. Agents ask it these questions and get exact locations and source instead of grepping the whole project.'],
+      ['程式碼在本機解析，不呼叫任何 API、不花 token。索引存在專案的 .codegraph/ 資料夾，Aivenue 會把它加進 git 本機的 exclude 檔，不會被提交。', "Code is parsed locally: no API calls, no tokens. The index lives in the project's .codegraph/ folder; Aivenue lists it in the local git exclude file, so it is not committed."],
+      ['和 Graphify 一起開時分工：CodeGraph 回答精確的程式碼關係（誰呼叫、呼叫了誰、改了會影響什麼、找符號）；Graphify 負責整個專案的概觀、群組、文件與「圖譜」視窗。', 'With Graphify also on, they split the work: CodeGraph answers exact code relations (callers, callees, what a change affects, finding a symbol); Graphify gives the overview of the project, its communities, docs and the Graph window.'],
+    ],
+    itemsTitle: ['agent 拿到的工具', 'Tools agents get'],
+    items: [
+      { name: 'codegraph_explore', text: ['一次回答「X 怎麼運作、X 怎麼走到 Y」：相關符號的原始碼、呼叫路徑與受影響的地方。', 'Answers "how does X work, how does X reach Y" in one call: the relevant source, call paths and what depends on it.'] },
+      { name: 'codegraph_callers／codegraph_callees', text: ['誰呼叫這個函式、這個函式呼叫了誰。', 'Who calls a function, and what it calls.'] },
+      { name: 'codegraph_impact', text: ['改這個符號會影響哪些程式碼。', 'What a change to a symbol affects.'] },
+      { name: 'codegraph_search／codegraph_node', text: ['用名稱找符號；看一個符號的原始碼與位置，或一個檔案的內容與行號。', 'Find a symbol by name; one symbol with its source and location, or a file with line numbers.'] },
+    ],
+    notes: [
+      ['Aivenue 用 npm 安裝固定版本 1.6.2 到自己的工具資料夾（需要 Node.js，約 270 MB），不改 PATH，也不執行 codegraph install，所以不會改你的 Claude Code、Codex 等 agent 的設定或 CLAUDE.md、AGENTS.md。卡片上的「解除安裝」會刪掉這份副本。', "Aivenue installs the pinned version 1.6.2 with npm into its own tools folder (needs Node.js, about 270 MB). It does not change your PATH and never runs codegraph install, so your Claude Code, Codex and other agent settings and your CLAUDE.md or AGENTS.md stay as they are. Uninstall on the card removes this copy."],
+      ['每個工作流開始前，Aivenue 會建立或更新工作資料夾的索引（最多等 2 分鐘，再久就在背景完成），agent 改檔後約 10 秒再更新，結束時最後更新一次。不使用 CodeGraph 的背景常駐程式與檔案監看。', 'Before each workflow Aivenue builds or updates the index of the working folder (waiting at most 2 minutes, then finishing in the background), updates it about 10 seconds after agents change files, and once more at the end. CodeGraph\'s background daemon and file watcher are not used.'],
+      ['使用統計：CodeGraph 預設會送出匿名的使用統計。Aivenue 啟動的每一個 CodeGraph 都設定 DO_NOT_TRACK=1 與 CODEGRAPH_TELEMETRY=0（也關掉每日的版本檢查），安裝後還會執行 codegraph telemetry off 寫進它自己的設定。', "Usage statistics: CodeGraph sends anonymous usage statistics by default. Every CodeGraph Aivenue starts runs with DO_NOT_TRACK=1 and CODEGRAPH_TELEMETRY=0 (which also turns off its daily version check), and after installing Aivenue runs codegraph telemetry off to store the choice in CodeGraph's own settings."],
+    ],
+  },
   omniroute: {
     title: 'OmniRoute',
     intro: [

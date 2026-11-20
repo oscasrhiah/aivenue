@@ -543,6 +543,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 | [Ponytail](https://github.com/DietrichGebert/ponytail)（MIT） | 「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計 | 撰寫計畫、審查計畫、實作與子 agent 一直套用主 Skill，審查程式碼套用 ponytail-review；強度可選 lite／full／ultra。指示直接放進 agent 的提示詞，不靠 agent 自己去讀 |
 | [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 25 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能、上線… | 依角色提供（例如計畫者拿到計畫拆解、審查者拿到程式碼審查），每個 Skill 可單獨開關；需要和使用者問答的 Skill 預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
 | [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。之後每個工作流開始前，Aivenue 先在工作資料夾（隔離模式是隔離副本）執行 `graphify update` 更新圖譜，agent 改檔後再在背景更新；agent 拿到 `graph_query`、`graph_path`、`graph_explain` 三個查圖工具，先查圖再 grep 或讀檔。細節見下方「Graphify 圖譜」 |
+| [CodeGraph](https://github.com/colbymchenry/codegraph)（MIT） | 程式碼索引：每個函式、類別在哪，誰呼叫它、它呼叫誰，改一個地方會影響哪裡；在本機解析，不呼叫 API | Aivenue 用 npm 把固定版本 1.6.2 裝進自己的工具資料夾（需要 Node.js，約 270 MB），不改 PATH、不改 agent 設定。每個工作流開始前建立或更新工作資料夾的 `.codegraph/` 索引，agent 拿到 CodeGraph 的查詢工具。細節見下方「CodeGraph 的細節」 |
 | [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。在卡片裡的「連接免費供應商」接上至少一家（例如 Gemini、OpenRouter）後，就能當 agent 使用 |
 
 **看得出用了什麼**：agent 的標題列會標出 🎀 Ponytail（強度）、🧰 讀過的 Skill、🕸️ Graphify 執行次數，滑鼠移上去看明細；處理過程裡讀 Skill 顯示成「🧰 使用 Skill 名稱」，graphify 指令顯示成「🕸️ Graphify 查詢 "…"」。
@@ -555,6 +556,14 @@ Graphify 圖譜的細節：
 - **查圖工具**：資料夾有圖譜且 Graphify 開著時，agent 多了 `graph_query`（問題）、`graph_path`（A 到 B 的關聯）、`graph_explain`（一個節點）三個 Aivenue 工具，等於在工作資料夾執行 `graphify query／path／explain`；agent 的指示改成先查圖，圖指到檔案後才 grep 或讀那幾行，圖沒幫上忙時在報告裡說一聲。shell 裡的 graphify 指令照樣能用。
 - **圖譜視窗**：對話標題列的「圖譜」按鈕（分工圖旁邊；圖譜更新中會轉圈）打開互動圖：依群組上色，淺色與深色主題都看得清楚；側邊可以搜尋名稱或檔案、點節點看它在哪個檔案第幾行、屬於哪個群組，以及依關係分組的相連節點（點一下就跳過去）；「重新建立」會重新解析資料夾。圖的右下角有放大、縮小按鈕（圖取得焦點時也能按加號、減號鍵），一開始縮放到相連的主體，按「整張圖」連零散的小群組一起看。超過 2,000 個節點時只畫連結最多的 2,000 個，並寫「顯示 N 個，共 M 個」。窄視窗（VS Code 側欄）裡圖在上、資料在下。畫圖用的 vis-network 9.1.6（MIT／Apache-2.0）隨 App 附上，只在打開視窗時載入，不連外部網路。
 - **分工圖看得到用了多少**：點開分工圖裡的 agent，會列出查圖、grep／讀檔、查圖前 grep／讀檔與建圖的次數。
+CodeGraph 的細節：
+
+- **安裝與移除**：開啟時用 npm 把 `@colbymchenry/codegraph@1.6.2` 裝進 Aivenue 的工具資料夾（`~/.aivenue/tools/codegraph`）。不用它的安裝腳本（那會改使用者的 PATH），也不執行 `codegraph install`（那會改 Claude Code、Codex 等 agent 的全域設定，並在 CLAUDE.md、AGENTS.md 加段落）；Aivenue 每次執行時自己把工具交給 agent。卡片上的「解除安裝」會刪掉這份副本並關閉擴充，專案裡的 `.codegraph/` 索引會留著。
+- **索引**：工作流開始前，沒有索引就執行 `codegraph init -y`，有就執行 `codegraph sync`，和 Graphify 的更新一起最多等 2 分鐘，再久就讓 agent 先開始、在背景完成；agent 改檔後約 10 秒在背景再更新，工作流結束時最後更新一次。不為整個磁碟或家目錄建立索引。`.codegraph/` 會加進 git 本機的 exclude 檔，不改 `.gitignore`。CodeGraph 的背景常駐程式與檔案監看都不使用。
+- **agent 的工具**：資料夾有索引時，所有供應商的 agent 都透過 Aivenue 的工具拿到 `codegraph_explore`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_search`、`codegraph_node`，由 CodeGraph 的命令列回答（內容和它的 MCP 工具相同）。沒有用它的 MCP 伺服器：同一個專案一次只能有一個伺服器寫入索引，同時跑好幾個 agent 時第二個會因為鎖而結束。
+- **和 Graphify 分工**：兩個都開時，agent 的指示是用 CodeGraph 查精確的程式碼關係（誰呼叫、呼叫了誰、改了會影響什麼、找符號），用 Graphify 看專案概觀、群組與文件；工具指到檔案後才 grep 或讀那幾行，工具失敗就改用另一個或一般搜尋。
+- **使用統計**：CodeGraph 預設會送出匿名的使用統計到 `telemetry.getcodegraph.com`。Aivenue 啟動的每一個 CodeGraph 都帶 `DO_NOT_TRACK=1`、`CODEGRAPH_TELEMETRY=0` 與 `CODEGRAPH_NO_UPDATE_CHECK=1`（每日版本檢查也關掉），安裝後還會執行 `codegraph telemetry off` 存進它自己的設定。
+- 分工圖的「查圖」也算 CodeGraph 的查詢，滑鼠移上去會列出用了哪些工具；agent 的標題列另外標出 CodeGraph × N。
 OmniRoute 的細節：
 
 - **連接免費供應商**：卡片裡列出推薦的 5 家（Google Gemini、OpenRouter、NVIDIA NIM、Mistral、Groq），另外 3 家收在「更多」（Ollama Cloud；Logfare 會記錄每一次請求；Cerebras 要綁卡）。按「取得金鑰」到官方網站自己註冊並建立 API 金鑰，貼回來按「連接」，Aivenue 會交給 OmniRoute（加密保存在它的資料庫）。接上後自動測試一次：送出和 agent 開頭差不多長的請求並要求呼叫工具，通過才顯示「可以跑 agent」，沒通過會寫出原因（金鑰無效、上下文太短、每分鐘上限太低、不支援工具）。
@@ -811,4 +820,4 @@ scripts/
 
 [MIT](LICENSE)
 
-內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。
+內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。CodeGraph 擴充在使用者開啟時才用 npm 下載，為 MIT 授權。
