@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../../core/src/types';
+import { GRAPH_TOOL } from '../../core/src/graphUsage';
 
 /** A tool call that used a skill (read its SKILL.md) or the graphify command. */
 export type ExtensionUse = { kind: 'skill'; name: string } | { kind: 'graphify'; action: string; arg?: string };
@@ -13,6 +14,9 @@ export function extensionUse(e: AgentEvent): ExtensionUse | undefined {
   if (skill && (tool.category === 'read' || /read|view|cat|type|get-content/i.test(tool.name + text))) return { kind: 'skill', name: skill[1] };
   const g = /\bgraphify(?:\.exe)?\s+(update|query|path|explain|add|install)\b\s*("[^"]*"|'[^']*'|\S+)?/i.exec(text);
   if (g && tool.category === 'command') return { kind: 'graphify', action: g[1].toLowerCase(), arg: g[2]?.replace(/^["']|["']$/g, '') };
+  // Aivenue's own graph tools (graph_query, graph_path, graph_explain): the same lookups as the commands.
+  const m = tool.category === 'hub' ? GRAPH_TOOL.exec(tool.name ?? '') : null;
+  if (m) return { kind: 'graphify', action: m[2].toLowerCase(), arg: /:\s*(.+)$/.exec(tool.title ?? '')?.[1] };
   return undefined;
 }
 

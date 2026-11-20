@@ -14,6 +14,7 @@ const bundled = await build({
   stdin: {
     contents: `export { GraphifyService, parseRebuilt } from './packages/core/src/graphify';
       export { graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } from './packages/core/src/graphUsage';
+      export { extensionSummary, extensionUse } from './packages/ui/src/extensionUse';
       export { Orchestrator } from './packages/core/src/orchestrator';
       export { RunStore } from './packages/core/src/store';`,
     resolveDir: process.cwd(),
@@ -27,7 +28,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { GraphifyService, parseRebuilt, Orchestrator, RunStore, graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } = mod.exports;
+const { GraphifyService, parseRebuilt, Orchestrator, RunStore, extensionSummary, extensionUse, graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } = mod.exports;
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-graphify-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -488,4 +489,11 @@ test('agent 只在資料夾有圖譜且 Graphify 開著時拿到查圖工具，�
   active = false;
   await finished(orch, orch.start(config(cwd)).id);
   assert.deepEqual(seen.at(-1), []);
+});
+
+test('回合標頭的 Graphify 次數也算 Aivenue 的查圖工具', () => {
+  const ev = (id, tool) => ({ seq: Number(id), ts: 1, kind: 'tool', tool: { id, status: 'ok', output: '', ...tool } });
+  const events = [ev('1', { name: 'mcp__aivenue__graph_query', category: 'hub', title: 'Query the graph: who calls hub' }), ev('2', { name: 'bash', category: 'command', title: 'graphify path "A" "B"' }), ev('3', { name: 'read_context', category: 'hub', title: 'Read context' })];
+  assert.equal(extensionSummary(events).graphify, 2);
+  assert.deepEqual(extensionUse(events[0]), { kind: 'graphify', action: 'query', arg: 'who calls hub' });
 });

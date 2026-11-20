@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { graphUsage } from '../../../core/src/graphUsage';
 import { ArrowLeft, CircleCheck, CircleDashed, CircleStop, CircleX, CornerDownRight, Hourglass, LoaderCircle, Pause, RotateCw, Square, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import { Dialog } from './Kit';
@@ -238,6 +239,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
     .sort(byStart);
   const tokens = agent.tokens;
   const steps = visible(events, raw);
+  const usage = useMemo(() => graphUsage(events), [events]);
   const answer = agent.finalText?.trim();
   return (
     <>
@@ -314,6 +316,25 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             <div>
               <dt>{t('指令', 'Commands')}</dt>
               <dd className="num">{agent.stats.commands}</dd>
+            </div>
+          )}
+          {/* How much it used the project graph (graphUsage.ts counts like the user's graphify-usage script). */}
+          <div title={t('graphify query、path、explain 指令與 Aivenue 的查圖工具', 'graphify query, path and explain commands and Aivenue graph tools')}>
+            <dt>{t('查圖', 'Graph lookups')}</dt>
+            <dd className="num">{usage.graph}</dd>
+          </div>
+          <div title={t('rg、grep、ls、cat 這類指令，以及搜尋與讀檔工具', 'rg, grep, ls, cat and similar commands, and search and read tools')}>
+            <dt>{t('grep／讀檔', 'grep / reads')}</dt>
+            <dd className="num">{usage.search}</dd>
+          </div>
+          <div title={t('第一次查圖之前做的 grep 與讀檔；沒有查圖時顯示 —', 'grep and reads before its first graph lookup; — when it never looked anything up in the graph')}>
+            <dt>{t('查圖前 grep／讀檔', 'grep / reads before graph')}</dt>
+            <dd className="num">{usage.graph ? usage.before : '—'}</dd>
+          </div>
+          {usage.build > 0 && (
+            <div title={t('graphify update 指令', 'graphify update commands')}>
+              <dt>{t('建圖', 'Graph builds')}</dt>
+              <dd className="num">{usage.build}</dd>
             </div>
           )}
           {agent.stats.filesChanged.length > 0 && (

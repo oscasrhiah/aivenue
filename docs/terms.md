@@ -17,6 +17,10 @@
 | 做事的 AI | agent（小寫，前後半形空格） | agent | 代理、代理人、智能體（「代理伺服器」指網路 proxy，照用） | 全部 |
 | 被派出去做子任務的 agent | 子 agent | sub-agent(s) | sub agent、Sub agents、子代理 | 工作流設定、卡片、分工圖、能力、供應商 |
 | 看所有 agent 的視窗與按鈕 | 分工圖 | Agent map | Agent map（中文介面）、agent 地圖、協作圖 | 對話標題列、分工圖視窗 |
+| Graphify 為工作資料夾建的圖，與看它的視窗和按鈕 | 圖譜（按鈕與視窗標題；說明文字裡可寫「知識圖譜」解釋它是什麼） | Graph | 程式碼圖、關係圖（對話紀錄裡可寫「專案圖譜」） | 對話標題列、圖譜視窗、對話紀錄、能力頁 |
+| agent 用圖譜查東西（graphify query／path／explain 與 graph_query 等工具） | 查圖（次數：查圖 N） | Graph lookups | 圖譜查詢（當標籤時） | 分工圖的 agent 詳細內容、README |
+| 一般搜尋與讀檔（rg、grep、ls、cat 這類指令與讀檔工具） | grep／讀檔；第一次查圖之前的叫「查圖前 grep／讀檔」（沒有查圖時顯示 —） | grep / reads | 搜尋次數、讀取次數 | 分工圖的 agent 詳細內容 |
+| 用 graphify update 建立或更新圖譜 | 建圖（agent 做的次數）；圖譜視窗的按鈕叫「重新建立」 | Graph builds / Rebuild | 重建圖譜、更新圖譜（按鈕名） | 分工圖的 agent 詳細內容、圖譜視窗 |
 | 權限：只讀 | 唯讀規劃 | Plan (read-only) | Plan 唯讀 | 輸入框、工作流設定 |
 | 權限：逐項問 | 手動核准 | Ask me | — | 同上 |
 | 權限：自動改檔 | 自動編輯 | Auto-edit | — | 同上 |
