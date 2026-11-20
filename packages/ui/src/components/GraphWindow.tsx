@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, LoaderCircle, RefreshCw, Search } from 'lucide-react';
+import { CircleAlert, LoaderCircle, RefreshCw, Search, ZoomIn, ZoomOut } from 'lucide-react';
 import type { GraphLink, GraphNode, GraphPayload, GraphifyStatus } from '../../../core/src/types';
 import { hub, useGraphify } from '../api';
 import { useT } from '../i18n';
 import { Ico } from '../icons';
 import { cx, fullTime, msgTime } from '../util';
 import { Dialog, ShowAll, StateWord } from './Kit';
+import { mainPart } from '../graphView';
 
 type T = ReturnType<typeof useT>;
 // vis-network is loaded only when the window opens (about 700 KB); its types come with the same file.
@@ -161,7 +162,8 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
         network.once('stabilizationIterationsDone', () => {
           // Still afterwards: the layout stays where it settled and costs no CPU.
           network.setOptions({ physics: false });
-          network.fit({ animation: false });
+          // The main part fills the view: small groups linked to nothing else would shrink it to a speck.
+          network.fit({ nodes: mainPart(graph), animation: false });
           if (alive) setLayout('done');
         });
         network.on('click', (p: { nodes: (string | number)[] }) => alive && setSelected(p.nodes.length ? String(p.nodes[0]) : undefined));
@@ -179,6 +181,13 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
       net.current = undefined;
     };
   }, [graph]);
+
+  // Zoom around the middle of the view (the wheel and a pinch still zoom where the pointer is).
+  const zoom = (factor: number) => {
+    const n = net.current?.network;
+    if (!n) return;
+    n.moveTo({ scale: Math.min(4, Math.max(0.03, n.getScale() * factor)), animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  };
 
   // The selection on the canvas follows the panel's.
   const focus = (id: string) => {
@@ -208,7 +217,36 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
         <div className="gv-stage">
           {graph && !visError ? (
             <>
-              <div ref={canvas} className="gv-canvas" role="img" aria-label={t('專案圖譜：用旁邊的搜尋找節點', 'Project graph: find nodes with the search beside it')} />
+              <div
+                ref={canvas}
+                className="gv-canvas"
+                role="img"
+                tabIndex={0}
+                aria-label={t('專案圖譜：用旁邊的搜尋找節點，加號與減號鍵縮放', 'Project graph: find nodes with the search beside it; plus and minus keys zoom')}
+                onKeyDown={(e) => {
+                  if (e.altKey || e.ctrlKey || e.metaKey) return;
+                  if (e.key === '+' || e.key === '=') zoom(1.25);
+                  else if (e.key === '-' || e.key === '_') zoom(1 / 1.25);
+                  else return;
+                  e.preventDefault();
+                }}
+              />
+              {layout === 'done' && (
+                <div className="gv-fit" role="group" aria-label={t('縮放', 'Zoom')}>
+                  <button type="button" className="icon-btn gv-zoom" onClick={() => zoom(1.25)} aria-label={t('放大', 'Zoom in')} title={t('放大', 'Zoom in')}>
+                    <Ico i={ZoomIn} size={16} />
+                  </button>
+                  <button type="button" className="icon-btn gv-zoom" onClick={() => zoom(1 / 1.25)} aria-label={t('縮小', 'Zoom out')} title={t('縮小', 'Zoom out')}>
+                    <Ico i={ZoomOut} size={16} />
+                  </button>
+                  <button type="button" className="btn small" onClick={() => net.current?.network.fit({ nodes: mainPart(graph), animation: { duration: 300, easingFunction: 'easeInOutQuad' } })} title={t('縮放到相連的主體，不含零散的小群組', 'Zoom to the connected main part, without the small detached groups')}>
+                    {t('主體', 'Main part')}
+                  </button>
+                  <button type="button" className="btn small" onClick={() => net.current?.network.fit({ animation: { duration: 300, easingFunction: 'easeInOutQuad' } })} title={t('縮放到整張圖，包含零散的小群組', 'Zoom to the whole graph, small detached groups included')}>
+                    {t('整張圖', 'Whole graph')}
+                  </button>
+                </div>
+              )}
               {layout !== 'done' && (
                 <div className="gv-overlay muted small">
                   <StateWord icon={LoaderCircle} spin>

@@ -4505,6 +4505,38 @@ textarea.code {
   pointer-events: none;
 }
 
+/* Zoom to the main part or the whole graph: at the canvas's bottom right. */
+.gv-fit {
+  position: absolute;
+  right: var(--sp-2);
+  bottom: var(--sp-2);
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.gv-fit .btn,
+.gv-fit .gv-zoom {
+  background: var(--raised);
+}
+
+/* Zoom in and out: the icon buttons' 30px square, with the line a button has so they show over the graph. */
+.gv-fit .gv-zoom {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.gv-fit .gv-zoom:hover {
+  background: var(--raised);
+  color: var(--accent-text);
+}
+
+.gv-canvas:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
 .gv-empty {
   height: 100%;
   display: grid;
