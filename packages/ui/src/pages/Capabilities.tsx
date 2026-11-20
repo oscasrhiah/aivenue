@@ -1182,6 +1182,13 @@ const PACK_INFO: Record<PackSkillId, { title: string; use: [string, string]; whe
     url: 'https://github.com/vercel-labs/web-interface-guidelines',
     license: 'MIT',
   },
+  'obsidian-skills': {
+    title: 'obsidian-markdown + json-canvas + obsidian-bases',
+    use: ['Obsidian 筆記庫的檔案格式：雙鏈、嵌入、callout、屬性等 Obsidian 語法，白板（.canvas）和資料庫檢視（.base）。', 'Obsidian vault formats: wikilinks, embeds, callouts, properties and other Obsidian syntax, canvases (.canvas) and Bases views (.base).'],
+    when: ['適用於在 Obsidian 筆記庫裡新增或修改筆記、白板、Base 的任務。直接寫檔，不需要開著 Obsidian；需要 Obsidian 程式的 obsidian-cli 沒有附上。', 'For tasks that add or change notes, canvases or Bases in an Obsidian vault. Files are written directly, Obsidian does not need to be open; obsidian-cli, which needs the Obsidian app, is not shipped.'],
+    url: 'https://github.com/obsidianmd/obsidian-skills',
+    license: 'MIT',
+  },
 };
 
 function PackSkills() {

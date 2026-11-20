@@ -167,9 +167,9 @@ for (const [view, width] of [['wide', null], ['narrow', 420]]) {
   const onDemand = find(ON_DEMAND);
   chk(`${at}: section "按需使用的內建 Skill"`, onDemand?.lists[0] ?? null, ['gh-fix-ci', 'gh-address-comments', 'security-audit']);
   const pack = find(PACK);
-  chk(`${at}: section "可開關的內建 Skill", its four skills`, pack?.lists[0] ?? null, ['improve-codebase-architecture + codebase-design', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines']);
-  chk(`${at}: four switches, off by default and usable`, pack?.switches.map((x) => `${x.label}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`) ?? null, ['improve-codebase-architecture + codebase-design:off', 'diagnosing-bugs:off', 'gha-security-review:off', 'web-design-guidelines:off']);
-  chk(`${at}: roles each one is offered to`, pack?.roles.map((r) => r.length) ?? null, [1, 2, 1, 1]);
+  chk(`${at}: section "可開關的內建 Skill", its five skills`, pack?.lists[0] ?? null, ['improve-codebase-architecture + codebase-design', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-markdown + json-canvas + obsidian-bases']);
+  chk(`${at}: five switches, off by default and usable`, pack?.switches.map((x) => `${x.label}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`) ?? null, ['improve-codebase-architecture + codebase-design:off', 'diagnosing-bugs:off', 'gha-security-review:off', 'web-design-guidelines:off', 'obsidian-markdown + json-canvas + obsidian-bases:off']);
+  chk(`${at}: roles each one is offered to`, pack?.roles.map((r) => r.length) ?? null, [1, 2, 1, 1, 3]);
   chk(`${at}: no "設計參考" list any more (removed in 0.4.3: none of them could be offered to agents)`, pack ? [pack.labels.length, pack.lists.length] : null, [0, 1]);
   chk(`${at}: "共用 Skill" still there`, Boolean(find(SHARED)), true);
   chk(`${at}: no sideways scrolling (page, pane)`, [pane.pageOverflow <= 0, (pane.bodyOverflow ?? 0) <= 0], [true, true]);

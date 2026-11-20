@@ -133,15 +133,18 @@ test('可開關的內建 skill：預設關閉；開啟後只出現在對應角�
   const caps = s.o.capabilities;
   const names = (role) => caps.extraSkills(role).map((x) => x.name);
   const list = s.packSkills();
-  assert.deepEqual(list.map((x) => x.id), ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines']);
+  assert.deepEqual(list.map((x) => x.id), ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-skills']);
   assert.ok(list.every((x) => x.available && !x.enabled), 'shipped, off by default');
   for (const role of ['planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent']) assert.deepEqual(names(role), [], `nothing for ${role} while off`);
-  for (const id of ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines']) s.setPackSkill(id, true);
-  assert.equal(pushed.length, 4);
+  for (const id of ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-skills']) s.setPackSkill(id, true);
+  assert.equal(pushed.length, 5);
   assert.deepEqual(names('planner').sort(), ['codebase-design', 'improve-codebase-architecture']);
-  assert.deepEqual(names('executor'), ['diagnosing-bugs']);
-  assert.deepEqual(names('subagent'), ['diagnosing-bugs']);
-  assert.deepEqual(names('code_reviewer').sort(), ['gha-security-review', 'web-design-guidelines']);
+  assert.deepEqual(names('executor'), ['diagnosing-bugs', 'json-canvas', 'obsidian-bases', 'obsidian-markdown']);
+  assert.deepEqual(names('subagent'), ['diagnosing-bugs', 'json-canvas', 'obsidian-bases', 'obsidian-markdown']);
+  assert.deepEqual(names('code_reviewer').sort(), ['gha-security-review', 'json-canvas', 'obsidian-bases', 'obsidian-markdown', 'web-design-guidelines']);
+  // obsidian-skills: the three file-format skills only (no obsidian-cli, defuddle or knap), with the rule.
+  assert.match(caps.extraRules('executor'), /obsidian-markdown, json-canvas or obsidian-bases: write the vault's files directly[\s\S]*do not install or run them/);
+  assert.deepEqual(fs.readdirSync(path.join(process.cwd(), 'packages', 'core', 'bundled', 'obsidian-skills', 'skills')).sort(), ['json-canvas', 'obsidian-bases', 'obsidian-markdown']);
   assert.deepEqual(names('plan_reviewer'), []);
   for (const x of caps.extraSkills('code_reviewer')) assert.ok(fs.existsSync(x.path), `copied: ${x.path}`);
   const wdg = caps.extraSkills('code_reviewer').find((x) => x.name === 'web-design-guidelines');
@@ -154,7 +157,7 @@ test('可開關的內建 skill：預設關閉；開啟後只出現在對應角�
   assert.match(caps.extraRules('executor'), /diagnosing-bugs: .*ask_user/);
   assert.equal(caps.extraRules('plan_reviewer'), '');
   s.setPackSkill('gha-security-review', false);
-  assert.deepEqual(names('code_reviewer'), ['web-design-guidelines']);
+  assert.deepEqual(names('code_reviewer').sort(), ['json-canvas', 'obsidian-bases', 'obsidian-markdown', 'web-design-guidelines']);
   assert.doesNotMatch(caps.extraRules('code_reviewer'), /gha-security-review/);
   assert.throws(() => s.setPackSkill('frontend-testing-debugging', true), /frontend-testing-debugging/);
   fs.rmSync(skillsDir, { recursive: true, force: true });

@@ -302,7 +302,7 @@ export interface ExtensionsConfig {
 }
 
 /** A bundled third-party skill the user turns on by itself (Capabilities → built-in skills you can turn on). */
-export type PackSkillId = 'architecture-review' | 'diagnosing-bugs' | 'gha-security-review' | 'web-design-guidelines';
+export type PackSkillId = 'architecture-review' | 'diagnosing-bugs' | 'gha-security-review' | 'web-design-guidelines' | 'obsidian-skills';
 
 /** One such skill, as the settings list it. */
 export interface PackSkillStatus {

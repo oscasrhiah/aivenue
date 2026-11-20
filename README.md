@@ -830,4 +830,4 @@ scripts/
 
 [MIT](LICENSE)
 
-內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。CodeGraph 擴充在使用者開啟時才用 npm 下載，為 MIT 授權。impeccable 的 Skill 檔與它開啟時用 npm 下載的引擎為 Apache-2.0。
+內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。CodeGraph 擴充在使用者開啟時才用 npm 下載，為 MIT 授權。impeccable 的 Skill 檔與它開啟時用 npm 下載的引擎為 Apache-2.0。「可開關的內建 Skill」裡的 Obsidian 三個 Skill（obsidian-markdown、json-canvas、obsidian-bases，來自 [obsidianmd/obsidian-skills](https://github.com/obsidianmd/obsidian-skills)）為 MIT：它們只教 agent 直接寫 Obsidian 筆記庫的檔案（雙鏈、屬性、callout、`.canvas` 白板、`.base` 資料庫檢視），不需要開著 Obsidian；需要 Obsidian 程式的 obsidian-cli，以及會要求用 npm 全域安裝工具的 defuddle、knap 沒有附上。

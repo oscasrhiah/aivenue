@@ -24,6 +24,7 @@
 | CodeGraph 在專案裡建的程式碼索引（.codegraph/） | CodeGraph 索引（名稱不翻譯；說明裡可寫「程式碼索引」） | CodeGraph index | 程式碼圖譜、CodeGraph 圖譜（「圖譜」只指 Graphify 的圖） | 能力頁、說明、工作流紀錄 |
 | 前端設計擴充 impeccable（名稱一律小寫，不翻譯） | impeccable | impeccable | Impeccable（大寫開頭）、設計 Skill 包 | 能力頁、說明、README |
 | impeccable 為新介面向 impeccable.style 取的一組設計方案（它的 concept-seed） | 設計方向 | design direction | 概念種子、擲骰（指令名 concept-seed 只出現在說明裡） | 能力頁、說明 |
+| Obsidian 的 vault 與它的檔案 | 筆記庫；白板（.canvas）；Base（.base，名稱不翻譯） | vault; canvas; Base | 倉庫、儲存庫（指 Obsidian 的 vault 時）、畫布 | 能力頁、README |
 | 擴充功能送出的匿名使用資料 | 使用統計 | usage statistics | 遙測、telemetry（中文介面） | 能力頁、說明 |
 | 權限：只讀 | 唯讀規劃 | Plan (read-only) | Plan 唯讀 | 輸入框、工作流設定 |
 | 權限：逐項問 | 手動核准 | Ask me | — | 同上 |

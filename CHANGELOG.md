@@ -19,6 +19,13 @@
     - agent 執行的指令一律帶上關閉使用統計與更新檢查的設定，impeccable 自己要存的檔案放在 Aivenue 的工具資料夾，不建立 `~/.impeccable`。
     - 能力頁和說明都寫明：為新介面挑設計方向時，引擎會連到 impeccable.style，這個連線關不掉；掃描網址時用電腦上的 Chrome 或 Edge。
 
+- **新的可開關內建 Skill：Obsidian 筆記庫的檔案格式（預設關閉）**：
+  - **原本的問題**：請 agent 在 Obsidian 筆記庫裡加筆記、白板或 Base 時，它不熟 Obsidian 自己的語法，雙鏈、callout、屬性和 `.canvas` 的 JSON 常常寫錯。
+  - **現在**：
+    - 「可開關的內建 Skill」多了 obsidian-markdown、json-canvas、obsidian-bases 三個 Skill，一個開關，來自 Obsidian 官方的 obsidianmd/obsidian-skills（MIT，固定在 2026-11-06 的 `60b7f25`）。
+    - 開啟後提供給實作者、子 agent 和程式碼審查者。附一條規則：直接寫檔，不安裝也不執行 obsidian 指令、Defuddle、Knap。
+    - 不需要開著 Obsidian。需要 Obsidian 程式的 obsidian-cli，以及會要求用 npm 全域安裝工具的 defuddle、knap 沒有附上。
+
 - **「工作資料夾外的寫檔紀錄」收成一行**：
   - **原本的問題**：對話裡「工作資料夾外有 N 筆寫檔工具紀錄」是一張有框的警告卡，連資料夾分組和說明一起攤開，佔很多位置。多數時候那些檔案只是 agent 自己的輔助腳本，例如 OpenCode 在執行前把 .ps1、.js 寫進 %TEMP%\opencode\。
   - **現在**：
