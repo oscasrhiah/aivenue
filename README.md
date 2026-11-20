@@ -561,7 +561,8 @@ CodeGraph 的細節：
 - **安裝與移除**：開啟時用 npm 把 `@colbymchenry/codegraph@1.6.2` 裝進 Aivenue 的工具資料夾（`~/.aivenue/tools/codegraph`）。不用它的安裝腳本（那會改使用者的 PATH），也不執行 `codegraph install`（那會改 Claude Code、Codex 等 agent 的全域設定，並在 CLAUDE.md、AGENTS.md 加段落）；Aivenue 每次執行時自己把工具交給 agent。卡片上的「解除安裝」會刪掉這份副本並關閉擴充，專案裡的 `.codegraph/` 索引會留著。
 - **索引**：工作流開始前，沒有索引就執行 `codegraph init -y`，有就執行 `codegraph sync`，和 Graphify 的更新一起最多等 2 分鐘，再久就讓 agent 先開始、在背景完成；agent 改檔後約 10 秒在背景再更新，工作流結束時最後更新一次。不為整個磁碟或家目錄建立索引。`.codegraph/` 會加進 git 本機的 exclude 檔，不改 `.gitignore`。CodeGraph 的背景常駐程式與檔案監看都不使用。
 - **agent 的工具**：資料夾有索引時，所有供應商的 agent 都透過 Aivenue 的工具拿到 `codegraph_explore`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_search`、`codegraph_node`，由 CodeGraph 的命令列回答（內容和它的 MCP 工具相同）。沒有用它的 MCP 伺服器：同一個專案一次只能有一個伺服器寫入索引，同時跑好幾個 agent 時第二個會因為鎖而結束。
-- **和 Graphify 分工**：兩個都開時，agent 的指示是用 CodeGraph 查精確的程式碼關係（誰呼叫、呼叫了誰、改了會影響什麼、找符號），用 Graphify 看專案概觀、群組與文件；工具指到檔案後才 grep 或讀那幾行，工具失敗就改用另一個或一般搜尋。
+- **和 Graphify 一起開**：agent 兩套工具都拿到，指示裡各用一句話說它們擅長什麼（CodeGraph：誰呼叫、呼叫了誰、改了會影響什麼、找符號；Graphify：專案概觀、群組、兩個概念之間的路徑與文件），由 agent 自己挑；兩邊都算查圖，都是先查再 grep，工具指到檔案後才讀那幾行，失敗就改用另一個或一般搜尋。
+- **在圖譜視窗看**：「圖譜」視窗有 Graphify 與 CodeGraph 兩個分頁，各自顯示自己的圖（資料不混在一起），搜尋、節點詳細資料、縮放都一樣。CodeGraph 沒有匯出功能（它的瀏覽器檢視器還沒正式推出），Aivenue 以唯讀方式讀它的 `.codegraph/codegraph.db`：符號是節點（略過 import），呼叫、包含、參照等是連線，每個檔案一個群組；同樣最多畫 2,000 個節點。
 - **使用統計**：CodeGraph 預設會送出匿名的使用統計到 `telemetry.getcodegraph.com`。Aivenue 啟動的每一個 CodeGraph 都帶 `DO_NOT_TRACK=1`、`CODEGRAPH_TELEMETRY=0` 與 `CODEGRAPH_NO_UPDATE_CHECK=1`（每日版本檢查也關掉），安裝後還會執行 `codegraph telemetry off` 存進它自己的設定。
 - 分工圖的「查圖」也算 CodeGraph 的查詢，滑鼠移上去會列出用了哪些工具；agent 的標題列另外標出 CodeGraph × N。
 OmniRoute 的細節：

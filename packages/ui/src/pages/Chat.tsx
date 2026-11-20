@@ -2,13 +2,13 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleStop, CircleX, GitBranch, Hand, LoaderCircle, LogIn, MessageCircleQuestionMark, Network, RefreshCw, Signpost, Target, Undo2, Waypoints, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun, WorkflowStatus } from '../../../core/src/types';
-import { fileUrl, hub, useAgentEvents, useDeleted, useExtensions, useGraphify, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
+import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { decideProblemText, decideProblems } from '../../../core/src/reviewDecide';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
-import { GraphWindow } from '../components/GraphWindow';
+import { GraphWindow, useGraphViews } from '../components/GraphWindow';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { deleteConversation, PreflightList, RunMenu, useMenuKeys } from '../components/RunTools';
@@ -1792,13 +1792,18 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
  */
 function GraphButton({ cwd, onOpen }: { cwd: string; onOpen: () => void }) {
   const t = useT();
-  const ext = useExtensions().find((e) => e.id === 'graphify');
-  const status = useGraphify(ext?.enabled && ext.state === 'ready' ? cwd : undefined);
-  if (!ext?.enabled || ext.state !== 'ready' || !status || (!status.exists && status.state !== 'building')) return null;
-  const building = status.state === 'building';
+  const views = useGraphViews(cwd);
+  // Either tool's graph: the window opens on the tab that has one.
+  const live = (['graphify', 'codegraph'] as const).filter((k) => views[k]?.active && (views[k]!.exists || views[k]!.state === 'building'));
+  if (!live.length) return null;
+  const building = live.some((k) => views[k]!.state === 'building');
+  const g = views.graphify;
+  const c = views.codegraph;
   const title = [
     t('開啟這個資料夾的圖譜：檔案、函式與它們的呼叫關係', "Open this folder's graph: files, functions and how they call each other"),
-    building ? t('正在更新圖譜', 'Updating the graph') : status.nodes !== undefined ? t(`${status.nodes} 個節點`, `${status.nodes} nodes`) : '',
+    g?.exists ? (g.nodes !== undefined ? t(`Graphify：${g.nodes} 個節點`, `Graphify: ${g.nodes} nodes`) : t('Graphify：有圖譜', 'Graphify: has a graph')) : '',
+    c?.exists ? (c.nodes !== undefined ? t(`CodeGraph：${c.nodes} 個符號`, `CodeGraph: ${c.nodes} symbols`) : t('CodeGraph：有索引', 'CodeGraph: indexed')) : '',
+    building ? t('正在更新', 'Updating') : '',
   ]
     .filter(Boolean)
     .join('\n');

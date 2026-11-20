@@ -92,7 +92,7 @@ const GUIDES: Record<ExtensionId, Guide> = {
     intro: [
       ['把專案的程式碼解析成索引：每個函式、類別、方法在哪裡，誰呼叫它、它呼叫誰，改一個地方會影響哪些程式碼。agent 問這類問題時查索引，拿到的是精確的位置與原始碼，不用整個專案 grep。', 'Parses the project\'s code into an index: where every function, class and method is, who calls it, what it calls, and what a change affects. Agents ask it these questions and get exact locations and source instead of grepping the whole project.'],
       ['程式碼在本機解析，不呼叫任何 API、不花 token。索引存在專案的 .codegraph/ 資料夾，Aivenue 會把它加進 git 本機的 exclude 檔，不會被提交。', "Code is parsed locally: no API calls, no tokens. The index lives in the project's .codegraph/ folder; Aivenue lists it in the local git exclude file, so it is not committed."],
-      ['和 Graphify 一起開時分工：CodeGraph 回答精確的程式碼關係（誰呼叫、呼叫了誰、改了會影響什麼、找符號）；Graphify 負責整個專案的概觀、群組、文件與「圖譜」視窗。', 'With Graphify also on, they split the work: CodeGraph answers exact code relations (callers, callees, what a change affects, finding a symbol); Graphify gives the overview of the project, its communities, docs and the Graph window.'],
+      ['和 Graphify 一起開時，agent 兩套工具都拿到並自己挑：CodeGraph 擅長誰呼叫、呼叫了誰、改了會影響什麼與找符號；Graphify 擅長專案概觀、群組、概念之間的路徑與文件。「圖譜」視窗的 CodeGraph 分頁可以看它的索引。', 'With Graphify also on, agents get both tool sets and pick: CodeGraph is good at callers, callees, what a change affects and finding a symbol; Graphify at the project overview, communities, paths between concepts and docs. The CodeGraph tab of the Graph window shows its index.'],
     ],
     itemsTitle: ['agent 拿到的工具', 'Tools agents get'],
     items: [

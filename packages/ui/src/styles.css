@@ -4478,6 +4478,12 @@ textarea.code {
   overflow: hidden;
 }
 
+.gv-tabs {
+  flex: none;
+  padding: var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--dialog-line);
+}
+
 .gv-layout {
   flex: 1;
   min-height: 0;
@@ -4494,6 +4500,11 @@ textarea.code {
 }
 
 .gv-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.gv-host {
   position: absolute;
   inset: 0;
 }
@@ -4704,6 +4715,10 @@ textarea.code {
 @media (max-width: 520px) {
   .gv-modal .dialog-body {
     overflow-y: auto;
+  }
+
+  .gv-tabs {
+    padding: var(--sp-2) var(--sp-3);
   }
 
   .gv-layout {

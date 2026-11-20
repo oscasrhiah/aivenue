@@ -9,7 +9,8 @@
   - **現在**：
     - 能力頁的內建擴充多了 CodeGraph。開啟時，Aivenue 用 npm 把固定版本 1.6.2 裝進自己的工具資料夾，不改 PATH，也不執行 `codegraph install`，所以不會改 agent 的全域設定或 CLAUDE.md、AGENTS.md；卡片上可以「解除安裝」。
     - 每個工作流開始前，Aivenue 在工作資料夾建立或更新 `.codegraph/` 索引（和 Graphify 一起最多等 2 分鐘），agent 改檔後約 10 秒在背景更新，結束時最後更新一次；`.codegraph/` 加進 git 本機的 exclude 檔。
-    - 有索引時，每家供應商的 agent 都拿到 `codegraph_explore`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_search`、`codegraph_node`。兩個擴充都開時，agent 用 CodeGraph 查精確的程式碼關係，用 Graphify 看概觀；都保留改用一般搜尋的退路。
+    - 有索引時，每家供應商的 agent 都拿到 `codegraph_explore`、`codegraph_callers`、`codegraph_callees`、`codegraph_impact`、`codegraph_search`、`codegraph_node`。兩個擴充都開時，兩套工具都給，指示裡各一句它們擅長什麼，由 agent 自己挑；都保留改用一般搜尋的退路。
+    - 「圖譜」視窗多了 Graphify 與 CodeGraph 兩個分頁，各自顯示自己的圖；CodeGraph 的圖以唯讀方式從它的索引資料庫讀出。哪一邊沒有開、沒裝好或還沒建索引，分頁裡用一句話說明怎麼做。
     - Aivenue 啟動的 CodeGraph 一律關閉使用統計（環境變數與它自己的設定都關）。
     - 分工圖的「查圖」也算 CodeGraph 的查詢，提示會列出用了哪些工具；agent 的標題列另外標出 CodeGraph × N。
 

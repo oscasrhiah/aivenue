@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CircleAlert, LoaderCircle, RefreshCw, Search, ZoomIn, ZoomOut } from 'lucide-react';
-import type { GraphLink, GraphNode, GraphPayload, GraphifyStatus } from '../../../core/src/types';
-import { hub, useGraphify } from '../api';
+import type { GraphLink, GraphNode, GraphPayload } from '../../../core/src/types';
+import { hub, useCodegraph, useExtensions, useGraphify } from '../api';
 import { useT } from '../i18n';
 import { Ico } from '../icons';
 import { cx, fullTime, msgTime } from '../util';
-import { Dialog, ShowAll, StateWord } from './Kit';
+import { Dialog, Seg, ShowAll, StateWord } from './Kit';
 import { mainPart } from '../graphView';
 
 type T = ReturnType<typeof useT>;
@@ -22,6 +22,9 @@ const PALETTE = 10;
 function relationLabel(t: T, relation: string, out: boolean): string {
   const r: Record<string, [string, string, string, string]> = {
     calls: ['呼叫', 'Calls', '被呼叫', 'Called by'],
+    instantiates: ['建立實例', 'Instantiates', '被建立實例', 'Instantiated by'],
+    extends: ['繼承', 'Extends', '被繼承', 'Extended by'],
+    implements: ['實作介面', 'Implements', '介面被實作', 'Implemented by'],
     indirect_call: ['間接呼叫', 'Calls indirectly', '被間接呼叫', 'Called indirectly by'],
     contains: ['包含', 'Contains', '屬於', 'Contained in'],
     method: ['方法', 'Methods', '所屬類別', 'Method of'],
@@ -89,10 +92,77 @@ function edgeStyle(l: GraphLink, i: number, th: Theme) {
 /** Where a node lives: "src/hub.ts:30" (graphify writes the line as "L30"). */
 const placeOf = (n: GraphNode) => (n.source_file ? `${n.source_file}${n.source_location ? `:${n.source_location.replace(/^L/, '')}` : ''}` : '');
 
-/** 「圖譜」: the Graphify graph of the folder a workflow works in, with search, a node's neighbours and a rebuild. */
+type Kind = 'graphify' | 'codegraph';
+
+/** What the window needs to know about one tool's graph of the folder, whichever tool it is. */
+interface ViewStatus {
+  /** The extension is on. */
+  enabled: boolean;
+  /** Its state was read (an extension that is off has nothing to read). */
+  loaded: boolean;
+  /** On and installed: it can build and be asked. */
+  active: boolean;
+  exists: boolean;
+  state: 'idle' | 'building' | 'failed' | 'refused';
+  builtAt?: number;
+  nodes?: number;
+  edges?: number;
+  communities?: number;
+  lastError?: string;
+}
+
+const METHODS: Record<Kind, { graph: string; rebuild: string }> = {
+  graphify: { graph: 'graphify.graph', rebuild: 'graphify.rebuild' },
+  codegraph: { graph: 'codegraph.graph', rebuild: 'codegraph.rebuild' },
+};
+
+/** The header button's and the window's view of both graphs of a folder. */
+export function useGraphViews(cwd: string | undefined): Record<Kind, ViewStatus | null> {
+  const ext = useExtensions();
+  const on = (id: Kind) => ext.find((e) => e.id === id);
+  const gx = on('graphify');
+  const cx_ = on('codegraph');
+  const g = useGraphify(gx?.enabled ? cwd : undefined);
+  const c = useCodegraph(cx_?.enabled ? cwd : undefined);
+  return {
+    graphify: gx ? { enabled: gx.enabled, loaded: !gx.enabled || !!g, active: !!g?.active, exists: !!g?.exists, state: g?.state ?? 'idle', builtAt: g?.builtAt, nodes: g?.nodes, edges: g?.edges, communities: g?.communities, lastError: g?.lastError } : null,
+    codegraph: cx_ ? { enabled: cx_.enabled, loaded: !cx_.enabled || !!c, active: !!c?.active, exists: !!c?.indexed, state: c?.state ?? 'idle', builtAt: c?.indexedAt, nodes: c?.symbols, edges: c?.edges, communities: c?.files, lastError: c?.lastError } : null,
+  };
+}
+
+/**
+ * 「圖譜」: the graphs of the folder a workflow works in, one tab each — Graphify's and CodeGraph's, never mixed — with
+ * the same viewer (search, a node's neighbours, zoom, fit) and a rebuild. It opens on the tab that has a graph.
+ */
 export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void }) {
   const t = useT();
-  const status = useGraphify(cwd);
+  const views = useGraphViews(cwd);
+  const [tab, setTab] = useState<Kind | undefined>();
+  // The tab that has a graph (Graphify first when both do), chosen once both states are known.
+  const known = !!views.graphify?.loaded && !!views.codegraph?.loaded;
+  const first: Kind = views.graphify?.exists || !views.codegraph?.exists ? 'graphify' : 'codegraph';
+  useEffect(() => {
+    if (known && !tab) setTab(first);
+  }, [known]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shown: Kind = tab ?? first;
+  return (
+    <Dialog className="gv-modal" size="xl" onClose={onClose} title={t('圖譜', 'Graph')}>
+      <div className="gv-tabs">
+        <Seg
+          label={t('圖譜來源', 'Graph source')}
+          value={shown}
+          onChange={setTab}
+          choices={(['graphify', 'codegraph'] as Kind[]).map((k) => ({ value: k, label: k === 'graphify' ? 'Graphify' : 'CodeGraph', title: views[k]?.exists ? undefined : k === 'graphify' ? t('這個資料夾還沒有 Graphify 圖譜', 'No Graphify graph for this folder yet') : t('這個資料夾還沒有 CodeGraph 索引', 'No CodeGraph index for this folder yet') }))}
+        />
+      </div>
+      {tab ? <GraphView key={tab} cwd={cwd} kind={tab} status={views[tab]} /> : <div className="gv-empty"><StateWord icon={LoaderCircle} spin>{t('載入中', 'Loading')}</StateWord></div>}
+    </Dialog>
+  );
+}
+
+/** One tool's graph: the canvas and the panel beside it. */
+function GraphView({ cwd, kind, status }: { cwd: string; kind: Kind; status: ViewStatus | null }) {
+  const t = useT();
   const [graph, setGraph] = useState<GraphPayload>();
   const [loadError, setLoadError] = useState<string>();
   const [selected, setSelected] = useState<string>();
@@ -102,21 +172,27 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
   const [asking, setAsking] = useState(false);
   const canvas = useRef<HTMLDivElement>(null);
   const net = useRef<{ network: Net; nodes: Updatable; edges: Updatable }>(undefined);
-  const builtAt = status?.exists ? status.builtAt : undefined;
+  // Read again whenever a new one was written (a graph whose time is unknown is read once).
+  const builtAt = status?.exists ? (status.builtAt ?? 1) : undefined;
 
   // The graph as it is now: read again whenever a new one was written.
+  const active = !!status?.active;
+  // Turned off (or not installed any more): the tab says so instead of showing the last graph.
   useEffect(() => {
-    if (!builtAt) return;
+    if (status?.loaded && !active) setGraph(undefined);
+  }, [status?.loaded, active]);
+  useEffect(() => {
+    if (!builtAt || !active) return;
     let alive = true;
     setLoadError(undefined);
     hub
-      .call<GraphPayload>('graphify.graph', { cwd })
+      .call<GraphPayload>(METHODS[kind].graph, { cwd })
       .then((g) => alive && setGraph(g))
       .catch((e) => alive && setLoadError((e as Error).message));
     return () => {
       alive = false;
     };
-  }, [cwd, builtAt]);
+  }, [cwd, kind, builtAt, active]);
 
   const byId = useMemo(() => new Map((graph?.nodes ?? []).map((n) => [n.id, n])), [graph]);
   const neighbours = useMemo(() => {
@@ -134,6 +210,10 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
     let alive = true;
     let observer: MutationObserver | undefined;
     let media: MediaQueryList | undefined;
+    // vis-network draws into an element of its own, which React never sees: React keeps only the outer box.
+    const host = document.createElement('div');
+    host.className = 'gv-host';
+    canvas.current.appendChild(host);
     const recolor = () => {
       const n = net.current;
       if (!n || !canvas.current) return;
@@ -149,7 +229,7 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
         const th = readTheme(canvas.current);
         const nodes = new vis.DataSet<any>(graph.nodes.map((n) => nodeStyle(n, th)));
         const edges = new vis.DataSet<any>(graph.links.map((l, i) => edgeStyle(l, i, th)));
-        const network = new vis.Network(canvas.current, { nodes, edges } as never, {
+        const network = new vis.Network(host, { nodes, edges } as never, {
           autoResize: true,
           nodes: { scaling: { min: 7, max: 34, label: { enabled: true, min: 10, max: 18, drawThreshold: 9, maxVisible: 22 } } },
           edges: { smooth: false, arrows: { to: { enabled: true, scaleFactor: 0.3 } } },
@@ -179,6 +259,7 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
       media?.removeEventListener('change', recolor);
       net.current?.network.destroy();
       net.current = undefined;
+      host.remove();
     };
   }, [graph]);
 
@@ -205,14 +286,13 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
   const rebuild = () => {
     setAsking(true);
     hub
-      .call('graphify.rebuild', { cwd })
+      .call(METHODS[kind].rebuild, { cwd })
       .catch((e) => alert((e as Error).message))
       .finally(() => setAsking(false));
   };
   const building = status?.state === 'building';
 
   return (
-    <Dialog className="gv-modal" size="xl" onClose={onClose} title={t('圖譜', 'Graph')}>
       <div className="gv-layout">
         <div className="gv-stage">
           {graph && !visError ? (
@@ -257,7 +337,7 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
             </>
           ) : (
             <div className="gv-empty">
-              <EmptyState t={t} status={status} loadError={loadError ?? visError} loading={!!builtAt && !graph && !loadError} />
+              <EmptyState t={t} kind={kind} status={status} loadError={loadError ?? visError} loading={!!builtAt && !graph && !loadError} />
             </div>
           )}
         </div>
@@ -269,7 +349,7 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
             </div>
           )}
           <div className="row gap">
-            <button type="button" className="btn small" onClick={rebuild} disabled={building || asking || !status?.active} title={t('用 graphify update 重新解析這個資料夾的程式碼', 'Parse this folder again with graphify update')}>
+            <button type="button" className="btn small" onClick={rebuild} disabled={building || asking || !status?.active} title={kind === 'graphify' ? t('用 graphify update 重新解析這個資料夾的程式碼', 'Parse this folder again with graphify update') : t('用 codegraph sync 更新這個資料夾的索引，沒有索引時用 codegraph init 建立', 'Update the index of this folder with codegraph sync, or build it with codegraph init')}>
               <Ico i={building ? LoaderCircle : RefreshCw} size={14} className={building ? 'spin' : undefined} /> {building ? t('建立中', 'Building') : t('重新建立', 'Rebuild')}
             </button>
           </div>
@@ -316,7 +396,6 @@ export function GraphWindow({ cwd, onClose }: { cwd: string; onClose: () => void
           )}
         </aside>
       </div>
-    </Dialog>
   );
 }
 
@@ -384,7 +463,7 @@ function NodeDetail({ t, node, neighbours, byId, selected, onFocus }: { t: T; no
   );
 }
 
-function StatusLine({ t, status, graph }: { t: T; status: GraphifyStatus | null; graph?: GraphPayload }) {
+function StatusLine({ t, status, graph }: { t: T; status: ViewStatus | null; graph?: GraphPayload }) {
   if (!status) return null;
   const nodes = graph?.totalNodes ?? status.nodes;
   const edges = graph?.totalLinks ?? status.edges;
@@ -407,11 +486,14 @@ function StatusLine({ t, status, graph }: { t: T; status: GraphifyStatus | null;
 }
 
 /** No graph to draw: why, in one sentence, with what to do. */
-function EmptyState({ t, status, loadError, loading }: { t: T; status: GraphifyStatus | null; loadError?: string; loading: boolean }) {
-  if (!status || loading) return <StateWord icon={LoaderCircle} spin>{t('載入中', 'Loading')}</StateWord>;
-  if (loadError) return <p>{t(`讀不到圖譜：${loadError}。按「重新建立」再試一次。`, `Could not read the graph: ${loadError}. Press Rebuild to try again.`)}</p>;
-  if (!status.active) return <p>{t('Graphify 沒有開啟或還沒安裝好：到設定的能力頁開啟 Graphify。', 'Graphify is off or not installed yet: turn it on under Settings, Capabilities.')}</p>;
-  if (status.state === 'building') return <p>{t('正在建立這個資料夾的圖譜，完成後會出現在這裡。', 'Building the graph of this folder; it shows here when done.')}</p>;
-  if (status.state === 'failed' || status.state === 'refused') return <p>{t(`圖譜沒有建立成功：${status.lastError ?? ''} 修正後按「重新建立」。`, `The graph was not built: ${status.lastError ?? ''} Fix that, then press Rebuild.`)}</p>;
-  return <p>{t('這個資料夾還沒有圖譜：按「重新建立」建立，或開始一個工作流時自動建立。', 'This folder has no graph yet: press Rebuild, or start a workflow and it is built.')}</p>;
+function EmptyState({ t, kind, status, loadError, loading }: { t: T; kind: Kind; status: ViewStatus | null; loadError?: string; loading: boolean }) {
+  const name = kind === 'graphify' ? 'Graphify' : 'CodeGraph';
+  const noun = kind === 'graphify' ? t('圖譜', 'graph') : t('CodeGraph 索引', 'CodeGraph index');
+  if (!status || !status.loaded || loading) return <StateWord icon={LoaderCircle} spin>{t('載入中', 'Loading')}</StateWord>;
+  if (loadError) return <p>{t(`讀不到${noun}：${loadError}。按「重新建立」再試一次。`, `Could not read the ${noun}: ${loadError}. Press Rebuild to try again.`)}</p>;
+  if (!status.enabled) return <p>{t(`${name} 沒有開啟：到設定的能力頁開啟 ${name}。`, `${name} is off: turn it on under Settings, Capabilities.`)}</p>;
+  if (!status.active) return <p>{t(`${name} 還沒安裝好：到設定的能力頁看它的狀態，需要時按「重試」。`, `${name} is not installed yet: see its state under Settings, Capabilities, and press Retry if needed.`)}</p>;
+  if (status.state === 'building') return <p>{t(`正在建立這個資料夾的${noun}，完成後會出現在這裡。`, `Building the ${noun} of this folder; it shows here when done.`)}</p>;
+  if (status.state === 'failed' || status.state === 'refused') return <p>{t(`${noun}沒有建立成功：${status.lastError ?? ''} 修正後按「重新建立」。`, `The ${noun} was not built: ${status.lastError ?? ''} Fix that, then press Rebuild.`)}</p>;
+  return <p>{t(`這個資料夾還沒有${noun}：按「重新建立」建立，或開始一個工作流時自動建立。`, `This folder has no ${noun} yet: press Rebuild, or start a workflow and it is built.`)}</p>;
 }

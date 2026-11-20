@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus, GraphifyStatus } from '../../core/src/types';
+import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus, GraphifyStatus, CodeGraphStatus } from '../../core/src/types';
 import { setPickedColors } from './util';
 import { NOT_REPLAYED } from '../../core/src/replay';
 
@@ -254,6 +254,30 @@ export function useGraphify(cwd: string | undefined): GraphifyStatus | null {
   return s;
 }
 
+/** The CodeGraph index of a workflow's folder (codegraph.ts), kept in sync from the `codegraph` pushes for that folder. */
+export function useCodegraph(cwd: string | undefined): CodeGraphStatus | null {
+  const [s, setS] = useState<CodeGraphStatus | null>(null);
+  useEffect(() => {
+    setS(null);
+    if (!cwd) return;
+    const key = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase();
+    let alive = true;
+    const load = () =>
+      hub
+        .call<CodeGraphStatus>('codegraph.status', { cwd })
+        .then((v) => alive && setS(v))
+        .catch(() => undefined);
+    void load();
+    const offPush = hub.on('codegraph', (d: CodeGraphStatus) => d?.cwd && key(d.cwd) === key(cwd) && setS(d));
+    const offRe = hub.on('reconnect', load);
+    return () => {
+      alive = false;
+      offPush();
+      offRe();
+    };
+  }, [cwd]);
+  return s;
+}
 /** The bundled third-party skills the user turns on one by one. */
 export function usePackSkills(): PackSkillStatus[] {
   return useSynced<PackSkillStatus[]>('extensions.packSkills', undefined, 'packSkills', [])[0];

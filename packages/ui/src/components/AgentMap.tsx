@@ -320,7 +320,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             </div>
           )}
           {/* How much it used the project graph (graphUsage.ts counts like the user's graphify-usage script). */}
-          <div title={[t('Graphify 與 CodeGraph 的查詢：指令與查圖工具', 'Graphify and CodeGraph lookups: commands and graph tools'), ...lookups.map(([n, k]) => ` × `)].join('\n')}>
+          <div title={[t('Graphify 與 CodeGraph 的查詢：指令與查圖工具', 'Graphify and CodeGraph lookups: commands and graph tools'), ...lookups.map(([n, k]) => `${n} × ${k}`)].join('\n')}>
             <dt>{t('查圖', 'Graph lookups')}</dt>
             <dd className="num">{usage.graph}</dd>
           </div>
