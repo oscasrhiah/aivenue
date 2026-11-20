@@ -2,7 +2,7 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## 未發布
+## 未發布（候選 0.4.3）
 
 - **新的內建擴充 CodeGraph（預設關閉）**：
   - **原本的問題**：Graphify 擅長專案概觀與群組，但「誰呼叫這個函式、改它會影響哪裡」這類精確的程式碼關係，agent 常常還是整個專案 grep。
