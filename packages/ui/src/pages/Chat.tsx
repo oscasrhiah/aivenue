@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleStop, CircleX, GitBranch, Hand, LoaderCircle, LogIn, MessageCircleQuestionMark, Network, RefreshCw, Signpost, Target, Undo2, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, TriangleAlert, X, type LucideIcon } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleStop, CircleX, GitBranch, Hand, LoaderCircle, LogIn, MessageCircleQuestionMark, Network, RefreshCw, Signpost, Target, Undo2, Waypoints, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun, WorkflowStatus } from '../../../core/src/types';
-import { fileUrl, hub, useAgentEvents, useDeleted, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
+import { fileUrl, hub, useAgentEvents, useDeleted, useExtensions, useGraphify, useHostInfo, useProviders, useThreads, useUsage, useWorkflow, useWorkflows } from '../api';
 import { SwitchChoices } from '../components/AccountSwitch';
 import { profileForInputs, readability, type Reason } from '../../../core/src/readability';
 import { decideProblemText, decideProblems } from '../../../core/src/reviewDecide';
 import { navigate } from '../App';
 import { AgentMap } from '../components/AgentMap';
+import { GraphWindow } from '../components/GraphWindow';
 import { DeniedActions } from '../components/DeniedActions';
 import { AgentTurn } from '../components/AgentTurn';
 import { deleteConversation, PreflightList, RunMenu, useMenuKeys } from '../components/RunTools';
@@ -1148,6 +1149,7 @@ export function Chat({ id }: { id?: string }) {
   const [sending, setSending] = useState(false);
   const [lightbox, setLightbox] = useState<string>();
   const [agentMap, setAgentMap] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
   const [, tick] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   // Following the newest entries while the user is at the bottom; reading older ones (scrolled up, or opened something
@@ -1516,6 +1518,7 @@ export function Chat({ id }: { id?: string }) {
           </div>
           <div className="topbar-actions">
             <AgentMapButton run={run} thread={earlier.length > 0} onOpen={() => setAgentMap(true)} />
+            <GraphButton cwd={run.config.cwd} onOpen={() => setGraphOpen(true)} />
             <RunMenu run={run} providers={providers} onRename={() => setRenaming(true)} onDelete={active ? undefined : () => void deleteRun()} />
             {active && (
               <button className="btn small danger" onClick={() => void stopRun()}>
@@ -1711,6 +1714,7 @@ export function Chat({ id }: { id?: string }) {
       )}
 
       {lightbox && <Lightbox src={lightbox} onClose={() => setLightbox(undefined)} />}
+      {graphOpen && run && <GraphWindow cwd={run.config.cwd} onClose={() => setGraphOpen(false)} />}
       {agentMap && run && <AgentMap run={{ ...run, agents: earlier.length ? Object.assign({}, ...earlier.map((r) => r.agents), run.agents) : run.agents, processes: [...earlier, run].flatMap((r) => (r.processes ?? []).map((p) => ({ ...p, workflowId: r.id }))) }} providers={providers} onClose={() => setAgentMap(false)} />}
       {rolesOpen && (
         <RoleSettings
@@ -1778,6 +1782,31 @@ function AgentMapButton({ run, onOpen, thread }: { run: WorkflowRun; onOpen: () 
           <Ico i={Activity} size={14} /> {alive}
         </span>
       )}
+    </button>
+  );
+}
+
+/**
+ * Opens the graph window (圖譜): shown while Graphify is on and installed and this chat's folder has a graph or one is
+ * being built (then with a spinner and the word for it). The name stays in the tooltip and for screen readers when narrow.
+ */
+function GraphButton({ cwd, onOpen }: { cwd: string; onOpen: () => void }) {
+  const t = useT();
+  const ext = useExtensions().find((e) => e.id === 'graphify');
+  const status = useGraphify(ext?.enabled && ext.state === 'ready' ? cwd : undefined);
+  if (!ext?.enabled || ext.state !== 'ready' || !status || (!status.exists && status.state !== 'building')) return null;
+  const building = status.state === 'building';
+  const title = [
+    t('開啟這個資料夾的圖譜：檔案、函式與它們的呼叫關係', "Open this folder's graph: files, functions and how they call each other"),
+    building ? t('正在更新圖譜', 'Updating the graph') : status.nodes !== undefined ? t(`${status.nodes} 個節點`, `${status.nodes} nodes`) : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return (
+    <button className="btn small am-open" onClick={onOpen} title={title} aria-label={building ? t('圖譜，更新中', 'Graph, updating') : t('圖譜', 'Graph')}>
+      <Ico i={building ? LoaderCircle : Waypoints} size={14} className={building ? 'spin' : undefined} />
+      <span className="am-open-label">{t('圖譜', 'Graph')}</span>
+      {building && <span className="am-open-count muted">{t('更新中', 'updating')}</span>}
     </button>
   );
 }

@@ -951,8 +951,8 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
         <Hint
           className="muted tiny"
           text={t(
-            '第一次開啟會自動安裝 uv 與 graphify，uv 會自己帶 Python，不需要另外安裝。agent 需要了解大型專案時會用 graphify update . 建圖，寫到 graphify-out/，之後先查圖再讀檔。',
-            'The first time it installs uv and graphify; uv brings its own Python. When agents need to understand a large project they build the graph with graphify update . into graphify-out/ and query it before reading files.',
+            '第一次開啟會自動安裝 uv 與 graphify，uv 會自己帶 Python，不需要另外安裝。每個工作流開始前，Aivenue 會在工作資料夾執行 graphify update 更新圖譜，寫到 graphify-out/，agent 改檔後也會在背景更新；agent 先查圖再讀檔。對話標題列的「圖譜」按鈕可以看整張圖。',
+            "The first time it installs uv and graphify; uv brings its own Python. Before each workflow Aivenue runs graphify update in the working folder, writing graphify-out/, and updates it in the background after agents change files; agents query the graph before reading files. The Graph button in a chat's header shows the whole graph.",
           )}
         />
       )}

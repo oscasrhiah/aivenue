@@ -101,6 +101,18 @@
   --dur-3: 0.4s;
   --pulse: pulse 2s ease-in-out infinite;
   --spin: spin 1.4s linear infinite;
+  /* The graph window's community colours (GraphWindow.tsx): ten hues mixed with the text colour, so the same names are
+     a little darker on a light background and lighter on a dark one (VS Code themes too). */
+  --gv-c0: color-mix(in oklab, #4e79a7 82%, var(--text));
+  --gv-c1: color-mix(in oklab, #f28e2b 82%, var(--text));
+  --gv-c2: color-mix(in oklab, #59a14f 82%, var(--text));
+  --gv-c3: color-mix(in oklab, #e15759 82%, var(--text));
+  --gv-c4: color-mix(in oklab, #76b7b2 82%, var(--text));
+  --gv-c5: color-mix(in oklab, #edc948 82%, var(--text));
+  --gv-c6: color-mix(in oklab, #b07aa1 82%, var(--text));
+  --gv-c7: color-mix(in oklab, #ff9da7 82%, var(--text));
+  --gv-c8: color-mix(in oklab, #9c755f 82%, var(--text));
+  --gv-c9: color-mix(in oklab, #8cd17d 82%, var(--text));
   color-scheme: light;
 }
 
@@ -4453,6 +4465,231 @@ textarea.code {
 .modal.am-modal {
   width: min(980px, 96vw);
   max-height: 88vh;
+}
+
+/* ---- graph window (圖譜): the canvas, and a panel beside it (under it when narrow) ---- */
+.modal.gv-modal {
+  width: min(1180px, 96vw);
+  height: min(820px, 90vh);
+}
+
+.gv-modal .dialog-body {
+  padding: 0;
+  overflow: hidden;
+}
+
+.gv-layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.gv-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--dialog-line);
+}
+
+.gv-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.gv-overlay {
+  position: absolute;
+  top: var(--sp-2);
+  left: var(--sp-3);
+  pointer-events: none;
+}
+
+.gv-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--text-2);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.gv-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* A long panel scrolls; its parts keep their height instead of being squeezed. */
+.gv-panel > * {
+  flex-shrink: 0;
+}
+
+.gv-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gv-note {
+  overflow-wrap: anywhere;
+}
+
+.gv-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2);
+  height: var(--ctl-md);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.gv-search:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.gv-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-14);
+}
+
+.gv-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+
+.gv-title {
+  margin: 0;
+  font-size: var(--fs-16);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.gv-wrap {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.gv-place {
+  color: var(--text-2);
+}
+
+.gv-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: var(--sp-2);
+}
+
+.gv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gv-node {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--sp-1) var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  cursor: pointer;
+}
+
+.gv-node:hover {
+  background: var(--hover-bg);
+}
+
+.gv-node.on {
+  background: var(--accent-soft);
+}
+
+.gv-node:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.gv-node-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gv-node-file {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: var(--fs-12);
+}
+
+.gv-dot {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  align-self: center;
+}
+
+/* Narrow (the VS Code side bar): the canvas on top, the panel under it, the sheet scrolls as one. */
+@media (max-width: 520px) {
+  .gv-modal .dialog-body {
+    overflow-y: auto;
+  }
+
+  .gv-layout {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .gv-stage {
+    flex: none;
+    height: 48vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--dialog-line);
+  }
+
+  .gv-panel {
+    overflow: visible;
+    padding: var(--sp-3);
+  }
 }
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus } from '../../core/src/types';
+import type { AgentEvent, AppSettings, CapabilitiesConfig, HostInfo, ModelInfo, ProviderInfo, ProviderUsage, PushMessage, ProjectSkillInfo, SkillInfo, WorkflowRun, WorkflowSummary, GithubStatus, ExtensionStatus, PackSkillStatus, GraphifyStatus } from '../../core/src/types';
 import { setPickedColors } from './util';
 import { NOT_REPLAYED } from '../../core/src/replay';
 
@@ -227,6 +227,31 @@ export function useCapabilities(): { config: CapabilitiesConfig; skills: SkillIn
 
 export function useExtensions(): ExtensionStatus[] {
   return useSynced<ExtensionStatus[]>('extensions.list', undefined, 'extensions', [])[0];
+}
+
+/** The project graph of a workflow's folder (graphify.ts), kept in sync from the `graphify` pushes for that folder. */
+export function useGraphify(cwd: string | undefined): GraphifyStatus | null {
+  const [s, setS] = useState<GraphifyStatus | null>(null);
+  useEffect(() => {
+    setS(null);
+    if (!cwd) return;
+    const key = (p: string) => p.replace(/[\\/]+$/, '').toLowerCase();
+    let alive = true;
+    const load = () =>
+      hub
+        .call<GraphifyStatus>('graphify.status', { cwd })
+        .then((v) => alive && setS(v))
+        .catch(() => undefined);
+    void load();
+    const offPush = hub.on('graphify', (d: GraphifyStatus) => d?.cwd && key(d.cwd) === key(cwd) && setS(d));
+    const offRe = hub.on('reconnect', load);
+    return () => {
+      alive = false;
+      offPush();
+      offRe();
+    };
+  }, [cwd]);
+  return s;
 }
 
 /** The bundled third-party skills the user turns on one by one. */

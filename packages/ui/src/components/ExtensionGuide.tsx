@@ -83,7 +83,7 @@ const GUIDES: Record<ExtensionId, Guide> = {
       { name: 'graphify explain "概念"', text: ['用白話解釋某個節點。', 'Explains one node in plain language.'] },
     ],
     notes: [
-      ['資料夾裡已經有 graphify-out/ 時，每個 agent 會先查圖再讀檔；還沒有的話，可寫入檔案的 agent 會在需要時自己建立。', 'When the folder already has graphify-out/, every agent queries it before reading files; otherwise an agent that may write files builds it when it helps.'],
+      ['每個工作流開始前，Aivenue 會先更新工作資料夾的圖譜，agent 改檔後也會在背景更新；agent 拿到 graph_query、graph_path、graph_explain 三個查圖工具，先查圖再讀檔。graphify-out/ 會加進 git 本機的 exclude 檔，不會被提交。', 'Before each workflow Aivenue updates the graph of the working folder, and again in the background after agents change files; agents get three graph tools (graph_query, graph_path, graph_explain) and query the graph before reading files. graphify-out/ is listed in the local git exclude file, so it is not committed.'],
       ['文件、圖片、影片的語意分析需要模型（graphify Skill 會說明），單純的程式碼圖譜不需要。', 'Meaning extraction from docs, images and video needs a model (the graphify skill explains how); the plain code graph does not.'],
     ],
   },
