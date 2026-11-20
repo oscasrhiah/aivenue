@@ -2408,6 +2408,38 @@ details[open] > summary .fold-chev {
   line-height: var(--lh-ui);
 }
 
+/* The title is the fold's button: it looks like the title, with a chevron. */
+.final-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.final-fold:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.final-head.fold-head {
+  cursor: pointer;
+}
+.final-result.folded .final-head {
+  margin-bottom: var(--sp-1);
+}
+/* Folded: the text's first words on one line, cut to the width. */
+.final-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .final-who {
   flex: 1 1 0;
   min-width: 4em;

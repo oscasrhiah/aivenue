@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Circle, CircleCheck, CircleDashed, CircleHelp, CircleSlash, CircleStop, CircleX, GitBranch, Hand, LoaderCircle, LogIn, MessageCircleQuestionMark, Network, RefreshCw, Signpost, Target, Undo2, Waypoints, File, FileArchive, FileAudio, FileSpreadsheet, FileText, FileVideo, Folder, Image as ImageIcon, NotebookPen, Paperclip, Pause, Pencil, Play, Shuffle, Square, TriangleAlert, X, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { AdvisorConfig, AgentRunInfo, AssignmentResult, Attachment, HumanDecision, ModelInfo, PermissionLevel, PreflightItem, ProviderInfo, WorkflowConfig, WorkflowRun, WorkflowStatus } from '../../../core/src/types';
@@ -28,6 +28,7 @@ import { FinalWho, ReviewResult, reviewShown } from '../components/ReviewResult'
 import { cx, duration, folderName, fullTime, modelLabel, providerName, recentFolders, roleLabel, saidOwner, waitKind, waitWord, wfStatus, type WaitKind } from '../util';
 import { Markdown } from '../components/Markdown';
 import { CopyButton } from '../components/CopyButton';
+import { headClickToggles, isFolded, previewLine, setFolded } from '../finalFold';
 import { ask } from '../components/Ask';
 import { RememberButton } from '../components/Memory';
 import { MsgTime } from '../components/MsgTime';
@@ -905,8 +906,15 @@ function finalText(run: WorkflowRun): string | undefined {
 function FinalResult({ run, providers }: { run: WorkflowRun; providers: ProviderInfo[] }) {
   const t = useT();
   const [progress, setProgress] = useState(false);
+  // Open by default; folded or opened again by its head, remembered per run while the app runs.
+  const [open, setOpenState] = useState(() => !isFolded(run.id));
+  const bodyId = useId();
   const text = finalText(run);
   if (!text) return null;
+  const setOpen = (v: boolean) => {
+    setFolded(run.id, !v);
+    setOpenState(v);
+  };
   const exec = lastMain(run, 'executor');
   const implRound = run.stages.implement.rounds.at(-1);
   const planRound = run.stages.plan.rounds.at(-1);
@@ -919,11 +927,17 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
   // Its steps all done: the progress panel above the input gives way, its list opens here.
   const settled = progressSettled(run, providers, t);
   return (
-    <div className="final-result">
+    <div className={cx('final-result', !open && 'folded')}>
       {/* Title and the review first (who did it gives way in a narrow column, whole in its tooltip and its turn above);
-          the progress, time and copy button after, on a line of their own when they do not fit. */}
-      <div className="final-head">
-        <h2 className="final-title">{exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}</h2>
+          the progress, time and copy button after, on a line of their own when they do not fit. The title is the
+          fold's button (keyboard, aria-expanded); a click elsewhere on the head folds too, except on its own controls. */}
+      <div className="final-head fold-head" onClick={(e) => headClickToggles(e.target as Element) && setOpen(!open)}>
+        <h2 className="final-title">
+          <button type="button" className="final-fold" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
+            <Ico i={ChevronRight} size={16} className={cx('fold-chev', open && 'open')} />
+            {exec ? t('最終結果', 'Final result') : t('最終計畫', 'Final plan')}
+          </button>
+        </h2>
         {review && (
           <span className={cx('state-word', review.verdict === 'approve' ? 'ok' : 'warn')}>
             <Ico i={review.verdict === 'approve' ? CircleCheck : TriangleAlert} size={14} /> {review.verdict === 'approve' ? t('審查通過', 'Approved') : t('未通過即結束', 'Ended without approval')}
@@ -938,6 +952,10 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
         </span>
       </div>
       {settled && progress && <ProgressList run={run} providers={providers} />}
+      {/* Folded: one muted line of the text, cut to the width; everything below stays as it is when open. */}
+      {!open && <div className="muted small final-preview">{previewLine(text)}</div>}
+      {open && (
+      <div id={bodyId} className="final-body">
       {/* What was delivered, from the workflow's file list (not an agent's account): each file with where it came from. */}
       {rows.length > 0 && (
         <div className="final-row">
@@ -1011,6 +1029,8 @@ function FinalResult({ run, providers }: { run: WorkflowRun; providers: Provider
             </div>
           ))}
         </details>
+      )}
+      </div>
       )}
     </div>
   );
