@@ -30,13 +30,22 @@ const wb = (await targets()).find((t) => t.type === 'page' && t.url.includes('wo
 if (!wb) throw new Error('no VS Code window');
 const w = cdp(wb.webSocketDebuggerUrl);
 await w.ready;
-await w.send('Page.bringToFront');
-await sleep(1000);
-await key(w, 'F1', 'F1', 112);
-await sleep(1200);
-await w.send('Input.insertText', { text: 'aivenue.openInEditor' });
-await sleep(1500);
-await key(w, 'Enter', 'Enter', 13);
+// The command from the palette, by id and else by its title; Esc first (a dialog or the chat view's input would take the
+// keys). Asked again while no tab shows up: right after start the palette may open before the extension's commands exist.
+const TITLES = ['aivenue.openInEditor', '在編輯器分頁中開啟 Aivenue'];
+let attempt = 0;
+const openTab = async () => {
+  await w.send('Page.bringToFront');
+  await sleep(700);
+  await key(w, 'Escape', 'Escape', 27);
+  await sleep(500);
+  await key(w, 'F1', 'F1', 112);
+  await sleep(1200);
+  await w.send('Input.insertText', { text: TITLES[attempt++ % TITLES.length] });
+  await sleep(1500);
+  await key(w, 'Enter', 'Enter', 13);
+};
+await openTab();
 
 // Aivenue's editor tab is a VS Code webview: its page is a context inside a vscode-webview:// frame (the extension loads
 // the UI from its own files and only talks to the hub over its socket), never a target of its own at http://127.0.0.1.
@@ -57,9 +66,14 @@ const findPage = async () => {
 };
 let page;
 const deadline = Date.now() + 90_000;
+let asked = Date.now();
 while (!page && Date.now() < deadline) {
   await sleep(1500);
   page = await findPage();
+  if (!page && Date.now() - asked > 15_000) {
+    await openTab();
+    asked = Date.now();
+  }
 }
 const shotRes = await w.send('Page.captureScreenshot', { format: 'png' });
 if (shotRes.result?.data) fs.writeFileSync(shot, Buffer.from(shotRes.result.data, 'base64'));
