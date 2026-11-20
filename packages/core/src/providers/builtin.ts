@@ -182,8 +182,9 @@ export const BUILTIN_PROVIDERS: ProviderSpec[] = [
     name: 'OpenCode',
     description: 'OpenCode CLI — 內建 OpenCode Zen 免費模型，也能接上百家 API；優先使用 OpenCode Desktop 附的 CLI。注意：部分免費模型會用你的資料改進模型',
     command: 'opencode',
-    // OpenCode Desktop's CLI on Windows; the official installer's folder on Linux / macOS.
-    commandPaths: ['~/AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe', '~/.opencode/bin/opencode'],
+    // OpenCode Desktop's CLI on Windows (its current install folder first, then the one older versions used); the
+    // official installer's folder on Linux / macOS.
+    commandPaths: ['~/AppData/Local/Programs/ai.opencode.desktop/resources/opencode-cli.exe', '~/AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe', '~/.opencode/bin/opencode'],
     install: 'npm install -g opencode-ai',
     installNoNpm: 'curl -fsSL https://opencode.ai/install | bash',
     docsUrl: 'https://opencode.ai/docs/zen/',

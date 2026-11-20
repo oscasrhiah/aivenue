@@ -70,7 +70,7 @@ const [wantProvider, wantModel] = opts.model.includes('/') ? opts.model.split('/
 function opencodeCli() {
   const stand = process.env.BENCH_OPENCODE_CLI;
   if (stand) return /\.(c|m)?js$/.test(stand) ? { cmd: process.execPath, pre: [stand] } : { cmd: stand, pre: [] };
-  const candidates = [path.join(os.homedir(), 'AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe'), path.join(os.homedir(), '.opencode/bin/opencode')];
+  const candidates = [path.join(os.homedir(), 'AppData/Local/Programs/ai.opencode.desktop/resources/opencode-cli.exe'), path.join(os.homedir(), 'AppData/Local/Programs/@opencodedesktop/resources/opencode-cli.exe'), path.join(os.homedir(), '.opencode/bin/opencode')];
   return { cmd: candidates.find((p) => fs.existsSync(p)) ?? 'opencode', pre: [] };
 }
 
