@@ -536,12 +536,12 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 
 ### 內建擴充
 
-「設定 → 能力 → 內建擴充」附了四個第三方擴充，**預設全部關閉**，打開開關就能用；每張卡片的「ⓘ 說明」會用一個小視窗介紹用途（Agent Skills 會逐一介紹 25 個 Skill）。
+「設定 → 能力 → 內建擴充」附了四個第三方擴充，**預設全部關閉**，打開開關就能用；每張卡片的「ⓘ 說明」會用一個小視窗介紹用途（Agent Skills 會逐一介紹 26 個 Skill）。
 
 | 擴充 | 做什麼 | 打開後 |
 |---|---|---|
 | [Ponytail](https://github.com/DietrichGebert/ponytail)（MIT） | 「最懶的資深工程師」：用最少、最直接的改動完整解決問題，不過度設計 | 撰寫計畫、審查計畫、實作與子 agent 一直套用主 Skill，審查程式碼套用 ponytail-review；強度可選 lite／full／ultra。指示直接放進 agent 的提示詞，不靠 agent 自己去讀 |
-| [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 25 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能、上線… | 依角色提供（例如計畫者拿到計畫拆解、審查者拿到程式碼審查），每個 Skill 可單獨開關；需要和使用者問答的 Skill 預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
+| [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 26 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、無障礙（accessibility-engineering，用到時會以 npx 下載 axe 與 pa11y）、安全、效能、上線… | 依角色提供（例如計畫者拿到計畫拆解、審查者拿到程式碼審查），每個 Skill 可單獨開關；需要和使用者問答的 Skill 預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
 | [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。之後每個工作流開始前，Aivenue 先在工作資料夾（隔離模式是隔離副本）執行 `graphify update` 更新圖譜，agent 改檔後再在背景更新；agent 拿到 `graph_query`、`graph_path`、`graph_explain` 三個查圖工具，先查圖再 grep 或讀檔。細節見下方「Graphify 圖譜」 |
 | [CodeGraph](https://github.com/colbymchenry/codegraph)（MIT） | 程式碼索引：每個函式、類別在哪，誰呼叫它、它呼叫誰，改一個地方會影響哪裡；在本機解析，不呼叫 API | Aivenue 用 npm 把固定版本 1.6.2 裝進自己的工具資料夾（需要 Node.js，約 270 MB），不改 PATH、不改 agent 設定。每個工作流開始前建立或更新工作資料夾的 `.codegraph/` 索引，agent 拿到 CodeGraph 的查詢工具。細節見下方「CodeGraph 的細節」 |
 | [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。在卡片裡的「連接免費供應商」接上至少一家（例如 Gemini、OpenRouter）後，就能當 agent 使用 |

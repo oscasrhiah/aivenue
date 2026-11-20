@@ -4,6 +4,13 @@
 
 ## 未發布（候選 0.4.3）
 
+- **Agent Skills 更新到上游 `222bf92`，多了 accessibility-engineering**：
+  - **原本的問題**：附的 Agent Skills 是 10 月的版本，沒有依 WCAG 2.2 AA 檢查現有介面的 Skill；無障礙只能靠 web-design-guidelines 的靜態規則。
+  - **現在**：
+    - Agent Skills 從 25 個變成 26 個，新的 accessibility-engineering 交給實作者與程式碼審查者，預設開啟；其他 Skill 的說明也跟著上游修訂，沒有 Skill 被移除或改名。
+    - 這個 Skill 會叫 agent 用 `npx` 執行 axe-core 和 pa11y：用到時會從 npm 下載這兩個工具，和 agent 執行的其他指令一樣受工作流的權限限制，Aivenue 不會先安裝。能力頁和說明都寫了這一點。
+    - 它連結的 accessibility-auditor 角色說明也一起附上。
+
 - **能力頁拿掉「設計參考・不會載入」那一段**：
   - **原本的問題**：能力頁最下面列著 impeccable、frontend-testing-debugging、accessibility-inspect 三個 Skill，但它們從來不會交給 agent，也沒有開關，看了只會以為少了什麼。
     - impeccable 需要它自己的 CLI、偵測器和瀏覽器。

@@ -817,8 +817,8 @@ const EXT_INFO: Record<ExtensionId, { name: string; zh: string; en: string; url:
   },
   'agent-skills': {
     name: 'Agent Skills',
-    zh: 'Addy Osmani 的 25 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、安全、效能等，依角色提供。',
-    en: "Addy Osmani's 25 engineering skills: specs, task breakdown, TDD, debugging, code review, security, performance and more, per role.",
+    zh: 'Addy Osmani 的 26 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、無障礙、安全、效能等，依角色提供。',
+    en: "Addy Osmani's 26 engineering skills: specs, task breakdown, TDD, debugging, code review, accessibility, security, performance and more, per role.",
     url: 'https://github.com/addyosmani/agent-skills',
     license: 'MIT',
   },
@@ -951,6 +951,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
             </ExtWindow>
           )}
           <div className="muted tiny">{t('agent 只會看到 Skill 名稱與一句說明，用到才讀全文，幾乎不增加 token。', "Agents only see each skill's name and one-line description and read the rest when needed, so it costs almost no tokens.")}</div>
+          <div className="muted tiny">{t('accessibility-engineering 會叫 agent 用 npx 執行 axe 和 pa11y 檢查網頁：用到時會從 npm 下載這兩個工具，和 agent 執行的其他指令一樣，受這次工作流的權限限制，Aivenue 不會先安裝。', 'accessibility-engineering has agents run axe and pa11y with npx to check a page: when used, those tools are downloaded from npm, like any other command an agent runs and under the run’s permission; Aivenue installs nothing beforehand.')}</div>
         </>
       )}
 

@@ -40,8 +40,9 @@ const GUIDES: Record<ExtensionId, Guide> = {
       ['Addy Osmani（Google Chrome 工程主管）整理的工程 Skill，涵蓋從規格、計畫、實作、測試、審查到上線的整個開發流程。每個 Skill 都是一份步驟清單與檢查表。', 'Engineering skills collected by Addy Osmani (engineering lead on Google Chrome), covering the whole flow from spec and plan to implementation, testing, review and launch. Each skill is a checklist of steps.'],
       ['Aivenue 依角色提供：例如計畫者拿到「計畫拆解」，審查者拿到「程式碼審查」。agent 平常只看到 Skill 名稱與一句說明，判斷用得到時才讀全文。每個 Skill 都能在卡片裡單獨開關。', 'Aivenue offers them per role, e.g. the planner gets task breakdown and the reviewer gets code review. Agents only see each name and one-line description and read the full skill when it applies. Each skill can be turned off on its own in the card.'],
     ],
-    itemsTitle: ['25 個 Skill', 'The 25 skills'],
+    itemsTitle: ['26 個 Skill', 'The 26 skills'],
     items: [
+      { name: 'accessibility-engineering', text: ['依 WCAG 2.2 AA 檢查現有的介面並修正：用 axe-core、pa11y 自動檢查，再手動檢查鍵盤、螢幕閱讀器與對比。axe 與 pa11y 用 npx 執行，用到時會從 npm 下載。', 'Audits an existing interface against WCAG 2.2 AA and fixes what it finds: axe-core and pa11y first, then keyboard, screen reader and contrast by hand. axe and pa11y run through npx, so they are downloaded from npm when used.'] },
       { name: 'api-and-interface-design', text: ['設計穩定的 API 與模組介面（REST、GraphQL、型別、模組邊界），避免日後的破壞性變更。', 'Stable API and interface design (REST, GraphQL, types, module boundaries) that avoids breaking changes later.'] },
       { name: 'browser-testing-with-devtools', text: ['用 Chrome DevTools MCP 在真的瀏覽器裡測試：檢查 DOM、console 錯誤、網路請求與效能。', 'Tests in a real browser through Chrome DevTools MCP: the DOM, console errors, network requests and performance.'] },
       { name: 'ci-cd-and-automation', text: ['建立或修改 CI/CD 流程：自動測試、品質關卡與部署策略。', 'Sets up or changes CI/CD: automated tests, quality gates and deployment strategy.'] },

@@ -30,6 +30,9 @@ const PONYTAIL: Record<string, { roles: InstructionRole[]; always?: boolean }> =
  * that spawn their own review loops on every decision.
  */
 const AGENT_SKILLS: Record<string, { roles: InstructionRole[]; off?: 'interactive' | 'heavy' | 'meta' }> = {
+  // Audits an existing UI: the implementer fixing it, the code reviewer checking it (its automated step runs npx axe /
+  // pa11y, which download those tools: the agent runs them like any other command, under the run's permission).
+  'accessibility-engineering': { roles: ['executor', 'code_reviewer'] },
   'api-and-interface-design': { roles: ['planner', 'executor', 'plan_reviewer'] },
   'browser-testing-with-devtools': { roles: ['executor', 'subagent'] },
   'ci-cd-and-automation': { roles: ['executor'] },
@@ -1071,7 +1074,8 @@ function readText(file: string): string {
 /** A skill's description cut to its first sentences (about 200 characters): every agent of a role reads the whole index. */
 function brief(d: string): string {
   if (d.length <= 220) return d;
-  const sentences = d.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [d];
+  // Sentences end at . ! ? followed by a space or the end: the dot inside "WCAG 2.2" does not split one.
+  const sentences = d.split(/(?<=[.!?])\s+/).map((s) => s + ' ');
   let out = '';
   for (const s of sentences) {
     if (out && (out + s).length > 220) break;
