@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../../core/src/types';
-import { GRAPH_TOOL } from '../../core/src/graphUsage';
+import { GRAPH_TOOL, graphToolCalls } from '../../core/src/graphUsage';
 
 /** A tool call that used a skill (read its SKILL.md) or the graphify command. */
 export type ExtensionUse = { kind: 'skill'; name: string } | { kind: 'graphify'; action: string; arg?: string };
@@ -17,6 +17,8 @@ export function extensionUse(e: AgentEvent): ExtensionUse | undefined {
   // Aivenue's own graph tools (graph_query, graph_path, graph_explain): the same lookups as the commands.
   const m = tool.category === 'hub' ? GRAPH_TOOL.exec(tool.name ?? '') : null;
   if (m) return { kind: 'graphify', action: m[2].toLowerCase(), arg: /:\s*(.+)$/.exec(tool.title ?? '')?.[1] };
+  // Called from the code of an OpenCode code-mode call (its event is named after its first tool).
+  if (graphToolCalls(tool)) return { kind: 'graphify', action: /graph_(query|path|explain)/.exec(tool.input ?? '')?.[1] ?? 'query' };
   return undefined;
 }
 
@@ -24,12 +26,12 @@ export function extensionUse(e: AgentEvent): ExtensionUse | undefined {
 export function extensionSummary(events: AgentEvent[]): { skills: string[]; graphify: number } {
   const skills = new Set<string>();
   // A tool call shows up when it starts and again when it ends: count each call once.
-  const calls = new Set<string>();
+  const calls = new Map<string, number>();
   for (const e of events) {
     if (e.kind !== 'tool') continue;
     const u = extensionUse(e);
     if (u?.kind === 'skill') skills.add(u.name);
-    if (u?.kind === 'graphify') calls.add(e.tool?.id ?? String(e.seq));
+    if (u?.kind === 'graphify') calls.set(e.tool?.id ?? String(e.seq), Math.max(1, graphToolCalls(e.tool!)));
   }
-  return { skills: [...skills], graphify: calls.size };
+  return { skills: [...skills], graphify: [...calls.values()].reduce((a, b) => a + b, 0) };
 }

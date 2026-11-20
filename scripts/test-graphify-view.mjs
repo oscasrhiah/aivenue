@@ -15,6 +15,7 @@ const bundled = await build({
     contents: `export { GraphifyService, parseRebuilt } from './packages/core/src/graphify';
       export { graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } from './packages/core/src/graphUsage';
       export { extensionSummary, extensionUse } from './packages/ui/src/extensionUse';
+      export { mainPart } from './packages/ui/src/graphView';
       export { Orchestrator } from './packages/core/src/orchestrator';
       export { RunStore } from './packages/core/src/store';`,
     resolveDir: process.cwd(),
@@ -28,7 +29,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { GraphifyService, parseRebuilt, Orchestrator, RunStore, extensionSummary, extensionUse, graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } = mod.exports;
+const { GraphifyService, parseRebuilt, Orchestrator, RunStore, mainPart, extensionSummary, extensionUse, graphUsage, GRAPH_COMMAND, BUILD_COMMAND, SEARCH_COMMAND } = mod.exports;
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-graphify-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -496,4 +497,34 @@ test('回合標頭的 Graphify 次數也算 Aivenue 的查圖工具', () => {
   const events = [ev('1', { name: 'mcp__aivenue__graph_query', category: 'hub', title: 'Query the graph: who calls hub' }), ev('2', { name: 'bash', category: 'command', title: 'graphify path "A" "B"' }), ev('3', { name: 'read_context', category: 'hub', title: 'Read context' })];
   assert.equal(extensionSummary(events).graphify, 2);
   assert.deepEqual(extensionUse(events[0]), { kind: 'graphify', action: 'query', arg: 'who calls hub' });
+});
+
+test('圖譜視窗第一次縮放到最大的相連部分，零散的小群組不算', () => {
+  const n = (id) => ({ id, label: id, degree: 0 });
+  const nodes = ['a', 'b', 'c', 'd', 'x', 'y', 'z'].map(n);
+  const links = [
+    { source: 'a', target: 'b', relation: 'calls' },
+    { source: 'c', target: 'b', relation: 'calls' },
+    { source: 'd', target: 'c', relation: 'imports' },
+    { source: 'x', target: 'y', relation: 'calls' },
+    { source: 'a', target: 'gone', relation: 'calls' },
+  ];
+  assert.deepEqual(mainPart({ nodes, links }), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(mainPart({ nodes: [n('solo')], links: [] }), ['solo']);
+  assert.deepEqual(mainPart({ nodes: [], links: [] }), []);
+});
+
+test('OpenCode 的程式碼模式一次呼叫好幾個工具：裡面的查圖工具也算查圖', () => {
+  const code = (c) => JSON.stringify({ code: c });
+  const tool = (id, category, name, input) => ({ kind: 'tool', tool: { id, name, category, title: name, status: 'ok', input } });
+  // As seen in a real OpenCode run: the event is named after its first tool (report_progress).
+  const events = [
+    tool('1', 'read', 'read', '{}'),
+    tool('2', 'hub', 'report_progress', code('const [p1,p2] = await Promise.all([ tools.aivenue.report_progress({step_id:"1"}), tools.aivenue.graph_query({question:"where"}) ]);')),
+    tool('3', 'other', 'execute', code('await tools.aivenue.graph_path({from:"a",to:"b"}); await tools.aivenue.graph_explain({node:"x"});')),
+    tool('4', 'hub', 'search_records', code('await tools.aivenue.search_records({q:"graph_query"})')),
+    tool('5', 'search', 'grep', '{}'),
+  ];
+  assert.deepEqual(graphUsage(events), { graph: 3, build: 0, search: 2, before: 1 });
+  assert.equal(extensionSummary(events).graphify, 3);
 });

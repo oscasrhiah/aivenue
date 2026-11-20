@@ -27,6 +27,25 @@ export interface GraphUsage {
 
 type ToolLike = NonNullable<AgentEvent['tool']>;
 
+/** A graph tool called from code: OpenCode's code mode runs several tools in one call (tools.aivenue.graph_query({…})). */
+const GRAPH_TOOL_IN_CODE = /\bgraph_(query|path|explain)\s*\(/g;
+
+/**
+ * How many of Aivenue's graph tools one tool call ran: 1 for the tool itself, or each one called from the code of a
+ * code-mode call (whose event is named after its first tool, e.g. report_progress, or is a plain "execute").
+ */
+export function graphToolCalls(t: Pick<ToolLike, 'name' | 'category' | 'input'>): number {
+  if (t.category === 'hub' && GRAPH_TOOL.test(t.name ?? '')) return 1;
+  if (t.category !== 'hub' && t.category !== 'other') return 0;
+  let code = '';
+  try {
+    code = String((JSON.parse(t.input || '{}') as { code?: unknown }).code ?? '');
+  } catch {
+    // not JSON
+  }
+  return code.match(GRAPH_TOOL_IN_CODE)?.length ?? 0;
+}
+
 /** The command a tool ran: its input's `command`, else its title. */
 function commandOf(t: ToolLike): string {
   let cmd: unknown = '';
@@ -48,7 +67,9 @@ export function graphUsage(events: Pick<AgentEvent, 'kind' | 'tool'>[]): GraphUs
   const r: GraphUsage = { graph: 0, build: 0, search: 0, before: 0 };
   for (const t of tools.values()) {
     const cmd = t.category === 'command' ? commandOf(t) : '';
-    if ((t.category === 'command' && GRAPH_COMMAND.test(cmd)) || (t.category === 'hub' && GRAPH_TOOL.test(t.name ?? ''))) r.graph++;
+    const tools = graphToolCalls(t);
+    if (tools) r.graph += tools;
+    else if (t.category === 'command' && GRAPH_COMMAND.test(cmd)) r.graph++;
     else if (t.category === 'command' && BUILD_COMMAND.test(cmd)) r.build++;
     else if (t.category === 'search' || t.category === 'read' || (t.category === 'command' && SEARCH_COMMAND.test(cmd))) {
       r.search++;

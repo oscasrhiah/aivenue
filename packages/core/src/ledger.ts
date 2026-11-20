@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { AgentEvent, AgentRunInfo, ObservedCheck, WorkflowRun } from './types';
 import { withoutHeredocs } from './procdetect';
-import { GRAPH_TOOL } from './graphUsage';
+import { GRAPH_TOOL, graphToolCalls } from './graphUsage';
 
 /**
  * What every agent did, built from their recorded events (no model call), for the shared context:
@@ -224,8 +224,9 @@ export function collectActivity(run: WorkflowRun, eventsOf: (agentId: string) =>
         continue;
       }
       // A lookup with Aivenue's graph tools: shared like the same graphify command run in a shell.
-      if (t.category === 'hub' && GRAPH_TOOL.test(t.name ?? '')) {
-        const what = evenOut(`${t.name.replace(/^.*?(graph_\w+)$/, '$1')} ${flat(t.title)}`);
+      // (Also called from the code of an OpenCode code-mode call, whose event carries the code as its input.)
+      if (graphToolCalls(t) > 0) {
+        const what = evenOut(GRAPH_TOOL.test(t.name ?? '') ? `${t.name.replace(/^.*?(graph_\w+)$/, '$1')} ${flat(t.title)}` : clip(flat(t.input), 300));
         entries.push({ ts: e.ts, agent: a, kind: 'graph', what, command: what, ok: t.status === 'ok', result: clip(flat(t.output), 2000) });
         continue;
       }
