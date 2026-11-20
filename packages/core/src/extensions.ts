@@ -343,15 +343,20 @@ export class ExtensionService {
     if (!fs.existsSync(from)) return;
     const stamp = bundleStamp(from);
     const stampFile = path.join(to, '.aivenue-stamp');
+    let same = false;
     try {
-      if (fs.readFileSync(stampFile, 'utf8') === stamp) return;
+      same = fs.readFileSync(stampFile, 'utf8') === stamp;
     } catch {
       // not copied yet
     }
-    fs.rmSync(to, { recursive: true, force: true });
-    fs.mkdirSync(to, { recursive: true });
-    fs.cpSync(from, to, { recursive: true });
-    fs.writeFileSync(stampFile, stamp);
+    if (!same) {
+      fs.rmSync(to, { recursive: true, force: true });
+      fs.mkdirSync(to, { recursive: true });
+      fs.cpSync(from, to, { recursive: true });
+      fs.writeFileSync(stampFile, stamp);
+    }
+    // Also for a copy made before (the stamp compares sizes only): a package built on Windows has no execute bits.
+    markRunnable(to);
   }
 
   /**
@@ -1152,6 +1157,52 @@ function freePort(): Promise<number> {
 }
 
 /** Names and sizes of every file: changes when the app ships different skills. */
+/**
+ * The scripts a bundled skill tells agents to run (a file under a scripts/ folder that starts with #!, e.g.
+ * impeccable's scripts/impeccable launcher) made executable, as their upstream repositories ship them. Not on Windows,
+ * which has no execute bit; data files stay as they are.
+ */
+export function markRunnable(dir: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') return [];
+  const done: string[] = [];
+  const walk = (d: string, inScripts: boolean) => {
+    let list: fs.Dirent[];
+    try {
+      list = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of list) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p, inScripts || e.name === 'scripts');
+      else if (inScripts && e.isFile() && startsWithShebang(p)) {
+        try {
+          const mode = fs.statSync(p).mode;
+          if ((mode & 0o111) !== 0o111) fs.chmodSync(p, mode | 0o755);
+          done.push(p);
+        } catch {
+          // left as it is: the agent can still run it with sh
+        }
+      }
+    }
+  };
+  walk(dir, false);
+  return done;
+}
+
+function startsWithShebang(file: string): boolean {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, 'r');
+    const b = Buffer.alloc(2);
+    return fs.readSync(fd, b, 0, 2, 0) === 2 && b.toString('latin1') === '#!';
+  } catch {
+    return false;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 function bundleStamp(dir: string): string {
   const parts: string[] = [];
   const walk = (d: string) => {

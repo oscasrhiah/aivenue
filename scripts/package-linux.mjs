@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import * as zlib from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { fileMode } from './lib/linux-modes.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
 const desktop = path.join(root, 'packages', 'desktop');
@@ -16,7 +17,17 @@ const name = `Aivenue-${version}-linux-x64`;
 const out = path.join(root, 'release', `${name}.tar.gz`);
 if (!fs.existsSync(unpacked)) throw new Error(`missing ${unpacked}: run npm run package:linux first`);
 
-const EXEC = new Set(['aivenue', 'chrome_crashpad_handler', 'chrome-sandbox', 'aivenue.sh', 'install.sh', 'uninstall.sh']);
+// Modes: scripts/lib/linux-modes.mjs (the app's programs, and the bundled skills' scripts that start with #!).
+const head = (file) => {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(2);
+    fs.readSync(fd, b, 0, 2, 0);
+    return b;
+  } finally {
+    fs.closeSync(fd);
+  }
+};
 
 /** [path inside the archive, source file or null for a folder, extra content] */
 const entries = [];
@@ -26,7 +37,10 @@ const walk = (dir, rel) => {
     if (d.isDirectory()) {
       entries.push({ path: r + '/', dir: true });
       walk(path.join(dir, d.name), r);
-    } else entries.push({ path: r, file: path.join(dir, d.name), exec: EXEC.has(d.name) && rel === name });
+    } else {
+      const file = path.join(dir, d.name);
+      entries.push({ path: r, file, exec: fileMode(r.slice(name.length + 1), head(file)) === 0o755 });
+    }
   }
 };
 entries.push({ path: name + '/', dir: true });

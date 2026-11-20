@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 // offered to, and impeccable's install folder, environment and uninstall (no real npm or engine: proc.ts is stubbed).
 const BUNDLED = path.join(process.cwd(), 'packages', 'core', 'bundled');
 const bundled = await build({
-  stdin: { contents: `export { ExtensionService } from './packages/core/src/extensions'; export { impeccableEngine } from './packages/core/src/impeccable';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { ExtensionService, markRunnable } from './packages/core/src/extensions'; export { impeccableEngine } from './packages/core/src/impeccable';`, resolveDir: process.cwd() },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -166,4 +166,56 @@ test('開啟 impeccable 或 CodeGraph 時，安裝開始前顯示「準備安裝
     assert.match(s.list().find((x) => x.id === id).message, /Node\.js/);
     fs.rmSync(data, { recursive: true, force: true });
   }
+});
+
+test('複製到 Aivenue 的 Skill 資料夾後，scripts/ 底下以 #! 開頭的檔案設成可執行（Windows 不動，資料檔不動）', () => {
+  const { markRunnable } = mod.exports;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-runnable-'));
+  const put = (rel, text, mode = 0o644) => {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+    fs.chmodSync(path.join(dir, rel), mode);
+  };
+  put('impeccable/skills/impeccable/scripts/impeccable', '#!/bin/sh\necho hi\n');
+  put('impeccable/skills/impeccable/scripts/impeccable.cmd', '@echo off\r\n');
+  put('impeccable/skills/impeccable/scripts/data/font-index.json', '{}');
+  put('impeccable/skills/impeccable/SKILL.md', '#!not a script outside scripts/\n');
+  put('agent-skills/skills/accessibility-engineering/scripts/audit-a11y.sh', '#!/usr/bin/env bash\n');
+  assert.deepEqual(markRunnable(dir, 'win32'), []);
+  const done = markRunnable(dir, 'linux').map((p) => path.relative(dir, p).split(path.sep).join('/')).sort();
+  assert.deepEqual(done, ['agent-skills/skills/accessibility-engineering/scripts/audit-a11y.sh', 'impeccable/skills/impeccable/scripts/impeccable']);
+  if (process.platform !== 'win32') {
+    const mode = (rel) => fs.statSync(path.join(dir, rel)).mode & 0o777;
+    assert.equal(mode('impeccable/skills/impeccable/scripts/impeccable'), 0o755);
+    assert.equal(mode('agent-skills/skills/accessibility-engineering/scripts/audit-a11y.sh'), 0o755);
+    assert.equal(mode('impeccable/skills/impeccable/scripts/impeccable.cmd'), 0o644);
+    assert.equal(mode('impeccable/skills/impeccable/scripts/data/font-index.json'), 0o644);
+    assert.equal(mode('impeccable/skills/impeccable/SKILL.md'), 0o644);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('Linux 套件的檔案權限：程式本體與內建 Skill 的 scripts/ 裡以 #! 開頭的檔案是 0755，其他是 0644', async () => {
+  const { fileMode, EXEC } = await import('./lib/linux-modes.mjs');
+  for (const n of EXEC) assert.equal(fileMode(n, Buffer.from('\x7fELF')), 0o755, n);
+  assert.equal(fileMode('resources/aivenue', Buffer.from('#!')), 0o644, 'EXEC names count at the top of the package only');
+  // Every file of the bundled skills, where the package puts them.
+  const shebang = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else {
+        const rel = 'resources/app.asar.unpacked/dist/bundled/' + path.relative(BUNDLED, p).split(path.sep).join('/');
+        const head = fs.readFileSync(p).subarray(0, 2);
+        const mode = fileMode(rel, head);
+        const runnable = head.toString('latin1') === '#!' && rel.split('/').slice(4, -1).includes('scripts');
+        assert.equal(mode, runnable ? 0o755 : 0o644, rel);
+        if (runnable) shebang.push(rel.slice('resources/app.asar.unpacked/dist/bundled/'.length));
+      }
+    }
+  };
+  walk(BUNDLED);
+  for (const want of ['impeccable/skills/impeccable/scripts/impeccable', 'agent-skills/skills/accessibility-engineering/scripts/audit-a11y.sh', 'agent-skills/skills/constraint-driven-development/scripts/quality-gate.mjs']) assert.ok(shebang.includes(want), want);
+  assert.equal(fileMode('resources/app.asar.unpacked/dist/bundled/impeccable/skills/impeccable/scripts/impeccable.cmd', Buffer.from('@e')), 0o644);
 });
