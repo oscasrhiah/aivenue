@@ -13,6 +13,7 @@ import { SwitchProvider } from './RunTools';
 import { ProcessWindow } from './DetailWindows';
 import type { TrackedProcess } from '../../../core/src/types';
 import { Markdown } from './Markdown';
+import { tokenTips } from '../tokenCells';
 import { Transcript, visible } from './Transcript';
 
 type T = ReturnType<typeof useT>;
@@ -238,6 +239,7 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
     .filter((a) => a.parentId === agent.id)
     .sort(byStart);
   const tokens = agent.tokens;
+  const tips = tokenTips(t, !!agent.observed?.splitUnknown);
   const steps = visible(events, raw);
   const usage = useMemo(() => graphUsage(events), [events]);
   const lookups = useMemo(() => graphLookupsByTool(events), [events]);
@@ -295,19 +297,28 @@ function Detail({ t, run, agent, providers, onOpen }: { t: T; run: WorkflowRun; 
             <dt>{t('耗時', 'Time')}</dt>
             <dd className="num">{agent.startedAt ? elapsed(agent.startedAt, agent.endedAt) : '—'}</dd>
           </div>
+          {/* One figure per cell (they used to share one, wrapping): the total, then its parts, cache reads apart. */}
           {tokens && (
-            <div>
-              <dt>token</dt>
-              <dd className="num">
-                {fmtTokens(tokens.input + tokens.output)}
-                <span className="muted">
-                  {' '}
-                  {t('輸入', 'in')} {fmtTokens(tokens.input)}
-                  {tokens.cached ? ` / ${t('快取', 'cached')} ${fmtTokens(tokens.cached)}` : ''}
-                  {t('，輸出', ', out')} {fmtTokens(tokens.output)}
-                </span>
-              </dd>
-            </div>
+            <>
+              <div title={tips.total}>
+                <dt>{t('token 合計', 'Tokens')}</dt>
+                <dd className="num">{fmtTokens(tokens.input + tokens.output)}</dd>
+              </div>
+              <div title={tips.input}>
+                <dt>{t('輸入', 'Input')}</dt>
+                <dd className="num">{fmtTokens(tokens.input)}</dd>
+              </div>
+              <div>
+                <dt>{t('輸出', 'Output')}</dt>
+                <dd className="num">{fmtTokens(tokens.output)}</dd>
+              </div>
+              {tokens.cached ? (
+                <div title={tips.cached}>
+                  <dt>{t('快取讀取', 'Cache reads')}</dt>
+                  <dd className="num">{fmtTokens(tokens.cached)}</dd>
+                </div>
+              ) : null}
+            </>
           )}
           <div>
             <dt>{t('動作', 'Actions')}</dt>
