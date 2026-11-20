@@ -112,7 +112,7 @@ test('impeccable：預設關閉；裝好後交給實作者與程式碼審查者�
   assert.ok(fs.existsSync(copy));
   for (const role of ['executor', 'code_reviewer']) {
     assert.deepEqual(caps.extraSkills(role).filter((k) => k.name === 'impeccable').map((k) => k.path), [copy], role);
-    assert.match(caps.extraRules(role, data), /IMPECCABLE \(design skill\)[\s\S]*do not run live, generate, hooks, pin or install/);
+    assert.match(caps.extraRules(role, data), /IMPECCABLE \(design skill\)[\s\S]*do not run live, generate, hooks, pin, install, component-review or build-phase[\s\S]*~\/\.impeccable\/component-reviews/);
   }
   for (const role of ['planner', 'plan_reviewer', 'subagent']) {
     assert.ok(!caps.extraSkills(role).some((k) => k.name === 'impeccable'), role);
@@ -144,4 +144,26 @@ test('impeccable：預設關閉；裝好後交給實作者與程式碼審查者�
   assert.equal(row().installed, false);
   assert.equal(row().enabled, false);
   fs.rmSync(data, { recursive: true, force: true });
+});
+
+test('開啟 impeccable 或 CodeGraph 時，安裝開始前顯示「準備安裝…」，不會閃過「尚未安裝」的錯誤', async () => {
+  for (const id of ['impeccable', 'codegraph']) {
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), `aivenue-${id}-`));
+    const cfg = {};
+    const seen = [];
+    const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+    const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: {}, secrets: {}, onChange: (list) => seen.push(list.find((x) => x.id === id)) });
+    const first = (await s.setEnabled(id, true)).find((x) => x.id === id);
+    for (let i = 0; i < 50 && s.list().find((x) => x.id === id).state === 'working'; i++) await new Promise((r) => setTimeout(r, 10));
+    const shown = seen.filter((x) => x.enabled);
+    assert.ok(shown.length > 0, id);
+    assert.equal(shown[0].state, 'working', `${id}: ${JSON.stringify(shown[0])}`);
+    assert.equal(shown[0].message, '準備安裝…');
+    assert.ok(['working', 'error'].includes(first.state), id);
+    assert.ok(!shown.some((x) => /尚未安裝/.test(x.message ?? '')), `${id}: ${JSON.stringify(shown.map((x) => [x.state, x.message]))}`);
+    // The stub has no Node.js: the install ends with its real error, not "not installed".
+    assert.equal(s.list().find((x) => x.id === id).state, 'error');
+    assert.match(s.list().find((x) => x.id === id).message, /Node\.js/);
+    fs.rmSync(data, { recursive: true, force: true });
+  }
 });

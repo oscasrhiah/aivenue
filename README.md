@@ -570,7 +570,7 @@ CodeGraph 的細節：
 impeccable 的細節：
 
 - **安裝**：Skill 檔案（上游 `skill-v4.8.0`）隨 App 附上。打開時 Aivenue 用 `npm install --prefix` 把固定版本 `impeccable@4.8.0` 裝進資料夾裡的 `tools/impeccable`，npm 依平台一併下載引擎 `@impeccable/cli-<os>-<arch>@0.1.18` 並核對雜湊。從不執行 `impeccable install`（它會把 Skill 複製到專案或使用者的 agent 資料夾、也可能加 hook）。卡片上的「解除安裝」只刪 Aivenue 的這份副本與 Skill 副本。
-- **交給誰**：實作者與程式碼審查者，加一段簡短規則：只在工作牽涉前端介面時用；執行中沒有人能回答問題，所以不跑 init 的問答、`live`、`generate`、`hooks`、`pin`、`install`；除非工作要求，不新增 `PRODUCT.md`、`DESIGN.md` 或 `.impeccable/`；審查者只回報。
+- **交給誰**：實作者與程式碼審查者，加一段簡短規則：只在工作牽涉前端介面時用；執行中沒有人能回答問題，所以不跑 init 的問答、`live`、`generate`、`hooks`、`pin`、`install`、`component-review`、`build-phase`（比稿建置與它的元件審查要等人在瀏覽器確認，審查紀錄固定存在 `~/.impeccable/component-reviews`，引擎沒有環境變數能改，只有 `component-review` 能用 `--store` 指定位置，`build-phase` 的關卡仍讀家目錄那份）；除非工作要求，不新增 `PRODUCT.md`、`DESIGN.md` 或 `.impeccable/`；審查者只回報。
 - **使用統計與本機檔案**：agent 執行的指令都帶 `IMPECCABLE_BIN`（Aivenue 裝的引擎）、`DO_NOT_TRACK=1`、`IMPECCABLE_NO_TELEMETRY=1`、`IMPECCABLE_NO_UPDATE_CHECK=1`、`IMPECCABLE_NO_STALENESS_CHECK=1`，快取與種子用的鹽值也指到 `tools/impeccable`，不建立 `~/.impeccable`。Aivenue 把 `"telemetry": false` 記在 `tools/impeccable/aivenue-settings.json`；impeccable 自己的設定檔在 `~/.impeccable/config.json`，Aivenue 不寫它，靠環境變數關閉。
 - **關不掉的連線**：為新介面或整個重新設計挑設計方向（`concept-seed`，專案要先有 `PRODUCT.md`）時，引擎會向 `https://impeccable.style/api` 要一組方向，示意圖從 `https://impeccable.style/worlds/cards` 來。關閉使用統計只會加上「不要記錄」的標頭，連線本身仍會發生，impeccable 也沒有離線開關。審查、修改既有介面不會走到這一步。
 - **瀏覽器**：`detect` 掃描網址時用電腦上已安裝的 Chrome、Chromium 或 Edge，不會另外下載瀏覽器。

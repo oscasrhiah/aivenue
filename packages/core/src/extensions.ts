@@ -135,10 +135,15 @@ const GRAPH_DIVISION =
 const CODEGRAPH_FALLBACK = 'If a CodeGraph tool fails, times out or returns nothing useful, do not stop or retry it repeatedly: use the other graph if there is one, else normal source search.';
 
 /** A graph is a shortcut, never a dependency: when it fails, the work goes on with plain search. */
-/** impeccable is offered to the roles that build or review UI; this is how it fits an Aivenue run. */
+/**
+ * impeccable is offered to the roles that build or review UI; this is how it fits an Aivenue run. The engine writes the
+ * user's home folder only in `component-review` (unless given --store) and `build-phase` (its review gate reads and keeps
+ * ~/.impeccable/component-reviews): no setting moves that store, so the rule keeps agents off both, with the other verbs
+ * that wait for a person.
+ */
 const IMPECCABLE_ROLES: InstructionRole[] = ['executor', 'code_reviewer'];
 const IMPECCABLE_RULE =
-  "IMPECCABLE (design skill): only when the task builds, changes or reviews a frontend interface, read the impeccable skill and run its launcher as it says (on Windows without sh, scripts\\impeccable.cmd); Aivenue has set up its engine. Nobody answers questions during a run: skip init's question round and do not run live, generate, hooks, pin or install; work from the existing code, and put your assumptions in your report. Do not create PRODUCT.md, DESIGN.md or .impeccable/ files unless the task asks for them. A code reviewer only reports.";
+  "IMPECCABLE (design skill): only when the task builds, changes or reviews a frontend interface, read the impeccable skill and run its launcher as it says (on Windows without sh, scripts\\impeccable.cmd); Aivenue has set up its engine. Nobody answers questions during a run: skip init's question round and do not run live, generate, hooks, pin, install, component-review or build-phase (the comp-led build and its plan / asset review wait for a person in a browser and keep their review store in ~/.impeccable/component-reviews); work from the existing code, and put your assumptions in your report. Do not create PRODUCT.md, DESIGN.md or .impeccable/ files unless the task asks for them. A code reviewer only reports.";
 
 const GRAPH_FALLBACK = 'If a graphify command fails, times out or returns nothing useful, do not stop or retry it repeatedly: fall back to normal source search (rg / grep / glob, reading files) and say in your report that the graph was not used.';
 
@@ -154,6 +159,8 @@ export class ExtensionService {
   private skillsRoot: string;
   private toolsDir: string;
   private work = new Map<ExtensionId, { message?: string; error?: string; since?: number }>();
+  /** Installs running now (their guard: the work message is set before one starts, see setEnabled). */
+  private installing = new Set<ExtensionId>();
   private graphifyVersion?: string;
   /** The installed CodeGraph's version (it lives in Aivenue's tools folder). */
   private codegraphVersion?: string;
@@ -290,6 +297,9 @@ export class ExtensionService {
 
   async setEnabled(id: ExtensionId, enabled: boolean): Promise<ExtensionStatus[]> {
     const c = this.cfg();
+    // Turned on and its tool is not there yet: "preparing to install" from the first status on, not a "not installed"
+    // error for the moment before the install starts.
+    if (enabled && this.needsInstall(id) && !this.work.get(id)?.message) this.work.set(id, { message: L('準備安裝…', 'Preparing to install…'), since: Date.now() });
     this.save({ ...c, [id]: { ...c[id], enabled } });
     if (id === 'omniroute') {
       if (enabled) void this.startOmni().catch(() => undefined);
@@ -307,6 +317,11 @@ export class ExtensionService {
     }
     this.changed();
     return this.list();
+  }
+
+  /** An extension whose tool Aivenue installs when it is turned on, and that tool is not ready yet. */
+  private needsInstall(id: ExtensionId): boolean {
+    return (id === 'graphify' && !this.graphifyVersion) || (id === 'codegraph' && !this.codegraphVersion) || (id === 'impeccable' && !this.impeccableVersion);
   }
 
   setOptions(p: { id: ExtensionId; level?: PonytailLevel; skill?: string; on?: boolean }): ExtensionStatus[] {
@@ -518,7 +533,8 @@ export class ExtensionService {
 
   /** Install uv (when missing) and then the graphify command with it. No admin rights needed. */
   private async installGraphify(): Promise<void> {
-    if (this.work.get('graphify')?.message) return;
+    if (this.installing.has('graphify')) return;
+    this.installing.add('graphify');
     const step = (message: string) => (this.work.set('graphify', { message, since: Date.now() }), this.changed());
     try {
       step(L('檢查 graphify…', 'Checking graphify…'));
@@ -544,6 +560,7 @@ export class ExtensionService {
     } catch (e) {
       this.work.set('graphify', { error: (e as Error).message });
     } finally {
+      this.installing.delete('graphify');
       if (!this.work.get('graphify')?.error) this.work.delete('graphify');
       this.changed();
     }
@@ -564,7 +581,8 @@ export class ExtensionService {
    * and CLAUDE.md / AGENTS.md sections) is never run: Aivenue hands CodeGraph to its agents itself, per run.
    */
   private async installCodegraph(): Promise<void> {
-    if (this.work.get('codegraph')?.message) return;
+    if (this.installing.has('codegraph')) return;
+    this.installing.add('codegraph');
     const step = (message: string) => (this.work.set('codegraph', { message, since: Date.now() }), this.changed());
     try {
       step(L('檢查 CodeGraph…', 'Checking CodeGraph…'));
@@ -584,6 +602,7 @@ export class ExtensionService {
     } catch (e) {
       this.work.set('codegraph', { error: (e as Error).message });
     } finally {
+      this.installing.delete('codegraph');
       if (!this.work.get('codegraph')?.error) this.work.delete('codegraph');
       this.changed();
     }
@@ -636,7 +655,8 @@ export class ExtensionService {
    * `impeccable install` (which writes the skill into the project's or the user's agent folders) is never run.
    */
   private async installImpeccable(): Promise<void> {
-    if (this.work.get('impeccable')?.message) return;
+    if (this.installing.has('impeccable')) return;
+    this.installing.add('impeccable');
     const step = (message: string) => (this.work.set('impeccable', { message, since: Date.now() }), this.changed());
     try {
       step(L('檢查 impeccable…', 'Checking impeccable…'));
@@ -654,6 +674,7 @@ export class ExtensionService {
     } catch (e) {
       this.work.set('impeccable', { error: (e as Error).message });
     } finally {
+      this.installing.delete('impeccable');
       if (!this.work.get('impeccable')?.error) this.work.delete('impeccable');
       this.changed();
     }
