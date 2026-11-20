@@ -5,3 +5,5 @@
 *.ico binary
 *.jpg binary
 *.mp4 binary
+# impeccable's Windows launcher: cmd.exe parses batch files by byte offset, so an LF-only .cmd breaks its goto / call.
+packages/core/bundled/impeccable/**/*.cmd text eol=crlf

@@ -108,6 +108,25 @@ const GUIDES: Record<ExtensionId, Guide> = {
       ['使用統計：CodeGraph 預設會送出匿名的使用統計。Aivenue 啟動的每一個 CodeGraph 都設定 DO_NOT_TRACK=1 與 CODEGRAPH_TELEMETRY=0（也關掉每日的版本檢查），安裝後還會執行 codegraph telemetry off 寫進它自己的設定。', "Usage statistics: CodeGraph sends anonymous usage statistics by default. Every CodeGraph Aivenue starts runs with DO_NOT_TRACK=1 and CODEGRAPH_TELEMETRY=0 (which also turns off its daily version check), and after installing Aivenue runs codegraph telemetry off to store the choice in CodeGraph's own settings."],
     ],
   },
+  impeccable: {
+    title: 'impeccable',
+    intro: [
+      ['Paul Bakaus 的前端設計 Skill：審查與修改介面的版面、字體、色彩、互動、文案、響應式與無障礙，附一個本機引擎，能掃描常見的設計問題（「AI 感」的套版、對比不足、字級混亂等）並讀取專案的 PRODUCT.md、DESIGN.md。', "Paul Bakaus's frontend design skill: reviewing and fixing an interface's layout, type, color, interaction, copy, responsiveness and accessibility, with a local engine that scans for common design problems (generic \"AI-looking\" patterns, low contrast, muddled type scales) and reads the project's PRODUCT.md and DESIGN.md."],
+      ['開啟後交給實作者和程式碼審查者，只在工作牽涉前端介面時使用：實作者照它的流程改介面，審查者用它檢查並回報。Aivenue 也告訴 agent：執行中沒有人能回答問題，不跑需要你在瀏覽器裡挑選的 live／generate，不安裝 hook，除非工作要求，不新增 PRODUCT.md、DESIGN.md 或 .impeccable/。', 'When on it is offered to the implementer and the code reviewer, for work on a frontend interface only: the implementer follows it to change the interface, the reviewer uses it to check and report. Aivenue also tells agents that nobody answers questions during a run, not to use live / generate (which need you to pick in a browser) or install hooks, and not to add PRODUCT.md, DESIGN.md or .impeccable/ unless the task asks for them.'],
+    ],
+    itemsTitle: ['常用的指令（Skill 裡的說明）', 'Common commands (described in the skill)'],
+    items: [
+      { name: 'audit', text: ['技術面的檢查：無障礙、效能、響應式。', 'Technical checks: accessibility, performance, responsiveness.'] },
+      { name: 'critique', text: ['用啟發式評分做 UX 設計審查。', 'A UX design review with heuristic scores.'] },
+      { name: 'polish／layout／typeset／colorize／clarify', text: ['出貨前的修飾；間距與層次；字體；色彩；介面文案與錯誤訊息。', 'A final pass before shipping; spacing and hierarchy; type; color; UI copy and error messages.'] },
+      { name: 'detect', text: ['引擎掃描檔案或網址的設計問題；掃描網址時用你電腦上的 Chrome 或 Edge。', 'The engine scans files or a URL for design problems; a URL scan uses the Chrome or Edge on your computer.'] },
+    ],
+    notes: [
+      ['Skill 檔案隨 Aivenue 附上（上游 skill-v4.8.0）。引擎用 npm 安裝固定版本 impeccable 4.8.0 到 Aivenue 的工具資料夾，npm 會依平台一併下載引擎 0.1.18 並核對雜湊（需要 Node.js）。不改 PATH，也從不執行 impeccable install，所以不會把 Skill 寫進你的專案或 Claude Code、Codex 等 agent 的設定。卡片上的「解除安裝」會刪掉這份副本與 Aivenue 的 Skill 副本。', "The skill files ship with Aivenue (upstream skill-v4.8.0). The engine comes from npm: Aivenue installs the pinned impeccable 4.8.0 into its tools folder, and npm fetches engine 0.1.18 for this platform and checks its hash (needs Node.js). Your PATH is not changed and impeccable install is never run, so the skill is not written into your project or your Claude Code, Codex and other agent settings. Uninstall on the card removes this copy and Aivenue's copy of the skill."],
+      ['使用統計與更新檢查：agent 執行的指令都帶 DO_NOT_TRACK=1、IMPECCABLE_NO_TELEMETRY=1 與 IMPECCABLE_NO_UPDATE_CHECK=1，impeccable 自己要存的檔案（快取、種子用的鹽值）放在 Aivenue 的工具資料夾，不建立 ~/.impeccable。Aivenue 把「telemetry: false」記在工具資料夾的設定裡；impeccable 自己的設定檔在 ~/.impeccable，Aivenue 不去寫它。', "Usage statistics and update checks: the commands agents run carry DO_NOT_TRACK=1, IMPECCABLE_NO_TELEMETRY=1 and IMPECCABLE_NO_UPDATE_CHECK=1, and the files impeccable keeps for itself (caches, the salt for its seeds) go in Aivenue's tools folder, so ~/.impeccable is not created. Aivenue records \"telemetry: false\" in its tools folder settings; impeccable's own settings file lives in ~/.impeccable, which Aivenue does not write."],
+      ['關不掉的連線：為新介面挑設計方向（concept-seed，專案要先有 PRODUCT.md）時，引擎會向 https://impeccable.style 要一組方向與示意圖。關閉使用統計只會讓它告訴伺服器不要記錄，連線本身仍會發生，impeccable 也沒有離線開關。只有全新介面或整個重新設計才會走到這一步，審查、修改既有介面不會。', 'A request that cannot be turned off: to pick a design direction for a new interface (concept-seed, once the project has a PRODUCT.md) the engine asks https://impeccable.style for a set of directions and preview images. Turning usage statistics off only tells the server not to record it; the request still happens, and impeccable has no offline switch. Only a new interface or a full redesign gets there; reviewing or fixing an existing one does not.'],
+    ],
+  },
   omniroute: {
     title: 'OmniRoute',
     intro: [

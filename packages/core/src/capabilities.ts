@@ -96,6 +96,8 @@ export class CapabilityStore {
   /** Set by the extensions: their skills for a role, and rules that depend on the working folder. */
   extraSkills?: (role: AgentRole) => ExtraSkill[];
   extraRules?: (role: AgentRole, cwd?: string) => string;
+  /** Environment the built-in extensions need in the agents' commands (set by ExtensionService). */
+  extraEnv?: () => Record<string, string> | undefined;
 
   /** Where a re-imported skill is copied and scanned before it replaces the library's copy. */
   private stagingDir: string;

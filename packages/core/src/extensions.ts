@@ -11,6 +11,7 @@ import { BUILTIN_PROVIDERS } from './providers/builtin';
 import type { SecretStore } from './secrets';
 import { L } from './i18n';
 import { CODEGRAPH_ENV, CODEGRAPH_PACKAGE, CODEGRAPH_VERSION, codegraphDir, codegraphShim } from './codegraph';
+import { IMPECCABLE_PACKAGE, IMPECCABLE_VERSION, impeccableDir, impeccableEngine, impeccableEnv } from './impeccable';
 
 const isWin = process.platform === 'win32';
 const WRITERS: InstructionRole[] = ['planner', 'executor', 'subagent'];
@@ -134,12 +135,19 @@ const GRAPH_DIVISION =
 const CODEGRAPH_FALLBACK = 'If a CodeGraph tool fails, times out or returns nothing useful, do not stop or retry it repeatedly: use the other graph if there is one, else normal source search.';
 
 /** A graph is a shortcut, never a dependency: when it fails, the work goes on with plain search. */
+/** impeccable is offered to the roles that build or review UI; this is how it fits an Aivenue run. */
+const IMPECCABLE_ROLES: InstructionRole[] = ['executor', 'code_reviewer'];
+const IMPECCABLE_RULE =
+  "IMPECCABLE (design skill): only when the task builds, changes or reviews a frontend interface, read the impeccable skill and run its launcher as it says (on Windows without sh, scripts\\impeccable.cmd); Aivenue has set up its engine. Nobody answers questions during a run: skip init's question round and do not run live, generate, hooks, pin or install; work from the existing code, and put your assumptions in your report. Do not create PRODUCT.md, DESIGN.md or .impeccable/ files unless the task asks for them. A code reviewer only reports.";
+
 const GRAPH_FALLBACK = 'If a graphify command fails, times out or returns nothing useful, do not stop or retry it repeatedly: fall back to normal source search (rg / grep / glob, reading files) and say in your report that the graph was not used.';
 
 /**
  * Built-in extensions, all off until the user turns them on:
  * - Ponytail and Agent Skills: skills shipped with the app, offered to the roles they suit.
  * - Graphify: a skill plus the `graphify` command (installed with uv), and a rule to query the graph when one exists.
+ * - CodeGraph: a code index installed with npm into Aivenue's tools folder (codegraph.ts).
+ * - impeccable: a design skill plus its engine, installed with npm into Aivenue's tools folder (impeccable.ts).
  * - OmniRoute: a local AI gateway (installed from npm, run in the background) that agents use as a provider through OpenCode.
  */
 export class ExtensionService {
@@ -149,6 +157,8 @@ export class ExtensionService {
   private graphifyVersion?: string;
   /** The installed CodeGraph's version (it lives in Aivenue's tools folder). */
   private codegraphVersion?: string;
+  /** The installed impeccable's version (Aivenue's npm copy in its tools folder, whose engine answered). */
+  private impeccableVersion?: string;
   private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string> };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
@@ -172,6 +182,7 @@ export class ExtensionService {
     this.toolsDir = path.join(o.dataDir, 'tools');
     o.capabilities.extraSkills = (role) => this.skillsFor(role);
     o.capabilities.extraRules = (role, cwd) => this.rulesFor(role, cwd);
+    o.capabilities.extraEnv = () => this.toolEnv();
     o.registry.extensionModels = (id) => (id === OMNI_PROVIDER ? this.omniModels() : Promise.resolve(undefined));
     o.registry.extensionAuth = (id) => (id === OMNI_PROVIDER ? this.omniAuth() : Promise.resolve(undefined));
   }
@@ -182,6 +193,10 @@ export class ExtensionService {
     for (const id of Object.keys(PACK_SKILLS) as PackSkillId[]) if (this.cfg().packSkills?.[id]) this.syncSkills(id);
     if (this.cfg().graphify?.enabled) void this.checkGraphify().then(() => this.changed());
     if (this.cfg().codegraph?.enabled) void this.checkCodegraph().then(() => this.changed());
+    if (this.cfg().impeccable?.enabled) {
+      this.syncSkills('impeccable');
+      void this.checkImpeccable().then(() => this.changed());
+    }
     if (this.cfg().omniroute?.enabled) void this.startOmni().catch(() => undefined);
   }
 
@@ -205,7 +220,14 @@ export class ExtensionService {
     const st = (id: ExtensionId, ready: boolean, extra: Partial<ExtensionStatus> = {}): ExtensionStatus => {
       const w = this.work.get(id);
       const enabled = !!c[id]?.enabled;
-      const notReady = id === 'graphify' ? L('graphify 尚未安裝', 'graphify is not installed') : id === 'codegraph' ? L('CodeGraph 尚未安裝', 'CodeGraph is not installed') : L('OmniRoute 沒有在執行', 'OmniRoute is not running');
+      const notReady =
+        id === 'graphify'
+          ? L('graphify 尚未安裝', 'graphify is not installed')
+          : id === 'codegraph'
+            ? L('CodeGraph 尚未安裝', 'CodeGraph is not installed')
+            : id === 'impeccable'
+              ? L('impeccable 尚未安裝', 'impeccable is not installed')
+              : L('OmniRoute 沒有在執行', 'OmniRoute is not running');
       return {
         id,
         enabled,
@@ -221,6 +243,7 @@ export class ExtensionService {
       st('agent-skills', true, { skills: this.skillList('agent-skills') }),
       st('graphify', !!this.graphifyVersion, { version: this.graphifyVersion }),
       st('codegraph', !!this.codegraphVersion, { version: this.codegraphVersion, installed: this.codegraphInstalled() }),
+      st('impeccable', !!this.impeccableVersion, { version: this.impeccableVersion, installed: this.impeccableInstalled() }),
       st('omniroute', !!omni?.ready, {
         version: this.omniVersion(),
         omniroute: omni?.ready
@@ -256,6 +279,15 @@ export class ExtensionService {
     return fs.existsSync(this.codegraphCommand());
   }
 
+  private impeccableInstalled(): boolean {
+    return fs.existsSync(impeccableEngine(this.toolsDir));
+  }
+
+  /** Environment for the commands agents run: impeccable's settings while it is on and installed (impeccable.ts). */
+  private toolEnv(): Record<string, string> | undefined {
+    return this.cfg().impeccable?.enabled && this.impeccableVersion ? impeccableEnv(this.toolsDir) : undefined;
+  }
+
   async setEnabled(id: ExtensionId, enabled: boolean): Promise<ExtensionStatus[]> {
     const c = this.cfg();
     this.save({ ...c, [id]: { ...c[id], enabled } });
@@ -264,6 +296,11 @@ export class ExtensionService {
       else this.stopOmni(true);
     } else if (id === 'codegraph') {
       if (enabled) void this.installCodegraph();
+    } else if (id === 'impeccable') {
+      if (enabled) {
+        this.syncSkills(id);
+        void this.installImpeccable();
+      }
     } else if (enabled) {
       this.syncSkills(id);
       if (id === 'graphify') void this.installGraphify();
@@ -285,7 +322,7 @@ export class ExtensionService {
   // ---------- bundled skills ----------
 
   /** Copy an extension's skills next to the user's (again when the app ships a different copy). */
-  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'security-audit' | 'gh-fix-ci' | 'gh-address-comments' | PackSkillId) {
+  private syncSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'impeccable' | 'security-audit' | 'gh-fix-ci' | 'gh-address-comments' | PackSkillId) {
     const from = path.join(this.o.bundledDir, id);
     const to = path.join(this.skillsRoot, id);
     if (!fs.existsSync(from)) return;
@@ -332,7 +369,7 @@ export class ExtensionService {
   }
 
   /** name → description of one extension's skills (from the copy, else the bundle). */
-  private readSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | PackSkillId): { name: string; description: string; path: string }[] {
+  private readSkills(id: 'ponytail' | 'agent-skills' | 'graphify' | 'impeccable' | PackSkillId): { name: string; description: string; path: string }[] {
     const root = [path.join(this.skillsRoot, id, 'skills'), path.join(this.o.bundledDir, id, 'skills')].find((d) => fs.existsSync(d));
     if (!root) return [];
     const out: { name: string; description: string; path: string }[] = [];
@@ -366,6 +403,7 @@ export class ExtensionService {
     }
     if (c['agent-skills']?.enabled) for (const s of this.skillList('agent-skills')) if (s.enabled && s.roles.includes(r)) out.push(this.readSkills('agent-skills').find((x) => x.name === s.name)!);
     if (c.graphify?.enabled && this.graphifyVersion) out.push(...this.readSkills('graphify'));
+    if (c.impeccable?.enabled && this.impeccableVersion && IMPECCABLE_ROLES.includes(r)) out.push(...this.readSkills('impeccable'));
     for (const [id, d] of Object.entries(PACK_SKILLS) as [PackSkillId, (typeof PACK_SKILLS)[PackSkillId]][]) {
       if (c.packSkills?.[id] && d.roles.includes(r)) out.push(...this.readSkills(id).filter((s) => d.skills.includes(s.name)));
     }
@@ -556,15 +594,69 @@ export class ExtensionService {
    * they are the user's; `codegraph uninit` or deleting the folder removes one.
    */
   async uninstall(id: ExtensionId): Promise<ExtensionStatus[]> {
-    if (id !== 'codegraph') throw new Error(L('只有 CodeGraph 可以從這裡解除安裝', 'Only CodeGraph can be uninstalled here'));
-    if (this.work.get('codegraph')?.message) throw new Error(L('CodeGraph 正在安裝，請等它完成', 'CodeGraph is being installed: wait for it to finish'));
+    if (id !== 'codegraph' && id !== 'impeccable') throw new Error(L('只有 CodeGraph 與 impeccable 可以從這裡解除安裝', 'Only CodeGraph and impeccable can be uninstalled here'));
+    const name = id === 'codegraph' ? 'CodeGraph' : 'impeccable';
+    if (this.work.get(id)?.message) throw new Error(L(`${name} 正在安裝，請等它完成`, `${name} is being installed: wait for it to finish`));
     const c = this.cfg();
-    this.save({ ...c, codegraph: { ...c.codegraph, enabled: false } });
-    fs.rmSync(codegraphDir(this.toolsDir), { recursive: true, force: true });
-    this.codegraphVersion = undefined;
-    this.work.delete('codegraph');
+    this.save({ ...c, [id]: { ...c[id], enabled: false } });
+    if (id === 'codegraph') {
+      fs.rmSync(codegraphDir(this.toolsDir), { recursive: true, force: true });
+      this.codegraphVersion = undefined;
+    } else {
+      // Aivenue's copies only (its tools folder and the skill copy in its skills folder): nothing else was written.
+      fs.rmSync(impeccableDir(this.toolsDir), { recursive: true, force: true });
+      fs.rmSync(path.join(this.skillsRoot, 'impeccable'), { recursive: true, force: true });
+      this.impeccableVersion = undefined;
+    }
+    this.work.delete(id);
     this.changed();
     return this.list();
+  }
+
+  // ---------- impeccable ----------
+
+  /** The engine answers its handshake ("impeccable-engine 0.1.18"); the version shown is the npm package's. */
+  private async checkImpeccable(): Promise<boolean> {
+    if (!this.impeccableInstalled()) return !!(this.impeccableVersion = undefined);
+    const r = await capture(impeccableEngine(this.toolsDir), ['engine-probe'], { timeoutMs: 60000, env: impeccableEnv(this.toolsDir) });
+    if (r.code !== 0 || !/impeccable-engine/.test(r.stdout)) return !!(this.impeccableVersion = undefined);
+    let v = 'installed';
+    try {
+      v = JSON.parse(fs.readFileSync(path.join(impeccableDir(this.toolsDir), 'node_modules', IMPECCABLE_PACKAGE, 'package.json'), 'utf8')).version ?? v;
+    } catch {
+      // the engine answered: installed
+    }
+    this.impeccableVersion = v;
+    return true;
+  }
+
+  /**
+   * npm install of the pinned version into Aivenue's tools folder (needs Node.js and npm; no admin, no PATH change). npm
+   * fetches the engine for this platform as an optional dependency and checks it against the registry's integrity hash.
+   * `impeccable install` (which writes the skill into the project's or the user's agent folders) is never run.
+   */
+  private async installImpeccable(): Promise<void> {
+    if (this.work.get('impeccable')?.message) return;
+    const step = (message: string) => (this.work.set('impeccable', { message, since: Date.now() }), this.changed());
+    try {
+      step(L('檢查 impeccable…', 'Checking impeccable…'));
+      if (!(await this.checkImpeccable())) {
+        const node = findNode();
+        if (!node) throw new Error(L('需要 Node.js 與 npm：請先安裝 Node.js', 'impeccable is installed with npm: install Node.js first'));
+        step(L(`用 npm 安裝 impeccable ${IMPECCABLE_VERSION}（約 20 MB）…`, `Installing impeccable ${IMPECCABLE_VERSION} with npm (about 20 MB)…`));
+        fs.mkdirSync(impeccableDir(this.toolsDir), { recursive: true });
+        const npmCli = path.join(path.dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+        const args = ['install', '--prefix', impeccableDir(this.toolsDir), `${IMPECCABLE_PACKAGE}@${IMPECCABLE_VERSION}`, '--save-exact', '--no-audit', '--no-fund', '--loglevel', 'http'];
+        const r = fs.existsSync(npmCli) ? await this.live('impeccable', node, [npmCli, ...args], 15 * 60000, NPM_EST) : await this.live('impeccable', 'npm', args, 15 * 60000, NPM_EST);
+        if (!(await this.checkImpeccable())) throw new Error(L(`impeccable 安裝失敗：${tail(r.stderr || r.stdout || r.error)}`, `Could not install impeccable: ${tail(r.stderr || r.stdout || r.error)}`));
+      }
+      this.work.delete('impeccable');
+    } catch (e) {
+      this.work.set('impeccable', { error: (e as Error).message });
+    } finally {
+      if (!this.work.get('impeccable')?.error) this.work.delete('impeccable');
+      this.changed();
+    }
   }
 
   /** Retry a failed install (or start one for an extension that needs a tool). */
@@ -572,6 +664,7 @@ export class ExtensionService {
     this.work.delete(id);
     if (id === 'graphify') void this.installGraphify();
     if (id === 'codegraph') void this.installCodegraph();
+    if (id === 'impeccable') void this.installImpeccable();
     if (id === 'omniroute') void this.startOmni().catch(() => undefined);
     this.changed();
     return this.list();
@@ -579,7 +672,11 @@ export class ExtensionService {
 
   /** Graphify's rule: query the graph when the folder has one; otherwise say how to build one. */
   private rulesFor(role: AgentRole, cwd?: string): string {
-    return this.packRules(role) + this.graphifyRules(role, cwd) + this.codegraphRules(cwd);
+    return this.packRules(role) + this.graphifyRules(role, cwd) + this.codegraphRules(cwd) + this.impeccableRules(role);
+  }
+
+  private impeccableRules(role: AgentRole): string {
+    return this.cfg().impeccable?.enabled && this.impeccableVersion && IMPECCABLE_ROLES.includes(role as InstructionRole) ? `\n${IMPECCABLE_RULE}\n` : '';
   }
 
   /** The folder has a CodeGraph index agents can query (CodeGraph on and installed, index built). */

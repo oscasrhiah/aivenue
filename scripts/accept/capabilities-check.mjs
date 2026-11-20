@@ -71,7 +71,7 @@ const PANE = `(async () => {
     // The roles of the first list's skills (the switchable ones; the design references have none).
     roles: [...(s.querySelector('.clist.builtin-skills')?.querySelectorAll(':scope > .crow') ?? [])].map((c) => [...c.querySelectorAll('.tag')].map((t) => t.innerText.trim())),
   }));
-  // The four built-in extension cards (section "內建擴充"): name, switch, and whether the card fits in the window.
+  // The built-in extension cards (section "內建擴充"): name, switch, and whether the card fits in the window.
   const extensions = [...document.querySelectorAll('.settings-body .ext-card')].map((c) => {
     const sw = c.querySelector('.ext-head input[type=checkbox]');
     const r = c.getBoundingClientRect();
@@ -158,11 +158,11 @@ for (const [view, width] of [['wide', null], ['narrow', 420]]) {
   const at = `${view} (${pane.width}px)`;
   const find = (is) => pane.sections.find((x) => is(x.title));
   chk(`${at}: build line in Settings shows the same build`, pane.buildLine?.includes(String(hub?.build)), true);
-  chk(`${at}: section "內建擴充", the four extension cards`, pane.extensions.map((x) => x.name), ['Ponytail', 'Agent Skills', 'Graphify', 'OmniRoute']);
-  chk(`${at}: extension switches, off in a clean AIVENUE_HOME and usable`, pane.extensions.map((x) => `${x.name}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`), ['Ponytail:off', 'Agent Skills:off', 'Graphify:off', 'OmniRoute:off']);
+  chk(`${at}: section "內建擴充", the six extension cards`, pane.extensions.map((x) => x.name), ['Ponytail', 'Agent Skills', 'Graphify', 'CodeGraph', 'impeccable', 'OmniRoute']);
+  chk(`${at}: extension switches, off in a clean AIVENUE_HOME and usable`, pane.extensions.map((x) => `${x.name}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`), ['Ponytail:off', 'Agent Skills:off', 'Graphify:off', 'CodeGraph:off', 'impeccable:off', 'OmniRoute:off']);
   // No icon before the name since UI round C (emoji icons are gone; the name says it). Before: 🎀, and earlier 🪮,
   // which showed as an empty box on Ubuntu 20.04.
-  chk(`${at}: no emoji icon before an extension's name`, pane.extensions.map((x) => x.icon), ['', '', '', '']);
+  chk(`${at}: no emoji icon before an extension's name`, pane.extensions.map((x) => x.icon), ['', '', '', '', '', '']);
   chk(`${at}: every extension card inside the window`, pane.extensions.every((x) => x.left >= 0 && x.right <= pane.width), true);
   const onDemand = find(ON_DEMAND);
   chk(`${at}: section "按需使用的內建 Skill"`, onDemand?.lists[0] ?? null, ['gh-fix-ci', 'gh-address-comments', 'security-audit']);

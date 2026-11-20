@@ -34,6 +34,8 @@ export interface RunAgentOptions {
   seqStart?: number;
   /** API-key mode: extra environment / args / settings for this run. */
   auth?: { env: Record<string, string>; args: ArgGroup[]; settingsExtra?: Record<string, unknown> };
+  /** Environment for the commands the agent runs (built-in extensions' tool settings, e.g. usage statistics off); the CLI's own settings win. */
+  toolEnv?: Record<string, string>;
   /** Shared MCP servers configured in Aivenue. */
   mcpServers?: ResolvedMcpServer[];
   /** User's instructions for this role. */
@@ -360,7 +362,7 @@ export async function runAgent(o: RunAgentOptions): Promise<RunAgentResult> {
     ...renderGroups(spec.run.tail, tokens),
   ];
   const args = await dropUnsupported(spec, rawArgs);
-  const extraEnv: Record<string, string> = { ...secretProcessEnv, ...(o.auth?.env ?? {}), ...(pickMode(spec.modeEnv, modeKey) ?? {}) };
+  const extraEnv: Record<string, string> = { ...(o.toolEnv ?? {}), ...secretProcessEnv, ...(o.auth?.env ?? {}), ...(pickMode(spec.modeEnv, modeKey) ?? {}) };
   for (const [k, v] of Object.entries(spec.run.env ?? {})) {
     const r = renderGroups([[v]], tokens);
     if (r.length) extraEnv[k] = r[0];

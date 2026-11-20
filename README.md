@@ -536,7 +536,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 
 ### 內建擴充
 
-「設定 → 能力 → 內建擴充」附了四個第三方擴充，**預設全部關閉**，打開開關就能用；每張卡片的「ⓘ 說明」會用一個小視窗介紹用途（Agent Skills 會逐一介紹 26 個 Skill）。
+「設定 → 能力 → 內建擴充」附了六個第三方擴充，**預設全部關閉**，打開開關就能用；每張卡片的「ⓘ 說明」會用一個小視窗介紹用途（Agent Skills 會逐一介紹 26 個 Skill）。
 
 | 擴充 | 做什麼 | 打開後 |
 |---|---|---|
@@ -544,6 +544,7 @@ agent 之間預設會交接計畫、審查意見與摘要，並看得到其他 a
 | [Agent Skills](https://github.com/addyosmani/agent-skills)（MIT） | Addy Osmani 的 26 個工程 Skill：規格、計畫拆解、TDD、除錯、程式碼審查、無障礙（accessibility-engineering，用到時會以 npx 下載 axe 與 pa11y）、安全、效能、上線… | 依角色提供（例如計畫者拿到計畫拆解、審查者拿到程式碼審查），每個 Skill 可單獨開關；需要和使用者問答的 Skill 預設關閉。agent 只看到名稱與一句說明，用到才讀全文 |
 | [Graphify](https://github.com/Graphify-Labs/graphify)（Apache-2.0） | 把專案整理成知識圖譜，agent 先查圖再讀檔，少翻很多檔案；程式碼在本機解析，不呼叫 API | 第一次打開會自動安裝 uv 與 graphify（uv 會自己帶 Python）。之後每個工作流開始前，Aivenue 先在工作資料夾（隔離模式是隔離副本）執行 `graphify update` 更新圖譜，agent 改檔後再在背景更新；agent 拿到 `graph_query`、`graph_path`、`graph_explain` 三個查圖工具，先查圖再 grep 或讀檔。細節見下方「Graphify 圖譜」 |
 | [CodeGraph](https://github.com/colbymchenry/codegraph)（MIT） | 程式碼索引：每個函式、類別在哪，誰呼叫它、它呼叫誰，改一個地方會影響哪裡；在本機解析，不呼叫 API | Aivenue 用 npm 把固定版本 1.6.2 裝進自己的工具資料夾（需要 Node.js，約 270 MB），不改 PATH、不改 agent 設定。每個工作流開始前建立或更新工作資料夾的 `.codegraph/` 索引，agent 拿到 CodeGraph 的查詢工具。細節見下方「CodeGraph 的細節」 |
+| [impeccable](https://github.com/pbakaus/impeccable)（Apache-2.0） | 前端設計 Skill：版面、字體、色彩、互動、文案與無障礙的審查和修改，附一個掃描設計問題的本機引擎 | Skill 隨 App 附上；引擎由 Aivenue 用 npm 把固定版本 4.8.0 裝進自己的工具資料夾（需要 Node.js），不改 PATH，也不把 Skill 寫進專案或 agent 設定。交給實作者與程式碼審查者，只用在介面的工作。為新介面挑設計方向時會連到 impeccable.style，這個連線關不掉。細節見下方「impeccable 的細節」 |
 | [OmniRoute](https://github.com/diegosouzapw/OmniRoute)（MIT） | 本機 AI 閘道，接上數百家供應商；`auto/best-free` 會自動挑現在能用的免費模型，額度用完就換下一家 | 自動安裝（約 500 MB）並在背景啟動，只在 127.0.0.1；管理密碼自動產生，可一鍵複製。在卡片裡的「連接免費供應商」接上至少一家（例如 Gemini、OpenRouter）後，就能當 agent 使用 |
 
 **看得出用了什麼**：agent 的標題列會標出 🎀 Ponytail（強度）、🧰 讀過的 Skill、🕸️ Graphify 執行次數，滑鼠移上去看明細；處理過程裡讀 Skill 顯示成「🧰 使用 Skill 名稱」，graphify 指令顯示成「🕸️ Graphify 查詢 "…"」。
@@ -565,6 +566,14 @@ CodeGraph 的細節：
 - **在圖譜視窗看**：「圖譜」視窗有 Graphify 與 CodeGraph 兩個分頁，各自顯示自己的圖（資料不混在一起），搜尋、節點詳細資料、縮放都一樣。CodeGraph 沒有匯出功能（它的瀏覽器檢視器還沒正式推出），Aivenue 以唯讀方式讀它的 `.codegraph/codegraph.db`：符號是節點（略過 import），呼叫、包含、參照等是連線，每個檔案一個群組；同樣最多畫 2,000 個節點。
 - **使用統計**：CodeGraph 預設會送出匿名的使用統計到 `telemetry.getcodegraph.com`。Aivenue 啟動的每一個 CodeGraph 都帶 `DO_NOT_TRACK=1`、`CODEGRAPH_TELEMETRY=0` 與 `CODEGRAPH_NO_UPDATE_CHECK=1`（每日版本檢查也關掉），安裝後還會執行 `codegraph telemetry off` 存進它自己的設定。
 - 分工圖的「查圖」也算 CodeGraph 的查詢，滑鼠移上去會列出用了哪些工具；agent 的標題列另外標出 CodeGraph × N。
+
+impeccable 的細節：
+
+- **安裝**：Skill 檔案（上游 `skill-v4.8.0`）隨 App 附上。打開時 Aivenue 用 `npm install --prefix` 把固定版本 `impeccable@4.8.0` 裝進資料夾裡的 `tools/impeccable`，npm 依平台一併下載引擎 `@impeccable/cli-<os>-<arch>@0.1.18` 並核對雜湊。從不執行 `impeccable install`（它會把 Skill 複製到專案或使用者的 agent 資料夾、也可能加 hook）。卡片上的「解除安裝」只刪 Aivenue 的這份副本與 Skill 副本。
+- **交給誰**：實作者與程式碼審查者，加一段簡短規則：只在工作牽涉前端介面時用；執行中沒有人能回答問題，所以不跑 init 的問答、`live`、`generate`、`hooks`、`pin`、`install`；除非工作要求，不新增 `PRODUCT.md`、`DESIGN.md` 或 `.impeccable/`；審查者只回報。
+- **使用統計與本機檔案**：agent 執行的指令都帶 `IMPECCABLE_BIN`（Aivenue 裝的引擎）、`DO_NOT_TRACK=1`、`IMPECCABLE_NO_TELEMETRY=1`、`IMPECCABLE_NO_UPDATE_CHECK=1`、`IMPECCABLE_NO_STALENESS_CHECK=1`，快取與種子用的鹽值也指到 `tools/impeccable`，不建立 `~/.impeccable`。Aivenue 把 `"telemetry": false` 記在 `tools/impeccable/aivenue-settings.json`；impeccable 自己的設定檔在 `~/.impeccable/config.json`，Aivenue 不寫它，靠環境變數關閉。
+- **關不掉的連線**：為新介面或整個重新設計挑設計方向（`concept-seed`，專案要先有 `PRODUCT.md`）時，引擎會向 `https://impeccable.style/api` 要一組方向，示意圖從 `https://impeccable.style/worlds/cards` 來。關閉使用統計只會加上「不要記錄」的標頭，連線本身仍會發生，impeccable 也沒有離線開關。審查、修改既有介面不會走到這一步。
+- **瀏覽器**：`detect` 掃描網址時用電腦上已安裝的 Chrome、Chromium 或 Edge，不會另外下載瀏覽器。
 OmniRoute 的細節：
 
 - **連接免費供應商**：卡片裡列出推薦的 5 家（Google Gemini、OpenRouter、NVIDIA NIM、Mistral、Groq），另外 3 家收在「更多」（Ollama Cloud；Logfare 會記錄每一次請求；Cerebras 要綁卡）。按「取得金鑰」到官方網站自己註冊並建立 API 金鑰，貼回來按「連接」，Aivenue 會交給 OmniRoute（加密保存在它的資料庫）。接上後自動測試一次：送出和 agent 開頭差不多長的請求並要求呼叫工具，通過才顯示「可以跑 agent」，沒通過會寫出原因（金鑰無效、上下文太短、每分鐘上限太低、不支援工具）。
@@ -821,4 +830,4 @@ scripts/
 
 [MIT](LICENSE)
 
-內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。CodeGraph 擴充在使用者開啟時才用 npm 下載，為 MIT 授權。
+內建擴充的 Skill 檔保留原本的授權：Ponytail、Agent Skills 與 Cloudflare security-audit 為 MIT，Graphify、OpenAI gh-fix-ci 與 gh-address-comments 為 Apache-2.0，來源與版本見 [packages/core/bundled/README.md](packages/core/bundled/README.md)。圖譜視窗用的 [vis-network](https://github.com/visjs/vis-network) 9.1.6 為 Apache-2.0 或 MIT 雙授權。CodeGraph 擴充在使用者開啟時才用 npm 下載，為 MIT 授權。impeccable 的 Skill 檔與它開啟時用 npm 下載的引擎為 Apache-2.0。

@@ -3699,6 +3699,7 @@ export class Orchestrator {
         signal: ac.signal,
         seqStart,
         auth,
+        toolEnv: caps.extraEnv?.(),
         keepAlive: {
           pool: this.pool,
           secret,

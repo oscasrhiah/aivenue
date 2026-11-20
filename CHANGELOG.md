@@ -11,9 +11,17 @@
     - 這個 Skill 會叫 agent 用 `npx` 執行 axe-core 和 pa11y：用到時會從 npm 下載這兩個工具，和 agent 執行的其他指令一樣受工作流的權限限制，Aivenue 不會先安裝。能力頁和說明都寫了這一點。
     - 它連結的 accessibility-auditor 角色說明也一起附上。
 
+- **新的內建擴充 impeccable（預設關閉）**：
+  - **原本的問題**：改介面或審查介面時，agent 只有 web-design-guidelines 的靜態規則和 Agent Skills 的 frontend-ui-engineering，沒有一套專門處理版面、字體、色彩與「AI 感」套版的設計流程；impeccable 之前因為需要它自己的 CLI 和偵測器而沒有收。
+  - **現在**：
+    - 能力頁的內建擴充多了 impeccable。Skill 檔隨 App 附上（上游 `skill-v4.8.0`）；開啟時 Aivenue 用 npm 把固定版本 4.8.0 裝進自己的工具資料夾，npm 依平台一併下載引擎並核對雜湊。不改 PATH，也從不執行 `impeccable install`，所以不會把 Skill 寫進專案或 agent 的設定；卡片上可以「解除安裝」。
+    - 交給實作者和程式碼審查者，附一段簡短規則：只用在前端介面的工作，不跑需要人回答或在瀏覽器裡挑選的流程，除非工作要求不新增 PRODUCT.md、DESIGN.md。
+    - agent 執行的指令一律帶上關閉使用統計與更新檢查的設定，impeccable 自己要存的檔案放在 Aivenue 的工具資料夾，不建立 `~/.impeccable`。
+    - 能力頁和說明都寫明：為新介面挑設計方向時，引擎會連到 impeccable.style，這個連線關不掉；掃描網址時用電腦上的 Chrome 或 Edge。
+
 - **能力頁拿掉「設計參考・不會載入」那一段**：
   - **原本的問題**：能力頁最下面列著 impeccable、frontend-testing-debugging、accessibility-inspect 三個 Skill，但它們從來不會交給 agent，也沒有開關，看了只會以為少了什麼。
-    - impeccable 需要它自己的 CLI、偵測器和瀏覽器。
+    - impeccable 需要它自己的 CLI、偵測器和瀏覽器（現在改成上面的 impeccable 擴充）。
     - frontend-testing-debugging 依賴 Codex 專用的 Browser 外掛，上游也沒有授權檔。
     - accessibility-inspect 缺少它依賴的檔案和 MCP 伺服器，上游也沒有授權檔。
     - 三個都沒辦法完整整合進 Aivenue。

@@ -285,7 +285,7 @@ export interface CapabilitiesConfig {
   extensions?: ExtensionsConfig;
 }
 
-export type ExtensionId = 'ponytail' | 'agent-skills' | 'graphify' | 'codegraph' | 'omniroute';
+export type ExtensionId = 'ponytail' | 'agent-skills' | 'graphify' | 'codegraph' | 'impeccable' | 'omniroute';
 export type PonytailLevel = 'lite' | 'full' | 'ultra';
 
 export interface ExtensionsConfig {
@@ -294,6 +294,7 @@ export interface ExtensionsConfig {
   'agent-skills'?: { enabled: boolean; skills?: Record<string, boolean> };
   graphify?: { enabled: boolean };
   codegraph?: { enabled: boolean };
+  impeccable?: { enabled: boolean };
   /** port: where OmniRoute listens (picked once, kept). pinned: models picked from an auto pool, kept in the menus. */
   omniroute?: { enabled: boolean; port?: number; pinned?: string[] };
   /** Bundled third-party skills turned on one by one (all off until the user turns one on). */
@@ -352,7 +353,7 @@ export interface ExtensionStatus {
   /** While installing: when the current step began and the last line its tool printed. */
   progress?: { since?: number; line?: string; /** Estimated, 0–100. */ percent?: number };
   version?: string;
-  /** CodeGraph: Aivenue's copy is on disk (so it can be uninstalled, also while the extension is off). */
+  /** CodeGraph, impeccable: Aivenue's copy is on disk (so it can be uninstalled, also while the extension is off). */
   installed?: boolean;
   skills?: ExtensionSkill[];
   level?: PonytailLevel;
