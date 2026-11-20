@@ -66,7 +66,19 @@ const AGENT_SKILLS: Record<string, { roles: InstructionRole[]; off?: 'interactiv
  * one is on, the roles below find it in their skills index (name, one-line description, what it covers) and read it
  * when the task calls for it, like the Agent Skills extension's.
  */
-export const PACK_SKILLS: Record<PackSkillId, { skills: string[]; roles: InstructionRole[]; rule?: string }> = {
+export const PACK_SKILLS: Record<
+  PackSkillId,
+  {
+    skills: string[];
+    roles: InstructionRole[];
+    /** One rule for every role listed. "{dir}" is the folder of Aivenue's copy. */
+    rule?: string;
+    /** A rule per role instead (same "{dir}"). */
+    rules?: Partial<Record<InstructionRole, string>>;
+    /** Which of the skills each role gets, when they differ (else all of them). */
+    skillRoles?: Record<string, InstructionRole[]>;
+  }
+> = {
   'architecture-review': {
     skills: ['improve-codebase-architecture', 'codebase-design'],
     roles: ['planner'],
@@ -89,6 +101,20 @@ export const PACK_SKILLS: Record<PackSkillId, { skills: string[]; roles: Instruc
     skills: ['obsidian-markdown', 'json-canvas', 'obsidian-bases'],
     roles: ['executor', 'subagent', 'code_reviewer'],
     rule: "If you use obsidian-markdown, json-canvas or obsidian-bases: write the vault's files directly. The obsidian command, Defuddle and Knap are not part of this setup: do not install or run them. Link only to notes that exist (or that you create), and keep .canvas and .base files valid JSON / YAML.",
+  },
+  // The Elephant-Goldfish Model (google/elephant-goldfish-model): the plan author is the Elephant that writes the
+  // design document, Aivenue's fresh plan reviewer (and, when sub-agents are allowed, read-only sub-agents it spawns per
+  // persona) are the Goldfish. AIVENUE.md in the bundle says how, over the upstream text.
+  egm: {
+    skills: ['egm-draft', 'egm-resolve', 'egm-review'],
+    roles: ['planner', 'plan_reviewer'],
+    skillRoles: { 'egm-draft': ['planner'], 'egm-resolve': ['planner'], 'egm-review': ['plan_reviewer'] },
+    rules: {
+      planner:
+        'ELEPHANT-GOLDFISH MODEL is on: you are the Elephant. First read {dir}/AIVENUE.md (how EGM runs in Aivenue; it wins over the skills where they differ), then egm-draft. Your plan is the EGM design document: all of it in the plan you submit, no files, no question-by-question gates. In a later round answer the reviews with egm-resolve.',
+      plan_reviewer:
+        "ELEPHANT-GOLDFISH MODEL is on: you are a Goldfish. First read {dir}/AIVENUE.md (how EGM runs in Aivenue; it wins over the skills where they differ), then egm-review. Review the plan (the design document) through egm-review's stages and personas ({dir}/agents/): with Aivenue's spawn_subagent tool, as one read-only sub-agent per persona given only the document; without it, yourself, persona by persona. Never stop for lack of a subagent tool. Your review is the report: no report files.",
+    },
   },
 };
 
@@ -432,7 +458,7 @@ export class ExtensionService {
     if (c.graphify?.enabled && this.graphifyVersion) out.push(...this.readSkills('graphify'));
     if (c.impeccable?.enabled && this.impeccableVersion && IMPECCABLE_ROLES.includes(r)) out.push(...this.readSkills('impeccable'));
     for (const [id, d] of Object.entries(PACK_SKILLS) as [PackSkillId, (typeof PACK_SKILLS)[PackSkillId]][]) {
-      if (c.packSkills?.[id] && d.roles.includes(r)) out.push(...this.readSkills(id).filter((s) => d.skills.includes(s.name)));
+      if (c.packSkills?.[id] && d.roles.includes(r)) out.push(...this.readSkills(id).filter((s) => d.skills.includes(s.name) && (d.skillRoles?.[s.name] ?? d.roles).includes(r)));
     }
     return out;
   }
@@ -730,7 +756,11 @@ export class ExtensionService {
   /** How Aivenue adapts the bundled skills turned on for this role (what their upstream text assumes and Aivenue does not have). */
   private packRules(role: AgentRole): string {
     const on = this.cfg().packSkills ?? {};
-    const rules = (Object.entries(PACK_SKILLS) as [PackSkillId, (typeof PACK_SKILLS)[PackSkillId]][]).filter(([id, d]) => on[id] && d.rule && d.roles.includes(role as InstructionRole)).map(([, d]) => `- ${d.rule}`);
+    const rules = (Object.entries(PACK_SKILLS) as [PackSkillId, (typeof PACK_SKILLS)[PackSkillId]][])
+      .filter(([id, d]) => on[id] && d.roles.includes(role as InstructionRole))
+      .map(([id, d]) => [id, d.rules?.[role as InstructionRole] ?? d.rule] as const)
+      .filter(([, rule]) => !!rule)
+      .map(([id, rule]) => `- ${rule!.split('{dir}/').join(path.join(this.skillsRoot, id) + path.sep).split('{dir}').join(path.join(this.skillsRoot, id))}`);
     return rules.length ? `\nBUNDLED SKILLS (how to use them in Aivenue):\n${rules.join('\n')}\n` : '';
   }
 

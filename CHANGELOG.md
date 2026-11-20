@@ -19,6 +19,15 @@
     - agent 執行的指令一律帶上關閉使用統計與更新檢查的設定，impeccable 自己要存的檔案放在 Aivenue 的工具資料夾，不建立 `~/.impeccable`。
     - 能力頁和說明都寫明：為新介面挑設計方向時，引擎會連到 impeccable.style，這個連線關不掉；掃描網址時用電腦上的 Chrome 或 Edge。
 
+- **新的可開關內建 Skill：Elephant-Goldfish Model（預設關閉）**：
+  - **原本的問題**：計畫審查只有一位審查者、一種眼光；計畫寫得像待辦清單，不像能被挑戰的設計文件。
+  - **現在**：
+    - 「可開關的內建 Skill」多了 Elephant-Goldfish Model，來自 google/elephant-goldfish-model（Apache-2.0，固定在 2026-11-06 的 v0.1.1）。上游註明它不是 Google 正式支援的產品。
+    - 開啟後，撰寫計畫的 agent 是「大象」：用 egm-draft 把計畫寫成一份設計文件，後續回合用 egm-resolve 回應審查。
+    - 審查計畫的 agent 是「金魚」：它是沒看過作者對話的全新上下文，用 egm-review 的五個階段審查。工作流允許子 agent 時，它為每個審查角色各派一個唯讀子 agent，只給文件本身；不允許時自己逐一套用，不會因為沒有子 agent 工具而停下。
+    - 上游假設有人逐題回答、作者會寫檔、各家 CLI 有自己的子 agent 工具；Aivenue 的對應方式寫在附帶的 AIVENUE.md，上游原文不變。
+    - 沒有附上 egm-bootstrap、egm-brainstorm、egm-drift-report、egm-review-loop：它們要整個儲存庫寫檔、需要人逐題回答，或有自己的審查迴圈。
+
 - **新的可開關內建 Skill：Obsidian 筆記庫的檔案格式（預設關閉）**：
   - **原本的問題**：請 agent 在 Obsidian 筆記庫裡加筆記、白板或 Base 時，它不熟 Obsidian 自己的語法，雙鏈、callout、屬性和 `.canvas` 的 JSON 常常寫錯。
   - **現在**：

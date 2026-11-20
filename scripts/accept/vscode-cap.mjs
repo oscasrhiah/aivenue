@@ -116,9 +116,9 @@ chk(`${at}: no emoji icon before an extension's name`, pane.extensions.map((x) =
 chk(`${at}: every extension card inside the window`, pane.extensions.every((x) => x.left >= 0 && x.right <= pane.width), true);
 chk(`${at}: section "按需使用的內建 Skill"`, find(either('按需使用的內建 Skill', 'Built-in skills used on demand'))?.lists[0] ?? null, ['gh-fix-ci', 'gh-address-comments', 'security-audit']);
 const pack = find(either('可開關的內建 Skill', 'Built-in skills you can turn on'));
-chk(`${at}: section "可開關的內建 Skill", its five skills`, pack?.lists[0] ?? null, ['improve-codebase-architecture + codebase-design', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-markdown + json-canvas + obsidian-bases']);
-chk(`${at}: five switches, off by default and usable`, pack?.switches.map((x) => `${x.label}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`) ?? null, ['improve-codebase-architecture + codebase-design:off', 'diagnosing-bugs:off', 'gha-security-review:off', 'web-design-guidelines:off', 'obsidian-markdown + json-canvas + obsidian-bases:off']);
-chk(`${at}: roles each one is offered to`, pack?.roles.map((r) => r.length) ?? null, [1, 2, 1, 1, 3]);
+chk(`${at}: section "可開關的內建 Skill", its six skills`, pack?.lists[0] ?? null, ['improve-codebase-architecture + codebase-design', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-markdown + json-canvas + obsidian-bases', 'Elephant-Goldfish Model']);
+chk(`${at}: six switches, off by default and usable`, pack?.switches.map((x) => `${x.label}:${x.checked ? 'on' : 'off'}${x.disabled ? ':disabled' : ''}`) ?? null, ['improve-codebase-architecture + codebase-design:off', 'diagnosing-bugs:off', 'gha-security-review:off', 'web-design-guidelines:off', 'obsidian-markdown + json-canvas + obsidian-bases:off', 'Elephant-Goldfish Model:off']);
+chk(`${at}: roles each one is offered to`, pack?.roles.map((r) => r.length) ?? null, [1, 2, 1, 1, 3, 2]);
 chk(`${at}: no "設計參考" list any more (removed in 0.4.3: none of them could be offered to agents)`, pack ? [pack.labels.length, pack.lists.length] : null, [0, 1]);
 chk(`${at}: "共用 Skill" still there`, Boolean(find(either('共用 Skill', 'Shared skills'))), true);
 chk(`${at}: no sideways scrolling (page, pane)`, [pane.pageOverflow <= 0, (pane.bodyOverflow ?? 0) <= 0], [true, true]);

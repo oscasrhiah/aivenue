@@ -133,7 +133,7 @@ test('可開關的內建 skill：預設關閉；開啟後只出現在對應角�
   const caps = s.o.capabilities;
   const names = (role) => caps.extraSkills(role).map((x) => x.name);
   const list = s.packSkills();
-  assert.deepEqual(list.map((x) => x.id), ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-skills']);
+  assert.deepEqual(list.map((x) => x.id), ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-skills', 'egm']);
   assert.ok(list.every((x) => x.available && !x.enabled), 'shipped, off by default');
   for (const role of ['planner', 'plan_reviewer', 'executor', 'code_reviewer', 'subagent']) assert.deepEqual(names(role), [], `nothing for ${role} while off`);
   for (const id of ['architecture-review', 'diagnosing-bugs', 'gha-security-review', 'web-design-guidelines', 'obsidian-skills']) s.setPackSkill(id, true);
@@ -184,5 +184,44 @@ test('審查意見：內建的 gh-address-comments skill 也複製到 skills 資
   const p = s.ghAddressCommentsSkill();
   assert.equal(p, path.join(skillsDir, '.bundled', 'gh-address-comments', 'skills', 'gh-address-comments', 'SKILL.md'));
   assert.ok(fs.existsSync(p));
+  fs.rmSync(skillsDir, { recursive: true, force: true });
+});
+
+test('Elephant-Goldfish Model：計畫者拿 egm-draft／egm-resolve，審查計畫者拿 egm-review；規則指向 Aivenue 的 AIVENUE.md，不會因為沒有子 agent 工具而停下', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const skillsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-egm-'));
+  let cfg = { extensions: {} };
+  const s = new ExtensionService({
+    dataDir: skillsDir,
+    bundledDir: path.join(process.cwd(), 'packages', 'core', 'bundled'),
+    capabilities: { skillsDir, get: () => cfg, setExtensions: (e) => { cfg = { ...cfg, extensions: e }; } },
+    registry: {}, secrets: {}, onChange() {},
+  });
+  const caps = s.o.capabilities;
+  const names = (role) => caps.extraSkills(role).map((x) => x.name).sort();
+  const egm = s.packSkills().find((x) => x.id === 'egm');
+  assert.ok(egm.available && !egm.enabled);
+  assert.deepEqual(egm.roles, ['planner', 'plan_reviewer']);
+  for (const role of ['planner', 'plan_reviewer']) assert.deepEqual(names(role), [], 'nothing while off');
+  s.setPackSkill('egm', true);
+  assert.deepEqual(names('planner'), ['egm-draft', 'egm-resolve']);
+  assert.deepEqual(names('plan_reviewer'), ['egm-review']);
+  for (const role of ['executor', 'code_reviewer', 'subagent']) assert.deepEqual(names(role), [], role);
+  const copy = path.join(skillsDir, '.bundled', 'egm');
+  // The adaptation and everything the skills link to, at upstream's relative paths.
+  for (const f of ['AIVENUE.md', 'LICENSE', 'agents/zoom_out.md', 'agents/comprehension.md', 'agents/design_critic.md', 'agents/implementation_readiness.md', 'agents/synthesizer.md', 'resources/execution_instructions.md', 'resources/document_standards/zoom-out-standard.md', 'skills/egm-draft/references/design_doc.md']) assert.ok(fs.existsSync(path.join(copy, f)), f);
+  const planner = caps.extraRules('planner');
+  const reviewer = caps.extraRules('plan_reviewer');
+  assert.match(planner, /you are the Elephant/);
+  assert.match(reviewer, /you are a Goldfish/);
+  assert.match(reviewer, /Never stop for lack of a subagent tool/);
+  for (const r of [planner, reviewer]) assert.ok(r.includes(path.join(copy, 'AIVENUE.md')), 'the rule names the copy of AIVENUE.md');
+  assert.doesNotMatch(reviewer, /you are the Elephant/);
+  assert.equal(caps.extraRules('executor'), '');
+  const doc = fs.readFileSync(path.join(copy, 'AIVENUE.md'), 'utf8');
+  assert.match(doc, /spawn_subagent/);
+  assert.match(doc, /Never stop because there is no subagent tool/);
   fs.rmSync(skillsDir, { recursive: true, force: true });
 });

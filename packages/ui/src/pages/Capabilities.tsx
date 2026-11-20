@@ -1189,6 +1189,13 @@ const PACK_INFO: Record<PackSkillId, { title: string; use: [string, string]; whe
     url: 'https://github.com/obsidianmd/obsidian-skills',
     license: 'MIT',
   },
+  egm: {
+    title: 'Elephant-Goldfish Model',
+    use: ['設計文件與多輪審查。撰寫計畫的 agent（大象）把計畫寫成設計文件，審查計畫的 agent 和它派出的唯讀子 agent（金魚）從全新的上下文、依不同角色挑毛病，結果回到計畫者修改。', 'Design docs and fresh-eyed reviews. The plan author (the Elephant) writes the plan as a design document; the plan reviewer and the read-only sub-agents it sends (the Goldfish) review it from fresh contexts through different personas, and the findings go back to the author.'],
+    when: ['適用於要先設計再動手的工作，需要在工作流裡開啟撰寫計畫。允許子 agent 時，每個審查角色各用一個子 agent；不允許時由審查者自己逐一套用。', 'For work worth designing before building; turn on planning in the workflow. With sub-agents allowed, each review persona runs as its own sub-agent; without them the reviewer applies them one by one.'],
+    url: 'https://github.com/google/elephant-goldfish-model',
+    license: 'Apache-2.0',
+  },
 };
 
 function PackSkills() {
