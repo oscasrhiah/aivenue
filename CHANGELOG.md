@@ -4,6 +4,10 @@
 
 ## 未發布
 
+- **找不到新版 OpenCode Desktop 附的 OpenCode**：
+  - **原本的問題**：OpenCode Desktop 現在裝在 `%LOCALAPPDATA%\Programs\ai.opencode.desktop`，Aivenue 只會到舊的 `@opencodedesktop` 資料夾找它附的 `opencode-cli.exe`，所以 OpenCode 不在 PATH 上時，供應商頁顯示沒有安裝。
+  - **現在**：先找新的資料夾，再找舊的資料夾和官方安裝程式的 `~/.opencode/bin`。
+
 - **Graphify 圖譜：自動更新、agent 先查圖、可以看整張圖**：
   - **原本的問題**：開了 Graphify，圖譜還是要 agent 自己想到才建；大多數工作資料夾根本沒有 `graphify-out/`，過去 104 個 agent 回合裡只查過 1 次圖，grep 與讀檔卻有 836 次。圖譜建了也看不到，只能自己打開 `graph.html`（它還要從網路載入程式庫）。也看不出每個 agent 到底有沒有用圖。
   - **現在**：
