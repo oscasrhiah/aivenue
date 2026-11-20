@@ -4,6 +4,16 @@
 
 ## 未發布（候選 0.4.3）
 
+- **能力頁拿掉「設計參考・不會載入」那一段**：
+  - **原本的問題**：能力頁最下面列著 impeccable、frontend-testing-debugging、accessibility-inspect 三個 Skill，但它們從來不會交給 agent，也沒有開關，看了只會以為少了什麼。
+    - impeccable 需要它自己的 CLI、偵測器和瀏覽器。
+    - frontend-testing-debugging 依賴 Codex 專用的 Browser 外掛，上游也沒有授權檔。
+    - accessibility-inspect 缺少它依賴的檔案和 MCP 伺服器，上游也沒有授權檔。
+    - 三個都沒辦法完整整合進 Aivenue。
+  - **現在**：整段拿掉。它們原本想做的事，改由能力頁上已經能用的項目負責：
+    - 介面實測：Agent Skills 的 browser-testing-with-devtools，加上 Playwright 或 Chrome DevTools。
+    - 無障礙的靜態檢查：web-design-guidelines。
+
 - **新的內建擴充 CodeGraph（預設關閉）**：
   - **原本的問題**：Graphify 擅長專案概觀與群組，但「誰呼叫這個函式、改它會影響哪裡」這類精確的程式碼關係，agent 常常還是整個專案 grep。
   - **現在**：

@@ -1162,31 +1162,6 @@ const PACK_INFO: Record<PackSkillId, { title: string; use: [string, string]; whe
   },
 };
 
-/** Evaluated and not loaded: what Aivenue took from them, and why they are not skills you can turn on. */
-const DESIGN_REFS: { name: string; text: [string, string] }[] = [
-  {
-    name: 'impeccable',
-    text: [
-      'App 介面設計參考。工作流時間線的評估採用它 critique 的評分方法；它需要自己的 CLI、偵測器、瀏覽器與專案設計檔，Aivenue 不載入也不執行。',
-      'App UI design reference. The workflow timeline review uses its critique scoring method; it needs its own CLI, detector, browser and project design files, which Aivenue neither loads nor runs.',
-    ],
-  },
-  {
-    name: 'frontend-testing-debugging',
-    text: [
-      '介面實測參考。它依賴 Codex 的 Browser 外掛，上游也沒有授權檔；請改用 Agent Skills 的 browser-testing-with-devtools，搭配上方的 Playwright 或 Chrome DevTools。',
-      "UI testing reference. It relies on Codex's Browser plugin and its repository has no LICENSE file; use Agent Skills' browser-testing-with-devtools with Playwright or Chrome DevTools above instead.",
-    ],
-  },
-  {
-    name: 'accessibility-inspect',
-    text: [
-      '無障礙檢查參考。它缺少依賴的檔案與 MCP 伺服器、會要求安裝工具，上游也沒有授權檔；目前由 web-design-guidelines 的無障礙規則做靜態檢查。',
-      'Accessibility reference. It is missing files and an MCP server it depends on, asks to install tools, and its repository has no LICENSE file; web-design-guidelines covers the static accessibility rules for now.',
-    ],
-  },
-];
-
 function PackSkills() {
   const t = useT();
   const list = usePackSkills();
@@ -1245,17 +1220,6 @@ function PackSkills() {
         })}
       </div>
       {error && <div className="note err">{error}</div>}
-      <div className="block-label">
-        {t('設計參考', 'Design references')} <span className="block-hint">{t('不會載入', 'not loaded')}</span>
-      </div>
-      <div className="clist builtin-skills design-refs">
-        {DESIGN_REFS.map((d) => (
-          <div key={d.name} className="crow">
-            <div className="crow-name mono">{d.name}</div>
-            <Hint className="muted small" text={t(...d.text)} />
-          </div>
-        ))}
-      </div>
     </section>
   );
 }
