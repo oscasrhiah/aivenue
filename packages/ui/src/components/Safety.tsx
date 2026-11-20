@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, ChevronRight, ClipboardList, FolderOpen, GitBranch, Hand, Pencil, ShieldAlert, Square, SquareCheck, Zap, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, ClipboardList, GitBranch, Hand, Pencil, ShieldAlert, Square, SquareCheck, TriangleAlert, Zap, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PermissionLevel, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
@@ -128,44 +128,63 @@ export function FullAccessBanner({ run }: { run: WorkflowRun }) {
   );
 }
 
-/** Files agents changed outside the working folder and the extra folders, from their file tools. */
+/**
+ * The system's temporary folder (Windows %TEMP%, /tmp, macOS /var/folders/…/T): agent CLIs write their own helper files
+ * there (OpenCode's scripts in %TEMP%\opencode\ before running them). Marked, not hidden: it is still outside the folder.
+ */
+export const isTempDir = (dir: string) => /(^|[\\/])AppData[\\/]Local[\\/]Temp([\\/]|$)|^\/(private\/)?tmp(\/|$)|^\/var\/tmp(\/|$)|^\/(private\/)?var\/folders\/[^/]+\/[^/]+\/T(\/|$)/i.test(dir);
+
+/**
+ * Files agents changed outside the working folder and the extra folders, from their file tools. One warning-coloured
+ * line on the first layer (how many, where); the grouped list and the note open from it.
+ */
 export function OutsideChanges({ run }: { run: WorkflowRun }) {
   const t = useT();
+  const [shown, setShown] = useState(false);
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const listId = useId();
   const files = run.outsideChanges ?? [];
   if (!files.length) return null;
   // By folder: the warning stays, the file names one click away.
   const groups = byFolder(files);
   const norm = (s: string) => s.replace(/\\/g, '/').toLowerCase();
   const goal = norm(run.config.goal);
+  const where = groups.length > 1 ? t(`${groups[0].label} 等 ${groups.length} 個位置`, `${groups[0].label} and ${groups.length - 1} more`) : groups[0].label;
   return (
-    <div className="decision outside-changes">
-      <div className="decision-q">
-        <Ico i={FolderOpen} /> {t(`工作資料夾外有 ${files.length} 筆寫檔工具紀錄`, `${files.length} file-tool write(s) outside the working folder`)}
-        {groups.length > 1 && <span className="muted small">{t(`，${groups.length} 個資料夾`, `, ${groups.length} folders`)}</span>}
-      </div>
-      <div className="outside-groups">
-        {groups.map((g) => (
-          <div key={g.dir} className="outside-group">
-            <button type="button" className="link mono small" title={g.dir} aria-expanded={open.has(g.dir)} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
-              <Ico i={open.has(g.dir) ? ChevronDown : ChevronRight} size={14} /> {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
-            </button>
-            {/* Only a hint: the request's own text names this folder (Aivenue does not know it was meant as the output). */}
-            {g.dir && goal.includes(norm(g.dir)) && <span className="badge muted">{t('任務文字提到這個資料夾', 'named in the request')}</span>}
-            {open.has(g.dir) && (
-              <div className="mono small outside-files">
-                <div className="muted">{g.dir}</div>
-                {g.files.map((f) => (
-                  <div key={f}>{f}</div>
-                ))}
+    <div className={cx('outside-changes', shown ? 'decision' : 'outside-line')}>
+      <button type="button" className="outside-toggle" aria-expanded={shown} aria-controls={listId} title={groups.map((g) => g.dir).join('\n')} onClick={() => setShown(!shown)}>
+        <Ico i={shown ? ChevronDown : ChevronRight} size={14} />
+        <Ico i={TriangleAlert} size={14} />
+        <span className="outside-count">{t(`工作資料夾外有 ${files.length} 筆寫檔紀錄`, `${files.length} file write(s) outside the working folder`)}</span>
+        <span className="mono small outside-where">{where}</span>
+      </button>
+      {shown && (
+        <div id={listId} className="outside-body">
+          <div className="outside-groups">
+            {groups.map((g) => (
+              <div key={g.dir} className="outside-group">
+                <button type="button" className="link mono small" title={g.dir} aria-expanded={open.has(g.dir)} onClick={() => setOpen((s) => new Set(s.has(g.dir) ? [...s].filter((x) => x !== g.dir) : [...s, g.dir]))}>
+                  <Ico i={open.has(g.dir) ? ChevronDown : ChevronRight} size={14} /> {g.label} · {t(`${g.files.length} 個檔案`, `${g.files.length} file(s)`)}
+                </button>
+                {isTempDir(g.dir) && <span className="badge muted">{t('agent 的暫存資料夾', "the agent's temp folder")}</span>}
+                {/* Only a hint: the request's own text names this folder (Aivenue does not know it was meant as the output). */}
+                {g.dir && goal.includes(norm(g.dir)) && <span className="badge muted">{t('任務文字提到這個資料夾', 'named in the request')}</span>}
+                {open.has(g.dir) && (
+                  <div className="mono small outside-files">
+                    <div className="muted">{g.dir}</div>
+                    {g.files.map((f) => (
+                      <div key={f}>{f}</div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="muted tiny">
-        {t('由 agent 的寫檔工具記錄，用終端指令改的檔案不一定列得出來。', 'Recorded from the agents’ file tools; files changed through shell commands may be missing.')}
-      </div>
+          <div className="muted tiny">
+            {t('由 agent 的寫檔工具記錄，用終端指令改的檔案不一定列得出來。', 'Recorded from the agents’ file tools; files changed through shell commands may be missing.')}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
