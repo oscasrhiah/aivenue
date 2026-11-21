@@ -308,6 +308,7 @@ test('OmniRoute 連線測試：新連線一開始停用、沒有模型，OmniRou
   const asked = [];
   // What a real OmniRoute does: the connection is inactive until /test passes, and only active connections list models.
   s.omniFetch = async (p, init = {}) => {
+    if (init.headers?.['x-omniroute-connection']) init.onHeaders?.(new Headers({ 'x-omniroute-selected-connection-id': init.headers['x-omniroute-connection'] }));
     if (p === '/api/providers') return { connections: [{ id: 'c1', provider: 'openrouter', isActive: active }] };
     if (p.startsWith('/v1/models')) return { data: active ? [{ id: 'openrouter/auto', owned_by: 'openrouter' }, { id: 'openrouter/qwen/qwen3-coder:free', owned_by: 'openrouter' }] : [] };
     if (p === '/api/providers/c1/test') return ((active = true), { valid: true });
@@ -330,6 +331,7 @@ test('OmniRoute 連線測試：第一個模型回 410（已不提供），換下
   const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
   const asked = [];
   s.omniFetch = async (p, init = {}) => {
+    if (init.headers?.['x-omniroute-connection']) init.onHeaders?.(new Headers({ 'x-omniroute-selected-connection-id': init.headers['x-omniroute-connection'] }));
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
     if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'nvidia/deepseek-ai/deepseek-v4-pro-0813', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
@@ -366,6 +368,7 @@ test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單�
   const calls = [];
   // Before the sync OmniRoute still lists the old name; the provider's own list has the new one.
   s.omniFetch = async (p, init = {}) => {
+    if (init.headers?.['x-omniroute-connection']) init.onHeaders?.(new Headers({ 'x-omniroute-selected-connection-id': init.headers['x-omniroute-connection'] }));
     calls.push(p);
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
     if (p.startsWith('/v1/models')) return { data: [{ id: synced ? 'nvidia/moonshotai/kimi-k3.1-pro' : 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }] };
@@ -388,7 +391,12 @@ const fakeOmni = async (answer, cfg = {}) => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnifake-'));
   const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
   const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
-  s.omniFetch = async (p, init = {}) => (await answer(p, init)) ?? { candidates: [] };
+  s.omniFetch = async (p, init = {}) => {
+    // Like OmniRoute 3.8.52: a request pinned to a connection is answered by it, and the answer says so.
+    const pinned = init.headers?.['x-omniroute-connection'];
+    if (pinned) init.onHeaders?.(new Headers({ 'x-omniroute-selected-connection-id': pinned }));
+    return (await answer(p, init)) ?? { candidates: [] };
+  };
   s.syncOmniProvider = () => undefined;
   s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
   await s.refreshOmni(true);
@@ -680,4 +688,49 @@ test('OmniRoute 刷新：讀清單逾時時保留上次成功的模型與連線�
   await s.refreshOmni(true);
   assert.equal(st().refresh, undefined);
   assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['nvidia/b']);
+});
+
+test('OmniRoute 連線測試：只有一條連線、閘道回 404 卻沒回報連線時，算無法確認，不判定模型下架', async () => {
+  const asked = [];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }, { id: 'nvidia/b', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: ['a', 'b'].map((modelId) => ({ provider: 'nvidia', modelId, freeType: 'recurring-daily' })) };
+    if (/sync-models$/.test(p)) throw new Error('offline');
+    if (p === '/v1/chat/completions') {
+      asked.push(init.body.model);
+      init.onHeaders(new Headers());
+      throw new Error('[404]: model not found');
+    }
+  });
+  await s.omniTest('n1');
+  assert.equal(asked.length, 1);
+  assert.equal(s.omniGone.get('n1'), undefined);
+  assert.ok(s.usableOmniModels().some((m) => m.id === asked[0]));
+  const t = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test;
+  assert.equal(t.state, 'fail');
+  assert.match(t.message, /無法確認|could not be confirmed/);
+});
+
+test('OmniRoute 刷新：免費目錄逾時時，候選清單成功變成空的那個池仍會更新（從選單拿掉）', async () => {
+  let pool = [{ provider: 'groq', connectionId: 'c1', model: 'groq/llama', modelStr: 'groq/llama', reachable: true, breakerState: 'CLOSED' }];
+  let catalogDown = false;
+  const s = await fakeOmni((p) => {
+    if (p === '/api/free-models') {
+      if (catalogDown) throw new Error('The operation was aborted due to timeout');
+      return { models: [] };
+    }
+    if (p === '/api/providers') return { connections: [{ id: 'c1', provider: 'groq', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'auto/coding:free', owned_by: 'combo' }, { id: 'groq/llama', owned_by: 'groq' }] };
+    if (p.startsWith('/v1/auto-combo/coding:free')) return { candidates: pool };
+    if (p.startsWith('/v1/auto-combo/')) return { candidates: [] };
+  });
+  const ids = () => s.usableOmniModels().map((m) => m.id);
+  assert.ok(ids().includes('auto/coding:free'), ids().join());
+  catalogDown = true;
+  pool = [];
+  await s.refreshOmni(true);
+  assert.ok(!ids().includes('auto/coding:free'), ids().join());
+  assert.match(s.list().find((x) => x.id === 'omniroute').omniroute.refresh.message, /free-models/);
 });

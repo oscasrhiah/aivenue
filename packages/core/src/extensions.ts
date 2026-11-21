@@ -206,7 +206,7 @@ export class ExtensionService {
   private codegraphVersion?: string;
   /** The installed impeccable's version (Aivenue's npm copy in its tools folder, whose engine answered). */
   private impeccableVersion?: string;
-  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string>; freeIds?: Set<string>; refreshError?: { at: number; message: string } };
+  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string>; freeIds?: Set<string>; refreshError?: { at: number; message: string }; poolOk?: Map<string, string[]> };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
@@ -1102,7 +1102,7 @@ export class ExtensionService {
     // A provider's catalog can list models it has since retired (NVIDIA answers 410 Gone): such a model is taken out
     // of the menus and the next one is tried, up to 5.
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
-    // this key only when it was this key, or when OmniRoute does not say and no other active connection serves the model.
+    // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     let model = order[0];
     for (const next of order.slice(0, 5)) {
       model = next;
@@ -1113,9 +1113,7 @@ export class ExtensionService {
           ? served !== id
             ? L(`OmniRoute 改用另一條連線（${served}）回答，這次沒有測到這把金鑰`, `OmniRoute answered through another connection (${served}); this key was not tested`)
             : undefined
-          : this.offering(model).some((c) => c.id !== id)
-            ? L('OmniRoute 沒有回報用了哪條連線，而另一條連線也提供這個模型：無法確認測到的是這把金鑰', 'OmniRoute did not say which connection answered, and another connection serves this model: this key could not be confirmed')
-            : undefined;
+          : L('OmniRoute 沒有回報用了哪條連線：無法確認測到的是這把金鑰', 'OmniRoute did not say which connection answered: this key could not be confirmed');
       try {
         const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
           method: 'POST',
@@ -1176,17 +1174,22 @@ export class ExtensionService {
     ]);
     if (this.omni !== omni) return this.list();
     // What the free pools can route to right now: those models go in the menus too.
-    const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p, (e) => failed.push(`${p}: ${e.message}`))));
+    const poolFailed = new Set<string>();
+    const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p, (e) => (poolFailed.add(p), failed.push(`${p}: ${e.message}`)))));
     if (this.omni !== omni) return this.list();
     if (freeCatalog) omni.freeIds = new Set((freeCatalog.models ?? []).filter((m) => m.provider && m.modelId && OMNI_FREE_TYPES.has(m.freeType ?? '')).map((m) => `${m.provider}/${m.modelId}`));
     if (models) omni.models = models.data ?? [];
     if (providers) omni.connections = providers.connections ?? [];
-    if (failed.length === 0 || !omni.at) {
-      omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
-      // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
-      // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
-      omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
-    }
+    // Each pool is updated from its own answer; a pool whose request failed keeps what it had.
+    const poolOk = new Map(omni.poolOk ?? []);
+    FREE_POOLS.forEach((p, i) => {
+      if (!poolFailed.has(p) || !poolOk.has(p)) poolOk.set(p, poolFailed.has(p) ? [] : pools[i].filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
+    });
+    omni.poolOk = poolOk;
+    omni.candidates = new Set([...poolOk.values()].flat());
+    // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
+    // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
+    omni.deadPools = new Set(FREE_POOLS.filter((p) => !poolOk.get(p)?.length));
     omni.refreshError = failed.length ? { at: Date.now(), message: failed.join('; ').slice(0, 400) } : undefined;
     omni.at = Date.now();
     this.o.registry.forgetModels(OMNI_PROVIDER);
