@@ -4334,6 +4334,12 @@ textarea.code {
   flex: 1;
 }
 
+/* A checkbox next to text that wraps keeps its size (a flex item would shrink to a dot). */
+label > input[type="checkbox"],
+label > input[type="radio"] {
+  flex-shrink: 0;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -5533,8 +5539,13 @@ textarea.code {
   flex-wrap: wrap;
 }
 
+/* In a narrow side bar the key box drops to its own line rather than shrinking to a few characters. */
+.omni-prov-key {
+  flex-wrap: wrap;
+}
+
 .omni-prov-key input {
-  min-width: 0;
+  min-width: 12em;
 }
 
 .omni-conn {
@@ -8706,6 +8717,20 @@ textarea.code {
 .ext-stats dt {
   color: var(--muted);
   font-size: var(--fs-12);
+}
+
+/* A short label keeps its line; a value too long to sit beside it (the URL in the side bar) moves under it whole. */
+.ext-stats > div {
+  flex-wrap: wrap;
+}
+
+.ext-stats dt {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ext-stats > div > dd {
+  margin-left: auto;
 }
 
 .dw-stats dd,

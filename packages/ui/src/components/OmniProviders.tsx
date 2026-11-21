@@ -46,7 +46,7 @@ const PROVIDERS: FreeProvider[] = [
     id: 'nvidia',
     name: 'NVIDIA NIM',
     keyUrl: 'https://build.nvidia.com/settings/api-keys',
-    free: ['30 多個免費端點模型，每分鐘約 40 次；能呼叫工具（跑 agent）的只有少數，例如 Kimi', '30+ free-endpoint models, about 40 requests a minute; only a few call tools (run agents), Kimi among them'],
+    free: ['30 多個免費端點模型，每分鐘約 40 次；不是每個都能呼叫工具（跑 agent），要實際測試才知道，例如 Kimi、GLM-5.3-flash 實測可以', '30+ free-endpoint models, about 40 requests a minute; not every one calls tools (runs agents), only a check tells: Kimi and GLM-5.3-flash do'],
     note: ['官方定位是開發與試用，不是正式上線用。免費端點要排隊，一次回答常要等一兩分鐘。NVIDIA 沒有提供能查出哪些是免費端點的 API，Aivenue 只能自動確認 OmniRoute 免費目錄收錄的幾個；其他模型（例如 Kimi）請在「測試模型」選好，再按「用付費模型測試」確認後測試。', 'Meant for development and evaluation, not production. Free endpoints queue: an answer often takes a minute or two. NVIDIA offers no API that tells which models are free endpoints, so Aivenue can confirm only the few in OmniRoute’s free list; for others (Kimi, say) pick it under the check model, then press "Check with a paid model" and confirm.'],
     recommended: true,
   },
