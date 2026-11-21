@@ -203,7 +203,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
   const store = new RunStore(dataDir, side);
   const attachments = new AttachmentStore(dataDir, side);
   // Built-in extensions (Ponytail, Agent Skills, Graphify, OmniRoute): off until the user turns them on.
-  const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }) });
+  const extensions = new ExtensionService({ dataDir, bundledDir: opts.bundledDir ?? path.join(path.dirname(opts.bridgePath), 'bundled'), capabilities, registry, secrets, onChange: (data) => push({ topic: 'extensions', data }), onPackChange: (data) => push({ topic: 'packSkills', data }), openExternal: (url) => opts.hooks.openExternal?.(url) });
   void extensions.init().catch(() => undefined);
   // The Graphify graph of the folders workflows work in, built by Aivenue while Graphify is on and installed.
   const graphify = new GraphifyService({ active: () => extensions.graphifyReady(), onChange: (data) => push({ topic: 'graphify', data }), log: (line) => console.warn(line) });
@@ -316,6 +316,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.omniCandidates': (p: { model: string }) => extensions.omniCandidates(p.model),
     'extensions.omniPin': (p: { model: string }) => extensions.omniPin(p.model),
     'extensions.omniConnect': (p: { provider: string; apiKey: string }) => extensions.omniConnect(p),
+    'extensions.omniOpenRouter': () => extensions.omniOpenRouter(),
     'extensions.omniDisconnect': (p: { id: string }) => extensions.omniDisconnect(p.id),
     'extensions.omniTest': (p: { id: string }) => extensions.omniTest(p.id),
     'capabilities.presets': () => MCP_PRESETS.map(({ id, name, zh, en, docsUrl }) => ({ id, name, zh, en, docsUrl })),

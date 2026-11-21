@@ -242,3 +242,49 @@ test('OmniRoute：免費池的候選全是免登入來源時，選單不列這�
   assert.ok(ids.includes('auto/coding:free'), ids.join());
   assert.ok(ids.includes('antigravity/gemini'), ids.join());
 });
+
+test('OmniRoute 接 OpenRouter：開授權頁（PKCE＋state），回呼帶對的 state 才換金鑰並交給 OmniRoute；錯的 state 不換', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-or-'));
+  const cfg = {};
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const opened = [];
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: {}, secrets: {}, onChange() {}, openExternal: (u) => opened.push(u) });
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: Date.now(), candidates: new Set() };
+  const connected = [];
+  s.omniConnect = async (p) => (connected.push(p), []);
+  const realFetch = globalThis.fetch;
+  const exchanged = [];
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === 'https://openrouter.ai/api/v1/auth/keys') {
+      exchanged.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ key: 'sk-or-test' }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  try {
+    await s.omniOpenRouter();
+    assert.equal(opened.length, 1);
+    const auth = new URL(opened[0]);
+    assert.equal(auth.origin + auth.pathname, 'https://openrouter.ai/auth');
+    assert.equal(auth.searchParams.get('code_challenge_method'), 'S256');
+    const cb = new URL(auth.searchParams.get('callback_url'));
+    assert.equal(cb.hostname, 'localhost');
+    const at = `http://127.0.0.1:${cb.port}/callback`;
+    assert.equal((await realFetch(`${at}?code=x&state=wrong`)).status, 400);
+    assert.equal(exchanged.length, 0);
+    assert.equal(s.list().find((x) => x.id === 'omniroute').omniroute?.openrouter?.state ?? s.orAuth.state, 'waiting');
+    assert.equal((await realFetch(`${at}?code=c1&state=${auth.searchParams.get('state')}`)).status, 200);
+    for (let i = 0; i < 50 && !connected.length; i++) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(exchanged[0].code, 'c1');
+    // The verifier hashes to the challenge sent to the sign-in page.
+    const { createHash } = await import('node:crypto');
+    assert.equal(createHash('sha256').update(exchanged[0].code_verifier).digest('base64url'), auth.searchParams.get('code_challenge'));
+    assert.deepEqual(connected, [{ provider: 'openrouter', apiKey: 'sk-or-test' }]);
+    assert.equal(s.orAuth, undefined);
+    // Done: the callback no longer answers.
+    await assert.rejects(realFetch(`${at}?code=c2&state=${auth.searchParams.get('state')}`));
+  } finally {
+    globalThis.fetch = realFetch;
+    s.orAuth?.stop?.();
+  }
+});

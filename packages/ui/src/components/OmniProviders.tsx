@@ -104,7 +104,7 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
         )}
       </div>
       {shown.map((p) => (
-        <ProviderRow key={p.id} p={p} conns={connected.filter((c) => c.provider === p.id)} />
+        <ProviderRow key={p.id} p={p} conns={connected.filter((c) => c.provider === p.id)} oauth={p.id === 'openrouter' ? s.omniroute?.openrouter : undefined} />
       ))}
       <Fold open={more} onToggle={() => setMore(!more)}>
         {more ? t('收起', 'Show less') : t(`另外 ${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length} 家，不推薦`, `${PROVIDERS.length - PROVIDERS.filter((p) => p.recommended).length} more, not recommended`)}
@@ -122,7 +122,7 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
   );
 }
 
-function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNullable<ExtensionStatus['omniroute']>['connected']> }) {
+function ProviderRow({ p, conns, oauth }: { p: FreeProvider; conns: NonNullable<NonNullable<ExtensionStatus['omniroute']>['connected']>; oauth?: NonNullable<ExtensionStatus['omniroute']>['openrouter'] }) {
   const t = useT();
   const tl = (l: Line) => t(l[0], l[1]);
   const [key, setKey] = useState('');
@@ -181,6 +181,22 @@ function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNull
           {c.test?.state === 'fail' && c.test.message && <div className="err-text tiny omni-conn-msg">{c.test.message}</div>}
         </div>
       ))}
+      {p.id === 'openrouter' && (
+        <>
+          <div className="row gap wrap">
+            <button className="btn small primary" disabled={busy || oauth?.state === 'connecting'} onClick={() => run(() => hub.call('extensions.omniOpenRouter'))}>
+              {conns.length ? t('用另一個 OpenRouter 帳號連接', 'Connect another OpenRouter account') : t('用 OpenRouter 帳號連接', 'Connect with OpenRouter')}
+            </button>
+            {oauth?.state === 'waiting' && oauth.url && (
+              <button className="btn small ghost" onClick={() => hub.call('host.openExternal', { url: oauth.url })}>
+                {t('重新開啟授權頁', 'Open the sign-in page again')}
+              </button>
+            )}
+          </div>
+          <OpenRouterAuth oauth={oauth} />
+          <div className="muted tiny">{t('或自己建立金鑰貼上：', 'Or create a key yourself and paste it:')}</div>
+        </>
+      )}
       <div className="row gap omni-prov-key">
         <button className="btn small link-icon" onClick={() => hub.call('host.openExternal', { url: p.keyUrl })}>
           <Ico i={ExternalLink} size={14} /> {t('取得金鑰', 'Get a key')}
@@ -192,5 +208,19 @@ function ProviderRow({ p, conns }: { p: FreeProvider; conns: NonNullable<NonNull
       </div>
       {error && <div className="err-text tiny">{error}</div>}
     </div>
+  );
+}
+
+/** Where OpenRouter's sign-in stands (also shown on the Capabilities page, where turning OmniRoute on starts it). */
+export function OpenRouterAuth({ oauth }: { oauth?: NonNullable<ExtensionStatus['omniroute']>['openrouter'] }) {
+  const t = useT();
+  if (!oauth) return null;
+  if (oauth.state === 'error') return <div className="err-text tiny">{oauth.message}</div>;
+  return (
+    <StateWord className="tiny" icon={LoaderCircle} spin tone="run">
+      {oauth.state === 'waiting'
+        ? t('已在瀏覽器開啟 OpenRouter：登入（或註冊）後按 Authorize，Aivenue 會自動接上並測試。', 'OpenRouter is open in your browser: sign in (or sign up) and press Authorize; Aivenue connects and checks it.')
+        : t('OpenRouter 已授權，正在接上 OmniRoute 並測試…', 'OpenRouter authorized; connecting it to OmniRoute and checking…')}
+    </StateWord>
   );
 }

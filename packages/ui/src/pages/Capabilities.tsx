@@ -7,7 +7,7 @@ import { useT, type T } from '../i18n';
 import { cx, providerColor } from '../util';
 import { GithubCard } from '../components/GithubCard';
 import { ExtensionGuide } from '../components/ExtensionGuide';
-import { OmniProviders } from '../components/OmniProviders';
+import { OmniProviders, OpenRouterAuth } from '../components/OmniProviders';
 import { ask } from '../components/Ask';
 import { Dialog, Hint, Seg, ShowAll, StateWord, Switch } from '../components/Kit';
 import { capabilityCounts, overviewParts } from '../settingsView';
@@ -1045,6 +1045,7 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
               t('它只在這台電腦上執行，位址是 127.0.0.1，管理密碼是自動產生的亂數。', 'It runs on this computer only, at 127.0.0.1, with a generated dashboard password.')
             }
           />
+          {s.omniroute?.openrouter && <OpenRouterAuth oauth={s.omniroute.openrouter} />}
           {s.omniroute && providers && (
             <ExtWindow title={t(`${info.name}：連接免費供應商`, `${info.name}: connect free providers`)} onClose={() => setProviders(false)}>
               <OmniProviders s={s} />

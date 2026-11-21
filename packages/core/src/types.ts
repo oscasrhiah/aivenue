@@ -364,6 +364,8 @@ export interface ExtensionStatus {
     connections: number;
     models: number;
     free: number;
+    /** OpenRouter's sign-in in progress: waiting for the browser, turning the key into a connection, or what failed. */
+    openrouter?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string };
     /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */
     connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest }[];
   };

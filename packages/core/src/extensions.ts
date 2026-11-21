@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
@@ -203,6 +204,8 @@ export class ExtensionService {
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
+  /** OpenRouter's sign-in in progress (OAuth PKCE): its page, and how to stop waiting for it. */
+  private orAuth?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string; stop?: () => void };
 
   constructor(
     private o: {
@@ -215,6 +218,8 @@ export class ExtensionService {
       onChange: (s: ExtensionStatus[]) => void;
       /** The bundled skills turned on one by one changed. */
       onPackChange?: (s: PackSkillStatus[]) => void;
+      /** Open a page in the user's browser (OpenRouter's sign-in). */
+      openExternal?: (url: string) => Promise<void> | void;
     },
   ) {
     // Inside the skills folder, so every CLI that may read skills can read these too; the dot keeps them out of the user's list.
@@ -293,7 +298,8 @@ export class ExtensionService {
               connections: omni.connections.length,
               models: this.usableOmniModels().length,
               free: this.usableOmniModels().filter((m) => this.omniFree(m)).length,
-              connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined })),
+              openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
+            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined })),
             }
           : undefined,
       }),
@@ -335,8 +341,14 @@ export class ExtensionService {
     if (enabled && this.needsInstall(id) && !this.work.get(id)?.message) this.work.set(id, { message: L('準備安裝…', 'Preparing to install…'), since: Date.now() });
     this.save({ ...c, [id]: { ...c[id], enabled } });
     if (id === 'omniroute') {
-      if (enabled) void this.startOmni().catch(() => undefined);
-      else this.stopOmni(true);
+      // Turned on by the user: once it runs, connect OpenRouter's free models with the user's own account (one sign-in
+      // in the browser), since OmniRoute's built-in no-sign-in sources cannot run an agent.
+      if (enabled) void this.startOmni().then(() => (this.omni?.connections.some((x) => x.provider === 'openrouter') ? undefined : this.omniOpenRouter())).catch(() => undefined);
+      else {
+        this.orAuth?.stop?.();
+        this.orAuth = undefined;
+        this.stopOmni(true);
+      }
     } else if (id === 'codegraph') {
       if (enabled) void this.installCodegraph();
     } else if (id === 'impeccable') {
@@ -911,6 +923,70 @@ export class ExtensionService {
     await this.refreshOmni(true);
     const id = r?.connection?.id ?? this.omni?.connections.find((c) => c.provider === p.provider)?.id;
     if (id) await this.omniTest(id);
+    return this.list();
+  }
+
+  /**
+   * Connect OpenRouter with the user's own account: its OAuth PKCE sign-in in the browser hands back an API key for that
+   * account, which goes to OmniRoute like a pasted one. Nobody types or sees the key. Waits 10 minutes for the sign-in.
+   */
+  async omniOpenRouter(): Promise<ExtensionStatus[]> {
+    this.orAuth?.stop?.();
+    if (!this.omni?.ready) await this.startOmni();
+    const verifier = randomBytes(32).toString('base64url');
+    const challenge = createHash('sha256').update(verifier).digest('base64url');
+    const state = randomBytes(16).toString('hex');
+    const servers: http.Server[] = [];
+    let timer: NodeJS.Timeout | undefined;
+    const stop = () => {
+      clearTimeout(timer);
+      for (const s of servers) s.close();
+    };
+    const page = (ok: boolean) =>
+      `<!doctype html><meta charset="utf-8"><title>Aivenue</title><body style="font:16px system-ui;padding:40px">${ok ? L('OpenRouter 已授權，Aivenue 正在接上 OmniRoute。可以關閉這個分頁。', 'OpenRouter authorized; Aivenue is connecting it to OmniRoute. You can close this tab.') : L('這個連結已經失效，請回到 Aivenue 再按一次「用 OpenRouter 帳號連接」。', 'This link is no longer valid; press "Connect with OpenRouter" in Aivenue again.')}</body>`;
+    const onRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+      const u = new URL(req.url ?? '/', 'http://localhost');
+      if (u.pathname !== '/callback') return void res.writeHead(404).end();
+      const code = u.searchParams.get('code');
+      // Only the sign-in this app started (its state), once.
+      if (u.searchParams.get('state') !== state || !code || this.orAuth?.state !== 'waiting') return void res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(page(false));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(page(true));
+      stop();
+      this.orAuth = { state: 'connecting' };
+      this.changed();
+      try {
+        const r = await fetch('https://openrouter.ai/api/v1/auth/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' }), signal: AbortSignal.timeout(30000) });
+        const j = (await r.json().catch(() => ({}))) as { key?: string; error?: { message?: string } | string };
+        if (!r.ok || !j.key) throw new Error(L(`OpenRouter 沒有發出金鑰：${(typeof j.error === 'string' ? j.error : j.error?.message) ?? `HTTP ${r.status}`}`, `OpenRouter did not issue a key: ${(typeof j.error === 'string' ? j.error : j.error?.message) ?? `HTTP ${r.status}`}`));
+        this.orAuth = undefined;
+        await this.omniConnect({ provider: 'openrouter', apiKey: j.key });
+      } catch (e) {
+        this.orAuth = { state: 'error', message: (e as Error).message.slice(0, 400) };
+      }
+      this.changed();
+    };
+    // localhost on both loopback addresses (browsers may try either), on one port.
+    const listen = (host: string, port: number) =>
+      new Promise<number>((resolve, reject) => {
+        const s = http.createServer((req, res) => void onRequest(req, res));
+        s.once('error', reject);
+        s.listen(port, host, () => (servers.push(s), resolve((s.address() as net.AddressInfo).port)));
+      });
+    const port = await listen('127.0.0.1', 0);
+    await listen('::1', port).catch(() => undefined);
+    const callback = `http://localhost:${port}/callback`;
+    const url = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callback)}&code_challenge=${challenge}&code_challenge_method=S256&key_label=${encodeURIComponent('Aivenue (OmniRoute)')}&state=${state}`;
+    timer = setTimeout(() => {
+      stop();
+      if (this.orAuth?.state === 'waiting' && this.orAuth.url === url) {
+        this.orAuth = { state: 'error', message: L('10 分鐘內沒有完成 OpenRouter 的授權，請再按一次「用 OpenRouter 帳號連接」。', 'The OpenRouter sign-in was not finished within 10 minutes; press "Connect with OpenRouter" again.') };
+        this.changed();
+      }
+    }, 10 * 60000);
+    timer.unref?.();
+    this.orAuth = { state: 'waiting', url, stop };
+    this.changed();
+    await this.o.openExternal?.(url);
     return this.list();
   }
 

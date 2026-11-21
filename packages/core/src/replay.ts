@@ -29,6 +29,7 @@ export const NOT_REPLAYED = new Set([
   'github.logout',
   'quota.antigravity.connect',
   'extensions.omniConnect',
+  'extensions.omniOpenRouter',
   'extensions.omniTest',
   'extensions.retry',
   'capabilities.testServer',
