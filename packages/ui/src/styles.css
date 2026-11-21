@@ -767,6 +767,19 @@ p {
   vertical-align: 0;
 }
 
+/* A long status line (a model id, a sign-in hint) wraps in a narrow side bar instead of running off it. */
+.state-word.wrap {
+  white-space: normal;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  align-items: flex-start;
+}
+
+.state-word.wrap .ico {
+  flex-shrink: 0;
+  margin-top: 0.1em;
+}
+
 .state-word.ok {
   color: var(--ok);
 }

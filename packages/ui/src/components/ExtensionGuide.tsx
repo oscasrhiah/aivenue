@@ -135,7 +135,7 @@ const GUIDES: Record<ExtensionId, Guide> = {
     ],
     itemsTitle: ['使用步驟', 'How to use it'],
     items: [
-      { name: '1', text: ['開啟開關，等它下載完成（約 500 MB，第一次需要幾分鐘）。', 'Turn it on and wait for the download (about 500 MB, a few minutes the first time).'] },
+      { name: '1', text: ['開啟開關，等它下載完成（約 500 MB，第一次需要幾分鐘）。它啟動後，如果還沒接上 OpenRouter，Aivenue 會在瀏覽器開啟 OpenRouter 的授權頁：登入並按 Authorize，就會接上這個帳號的免費模型；不想接的話，直接關掉那一頁就好。', 'Turn it on and wait for the download (about 500 MB, a few minutes the first time). Once it runs, if OpenRouter is not connected yet, Aivenue opens OpenRouter’s authorization page in your browser: sign in and press Authorize to connect that account’s free models, or just close the page.'] },
       { name: '2', text: ['按「開啟 OmniRoute 管理頁」，用「複製管理密碼」登入。', 'Press "Open the OmniRoute dashboard" and sign in with "Copy dashboard password".'] },
       { name: '3', text: ['在管理頁用你自己的帳號連接免費供應商，例如 Gemini、Groq、OpenRouter。', 'Connect free providers with your own accounts in the dashboard, e.g. Gemini, Groq, OpenRouter.'] },
       { name: '4', text: ['回到 Aivenue 按「重新讀取」，就能在角色設定裡選 OmniRoute 的模型。', 'Back in Aivenue press Reload; OmniRoute models can then be picked in role settings.'] },

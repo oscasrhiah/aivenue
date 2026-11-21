@@ -845,8 +845,8 @@ const EXT_INFO: Record<ExtensionId, { name: string; zh: string; en: string; url:
   },
   omniroute: {
     name: 'OmniRoute',
-    zh: '本機 AI 閘道，接上數百家供應商；auto/best-free 會自動挑選現在能用的免費模型，額度用完就換下一家。',
-    en: 'A local AI gateway to hundreds of providers; auto/best-free picks a free model that works right now and moves on when one runs out.',
+    zh: '本機 AI 閘道，接上數百家供應商；auto/best-free 會自動挑選現在能用的免費模型，額度用完就換下一家。開啟後還沒接上 OpenRouter 的話，會在瀏覽器開啟它的授權頁。',
+    en: 'A local AI gateway to hundreds of providers; auto/best-free picks a free model that works right now and moves on when one runs out. Once on, it opens OpenRouter’s authorization page in your browser if OpenRouter is not connected yet.',
     url: 'https://github.com/diegosouzapw/OmniRoute',
     license: 'MIT',
   },

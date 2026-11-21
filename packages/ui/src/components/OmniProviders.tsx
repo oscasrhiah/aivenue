@@ -169,7 +169,7 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
         return (
         <div key={c.id} className="omni-conn">
           <StateWord
-            className="tiny"
+            className="tiny wrap"
             icon={c.test?.state === 'ok' ? CircleCheck : c.test?.state === 'fail' ? CircleX : c.test?.state === 'testing' ? LoaderCircle : CircleDashed}
             spin={c.test?.state === 'testing'}
             tone={c.test?.state === 'ok' ? 'ok' : c.test?.state === 'fail' ? 'err' : c.test?.state === 'testing' ? 'run' : undefined}
@@ -337,7 +337,7 @@ export function OpenRouterAuth({ oauth }: { oauth?: NonNullable<ExtensionStatus[
   if (!oauth) return null;
   if (oauth.state === 'error') return <div className="err-text tiny">{oauth.message}</div>;
   return (
-    <StateWord className="tiny" icon={LoaderCircle} spin tone="run">
+    <StateWord className="tiny wrap" icon={LoaderCircle} spin tone="run">
       {oauth.state === 'waiting'
         ? t('已在瀏覽器開啟 OpenRouter：登入（或註冊）後按 Authorize，Aivenue 會自動接上並測試。', 'OpenRouter is open in your browser: sign in (or sign up) and press Authorize; Aivenue connects and checks it.')
         : t('OpenRouter 已授權，正在接上 OmniRoute 並測試…', 'OpenRouter authorized; connecting it to OmniRoute and checking…')}
