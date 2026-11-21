@@ -26,11 +26,13 @@ const events = { a1: [
   { seq: 1, ts: 1, kind: 'thinking', text: 'SECRET THOUGHT' },
   { seq: 2, ts: 2, kind: 'message', text: '我先讀 store.js' },
   { seq: 3, ts: 3, kind: 'tool', tool: { id: 't', name: 'read', category: 'read', title: 'Read src/store.js', output: 'x'.repeat(5000), status: 'ok' } },
+  // A key with no fixed prefix, only its field name gives it away (JSON quotes, which HTML would turn into &quot;).
+  { seq: 5, ts: 5, kind: 'tool', tool: { id: 'c', name: 'read', category: 'read', title: 'Read config.json', output: '{"password": "hunter2secretvalue", "api_key": "zz9988776655qq", "name": "notes"}', status: 'ok' } },
   { seq: 4, ts: 4, kind: 'error', text: 'boom' },
 ] };
 
 test('匯出頁：你的訊息、agent 的角色與模型、說的話、工具（輸出截短）、錯誤、結果；不含思考；HTML 會跳脫', () => {
-  const h = runReportHtml(run, (id) => events[id] ?? []);
+  const { html: h, masked } = runReportHtml(run, (id) => events[id] ?? []);
   assert.match(h, /幫筆記加上標籤/);
   assert.match(h, /實作|Implementer/);
   assert.match(h, /opencode\/big-pickle/);
@@ -40,6 +42,11 @@ test('匯出頁：你的訊息、agent 的角色與模型、說的話、工具�
   assert.ok(!h.includes('SECRET THOUGHT'));
   assert.ok(!h.includes('x'.repeat(2000)));
   assert.ok(h.includes('加標籤 &lt;b&gt;'));
+  // Masked before escaping: the field-name rules still match; the rest of the line stays readable.
+  assert.ok(!h.includes('hunter2secretvalue') && !h.includes('zz9988776655qq'), h);
+  assert.ok(!h.includes('sk-abcdefghijklmnopqrstuv'));
+  assert.match(h, /notes/);
+  assert.ok(masked >= 3);
 });
 
 test('匯出成 PDF：用無頭瀏覽器印出，金鑰遮罩，暫存的 HTML 會刪掉', { skip: !findBrowser() && 'no Chromium-based browser' }, async () => {
@@ -48,6 +55,12 @@ test('匯出成 PDF：用無頭瀏覽器印出，金鑰遮罩，暫存的 HTML �
   assert.ok(r.path.endsWith('.pdf'));
   assert.equal(fs.readFileSync(r.path).subarray(0, 5).toString(), '%PDF-');
   assert.ok(r.bytes > 1000);
-  assert.ok(r.masked >= 1);
+  assert.ok(r.masked >= 3);
+  // The PDF's own text: no secret, the readable parts still there.
+  const pdf = await createRequire(import.meta.url)('pdf-parse/lib/pdf-parse.js')(fs.readFileSync(r.path));
+  const words = pdf.text.replace(/\s+/g, '');
+  assert.ok(!words.includes('hunter2secretvalue') && !words.includes('zz9988776655qq') && !words.includes('abcdefghijklmnopqrstuv'), pdf.text);
+  assert.ok(words.includes('[masked]') || words.includes('[apikey]'), pdf.text);
+  assert.ok(words.includes('我先讀store.js'), pdf.text);
   assert.deepEqual(fs.readdirSync(path.join(data, 'exports')).filter((f) => f.endsWith('.html')), []);
 });

@@ -139,8 +139,6 @@ interface Estimate {
 /** npm install of OmniRoute: about four minutes on a fresh machine (its output line count varies too much to use). */
 const NPM_EST: Estimate = { from: 0, to: 90, ms: 240000 };
 const FREE_POOLS = ['auto/best-free', 'auto/coding:free'];
-/** Providers whose free key or account runs every model they list (NVIDIA NIM, Groq, Cerebras, Mistral's Experiment plan, Antigravity). */
-const OMNI_FREE_PROVIDERS = new Set(['nvidia', 'groq', 'cerebras', 'mistral', 'antigravity', 'agy']);
 const MAX_OMNI_MODELS = 120;
 
 /** The model itself is gone (retired or unknown to the provider), not the key or the service. */
@@ -153,7 +151,7 @@ interface OmniModel {
   context_length?: number;
   capabilities?: { tool_calling?: boolean; reasoning?: boolean; thinking?: boolean; vision?: boolean };
   input_modalities?: string[];
-  pricing?: { prompt?: string; input?: number };
+  pricing?: { prompt?: string; completion?: string; input?: number; output?: number };
 }
 
 /**
@@ -205,12 +203,19 @@ export class ExtensionService {
   private codegraphVersion?: string;
   /** The installed impeccable's version (Aivenue's npm copy in its tools folder, whose engine answered). */
   private impeccableVersion?: string;
-  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string> };
+  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string>; freeIds?: Set<string> };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
-  /** Models a provider answered as retired or unknown (410, 404): out of the menus until the app restarts. */
-  private omniGone = new Set<string>();
+  /**
+   * Models a provider answered as retired or unknown (410, 404), per connection: out of its menus until its model list is
+   * synced again (a temporary 404, or a model the provider brings back, gets another chance).
+   */
+  private omniGone = new Map<string, Set<string>>();
+  /** The last model-list sync of each connection: a failed one keeps the list OmniRoute had. */
+  private omniSyncs = new Map<string, { ok: boolean; at: number; message?: string }>();
+  /** Each OpenRouter sign-in's number: a sign-in that is no longer the current one (or OmniRoute was turned off) connects nothing. */
+  private orGen = 0;
   private omniSyncTimer?: NodeJS.Timeout;
   /** OpenRouter's sign-in in progress (OAuth PKCE): its page, and how to stop waiting for it. */
   private orAuth?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string; stop?: () => void };
@@ -307,7 +312,7 @@ export class ExtensionService {
               models: this.usableOmniModels().length,
               free: this.usableOmniModels().filter((m) => this.omniFree(m)).length,
               openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
-            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined })),
+            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined })),
             }
           : undefined,
       }),
@@ -354,6 +359,7 @@ export class ExtensionService {
       if (enabled) void this.startOmni().then(() => (this.omni?.connections.some((x) => x.provider === 'openrouter') ? undefined : this.omniOpenRouter())).catch(() => undefined);
       else {
         this.orAuth?.stop?.();
+        this.orGen++;
         this.orAuth = undefined;
         this.stopOmni(true);
       }
@@ -907,8 +913,24 @@ export class ExtensionService {
   }
 
   /** Ask OmniRoute to fetch a connection's current model list from the provider (new names in, retired ones out). */
-  private async omniSyncModels(id: string): Promise<void> {
-    await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000 }).catch(() => undefined);
+  private async omniSyncModels(id: string): Promise<boolean> {
+    try {
+      await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000 });
+      this.omniSyncs.set(id, { ok: true, at: Date.now() });
+      // A fresh list from the provider: models it called gone get another chance.
+      this.omniGone.delete(id);
+      return true;
+    } catch (e) {
+      this.omniSyncs.set(id, { ok: false, at: Date.now(), message: (e as Error).message.slice(0, 300) });
+      return false;
+    }
+  }
+
+  /** Models gone for any active connection (each connection's own models only). */
+  private goneIds(): Set<string> {
+    const out = new Set<string>();
+    for (const c of this.omni?.connections ?? []) if (c.id && c.isActive !== false) for (const m of this.omniGone.get(c.id) ?? []) out.add(m);
+    return out;
   }
 
   /** Every active connection's model list, then the menus. */
@@ -960,6 +982,8 @@ export class ExtensionService {
    */
   async omniOpenRouter(): Promise<ExtensionStatus[]> {
     this.orAuth?.stop?.();
+    const gen = ++this.orGen;
+    const current = () => gen === this.orGen && !!this.cfg().omniroute?.enabled && !!this.omni?.ready;
     if (!this.omni?.ready) await this.startOmni();
     const verifier = randomBytes(32).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
@@ -977,7 +1001,7 @@ export class ExtensionService {
       if (u.pathname !== '/callback') return void res.writeHead(404).end();
       const code = u.searchParams.get('code');
       // Only the sign-in this app started (its state), once.
-      if (u.searchParams.get('state') !== state || !code || this.orAuth?.state !== 'waiting') return void res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(page(false));
+      if (u.searchParams.get('state') !== state || !code || !current() || this.orAuth?.state !== 'waiting') return void res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }).end(page(false));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(page(true));
       stop();
       this.orAuth = { state: 'connecting' };
@@ -986,10 +1010,12 @@ export class ExtensionService {
         const r = await fetch('https://openrouter.ai/api/v1/auth/keys', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' }), signal: AbortSignal.timeout(30000) });
         const j = (await r.json().catch(() => ({}))) as { key?: string; error?: { message?: string } | string };
         if (!r.ok || !j.key) throw new Error(L(`OpenRouter 沒有發出金鑰：${(typeof j.error === 'string' ? j.error : j.error?.message) ?? `HTTP ${r.status}`}`, `OpenRouter did not issue a key: ${(typeof j.error === 'string' ? j.error : j.error?.message) ?? `HTTP ${r.status}`}`));
+        // Turned off, or another sign-in started, while the code was being exchanged: drop the key, connect nothing.
+        if (!current()) return;
         this.orAuth = undefined;
         await this.omniConnect({ provider: 'openrouter', apiKey: j.key });
       } catch (e) {
-        this.orAuth = { state: 'error', message: (e as Error).message.slice(0, 400) };
+        if (current()) this.orAuth = { state: 'error', message: (e as Error).message.slice(0, 400) };
       }
       this.changed();
     };
@@ -1006,7 +1032,7 @@ export class ExtensionService {
     const url = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callback)}&code_challenge=${challenge}&code_challenge_method=S256&key_label=${encodeURIComponent('Aivenue (OmniRoute)')}&state=${state}`;
     timer = setTimeout(() => {
       stop();
-      if (this.orAuth?.state === 'waiting' && this.orAuth.url === url) {
+      if (gen === this.orGen && this.orAuth?.state === 'waiting' && this.orAuth.url === url) {
         this.orAuth = { state: 'error', message: L('10 分鐘內沒有完成 OpenRouter 的授權，請再按一次「用 OpenRouter 帳號連接」。', 'The OpenRouter sign-in was not finished within 10 minutes; press "Connect with OpenRouter" again.') };
         this.changed();
       }
@@ -1029,7 +1055,7 @@ export class ExtensionService {
    * Can this connection run an agent? One request the size of an agent's opening prompt (about 24,000 characters)
    * that must come back as a tool call: catches bad keys, short context, low per-minute token caps and no tool support.
    */
-  async omniTest(id: string): Promise<ExtensionStatus[]> {
+  async omniTest(id: string, opts: { paid?: boolean } = {}): Promise<ExtensionStatus[]> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
@@ -1047,9 +1073,16 @@ export class ExtensionService {
     // provider's current model list, then read the models again, or a just-connected provider looks like it has none.
     await this.omniSyncModels(id);
     await this.refreshOmni(true);
-    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !this.omniGone.has(m.id));
-    // Free models first: that is what the user connected it for.
-    const order = [...models.filter((m) => this.omniFree(m)), ...models.filter((m) => !this.omniFree(m))];
+    const gone = this.omniGone.get(id) ?? new Set<string>();
+    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
+    // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
+    const free = models.filter((m) => this.omniFree(m));
+    const order = opts.paid ? [...free, ...models.filter((m) => !this.omniFree(m))] : free;
+    if (!order.length && models.length) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), noFree: true, message: L('這家沒有能確認免費的模型，Aivenue 不會自動用付費模型測試。要測試的話，按「用付費模型測試」（會產生一次少量費用）。', 'No model of this provider is known to be free, and Aivenue does not test with a paid one on its own. Press "Check with a paid model" to test (one small charge).') });
+      this.changed();
+      return this.list();
+    }
     if (!order.length) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), message: L('OmniRoute 沒有列出這家可以呼叫工具的模型', 'OmniRoute lists no tool-calling model for this provider') });
       this.changed();
@@ -1083,7 +1116,7 @@ export class ExtensionService {
         const msg = (e as Error).message;
         this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: msg.slice(0, 400) });
         if (!omniModelGone(msg)) break;
-        this.omniGone.add(model.id);
+        this.omniGone.set(id, gone.add(model.id));
         this.syncOmniProvider();
       }
     }
@@ -1098,10 +1131,13 @@ export class ExtensionService {
       return this.list();
     }
     if (!force && Date.now() - this.omni.at < 30000) return this.list();
-    const [models, providers] = await Promise.all([
+    const [models, providers, freeCatalog] = await Promise.all([
       this.omniFetch<{ data: OmniModel[] }>('/v1/models?prefix=alias').catch(() => ({ data: [] as OmniModel[] })),
       this.omniFetch<{ connections: OmniConnection[] }>('/api/providers').catch(() => ({ connections: [] as OmniConnection[] })),
+      // OmniRoute's own catalog of free tiers, each with its source: what counts as free besides a free id or price.
+      this.omniFetch<{ models?: { provider?: string; modelId?: string; freeType?: string }[] }>('/api/free-models').catch(() => ({ models: [] })),
     ]);
+    this.omni.freeIds = new Set((freeCatalog?.models ?? []).filter((m) => m.provider && m.modelId && m.freeType !== 'discontinued').map((m) => `${m.provider}/${m.modelId}`));
     this.omni.models = models.data ?? [];
     this.omni.connections = providers.connections ?? [];
     // What the free pools can route to right now: those models go in the menus too.
@@ -1125,7 +1161,8 @@ export class ExtensionService {
     // Models name their provider by id ("groq") or, for custom endpoints, by the prefix the user gave it.
     const connected = new Set(omni.connections.filter((c) => c.isActive !== false).flatMap((c) => [c.provider, c.providerId, c.providerSpecificData?.prefix].filter((x): x is string => typeof x === 'string')));
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
-    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.omniGone.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
+    const gone = this.goneIds();
+    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !gone.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
     // name: with a cap on the list, the free ones are never the ones cut.
     const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
@@ -1166,12 +1203,11 @@ export class ExtensionService {
     await this.refreshOmni(true);
   }
 
+  /** Free as far as can be known: a free id (":free"), a zero price for input and output, or OmniRoute's free-tier catalog. */
   private omniFree(m: OmniModel): boolean {
-    if (/free/i.test(m.id) || m.pricing?.prompt === '0' || m.pricing?.input === 0) return true;
-    // OmniRoute gives no prices for these: providers whose free key (or free account) covers every model, and
-    // Gemini's free tier, which covers the Flash and Gemma models only.
-    const p = m.owned_by ?? '';
-    return OMNI_FREE_PROVIDERS.has(p) || (p === 'gemini' && /flash|gemma/i.test(m.id));
+    if (/free/i.test(m.id)) return true;
+    if ((m.pricing?.prompt === '0' && m.pricing?.completion === '0') || (m.pricing?.input === 0 && m.pricing?.output === 0)) return true;
+    return !!this.omni?.freeIds?.has(m.id);
   }
 
   private async omniModels(): Promise<ModelInfo[]> {

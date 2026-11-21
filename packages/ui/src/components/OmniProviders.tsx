@@ -179,6 +179,21 @@ function ProviderRow({ p, conns, oauth }: { p: FreeProvider; conns: NonNullable<
             {t('移除', 'Remove')}
           </button>
           {c.test?.state === 'fail' && c.test.message && <div className="err-text tiny omni-conn-msg">{c.test.message}</div>}
+          {c.test?.state === 'fail' && c.test.noFree && (
+            <button
+              className="btn small ghost omni-conn-msg"
+              disabled={busy}
+              onClick={async () => (await ask(t(`用 ${p.name} 的付費模型測試一次？會產生一次少量的費用。`, `Check ${p.name} with a paid model? It costs one small request.`))) && run(() => hub.call('extensions.omniTest', { id: c.id, paid: true }))}
+            >
+              {t('用付費模型測試', 'Check with a paid model')}
+            </button>
+          )}
+          {c.sync && !c.sync.ok && (
+            <div className="muted tiny omni-conn-msg">
+              {t('這次沒有更新模型清單，沿用原本的清單：', 'The model list was not updated this time; the previous one stays: ')}
+              {c.sync.message}
+            </div>
+          )}
         </div>
       ))}
       {p.id === 'openrouter' && (

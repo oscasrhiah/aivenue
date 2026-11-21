@@ -233,7 +233,9 @@ test('OmniRoute：免費池的候選全是免登入來源時，選單不列這�
       ? { data: [{ id: 'auto/best-free', owned_by: 'combo' }, { id: 'auto/coding:free', owned_by: 'combo' }, { id: 'antigravity/gemini', owned_by: 'antigravity' }, { id: 'openrouter/qwen/qwen3-coder:free', owned_by: 'openrouter' }, { id: 'openrouter/anthropic/claude-x', owned_by: 'openrouter' }, { id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'auto/best', owned_by: 'combo' }] }
       : p === '/api/providers'
         ? { connections: [{ provider: 'antigravity', isActive: true }, { provider: 'openrouter', isActive: true }, { provider: 'nvidia', isActive: true }] }
-        : { candidates: pools[p.split('/')[3]] ?? [] };
+        : p === '/api/free-models'
+          ? { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3', freeType: 'one-time-initial' }, { provider: 'openrouter', modelId: 'anthropic/claude-x', freeType: 'discontinued' }] }
+          : { candidates: pools[p.split('/')[3]] ?? [] };
   s.syncOmniProvider = () => undefined;
   s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
   await s.refreshOmni(true);
@@ -241,7 +243,8 @@ test('OmniRoute：免費池的候選全是免登入來源時，選單不列這�
   assert.ok(!ids.includes('auto/best-free'), ids.join());
   assert.ok(ids.includes('auto/coding:free'), ids.join());
   assert.ok(ids.includes('antigravity/gemini'), ids.join());
-  // Every model is listed, the free ones first and marked: OpenRouter's :free ones and every NVIDIA one are free.
+  // Every model is listed, the free ones first and marked: a :free id, or a model in OmniRoute's free-tier catalog (a
+  // discontinued entry does not count).
   const free = Object.fromEntries((await s.omniModels()).map((m) => [m.id, m.free]));
   assert.equal(free['omniroute/openrouter/qwen/qwen3-coder:free'], true);
   assert.equal(free['omniroute/nvidia/moonshotai/kimi-k3'], true);
@@ -253,6 +256,7 @@ test('OmniRoute 接 OpenRouter：開授權頁（PKCE＋state），回呼帶對�
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-or-'));
   const cfg = {};
   const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  cfg.omniroute = { enabled: true };
   const opened = [];
   const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: {}, secrets: {}, onChange() {}, openExternal: (u) => opened.push(u) });
   s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: Date.now(), candidates: new Set() };
@@ -329,6 +333,7 @@ test('OmniRoute 連線測試：第一個模型回 410（已不提供），換下
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
     if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'nvidia/deepseek-ai/deepseek-v4-pro-0813', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3' }, { provider: 'nvidia', modelId: 'deepseek-ai/deepseek-v4-pro-0813' }] };
     if (p === '/v1/chat/completions') {
       asked.push(init.body.model);
       if (init.body.model.endsWith('kimi-k3')) throw new Error('[410]: upstream error');
@@ -366,6 +371,7 @@ test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單�
     if (p.startsWith('/v1/models')) return { data: [{ id: synced ? 'nvidia/moonshotai/kimi-k3.1-pro' : 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
     if (p === '/api/providers/n1/sync-models') return ((synced = true), { ok: true });
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3' }, { provider: 'nvidia', modelId: 'moonshotai/kimi-k3.1-pro' }] };
     if (p === '/v1/chat/completions') return { model: init.body.model, choices: [{ message: { tool_calls: [{}] } }] };
     return { candidates: [] };
   };
@@ -375,4 +381,130 @@ test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單�
   await s.omniTest('n1');
   assert.ok(calls.indexOf('/api/providers/n1/sync-models') < calls.indexOf('/v1/chat/completions'), calls.join());
   assert.equal(s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test.model, 'nvidia/moonshotai/kimi-k3.1-pro');
+});
+
+/** A service with a fake OmniRoute: `answer(path, init)` returns what OmniRoute would. */
+const fakeOmni = async (answer, cfg = {}) => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnifake-'));
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
+  s.omniFetch = async (p, init = {}) => (await answer(p, init)) ?? { candidates: [] };
+  s.syncOmniProvider = () => undefined;
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  await s.refreshOmni(true);
+  return s;
+};
+
+test('OmniRoute 連線測試：沒有能確認免費的模型時不自動打付費模型，回報並等使用者按「用付費模型測試」', async () => {
+  const asked = [];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'g1', provider: 'groq', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'groq/llama-big', owned_by: 'groq', pricing: { prompt: '0' } }] };
+    if (p === '/api/providers/g1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [] };
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  });
+  await s.omniTest('g1');
+  // An input price of 0 alone (output unknown) does not make it free.
+  assert.deepEqual(asked, []);
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  assert.equal(row().test.state, 'fail');
+  assert.equal(row().test.noFree, true);
+  await s.omniTest('g1', { paid: true });
+  assert.deepEqual(asked, ['groq/llama-big']);
+  assert.equal(row().test.state, 'ok');
+});
+
+test('OmniRoute 退役模型只對那個連線、只到下一次成功同步；同步失敗時保留舊清單並記下沒有更新', async () => {
+  let syncFails = false;
+  let gone = true;
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }, { id: 'nvidia/b', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'a' }, { provider: 'nvidia', modelId: 'b' }] };
+    if (p === '/api/providers/n1/sync-models') {
+      if (syncFails) throw new Error('upstream timeout');
+      return { ok: true };
+    }
+    if (p === '/v1/chat/completions') {
+      if (init.body.model === 'nvidia/a' && gone) throw new Error('[404]: model not found');
+      return { choices: [{ message: { tool_calls: [{}] } }] };
+    }
+  });
+  await s.omniTest('n1');
+  assert.ok(!s.usableOmniModels().some((m) => m.id === 'nvidia/a'));
+  // The provider has it again: a failed sync keeps it out (and says the list was not updated)…
+  gone = false;
+  syncFails = true;
+  await s.omniSyncAll();
+  assert.ok(!s.usableOmniModels().some((m) => m.id === 'nvidia/a'));
+  const sync = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].sync;
+  assert.equal(sync.ok, false);
+  assert.match(sync.message, /upstream timeout/);
+  // …a successful one lets it back in.
+  syncFails = false;
+  await s.omniSyncAll();
+  assert.ok(s.usableOmniModels().some((m) => m.id === 'nvidia/a'));
+});
+
+/** OpenRouter's sign-in with the key exchange held until `release()`. */
+const heldSignIn = async (s, connected) => {
+  const realFetch = globalThis.fetch;
+  let release;
+  const held = new Promise((r) => (release = r));
+  globalThis.fetch = async (url, init) => {
+    if (String(url) === 'https://openrouter.ai/api/v1/auth/keys') {
+      await held;
+      return new Response(JSON.stringify({ key: 'sk-or-held' }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  const opened = [];
+  s.o.openExternal = (u) => opened.push(u);
+  s.omniConnect = async (p) => (connected.push(p), []);
+  await s.omniOpenRouter();
+  const auth = new URL(opened.at(-1));
+  const cb = new URL(auth.searchParams.get('callback_url'));
+  const res = await realFetch(`http://127.0.0.1:${cb.port}/callback?code=c&state=${auth.searchParams.get('state')}`);
+  assert.equal(res.status, 200);
+  return { release, restore: () => (globalThis.fetch = realFetch), realFetch };
+};
+
+test('OpenRouter 授權：換金鑰途中關掉 OmniRoute，換回的金鑰不會接上', async () => {
+  const cfg = { omniroute: { enabled: true } };
+  const s = await fakeOmni(() => undefined, cfg);
+  s.stopOmni = () => (s.omni = undefined);
+  const connected = [];
+  const h = await heldSignIn(s, connected);
+  try {
+    await s.setEnabled('omniroute', false);
+    h.release();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(connected, []);
+    assert.equal(s.orAuth, undefined);
+  } finally {
+    h.restore();
+  }
+});
+
+test('OpenRouter 授權：換金鑰途中開始了新一輪授權，舊的那輪換回的金鑰不會接上', async () => {
+  const cfg = { omniroute: { enabled: true } };
+  const s = await fakeOmni(() => undefined, cfg);
+  const connected = [];
+  const h = await heldSignIn(s, connected);
+  try {
+    const opened = [];
+    s.o.openExternal = (u) => opened.push(u);
+    await s.omniOpenRouter();
+    h.release();
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(connected, []);
+    // The new sign-in is still the one waiting.
+    assert.equal(s.orAuth.state, 'waiting');
+    assert.equal(s.orAuth.url, opened[0]);
+  } finally {
+    s.orAuth?.stop?.();
+    h.restore();
+  }
 });
