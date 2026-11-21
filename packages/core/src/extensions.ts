@@ -1274,8 +1274,10 @@ export class ExtensionService {
     const confirmed = new Set(opts.confirmed ?? []);
     // The list the user saw when starting: models synced in later (free ones too) wait for the next run.
     const listed = opts.models ? new Set(opts.models) : undefined;
+    // Bound to the OmniRoute this run started on: a refresh updates it in place, a stop or restart replaces it.
+    const inst = this.omni;
     const eligible = (mid: string) => {
-      const c = this.omni?.connections.find((x) => x.id === id && x.isActive !== false);
+      const c = this.omni === inst && this.omni?.connections.find((x) => x.id === id && x.isActive !== false);
       const m = c && this.checkable(c).find((x) => x.id === mid);
       return m && !gone.has(m.id) && (!listed || listed.has(m.id)) && (this.omniFree(m) || confirmed.has(m.id)) ? m : undefined;
     };
@@ -1297,9 +1299,10 @@ export class ExtensionService {
           const prev = this.checks()[id]?.[m.id];
           this.setCheck(id, m.id, { state: 'testing', at: Date.now() });
           // An unpriced model in a vouched connection goes with the user's okay, and its result says so.
-          const p: { ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean } = await this.omniProbe(id, m.id, !this.omniFree(m), () => !!eligible(m.id)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
-          if (p.notSent) {
-            // Became ineligible while the key was read: nothing was sent, the earlier result stands.
+          const p: { ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean; stale?: boolean } = await this.omniProbe(id, m.id, !this.omniFree(m), () => !!eligible(m.id)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
+          if (p.notSent || p.stale) {
+            // Became ineligible while the key was read (nothing sent), or OmniRoute restarted mid-request (its answer is
+            // not this run's): the earlier result stands.
             if (prev) this.setCheck(id, m.id, prev);
             else delete this.checks()[id]?.[m.id];
             prog.done++;
@@ -1326,7 +1329,9 @@ export class ExtensionService {
    */
   /** `authorized`: the user okayed this request though the model is not known to be free. */
   /** `stillOk`: checked once more right before the request leaves; false sends nothing (`notSent`). */
-  private async omniProbe(id: string, modelId: string, authorized = false, stillOk?: () => boolean): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean }> {
+  private async omniProbe(id: string, modelId: string, authorized = false, stillOk?: () => boolean): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean; stale?: boolean }> {
+    const inst = this.omni;
+    const stale = { ok: false, answered: false, gone: false, stale: true, message: L('OmniRoute 在測試途中重新啟動，這次的結果不採用，請重新測試', 'OmniRoute restarted during the check; this result is not used, check again') };
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
     const model = { id: modelId };
     {
@@ -1359,6 +1364,7 @@ export class ExtensionService {
             tool_choice: 'required',
           },
         });
+        if (this.omni !== inst) return stale;
         const other = elsewhere();
         if (other) return { ok: false, answered: true, gone: false, message: other };
         const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
@@ -1367,6 +1373,7 @@ export class ExtensionService {
         return called ? { ok: true, answered: true, gone: false } : { ok: false, answered: true, gone: false, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') };
       } catch (e) {
         if (e instanceof OmniNotSent) return { ok: false, answered: false, gone: false, notSent: true };
+        if (this.omni !== inst) return stale;
         const msg = (e as Error).message;
         if (!answered) {
           // No answer at all (NVIDIA's free models can queue for minutes): it says nothing about the key or the model's

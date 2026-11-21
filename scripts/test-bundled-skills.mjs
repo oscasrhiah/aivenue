@@ -1083,3 +1083,63 @@ test('OmniRoute 批次測試在金鑰讀完、送出前最後核對：讀金鑰�
     globalThis.fetch = realFetch;
   }
 });
+
+test('OmniRoute 批次測試綁定開始時的服務：讀金鑰期間重啟並載入相同連線，新服務收到 0 筆舊批次請求；重啟前送出的回覆不採用', async () => {
+  const sent = [];
+  const keys = [];
+  const answers = [];
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: ['a', 'b'].map((n) => ({ id: `nvidia/${n}`, owned_by: 'nvidia' })) };
+    if (p === '/api/free-models') return { models: [] };
+  }, { omniroute: { enabled: true } });
+  const fake = s.omniFetch;
+  s.omniFetch = (p, init) => (p === '/v1/chat/completions' ? ExtensionService.prototype.omniFetch.call(s, p, init) : fake(p, init));
+  let holdKey = true;
+  s.omniSecret = () => (holdKey ? new Promise((r) => keys.push(() => r('k'))) : Promise.resolve('k'));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (url, init) => {
+    sent.push(`${url} ${JSON.parse(init.body).model}`);
+    return new Promise((resolve) => answers.push(() => resolve(new Response(JSON.stringify({ choices: [{ message: { tool_calls: [{}] } }] }), { headers: { 'x-omniroute-selected-connection-id': 'n1' } }))));
+  };
+  // A restart: a new OmniRoute that loads the same connection and models.
+  const restart = async (port) => {
+    s.omni = { url: `http://127.0.0.1:${port}`, ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+    await s.refreshOmni(true);
+  };
+  const checks = () => s.list().find((x) => x.id === 'omniroute').omniroute.checks.n1 ?? {};
+  try {
+    s.omniVouch('n1', true);
+    const all = [...s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].unpricedModels];
+    const run = s.omniCheckModels('n1', { confirmed: all, models: all });
+    while (keys.length < 2) await new Promise((r) => setTimeout(r, 10));
+    await restart(2);
+    assert.equal(s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].unpricedModels.length, 2);
+    keys.splice(0).forEach((go) => go());
+    // Anything that did go out is answered, so the run ends and the assertion (not a hang) reports it.
+    await new Promise((r) => setTimeout(r, 50));
+    answers.splice(0).forEach((go) => go());
+    await run;
+    assert.deepEqual(sent, []);
+    assert.deepEqual(checks(), {});
+    // Sent before a restart, answered after it: the answer is not recorded.
+    holdKey = false;
+    const again = s.omniCheckModels('n1', { confirmed: all, models: all });
+    while (answers.length < 2) await new Promise((r) => setTimeout(r, 10));
+    assert.deepEqual(sent.sort(), ['http://127.0.0.1:2/v1/chat/completions nvidia/a', 'http://127.0.0.1:2/v1/chat/completions nvidia/b']);
+    await restart(3);
+    answers.splice(0).forEach((go) => go());
+    await again;
+    assert.deepEqual(checks(), {});
+    // A run started on the new one works as usual.
+    sent.length = 0;
+    const fresh = s.omniCheckModels('n1', { confirmed: all, models: all });
+    while (answers.length < 2) await new Promise((r) => setTimeout(r, 10));
+    answers.splice(0).forEach((go) => go());
+    await fresh;
+    assert.ok(sent.every((x) => x.startsWith('http://127.0.0.1:3/')) && sent.length === 2, sent.join());
+    assert.deepEqual(Object.values(checks()).map((c) => c.state), ['ok', 'ok']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
