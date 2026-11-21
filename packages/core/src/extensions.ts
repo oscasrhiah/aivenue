@@ -144,8 +144,14 @@ const MAX_OMNI_MODELS = 120;
 /** The model itself is gone (retired or unknown to the provider), not the key or the service. */
 export const omniModelGone = (msg: string) => /\[(404|410)\]|\b410\b|model[^.]{0,40}(not found|does not exist|no longer|deprecated|retired|decommissioned)|\bgone\b/i.test(msg);
 
-/** How long a connection check waits for one model's answer. */
-const OMNI_PROBE_MS = 90_000;
+/** The names people know OmniRoute's providers by, for the menus ("which service is this model from?"). */
+const OMNI_SOURCES: Record<string, string> = { gemini: 'Gemini AI Studio', openrouter: 'OpenRouter', nvidia: 'NVIDIA NIM', groq: 'Groq', cerebras: 'Cerebras', mistral: 'Mistral', antigravity: 'Antigravity', github: 'GitHub Models', cloudflare: 'Cloudflare' };
+
+/**
+ * How long a connection check waits for one model's answer. NVIDIA's free endpoints queue: its Kimi took 74-113 s to
+ * send its first word even for "hi", so a shorter wait calls a working key broken.
+ */
+const OMNI_PROBE_MS = 240_000;
 
 /** Free-tier kinds in OmniRoute's catalog that mean no charge; anything else (discontinued, missing, unknown) does not count. */
 const OMNI_FREE_TYPES = new Set(['keyless', 'recurring-daily', 'recurring-monthly', 'recurring-uncapped', 'recurring-credit', 'one-time-initial']);
@@ -939,6 +945,11 @@ export class ExtensionService {
     return (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
   }
 
+  /** A connection check got a tool call from this model. */
+  private omniTested(model: string): boolean {
+    return [...this.omniTests.values()].some((t) => t.state === 'ok' && t.model === model);
+  }
+
   /** The active connections that serve this model. */
   private offering(m: OmniModel): OmniConnection[] {
     return (this.omni?.connections ?? []).filter((c) => c.isActive !== false && [c.provider, c.providerId, c.providerSpecificData?.prefix].includes(m.owned_by));
@@ -1159,7 +1170,9 @@ export class ExtensionService {
           onHeaders,
           body: {
             model: model.id,
-            max_tokens: 200,
+            // Reasoning models (Kimi) think before calling the tool: little thinking, and room for it.
+            max_tokens: 2048,
+            reasoning_effort: 'low',
             messages: [
               { role: 'system', content: filler },
               { role: 'user', content: 'Call the ping tool with ok=true. Do not answer in text.' },
@@ -1182,7 +1195,7 @@ export class ExtensionService {
           // No answer at all (NVIDIA's free models can queue for minutes): it says nothing about the key or the model's
           // existence, so the next model is tried.
           const s = OMNI_PROBE_MS / 1000;
-          this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: L(`${model.id} 在 ${s} 秒內沒有回應（免費模型可能在排隊），沒有能回應的模型：${msg}`, `${model.id} did not answer within ${s} s (free models can queue), and no model answered: ${msg}`).slice(0, 400) });
+          this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: L(`${model.id} 在 ${s} 秒內沒有回應。免費模型常要排隊（NVIDIA 的 Kimi 曾排一到兩分鐘），金鑰不一定有問題，可以稍後重新測試：${msg}`, `${model.id} did not answer within ${s} s. Free models often queue (NVIDIA's Kimi has taken one to two minutes); the key is not necessarily wrong, check again later: ${msg}`).slice(0, 400) });
           continue;
         }
         // Another key's failure says nothing about this one: not marked gone for it.
@@ -1253,7 +1266,8 @@ export class ExtensionService {
     const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.goneEverywhere(m) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
     // name: with a cap on the list, the free ones are never the ones cut.
-    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
+    // Pools that are not free can route to anything connected (or nothing): they go last.
+    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 7) : this.omniTested(m.id) ? 2 : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
     // The list rides in an environment variable (OpenCode's config): keep it well under Windows' 32K limit.
     return ok.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id)).slice(0, MAX_OMNI_MODELS);
   }
@@ -1306,11 +1320,13 @@ export class ExtensionService {
     await this.refreshOmni();
     return this.usableOmniModels().map((m) => ({
       id: `${OMNI_PROVIDER}/${m.id}`,
-      label: m.id.startsWith('auto/') ? undefined : m.name,
+      // Where it comes from, and whether a connection check got an answer from it: the menu says so up front.
+      label: `${this.omniTested(m.id) ? L('✓ 已測試可用 · ', '✓ checked · ') : ''}${m.owned_by === 'combo' ? L('OmniRoute 自動組合', 'OmniRoute pool') : (OMNI_SOURCES[m.owned_by ?? ''] ?? m.owned_by ?? '')} · ${m.owned_by && m.owned_by !== 'combo' && m.id.startsWith(`${m.owned_by}/`) ? m.id.slice(m.owned_by.length + 1) : m.id}`,
       description: m.owned_by === 'combo' ? L('OmniRoute 自動挑選的模型組合', 'A model pool OmniRoute picks from') : m.owned_by,
       context: m.context_length || undefined,
       contextSource: m.context_length ? 'cli' : undefined,
-      efforts: m.capabilities?.reasoning || m.capabilities?.thinking ? OMNI_EFFORTS : [],
+      // Synced catalogs (NVIDIA) often leave reasoning unmarked though the model thinks (Kimi): offered unless marked off.
+      efforts: m.capabilities?.reasoning === false && !m.capabilities?.thinking ? [] : OMNI_EFFORTS,
       free: this.omniFree(m),
       inputs: Array.isArray(m.input_modalities) ? m.input_modalities : m.capabilities?.vision ? ['text', 'image'] : undefined,
     }));

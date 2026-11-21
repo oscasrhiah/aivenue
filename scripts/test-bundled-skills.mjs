@@ -784,3 +784,42 @@ test('OmniRoute 連線測試：使用者選了測試用的模型（NVIDIA 的金
   assert.equal(asked.at(-1), 'nvidia/google/gemma-4-31b-it');
   assert.equal(row().testModel, undefined);
 });
+
+test('OmniRoute 模型的推理強度：沒標會不會思考的（NVIDIA 同步來的 Kimi）也能選；明確標成不會思考的才不給', async () => {
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/moonshotai/kimi-k3.1-pro', owned_by: 'nvidia' }, { id: 'nvidia/x/plain', owned_by: 'nvidia', capabilities: { reasoning: false } }] };
+  });
+  const efforts = Object.fromEntries((await s.omniModels()).map((m) => [m.id, m.efforts]));
+  assert.deepEqual(efforts['omniroute/nvidia/moonshotai/kimi-k3.1-pro'], ['low', 'medium', 'high']);
+  assert.deepEqual(efforts['omniroute/nvidia/x/plain'], []);
+});
+
+test('OmniRoute 選單：每個模型標出來源（Gemini AI Studio、OpenRouter、NVIDIA NIM），測試通過的標「已測試可用」排前面，非免費的自動組合排最後', async () => {
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'g1', provider: 'gemini', isActive: true }, { id: 'o1', provider: 'openrouter', isActive: true }, { id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return {
+        data: [
+          { id: 'auto/claude-opus', owned_by: 'combo' },
+          { id: 'gemini/gemini-3-flash-preview', owned_by: 'gemini' },
+          { id: 'openrouter/qwen/qwen3-coder:free', owned_by: 'openrouter' },
+          { id: 'nvidia/moonshotai/kimi-k3.1-pro', owned_by: 'nvidia' },
+        ],
+      };
+    if (p === '/api/providers/g1/test') return { valid: true };
+    if (/sync-models$/.test(p)) return { ok: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'gemini', modelId: 'gemini-3-flash-preview', freeType: 'recurring-daily' }] };
+    if (p === '/v1/chat/completions') return { choices: [{ message: { tool_calls: [{}] } }] };
+  });
+  await s.omniTest('g1');
+  const models = await s.omniModels();
+  const label = Object.fromEntries(models.map((m) => [m.id, m.label]));
+  assert.match(label['omniroute/gemini/gemini-3-flash-preview'], /已測試可用.*Gemini AI Studio · gemini-3-flash-preview/);
+  assert.match(label['omniroute/openrouter/qwen/qwen3-coder:free'], /^OpenRouter · qwen\/qwen3-coder:free$/);
+  assert.match(label['omniroute/nvidia/moonshotai/kimi-k3.1-pro'], /^NVIDIA NIM · moonshotai\/kimi-k3.1-pro$/);
+  assert.match(label['omniroute/auto/claude-opus'], /OmniRoute 自動組合/);
+  const ids = models.map((m) => m.id);
+  assert.equal(ids[0], 'omniroute/gemini/gemini-3-flash-preview');
+  assert.equal(ids.at(-1), 'omniroute/auto/claude-opus');
+});
