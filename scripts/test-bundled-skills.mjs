@@ -222,7 +222,7 @@ test('Linux 套件的檔案權限：程式本體與內建 Skill 的 scripts/ 裡
 
 test('OmniRoute：免費池的候選全是免登入來源時，選單不列這個池；有一個能用的候選就列；全部列出，免費的排前面並標出', async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omni-'));
-  const cfg = {};
+  const cfg = { omniroute: { onlyChecked: false } };
   const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
   const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
   const noauth = (model) => ({ provider: 'cloudflare-playground', connectionId: 'noauth', model, modelStr: model, excluded: false, reachable: true, breakerState: 'CLOSED' });
@@ -387,7 +387,7 @@ test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單�
 });
 
 /** A service with a fake OmniRoute: `answer(path, init)` returns what OmniRoute would. */
-const fakeOmni = async (answer, cfg = {}) => {
+const fakeOmni = async (answer, cfg = { omniroute: { onlyChecked: false } }) => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnifake-'));
   const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
   const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
@@ -822,4 +822,45 @@ test('OmniRoute 選單：每個模型標出來源（Gemini AI Studio、OpenRoute
   const ids = models.map((m) => m.id);
   assert.equal(ids[0], 'omniroute/gemini/gemini-3-flash-preview');
   assert.equal(ids.at(-1), 'omniroute/auto/claude-opus');
+});
+
+test('OmniRoute 模型逐一測試：只測這家的免費模型（NVIDIA 的都算），記住結果；選單預設只列免費且測試通過的，關掉篩選就全列', async () => {
+  const asked = [];
+  const cfg = { omniroute: { enabled: true } };
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }, { id: 'o1', provider: 'openrouter', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return {
+        data: [
+          { id: 'auto/best-free', owned_by: 'combo' },
+          { id: 'auto/claude-opus', owned_by: 'combo' },
+          { id: 'nvidia/z-ai/glm-5.3-flash', owned_by: 'nvidia' },
+          { id: 'nvidia/google/gemma-4-31b-it', owned_by: 'nvidia' },
+          { id: 'openrouter/anthropic/claude-opus-5', owned_by: 'openrouter' },
+        ],
+      };
+    if (p.startsWith('/v1/auto-combo/best-free')) return { candidates: [{ provider: 'nvidia', connectionId: 'n1', model: 'nvidia/z-ai/glm-5.3-flash', modelStr: 'nvidia/z-ai/glm-5.3-flash', reachable: true, breakerState: 'CLOSED' }] };
+    if (p === '/v1/chat/completions') {
+      asked.push(init.body.model);
+      if (init.body.model.includes('gemma')) return { choices: [{ message: { content: 'hello' } }] };
+      return { choices: [{ message: { tool_calls: [{}] } }] };
+    }
+  }, cfg);
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute;
+  // Every NVIDIA model is a free endpoint; OpenRouter's paid one is not checked.
+  assert.deepEqual(row().connected.find((c) => c.id === 'n1').freeModels, ['nvidia/z-ai/glm-5.3-flash', 'nvidia/google/gemma-4-31b-it']);
+  // Nothing checked yet: only the free pool is in the menu.
+  assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['auto/best-free']);
+  await s.omniCheckModels('n1');
+  assert.deepEqual(asked.sort(), ['nvidia/google/gemma-4-31b-it', 'nvidia/z-ai/glm-5.3-flash']);
+  assert.equal(row().checks['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
+  assert.equal(row().checks['nvidia/google/gemma-4-31b-it'].state, 'fail');
+  assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['auto/best-free', 'nvidia/z-ai/glm-5.3-flash']);
+  // Kept on disk for the next start.
+  const again = new ExtensionService({ dataDir: s.o.dataDir, bundledDir: BUNDLED, capabilities: s.o.capabilities, registry: s.o.registry, secrets: {}, onChange() {} });
+  assert.equal(again.checks()['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
+  // The filter off: every model again.
+  await s.omniOnlyChecked(false);
+  assert.equal(row().onlyChecked, false);
+  assert.ok(s.usableOmniModels().some((m) => m.id === 'openrouter/anthropic/claude-opus-5'));
 });

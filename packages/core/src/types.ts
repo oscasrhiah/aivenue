@@ -297,7 +297,8 @@ export interface ExtensionsConfig {
   impeccable?: { enabled: boolean };
   /** port: where OmniRoute listens (picked once, kept). pinned: models picked from an auto pool, kept in the menus. */
   /** testModels: the model each connection is checked with, when the user picked one (a key may serve only some models). */
-  omniroute?: { enabled: boolean; port?: number; pinned?: string[]; testModels?: Record<string, string> };
+  /** onlyChecked: the menus list only free models a check got a tool call from (default on). */
+  omniroute?: { enabled: boolean; port?: number; pinned?: string[]; testModels?: Record<string, string>; onlyChecked?: boolean };
   /** Bundled third-party skills turned on one by one (all off until the user turns one on). */
   packSkills?: Partial<Record<PackSkillId, boolean>>;
 }
@@ -370,9 +371,13 @@ export interface ExtensionStatus {
     /** OpenRouter's sign-in in progress: waiting for the browser, turning the key into a connection, or what failed. */
     /** The last refresh of OmniRoute's lists failed in part; the menus keep the last lists that worked. */
     refresh?: { at: number; message: string };
+    /** What each model's last check found (model id without the omniroute/ prefix). */
+    checks?: Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string }>;
+    /** The menus list only free models a check passed. */
+    onlyChecked?: boolean;
     openrouter?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string };
     /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */
-    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** The tool-calling models this connection serves, and the one picked to check it with. */ models?: string[]; testModel?: string; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
+    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** The tool-calling models this connection serves, and the one picked to check it with. */ models?: string[]; testModel?: string; /** How many of its free models a check run has done, while it runs. */ checking?: { done: number; total: number }; /** Its free tool-calling models (what a check run asks). */ freeModels?: string[]; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
   };
 }
 

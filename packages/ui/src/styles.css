@@ -5544,6 +5544,13 @@ textarea.code {
   flex-wrap: wrap;
 }
 
+.omni-checks {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  max-height: 220px;
+  overflow-y: auto;
+  word-break: break-word;
+}
 .omni-conn-msg {
   flex-basis: 100%;
 }
