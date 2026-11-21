@@ -569,15 +569,18 @@ test('OmniRoute 選單：兩條連線提供同一模型，只有一條失效時�
     if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'a', freeType: 'recurring-daily' }] };
     if (/sync-models$/.test(p)) throw new Error('offline');
     if (p === '/v1/chat/completions') {
-      if (dead.has(s.testing)) throw new Error('[404]: model not found');
+      // OmniRoute serves through the pinned connection and says so.
+      const conn = init.headers['x-omniroute-connection'];
+      init.onHeaders(new Headers({ 'x-omniroute-selected-connection-id': conn }));
+      if (dead.has(conn)) throw new Error('[404]: model not found');
       return { choices: [{ message: { tool_calls: [{}] } }] };
     }
   });
   const listed = () => s.usableOmniModels().some((m) => m.id === 'nvidia/a');
-  dead.add((s.testing = 'n1'));
+  dead.add('n1');
   await s.omniTest('n1');
   assert.ok(listed());
-  dead.add((s.testing = 'n2'));
+  dead.add('n2');
   await s.omniTest('n2');
   assert.ok(!listed());
 });
@@ -615,4 +618,66 @@ test('OmniRoute 刷新：途中停用或重啟，舊的回覆不寫進目前的�
   assert.deepEqual(fresh.models, []);
   assert.deepEqual(fresh.connections, []);
   assert.equal(fresh.at, 0);
+});
+
+test('OmniRoute 連線測試：指定要測的連線，並核對 OmniRoute 實際用的連線；用了別條就不算這把金鑰的結果', async () => {
+  const sent = [];
+  let served;
+  let fails = false;
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }, { id: 'n2', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }, { id: 'nvidia/b', owned_by: 'nvidia' }] };
+    if (/\/test$/.test(p)) return { valid: true };
+    if (p === '/api/free-models') return { models: ['a', 'b'].map((modelId) => ({ provider: 'nvidia', modelId, freeType: 'recurring-daily' })) };
+    if (/sync-models$/.test(p)) throw new Error('offline');
+    if (p === '/v1/chat/completions') {
+      sent.push(init.headers['x-omniroute-connection']);
+      if (served !== undefined) init.onHeaders(new Headers(served ? { 'x-omniroute-selected-connection-id': served } : {}));
+      if (fails) throw new Error('[410]: model gone');
+      return { choices: [{ message: { tool_calls: [{}] } }] };
+    }
+  });
+  const test = (id) => s.list().find((x) => x.id === 'omniroute').omniroute.connected.find((c) => c.id === id).test;
+  // Asked for n1, OmniRoute says n2 answered: not a pass for n1.
+  served = 'n2';
+  await s.omniTest('n1');
+  assert.deepEqual(sent, ['n1']);
+  assert.equal(test('n1').state, 'fail');
+  assert.match(test('n1').message, /n2/);
+  // n2's 410 is not n1's: nothing is marked gone for n1 and no other model is tried.
+  fails = true;
+  await s.omniTest('n1');
+  assert.deepEqual(sent, ['n1', 'n1']);
+  assert.equal(s.omniGone.get('n1'), undefined);
+  // OmniRoute does not say, and another connection serves the model: not confirmed.
+  fails = false;
+  served = null;
+  await s.omniTest('n1');
+  assert.equal(test('n1').state, 'fail');
+  // It says n1 answered: a pass for n1.
+  served = 'n1';
+  await s.omniTest('n1');
+  assert.equal(test('n1').state, 'ok');
+});
+
+test('OmniRoute 刷新：讀清單逾時時保留上次成功的模型與連線並顯示刷新失敗，恢復後清掉提示', async () => {
+  let down = false;
+  let model = 'nvidia/a';
+  const s = await fakeOmni((p) => {
+    if (down && (p === '/api/providers' || p.startsWith('/v1/models') || p.startsWith('/v1/auto-combo'))) throw new Error('The operation was aborted due to timeout');
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: model, owned_by: 'nvidia' }] };
+  });
+  const st = () => s.list().find((x) => x.id === 'omniroute').omniroute;
+  assert.ok(s.usableOmniModels().some((m) => m.id === 'nvidia/a'));
+  down = true;
+  await s.refreshOmni(true);
+  assert.ok(s.usableOmniModels().some((m) => m.id === 'nvidia/a'));
+  assert.equal(st().connections, 1);
+  assert.match(st().refresh.message, /timeout/);
+  down = false;
+  model = 'nvidia/b';
+  await s.refreshOmni(true);
+  assert.equal(st().refresh, undefined);
+  assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['nvidia/b']);
 });

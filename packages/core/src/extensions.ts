@@ -206,7 +206,7 @@ export class ExtensionService {
   private codegraphVersion?: string;
   /** The installed impeccable's version (Aivenue's npm copy in its tools folder, whose engine answered). */
   private impeccableVersion?: string;
-  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string>; freeIds?: Set<string> };
+  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string>; freeIds?: Set<string>; refreshError?: { at: number; message: string } };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
@@ -314,6 +314,7 @@ export class ExtensionService {
               connections: omni.connections.length,
               models: this.usableOmniModels().length,
               free: this.usableOmniModels().filter((m) => this.omniFree(m)).length,
+              refresh: omni.refreshError,
               openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
             connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined })),
             }
@@ -929,9 +930,14 @@ export class ExtensionService {
     }
   }
 
+  /** The active connections that serve this model. */
+  private offering(m: OmniModel): OmniConnection[] {
+    return (this.omni?.connections ?? []).filter((c) => c.isActive !== false && [c.provider, c.providerId, c.providerSpecificData?.prefix].includes(m.owned_by));
+  }
+
   /** Gone for every active connection that offers it: one dead key does not hide a model another connection serves. */
   private goneEverywhere(m: OmniModel): boolean {
-    const offers = (this.omni?.connections ?? []).filter((c) => c.isActive !== false && [c.provider, c.providerId, c.providerSpecificData?.prefix].includes(m.owned_by));
+    const offers = this.offering(m);
     return offers.length > 0 && offers.every((c) => !!c.id && !!this.omniGone.get(c.id)?.has(m.id));
   }
 
@@ -951,14 +957,15 @@ export class ExtensionService {
     if (remove && this.o.registry.get(OMNI_PROVIDER)) this.o.registry.remove(OMNI_PROVIDER);
   }
 
-  private async omniFetch<T>(p: string, init: { method?: string; body?: unknown; timeoutMs?: number } = {}): Promise<T> {
+  private async omniFetch<T>(p: string, init: { method?: string; body?: unknown; timeoutMs?: number; headers?: Record<string, string>; onHeaders?: (h: Headers) => void } = {}): Promise<T> {
     if (!this.omni) throw new Error('OmniRoute is not running');
     const res = await fetch(this.omni.url + p, {
       method: init.method ?? 'GET',
-      headers: { Authorization: `Bearer ${await this.omniSecret('apiKey')}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { Authorization: `Bearer ${await this.omniSecret('apiKey')}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
       body: init.body ? JSON.stringify(init.body) : undefined,
       signal: AbortSignal.timeout(init.timeoutMs ?? 15000),
     });
+    init.onHeaders?.(res.headers);
     const text = await res.text();
     if (!res.ok) throw new Error(omniError(text) || `OmniRoute ${p}: HTTP ${res.status}`);
     return (text ? JSON.parse(text) : null) as T;
@@ -1094,13 +1101,27 @@ export class ExtensionService {
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
     // A provider's catalog can list models it has since retired (NVIDIA answers 410 Gone): such a model is taken out
     // of the menus and the next one is tried, up to 5.
+    // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
+    // this key only when it was this key, or when OmniRoute does not say and no other active connection serves the model.
     let model = order[0];
     for (const next of order.slice(0, 5)) {
       model = next;
+      let served = null as string | null;
+      const onHeaders = (h: Headers) => (served = h.get('x-omniroute-selected-connection-id'));
+      const elsewhere = () =>
+        served
+          ? served !== id
+            ? L(`OmniRoute 改用另一條連線（${served}）回答，這次沒有測到這把金鑰`, `OmniRoute answered through another connection (${served}); this key was not tested`)
+            : undefined
+          : this.offering(model).some((c) => c.id !== id)
+            ? L('OmniRoute 沒有回報用了哪條連線，而另一條連線也提供這個模型：無法確認測到的是這把金鑰', 'OmniRoute did not say which connection answered, and another connection serves this model: this key could not be confirmed')
+            : undefined;
       try {
         const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
           method: 'POST',
           timeoutMs: 120000,
+          headers: { 'x-omniroute-connection': id },
+          onHeaders,
           body: {
             model: model.id,
             max_tokens: 200,
@@ -1112,13 +1133,20 @@ export class ExtensionService {
             tool_choice: 'required',
           },
         });
+        const other = elsewhere();
+        if (other) {
+          this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: other });
+          break;
+        }
         const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
         this.omniTests.set(id, called ? { state: 'ok', at: Date.now(), model: model.id } : { state: 'fail', at: Date.now(), model: model.id, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') });
         break;
       } catch (e) {
         const msg = (e as Error).message;
-        this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: msg.slice(0, 400) });
-        if (!omniModelGone(msg)) break;
+        // Another key's failure says nothing about this one: not marked gone for it.
+        const other = elsewhere();
+        this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: (other ? `${other}：${msg}` : msg).slice(0, 400) });
+        if (other || !omniModelGone(msg)) break;
         this.omniGone.set(id, gone.add(model.id));
         this.syncOmniProvider();
       }
@@ -1136,23 +1164,30 @@ export class ExtensionService {
     if (!force && Date.now() - this.omni.at < 30000) return this.list();
     // OmniRoute may be stopped or restarted while the answers are on their way: they belong to this instance only.
     const omni = this.omni;
+    // A request that fails (a timeout, OmniRoute busy) keeps the last list that worked: one slow answer must not empty
+    // the menus. What failed is shown until a refresh gets through.
+    const failed: string[] = [];
+    const got = <T>(what: string, p: Promise<T>) => p.catch((e) => (failed.push(`${what}: ${(e as Error).message}`), undefined));
     const [models, providers, freeCatalog] = await Promise.all([
-      this.omniFetch<{ data: OmniModel[] }>('/v1/models?prefix=alias').catch(() => ({ data: [] as OmniModel[] })),
-      this.omniFetch<{ connections: OmniConnection[] }>('/api/providers').catch(() => ({ connections: [] as OmniConnection[] })),
+      got('/v1/models', this.omniFetch<{ data: OmniModel[] }>('/v1/models?prefix=alias')),
+      got('/api/providers', this.omniFetch<{ connections: OmniConnection[] }>('/api/providers')),
       // OmniRoute's own catalog of free tiers, each with its source: what counts as free besides a free id or price.
-      this.omniFetch<{ models?: { provider?: string; modelId?: string; freeType?: string }[] }>('/api/free-models').catch(() => ({ models: [] })),
+      got('/api/free-models', this.omniFetch<{ models?: { provider?: string; modelId?: string; freeType?: string }[] }>('/api/free-models')),
     ]);
     if (this.omni !== omni) return this.list();
     // What the free pools can route to right now: those models go in the menus too.
-    const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p)));
+    const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p, (e) => failed.push(`${p}: ${e.message}`))));
     if (this.omni !== omni) return this.list();
-    omni.freeIds = new Set((freeCatalog?.models ?? []).filter((m) => m.provider && m.modelId && OMNI_FREE_TYPES.has(m.freeType ?? '')).map((m) => `${m.provider}/${m.modelId}`));
-    omni.models = models.data ?? [];
-    omni.connections = providers.connections ?? [];
-    omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
-    // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
-    // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
-    omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
+    if (freeCatalog) omni.freeIds = new Set((freeCatalog.models ?? []).filter((m) => m.provider && m.modelId && OMNI_FREE_TYPES.has(m.freeType ?? '')).map((m) => `${m.provider}/${m.modelId}`));
+    if (models) omni.models = models.data ?? [];
+    if (providers) omni.connections = providers.connections ?? [];
+    if (failed.length === 0 || !omni.at) {
+      omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
+      // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
+      // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
+      omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
+    }
+    omni.refreshError = failed.length ? { at: Date.now(), message: failed.join('; ').slice(0, 400) } : undefined;
     omni.at = Date.now();
     this.o.registry.forgetModels(OMNI_PROVIDER);
     this.syncOmniProvider();
@@ -1182,10 +1217,10 @@ export class ExtensionService {
     return this.fetchCandidates(model.replace(new RegExp(`^${OMNI_PROVIDER}/`), '').replace(/#.*$/, ''));
   }
 
-  private async fetchCandidates(pool: string): Promise<OmniCandidate[]> {
+  private async fetchCandidates(pool: string, onError?: (e: Error) => void): Promise<OmniCandidate[]> {
     const channel = pool.replace(/^auto\//, '');
     if (!this.omni?.ready || !pool.startsWith('auto/') || /[/?#]/.test(channel)) return [];
-    const r = await this.omniFetch<{ candidates?: OmniPoolEntry[] }>(`/v1/auto-combo/${channel}/candidates`).catch(() => ({ candidates: [] as OmniPoolEntry[] }));
+    const r = await this.omniFetch<{ candidates?: OmniPoolEntry[] }>(`/v1/auto-combo/${channel}/candidates`).catch((e) => (onError?.(e as Error), { candidates: [] as OmniPoolEntry[] }));
     const seen = new Set<string>();
     const out: OmniCandidate[] = [];
     for (const c of r.candidates ?? []) {

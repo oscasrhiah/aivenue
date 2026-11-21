@@ -1046,6 +1046,12 @@ function ExtensionCard({ s }: { s: ExtensionStatus }) {
             }
           />
           {s.omniroute?.openrouter && <OpenRouterAuth oauth={s.omniroute.openrouter} />}
+          {s.omniroute?.refresh && (
+            <div className="muted tiny" role="status">
+              {t('這次沒有讀到 OmniRoute 的最新清單，沿用上次讀到的：', 'OmniRoute’s lists could not be read this time; the last ones read stay: ')}
+              {s.omniroute.refresh.message}
+            </div>
+          )}
           {s.omniroute && providers && (
             <ExtWindow title={t(`${info.name}：連接免費供應商`, `${info.name}: connect free providers`)} onClose={() => setProviders(false)}>
               <OmniProviders s={s} />
