@@ -2,7 +2,17 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## 未發布（候選 0.4.3）
+## 0.4.3 - 2026-11-21
+
+- **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都從提交 `9432555`（標籤 `v0.4.3`）建置。這段發布日期是發布之後才補上的，所以標籤所在的提交裡，這個標題仍寫「未發布（候選 0.4.3）」，下面最後兩項也是發布後才補寫的（它們的程式已在 `9432555` 裡）。檔案的 SHA-256 與驗收結果寫在 v0.4.3 的 Release 說明。
+
+- **最終結果／最終計畫卡片可以再收合（預設展開）**：
+  - **原本的問題**：0.3.0 把這張卡改成整個工作流的答案時拿掉了收合，交付、驗證範圍、檢查和實作者的說明全部攤開，常常佔掉一整個畫面。
+  - **現在**：點標題列就收合，收合後整條標題列（審查結果、模型、進度、時間、複製）都留著，下面一行預覽；按複製或進度不會順便收合。收合狀態依對話分開記住，App 關掉前都有效。內容沒有拿掉任何東西。
+
+- **Linux：內附 Skill 裡開頭是 `#!` 的腳本可以直接執行**：
+  - **原本的問題**：在 Windows 上打包時，impeccable 的啟動器、Agent Skills 的 3 個、diagnosing-bugs 的 1 個腳本少了執行權限，Linux 上的 agent 照 SKILL.md 直接執行會出現 Permission denied。
+  - **現在**：打包時就設好權限；Aivenue 複製 Skill 時，在 Linux 和 macOS 上再補一次，所以舊副本也會修好。
 
 - **Agent Skills 更新到上游 `222bf92`，多了 accessibility-engineering**：
   - **原本的問題**：附的 Agent Skills 是 10 月的版本，沒有依 WCAG 2.2 AA 檢查現有介面的 Skill；無障礙只能靠 web-design-guidelines 的靜態規則。
