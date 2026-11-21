@@ -10,7 +10,7 @@ import { build } from 'esbuild';
 // offered to, and impeccable's install folder, environment and uninstall (no real npm or engine: proc.ts is stubbed).
 const BUNDLED = path.join(process.cwd(), 'packages', 'core', 'bundled');
 const bundled = await build({
-  stdin: { contents: `export { ExtensionService, markRunnable } from './packages/core/src/extensions'; export { impeccableEngine } from './packages/core/src/impeccable';`, resolveDir: process.cwd() },
+  stdin: { contents: `export { ExtensionService, markRunnable, omniModelGone } from './packages/core/src/extensions'; export { impeccableEngine } from './packages/core/src/impeccable';`, resolveDir: process.cwd() },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -317,4 +317,37 @@ test('OmniRoute 連線測試：新連線一開始停用、沒有模型，OmniRou
   assert.deepEqual(asked, ['openrouter/qwen/qwen3-coder:free']);
   const row = s.list().find((x) => x.id === 'omniroute').omniroute.connected.find((c) => c.id === 'c1');
   assert.equal(row.test.state, 'ok', JSON.stringify(row.test));
+});
+
+test('OmniRoute 連線測試：第一個模型回 410（已不提供），換下一個測試，並把它從選單拿掉；金鑰錯誤這類就不換', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnigone-'));
+  const cfg = {};
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
+  const asked = [];
+  s.omniFetch = async (p, init = {}) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'nvidia/deepseek-ai/deepseek-v4-pro-0813', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/v1/chat/completions') {
+      asked.push(init.body.model);
+      if (init.body.model.endsWith('kimi-k3')) throw new Error('[410]: upstream error');
+      return { choices: [{ message: { tool_calls: [{}] } }] };
+    }
+    return { candidates: [] };
+  };
+  s.syncOmniProvider = () => undefined;
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  await s.refreshOmni(true);
+  await s.omniTest('n1');
+  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3', 'nvidia/deepseek-ai/deepseek-v4-pro-0813']);
+  const row = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  assert.equal(row.test.state, 'ok');
+  assert.equal(row.test.model, 'nvidia/deepseek-ai/deepseek-v4-pro-0813');
+  const ids = s.usableOmniModels().map((m) => m.id);
+  assert.ok(!ids.includes('nvidia/moonshotai/kimi-k3'), ids.join());
+  assert.ok(ids.includes('nvidia/deepseek-ai/deepseek-v4-pro-0813'), ids.join());
+  const { omniModelGone } = mod.exports;
+  assert.equal(omniModelGone('Invalid API key [401]'), false);
+  assert.equal(omniModelGone('[404]: model not found'), true);
 });

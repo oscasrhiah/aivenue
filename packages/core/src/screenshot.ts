@@ -59,6 +59,8 @@ export interface ScreenshotRequest {
   fullPage?: boolean;
   /** Extra time for scripts / animations after the page loaded. */
   waitMs?: number;
+  /** Print the page to a PDF (A4, backgrounds kept) at `out` instead of taking a PNG. */
+  pdf?: boolean;
   signal?: AbortSignal;
 }
 
@@ -238,6 +240,11 @@ export async function captureScreenshot(r: ScreenshotRequest): Promise<{ path: s
     if (nav.errorText) throw new Error(L(`無法開啟 ${url}：${nav.errorText}`, `Could not open ${url}: ${nav.errorText}`));
     await loaded;
     await sleep(waitMs);
+    if (r.pdf) {
+      const { data } = await cdp.send<{ data: string }>('Page.printToPDF', { printBackground: true, paperWidth: 8.27, paperHeight: 11.69, marginTop: 0.6, marginBottom: 0.6, marginLeft: 0.6, marginRight: 0.6 });
+      fs.writeFileSync(r.out, Buffer.from(data, 'base64'));
+      return { path: r.out, url, width, height };
+    }
     let shotHeight = height;
     const params: Record<string, unknown> = { format: 'png' };
     if (r.fullPage) {

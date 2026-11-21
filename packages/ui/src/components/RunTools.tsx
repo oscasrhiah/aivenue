@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react';
-import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, Layers, Library, Pencil, Search, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { ArrowLeftRight, BookCheck, ChartColumn, CircleCheck, CircleX, Download, Ellipsis, FileText, Layers, Library, Pencil, Search, Trash2, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { Ico } from '../icons';
 import type { PreflightItem, ProviderInfo, WorkflowRun } from '../../../core/src/types';
 import { hub } from '../api';
@@ -216,6 +216,16 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
   const [memory, setMemory] = useState(false);
   const [cost, setCost] = useState(false);
   const [note, setNote] = useState<string>();
+  const exportPdf = async () => {
+    setNote(t('正在產生 PDF…', 'Making the PDF…'));
+    try {
+      const r = await hub.call<{ path: string; bytes: number; masked: number }>('workflows.exportPdf', { id: run.id });
+      setNote(t(`已匯出 PDF（${Math.ceil(r.bytes / 1024)} KB），遮罩了 ${r.masked} 處金鑰／信箱：${r.path}。保存 30 天後自動刪除。`, `Exported a PDF (${Math.ceil(r.bytes / 1024)} KB, ${r.masked} keys / emails masked): ${r.path}. Deleted automatically after 30 days.`));
+      void hub.call('host.openPath', { path: r.path }).catch(() => undefined);
+    } catch (e) {
+      setNote((e as Error).message);
+    }
+  };
   const exportRun = async () => {
     try {
       const r = await hub.call<{ path: string; bytes: number; masked: number }>('workflows.export', { id: run.id, mask: true });
@@ -244,7 +254,8 @@ export function RunMenu({ run, providers, onRename, onDelete }: { run: WorkflowR
           { label: t('成本分解', 'Cost breakdown'), hint: t('token、時間、prompt 組成', 'Tokens, time, prompt makeup'), icon: ChartColumn, onSelect: () => setCost(true) },
           { label: t('專案記憶', 'Project memory'), hint: t('這次帶入了什麼、記憶模式', 'What this run was given, memory mode'), icon: Library, onSelect: () => setMemory(true) },
           { label: t('搜尋紀錄', 'Search records'), icon: Search, onSelect: () => setSearch(true) },
-          { label: t('匯出完整紀錄', 'Export full records'), hint: t('金鑰會遮罩', 'Keys masked'), icon: Download, onSelect: () => void exportRun() },
+          { label: t('匯出完整紀錄（PDF）', 'Export full records (PDF)'), hint: t('金鑰會遮罩', 'Keys masked'), icon: FileText, onSelect: () => void exportPdf() },
+          { label: t('匯出原始紀錄（JSON）', 'Export raw records (JSON)'), hint: t('給除錯用，金鑰會遮罩', 'For troubleshooting, keys masked'), icon: Download, onSelect: () => void exportRun() },
           { label: t('存成專案 Skill', 'Save as a project Skill'), hint: t('只收驗證過的規則', 'Verified rules only'), icon: BookCheck, onSelect: () => void distil() },
           !!onDelete && 'sep',
           !!onDelete && { label: t('刪除對話…', 'Delete chat…'), icon: Trash2, danger: true, onSelect: onDelete },

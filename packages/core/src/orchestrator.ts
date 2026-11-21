@@ -72,6 +72,7 @@ import { checkRecords, collectActivity, fileReadOf, ownWorkBlock, POLLING, toolC
 import { buildTopics, topicDetail, topicList } from './topics';
 import { classifyFailure, recoveryFor } from './failures';
 import { exportBundle, distilProjectSkill, projectSkillsDir } from './bundle';
+import { exportRunPdf } from './runReport';
 import { skillsReminder } from './capabilities';
 import { addObserved, addTurn, costBreakdown, promptTurn, roleParts, trackWaiting } from './promptStats';
 import { memoryContentDigest, MemoryStore, type MemoryCandidate, type MemoryPatch } from './memoryStore';
@@ -1856,6 +1857,13 @@ export class Orchestrator {
     const run = this.runs.get(id);
     if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
     return exportBundle(this.d.dataDir, run, (aid) => this.events(run.id, aid), mask);
+  }
+
+  /** The conversation as a PDF a person reads (keys and e-mail addresses masked), in the exports folder. */
+  exportPdf(id: string): Promise<{ path: string; bytes: number; masked: number }> {
+    const run = this.runs.get(id);
+    if (!run) throw new Error(L('找不到工作流', 'Workflow not found'));
+    return exportRunPdf(this.d.dataDir, run, (aid) => this.events(run.id, aid));
   }
 
   /** Write the run's verified rules (facts, decisions, rulings, how the goal was measured) into the project's Skill. */

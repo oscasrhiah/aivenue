@@ -56,12 +56,12 @@ export function exportBundle(dataDir: string, run: WorkflowRun, eventsOf: (agent
   return { path: file, bytes: Buffer.byteLength(text), masked };
 }
 
-function pruneExports(dir: string) {
+export function pruneExports(dir: string) {
   const cutoff = Date.now() - EXPORT_RETENTION_DAYS * 86400000;
   for (const f of fs.readdirSync(dir)) {
     const p = path.join(dir, f);
     try {
-      if (f.endsWith('.json') && fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { force: true });
+      if (/\.(json|pdf)$/.test(f) && fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { force: true });
     } catch {
       // in use or gone
     }

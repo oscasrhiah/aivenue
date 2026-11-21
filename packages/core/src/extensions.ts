@@ -143,6 +143,9 @@ const FREE_POOLS = ['auto/best-free', 'auto/coding:free'];
 const OMNI_FREE_PROVIDERS = new Set(['nvidia', 'groq', 'cerebras', 'mistral', 'antigravity', 'agy']);
 const MAX_OMNI_MODELS = 120;
 
+/** The model itself is gone (retired or unknown to the provider), not the key or the service. */
+export const omniModelGone = (msg: string) => /\[(404|410)\]|\b410\b|model[^.]{0,40}(not found|does not exist|no longer|deprecated|retired|decommissioned)|\bgone\b/i.test(msg);
+
 interface OmniModel {
   id: string;
   name?: string;
@@ -206,6 +209,8 @@ export class ExtensionService {
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
+  /** Models a provider answered as retired or unknown (410, 404): out of the menus until the app restarts. */
+  private omniGone = new Set<string>();
   /** OpenRouter's sign-in in progress (OAuth PKCE): its page, and how to stop waiting for it. */
   private orAuth?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string; stop?: () => void };
 
@@ -1020,34 +1025,45 @@ export class ExtensionService {
     // OmniRoute creates a connection inactive and lists its models only once its own check has turned it on: read
     // the models again now, or a just-connected provider looks like it has none.
     await this.refreshOmni(true);
-    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
-    // A free model first: that is what the user connected it for.
-    const model = models.find((m) => this.omniFree(m)) ?? models[0];
-    if (!model) {
+    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !this.omniGone.has(m.id));
+    // Free models first: that is what the user connected it for.
+    const order = [...models.filter((m) => this.omniFree(m)), ...models.filter((m) => !this.omniFree(m))];
+    if (!order.length) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), message: L('OmniRoute 沒有列出這家可以呼叫工具的模型', 'OmniRoute lists no tool-calling model for this provider') });
       this.changed();
       return this.list();
     }
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
-    try {
-      const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
-        method: 'POST',
-        timeoutMs: 120000,
-        body: {
-          model: model.id,
-          max_tokens: 200,
-          messages: [
-            { role: 'system', content: filler },
-            { role: 'user', content: 'Call the ping tool with ok=true. Do not answer in text.' },
-          ],
-          tools: [{ type: 'function', function: { name: 'ping', description: 'Reply to a connectivity check.', parameters: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } }],
-          tool_choice: 'required',
-        },
-      });
-      const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
-      this.omniTests.set(id, called ? { state: 'ok', at: Date.now(), model: model.id } : { state: 'fail', at: Date.now(), model: model.id, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') });
-    } catch (e) {
-      this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: (e as Error).message.slice(0, 400) });
+    // A provider's catalog can list models it has since retired (NVIDIA answers 410 Gone): such a model is taken out
+    // of the menus and the next one is tried, up to 5.
+    let model = order[0];
+    for (const next of order.slice(0, 5)) {
+      model = next;
+      try {
+        const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
+          method: 'POST',
+          timeoutMs: 120000,
+          body: {
+            model: model.id,
+            max_tokens: 200,
+            messages: [
+              { role: 'system', content: filler },
+              { role: 'user', content: 'Call the ping tool with ok=true. Do not answer in text.' },
+            ],
+            tools: [{ type: 'function', function: { name: 'ping', description: 'Reply to a connectivity check.', parameters: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } } }],
+            tool_choice: 'required',
+          },
+        });
+        const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
+        this.omniTests.set(id, called ? { state: 'ok', at: Date.now(), model: model.id } : { state: 'fail', at: Date.now(), model: model.id, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') });
+        break;
+      } catch (e) {
+        const msg = (e as Error).message;
+        this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: msg.slice(0, 400) });
+        if (!omniModelGone(msg)) break;
+        this.omniGone.add(model.id);
+        this.syncOmniProvider();
+      }
     }
     this.changed();
     return this.list();
@@ -1087,7 +1103,7 @@ export class ExtensionService {
     // Models name their provider by id ("groq") or, for custom endpoints, by the prefix the user gave it.
     const connected = new Set(omni.connections.filter((c) => c.isActive !== false).flatMap((c) => [c.provider, c.providerId, c.providerSpecificData?.prefix].filter((x): x is string => typeof x === 'string')));
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
-    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
+    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.omniGone.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
     // name: with a cap on the list, the free ones are never the ones cut.
     const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);

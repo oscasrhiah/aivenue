@@ -18,6 +18,7 @@ export const NOT_REPLAYED = new Set([
   'providers.addAccount',
   'catalog.add',
   'workflows.export',
+  'workflows.exportPdf',
   // a program, a sign-in, a network call or a test run started again
   'providers.install',
   'providers.uninstall',

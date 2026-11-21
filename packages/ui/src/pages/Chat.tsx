@@ -842,6 +842,25 @@ function UserMessage({ run, text, active, config }: { run: WorkflowRun; text: st
               <Ico i={Pencil} size={13} /> {t('編輯', 'Edit')}
             </button>
           )}
+          {!run.replacedBy && (
+            <button
+              className="link tiny user-edit"
+              disabled={busy}
+              title={active ? t('停止目前的工作流，用同一則訊息重新執行', 'Stop the current workflow and run the same message again') : t('用同一則訊息和設定重新執行一次', 'Run the same message with the same settings again')}
+              onClick={async () => {
+                if (active && !(await ask(t('重新送出會停止目前的工作流，用同一則訊息重新執行。要繼續嗎？', 'Re-sending stops the current workflow and runs the same message again. Continue?')))) return;
+                setBusy(true);
+                try {
+                  navigate(`run/${await hub.call<string>('workflows.edit', { id: run.id, goal: text, config })}`);
+                } catch (e) {
+                  setBusy(false);
+                  await ask((e as Error).message, { ok: t('知道了', 'OK') });
+                }
+              }}
+            >
+              <Ico i={RefreshCw} size={13} /> {t('重新送出', 'Re-send')}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1633,14 +1652,14 @@ export function Chat({ id }: { id?: string }) {
                       )}
                       {run.config.replaces && (
                         <div className="muted tiny edit-link">
-                          <Ico i={Pencil} size={12} /> {t('這是編輯後重新送出的版本', 'This is the edited, re-sent version')} ·{' '}
+                          <Ico i={Pencil} size={12} /> {t('這是重新送出的版本', 'This is the re-sent version')} ·{' '}
                           <a href={`#/run/${run.config.replaces}`}>{t('查看原版本', 'See the original')}</a>
                         </div>
                       )}
                       <UserMessage run={run} text={it.text} active={active} config={runDraft ? { ...run.config, ...runDraft } : run.config} />
                       {run.replacedBy && (
                         <div className="note small edit-link">
-                          {t('這則訊息已編輯並重新送出。', 'This message was edited and re-sent.')} <a href={`#/run/${run.replacedBy}`}>{t('前往新版本', 'Go to the new version')}</a>
+                          {t('這則訊息已重新送出。', 'This message was re-sent.')} <a href={`#/run/${run.replacedBy}`}>{t('前往新版本', 'Go to the new version')}</a>
                         </div>
                       )}
                       {run.assignment && (

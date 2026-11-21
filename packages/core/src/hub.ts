@@ -478,6 +478,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'workflows.search': (p: { id: string; query: Parameters<Orchestrator['search']>[1] }) => orchestrator.search(p.id, p.query ?? {}),
     'workflows.preflight': (p: { config: WorkflowConfig }) => orchestrator.preflight(p.config),
     'workflows.export': (p: { id: string; mask?: boolean }) => orchestrator.exportRun(p.id, p.mask !== false),
+    'workflows.exportPdf': (p: { id: string }) => orchestrator.exportPdf(p.id),
     'workflows.distilSkill': (p: { id: string }) => orchestrator.distilSkill(p.id),
     'workflows.setMemoryMode': (p: { id: string; mode: 'full' | 'readonly' | 'off' }) => orchestrator.setMemoryMode(p.id, p.mode),
     'workflows.memory': (p: { id: string }) => orchestrator.memoryForRun(p.id),
