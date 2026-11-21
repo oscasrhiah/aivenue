@@ -1134,6 +1134,8 @@ export class ExtensionService {
   private async omniTestRun(id: string, opts: { paid?: boolean; confirmed?: string | null }): Promise<ExtensionStatus[]> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
+    // The run (and a paid okay) belongs to this OmniRoute: after a stop or restart nothing more is sent.
+    const inst = this.omni;
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
     this.omniTests.set(id, { state: 'testing', at: Date.now() });
     this.changed();
@@ -1192,9 +1194,10 @@ export class ExtensionService {
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     for (const model of order.slice(0, 5)) {
-      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model));
-      this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.message });
-      if (p.ok || (p.answered && !p.gone)) break;
+      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model), () => this.omni === inst);
+      const restarted = L('OmniRoute 在測試途中重新啟動，這次沒有送出或結果不採用，請重新測試', 'OmniRoute restarted during the check; nothing was sent or the result is not used, check again');
+      this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.notSent || p.stale ? restarted : p.message });
+      if (p.ok || p.notSent || p.stale || (p.answered && !p.gone)) break;
       if (p.gone) {
         this.omniGone.set(id, gone.add(model.id));
         this.syncOmniProvider();
@@ -1350,7 +1353,8 @@ export class ExtensionService {
           timeoutMs: OMNI_PROBE_MS,
           headers: { 'x-omniroute-connection': id },
           onHeaders,
-          beforeSend: stillOk,
+          // Every send: still the OmniRoute this probe began on (a restart may reload the same connection), plus the caller's own conditions.
+          beforeSend: () => this.omni === inst && (!stillOk || stillOk()),
           body: {
             model: model.id,
             // Reasoning models (Kimi) think before calling the tool: little thinking, and room for it.
@@ -1372,7 +1376,7 @@ export class ExtensionService {
         this.setCheck(id, model.id, called ? { state: 'ok', at: Date.now(), authorized } : { state: 'fail', at: Date.now(), message: L('有回答但沒有呼叫工具', 'answered without calling the tool') });
         return called ? { ok: true, answered: true, gone: false } : { ok: false, answered: true, gone: false, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') };
       } catch (e) {
-        if (e instanceof OmniNotSent) return { ok: false, answered: false, gone: false, notSent: true };
+        if (e instanceof OmniNotSent) return this.omni !== inst ? { ...stale, notSent: true } : { ok: false, answered: false, gone: false, notSent: true };
         if (this.omni !== inst) return stale;
         const msg = (e as Error).message;
         if (!answered) {

@@ -1143,3 +1143,61 @@ test('OmniRoute 批次測試綁定開始時的服務：讀金鑰期間重啟並�
     globalThis.fetch = realFetch;
   }
 });
+
+test('OmniRoute 單次付費測試綁定開始時的服務：確認後讀金鑰期間、或測試開始後重啟，新服務收到 0 筆請求', async () => {
+  const sent = [];
+  const keys = [];
+  const ownTest = [];
+  let holdOwn = false;
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/kimi', owned_by: 'nvidia' }] };
+    if (p === '/api/free-models') return { models: [] };
+    if (p === '/api/providers/n1/test') return holdOwn ? new Promise((r) => ownTest.push(() => r({ valid: true }))) : { valid: true };
+  }, { omniroute: { enabled: true } });
+  const fake = s.omniFetch;
+  s.omniFetch = (p, init) => (p === '/v1/chat/completions' ? ExtensionService.prototype.omniFetch.call(s, p, init) : fake(p, init));
+  s.omniSecret = () => new Promise((r) => keys.push(() => r('k')));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    sent.push(`${url} ${JSON.parse(init.body).model}`);
+    return new Response(JSON.stringify({ choices: [{ message: { tool_calls: [{}] } }] }), { headers: { 'x-omniroute-selected-connection-id': 'n1' } });
+  };
+  const restart = async (port) => {
+    s.omni = { url: `http://127.0.0.1:${port}`, ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+    await s.refreshOmni(true);
+  };
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  try {
+    s.omniSetTestModel('n1', 'nvidia/kimi');
+    // The user okayed one paid request for Kimi; OmniRoute restarts while the key is read.
+    const run = s.omniTest('n1', { paid: true, confirmed: 'nvidia/kimi' });
+    while (keys.length < 1) await new Promise((r) => setTimeout(r, 10));
+    await restart(2);
+    keys.splice(0).forEach((go) => go());
+    await run;
+    assert.deepEqual(sent, []);
+    assert.equal(row().test.state, 'fail');
+    assert.match(row().test.message, /重新啟動/);
+    // Restarted earlier in the run (during OmniRoute's own key check): the probe that follows sends nothing either.
+    holdOwn = true;
+    const again = s.omniTest('n1', { paid: true, confirmed: 'nvidia/kimi' });
+    while (ownTest.length < 1) await new Promise((r) => setTimeout(r, 10));
+    await restart(3);
+    ownTest.splice(0).forEach((go) => go());
+    while (!keys.length && row().test.state === 'testing') await new Promise((r) => setTimeout(r, 10));
+    keys.splice(0).forEach((go) => go());
+    await again;
+    assert.deepEqual(sent, []);
+    // A check started on the new one sends its one request there.
+    holdOwn = false;
+    const fresh = s.omniTest('n1', { paid: true, confirmed: 'nvidia/kimi' });
+    while (keys.length < 1) await new Promise((r) => setTimeout(r, 10));
+    keys.splice(0).forEach((go) => go());
+    await fresh;
+    assert.deepEqual(sent, ['http://127.0.0.1:3/v1/chat/completions nvidia/kimi']);
+    assert.equal(row().test.state, 'ok');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
