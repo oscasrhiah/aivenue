@@ -144,6 +144,9 @@ const MAX_OMNI_MODELS = 120;
 /** The model itself is gone (retired or unknown to the provider), not the key or the service. */
 export const omniModelGone = (msg: string) => /\[(404|410)\]|\b410\b|model[^.]{0,40}(not found|does not exist|no longer|deprecated|retired|decommissioned)|\bgone\b/i.test(msg);
 
+/** Free-tier kinds in OmniRoute's catalog that mean no charge; anything else (discontinued, missing, unknown) does not count. */
+const OMNI_FREE_TYPES = new Set(['keyless', 'recurring-daily', 'recurring-monthly', 'recurring-uncapped', 'recurring-credit', 'one-time-initial']);
+
 interface OmniModel {
   id: string;
   name?: string;
@@ -926,11 +929,10 @@ export class ExtensionService {
     }
   }
 
-  /** Models gone for any active connection (each connection's own models only). */
-  private goneIds(): Set<string> {
-    const out = new Set<string>();
-    for (const c of this.omni?.connections ?? []) if (c.id && c.isActive !== false) for (const m of this.omniGone.get(c.id) ?? []) out.add(m);
-    return out;
+  /** Gone for every active connection that offers it: one dead key does not hide a model another connection serves. */
+  private goneEverywhere(m: OmniModel): boolean {
+    const offers = (this.omni?.connections ?? []).filter((c) => c.isActive !== false && [c.provider, c.providerId, c.providerSpecificData?.prefix].includes(m.owned_by));
+    return offers.length > 0 && offers.every((c) => !!c.id && !!this.omniGone.get(c.id)?.has(m.id));
   }
 
   /** Every active connection's model list, then the menus. */
@@ -1077,7 +1079,8 @@ export class ExtensionService {
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
     const free = models.filter((m) => this.omniFree(m));
-    const order = opts.paid ? [...free, ...models.filter((m) => !this.omniFree(m))] : free;
+    // The user confirmed one paid request: at most one paid model is asked, and it is the last one tried.
+    const order = opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !this.omniFree(m)).slice(0, 1)] : free;
     if (!order.length && models.length) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), noFree: true, message: L('這家沒有能確認免費的模型，Aivenue 不會自動用付費模型測試。要測試的話，按「用付費模型測試」（會產生一次少量費用）。', 'No model of this provider is known to be free, and Aivenue does not test with a paid one on its own. Press "Check with a paid model" to test (one small charge).') });
       this.changed();
@@ -1131,22 +1134,26 @@ export class ExtensionService {
       return this.list();
     }
     if (!force && Date.now() - this.omni.at < 30000) return this.list();
+    // OmniRoute may be stopped or restarted while the answers are on their way: they belong to this instance only.
+    const omni = this.omni;
     const [models, providers, freeCatalog] = await Promise.all([
       this.omniFetch<{ data: OmniModel[] }>('/v1/models?prefix=alias').catch(() => ({ data: [] as OmniModel[] })),
       this.omniFetch<{ connections: OmniConnection[] }>('/api/providers').catch(() => ({ connections: [] as OmniConnection[] })),
       // OmniRoute's own catalog of free tiers, each with its source: what counts as free besides a free id or price.
       this.omniFetch<{ models?: { provider?: string; modelId?: string; freeType?: string }[] }>('/api/free-models').catch(() => ({ models: [] })),
     ]);
-    this.omni.freeIds = new Set((freeCatalog?.models ?? []).filter((m) => m.provider && m.modelId && m.freeType !== 'discontinued').map((m) => `${m.provider}/${m.modelId}`));
-    this.omni.models = models.data ?? [];
-    this.omni.connections = providers.connections ?? [];
+    if (this.omni !== omni) return this.list();
     // What the free pools can route to right now: those models go in the menus too.
     const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p)));
-    this.omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
+    if (this.omni !== omni) return this.list();
+    omni.freeIds = new Set((freeCatalog?.models ?? []).filter((m) => m.provider && m.modelId && OMNI_FREE_TYPES.has(m.freeType ?? '')).map((m) => `${m.provider}/${m.modelId}`));
+    omni.models = models.data ?? [];
+    omni.connections = providers.connections ?? [];
+    omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
     // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
     // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
-    this.omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
-    this.omni.at = Date.now();
+    omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
+    omni.at = Date.now();
     this.o.registry.forgetModels(OMNI_PROVIDER);
     this.syncOmniProvider();
     void this.o.registry.checkAuth(OMNI_PROVIDER).catch(() => undefined);
@@ -1161,8 +1168,7 @@ export class ExtensionService {
     // Models name their provider by id ("groq") or, for custom endpoints, by the prefix the user gave it.
     const connected = new Set(omni.connections.filter((c) => c.isActive !== false).flatMap((c) => [c.provider, c.providerId, c.providerSpecificData?.prefix].filter((x): x is string => typeof x === 'string')));
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
-    const gone = this.goneIds();
-    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !gone.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
+    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.goneEverywhere(m) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
     // name: with a cap on the list, the free ones are never the ones cut.
     const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
@@ -1205,7 +1211,11 @@ export class ExtensionService {
 
   /** Free as far as can be known: a free id (":free"), a zero price for input and output, or OmniRoute's free-tier catalog. */
   private omniFree(m: OmniModel): boolean {
-    if (/free/i.test(m.id)) return true;
+    // A stated non-zero price outranks any name or catalog entry.
+    const prices = [m.pricing?.prompt, m.pricing?.completion, m.pricing?.input, m.pricing?.output].filter((p) => p !== undefined && p !== null && p !== '');
+    if (prices.some((p) => Number(p) !== 0)) return false;
+    // OpenRouter's ":free" variants and OmniRoute's free routing pools (auto/best-free); not any id containing "free".
+    if (/:free$/i.test(m.id) || /^auto\/[\w-]*free\b/i.test(m.id)) return true;
     if ((m.pricing?.prompt === '0' && m.pricing?.completion === '0') || (m.pricing?.input === 0 && m.pricing?.output === 0)) return true;
     return !!this.omni?.freeIds?.has(m.id);
   }

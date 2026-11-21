@@ -333,7 +333,7 @@ test('OmniRoute 連線測試：第一個模型回 410（已不提供），換下
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
     if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'nvidia/deepseek-ai/deepseek-v4-pro-0813', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
-    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3' }, { provider: 'nvidia', modelId: 'deepseek-ai/deepseek-v4-pro-0813' }] };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3', freeType: 'one-time-initial' }, { provider: 'nvidia', modelId: 'deepseek-ai/deepseek-v4-pro-0813', freeType: 'one-time-initial' }] };
     if (p === '/v1/chat/completions') {
       asked.push(init.body.model);
       if (init.body.model.endsWith('kimi-k3')) throw new Error('[410]: upstream error');
@@ -371,7 +371,7 @@ test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單�
     if (p.startsWith('/v1/models')) return { data: [{ id: synced ? 'nvidia/moonshotai/kimi-k3.1-pro' : 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
     if (p === '/api/providers/n1/sync-models') return ((synced = true), { ok: true });
-    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3' }, { provider: 'nvidia', modelId: 'moonshotai/kimi-k3.1-pro' }] };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'moonshotai/kimi-k3', freeType: 'one-time-initial' }, { provider: 'nvidia', modelId: 'moonshotai/kimi-k3.1-pro', freeType: 'one-time-initial' }] };
     if (p === '/v1/chat/completions') return { model: init.body.model, choices: [{ message: { tool_calls: [{}] } }] };
     return { candidates: [] };
   };
@@ -422,7 +422,7 @@ test('OmniRoute 退役模型只對那個連線、只到下一次成功同步；�
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
     if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }, { id: 'nvidia/b', owned_by: 'nvidia' }] };
     if (p === '/api/providers/n1/test') return { valid: true };
-    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'a' }, { provider: 'nvidia', modelId: 'b' }] };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'a', freeType: 'recurring-daily' }, { provider: 'nvidia', modelId: 'b', freeType: 'recurring-daily' }] };
     if (p === '/api/providers/n1/sync-models') {
       if (syncFails) throw new Error('upstream timeout');
       return { ok: true };
@@ -507,4 +507,112 @@ test('OpenRouter 授權：換金鑰途中開始了新一輪授權，舊的那輪
     s.orAuth?.stop?.();
     h.restore();
   }
+});
+
+test('OmniRoute 免費判定：明示的非零價格優先於名稱；免費目錄只採信明確的免費類型', async () => {
+  const asked = [];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'o1', provider: 'openrouter', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return {
+        data: [
+          { id: 'openrouter/x/coder:free', owned_by: 'openrouter', pricing: { prompt: '0.000002', completion: '0.000004' } },
+          { id: 'openrouter/x/freeform', owned_by: 'openrouter' },
+          { id: 'openrouter/x/untyped', owned_by: 'openrouter' },
+          { id: 'openrouter/x/gone', owned_by: 'openrouter' },
+        ],
+      };
+    if (p === '/api/providers/o1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'openrouter', modelId: 'x/untyped' }, { provider: 'openrouter', modelId: 'x/gone', freeType: 'discontinued' }] };
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  });
+  const free = Object.fromEntries((await s.omniModels()).map((m) => [m.id, m.free]));
+  assert.equal(free['omniroute/openrouter/x/coder:free'], false);
+  assert.equal(free['omniroute/openrouter/x/freeform'], false);
+  assert.equal(free['omniroute/openrouter/x/untyped'], false);
+  assert.equal(free['omniroute/openrouter/x/gone'], false);
+  await s.omniTest('o1');
+  assert.deepEqual(asked, []);
+  assert.equal(s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test.noFree, true);
+});
+
+test('OmniRoute 付費測試：一次確認最多送一筆付費請求，模型失效就回報', async () => {
+  const asked = [];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'g1', provider: 'groq', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: ['a', 'b', 'c'].map((n) => ({ id: `groq/${n}`, owned_by: 'groq' })) };
+    if (p === '/api/providers/g1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [] };
+    // The sync does not reach the provider, so the gone model stays marked.
+    if (p === '/api/providers/g1/sync-models') throw new Error('offline');
+    if (p === '/v1/chat/completions') {
+      asked.push(init.body.model);
+      throw new Error('[410]: model gone');
+    }
+  });
+  await s.omniTest('g1', { paid: true });
+  assert.equal(asked.length, 1);
+  const t = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test;
+  assert.equal(t.state, 'fail');
+  // Pressing again tries the next one, again only one.
+  await s.omniTest('g1', { paid: true });
+  assert.equal(asked.length, 2);
+  assert.notEqual(asked[0], asked[1]);
+});
+
+test('OmniRoute 選單：兩條連線提供同一模型，只有一條失效時仍列出；兩條都失效才拿掉', async () => {
+  const dead = new Set();
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }, { id: 'n2', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }] };
+    if (/\/test$/.test(p)) return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'a', freeType: 'recurring-daily' }] };
+    if (/sync-models$/.test(p)) throw new Error('offline');
+    if (p === '/v1/chat/completions') {
+      if (dead.has(s.testing)) throw new Error('[404]: model not found');
+      return { choices: [{ message: { tool_calls: [{}] } }] };
+    }
+  });
+  const listed = () => s.usableOmniModels().some((m) => m.id === 'nvidia/a');
+  dead.add((s.testing = 'n1'));
+  await s.omniTest('n1');
+  assert.ok(listed());
+  dead.add((s.testing = 'n2'));
+  await s.omniTest('n2');
+  assert.ok(!listed());
+});
+
+test('OmniRoute 刷新：途中停用或重啟，舊的回覆不寫進目前的服務', async () => {
+  let release;
+  const held = new Promise((r) => (release = r));
+  let hold = false;
+  const s = await fakeOmni(async (p) => {
+    if (hold && p === '/api/providers') await held;
+    if (p === '/api/providers') return { connections: [{ id: 'old', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/old', owned_by: 'nvidia' }] };
+  });
+  hold = true;
+  // Stopped mid-way: nothing is written and nothing throws.
+  let pending = s.refreshOmni(true);
+  s.omni = undefined;
+  release();
+  await pending;
+  assert.equal(s.omni, undefined);
+  // Restarted mid-way: the new instance keeps its own lists.
+  let release2;
+  const held2 = new Promise((r) => (release2 = r));
+  s.omniFetch = async (p) => {
+    await held2;
+    return p === '/api/providers' ? { connections: [{ id: 'old', provider: 'nvidia', isActive: true }] } : p.startsWith('/v1/models') ? { data: [{ id: 'nvidia/old', owned_by: 'nvidia' }] } : { candidates: [] };
+  };
+  const first = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  s.omni = first;
+  pending = s.refreshOmni(true);
+  const fresh = { url: 'http://127.0.0.1:2', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  s.omni = fresh;
+  release2();
+  await pending;
+  assert.deepEqual(fresh.models, []);
+  assert.deepEqual(fresh.connections, []);
+  assert.equal(fresh.at, 0);
 });
