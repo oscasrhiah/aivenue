@@ -220,7 +220,7 @@ test('Linux 套件的檔案權限：程式本體與內建 Skill 的 scripts/ 裡
   assert.equal(fileMode('resources/app.asar.unpacked/dist/bundled/impeccable/skills/impeccable/scripts/impeccable.cmd', Buffer.from('@e')), 0o644);
 });
 
-test('OmniRoute：免費池的候選全是免登入來源時，選單不列這個池；有一個能用的候選就列', async () => {
+test('OmniRoute：免費池的候選全是免登入來源時，選單不列這個池；有一個能用的候選就列；全部列出，免費的排前面並標出', async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omni-'));
   const cfg = {};
   const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
@@ -230,9 +230,9 @@ test('OmniRoute：免費池的候選全是免登入來源時，選單不列這�
   const pools = { 'best-free': [noauth('cfp/zai-org/glm-5.2'), { ...noauth('unc/qwen'), provider: 'uncloseai' }], 'coding:free': [noauth('cfp/openai/gpt-oss-20b'), { provider: 'groq', connectionId: 'c1', model: 'groq/llama', modelStr: 'groq/llama', reachable: true, breakerState: 'CLOSED' }] };
   s.omniFetch = async (p) =>
     p.startsWith('/v1/models')
-      ? { data: [{ id: 'auto/best-free', owned_by: 'combo' }, { id: 'auto/coding:free', owned_by: 'combo' }, { id: 'antigravity/gemini', owned_by: 'antigravity' }] }
+      ? { data: [{ id: 'auto/best-free', owned_by: 'combo' }, { id: 'auto/coding:free', owned_by: 'combo' }, { id: 'antigravity/gemini', owned_by: 'antigravity' }, { id: 'openrouter/qwen/qwen3-coder:free', owned_by: 'openrouter' }, { id: 'openrouter/anthropic/claude-x', owned_by: 'openrouter' }, { id: 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }, { id: 'auto/best', owned_by: 'combo' }] }
       : p === '/api/providers'
-        ? { connections: [{ provider: 'antigravity', isActive: true }] }
+        ? { connections: [{ provider: 'antigravity', isActive: true }, { provider: 'openrouter', isActive: true }, { provider: 'nvidia', isActive: true }] }
         : { candidates: pools[p.split('/')[3]] ?? [] };
   s.syncOmniProvider = () => undefined;
   s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
@@ -241,6 +241,12 @@ test('OmniRoute：免費池的候選全是免登入來源時，選單不列這�
   assert.ok(!ids.includes('auto/best-free'), ids.join());
   assert.ok(ids.includes('auto/coding:free'), ids.join());
   assert.ok(ids.includes('antigravity/gemini'), ids.join());
+  // Every model is listed, the free ones first and marked: OpenRouter's :free ones and every NVIDIA one are free.
+  const free = Object.fromEntries((await s.omniModels()).map((m) => [m.id, m.free]));
+  assert.equal(free['omniroute/openrouter/qwen/qwen3-coder:free'], true);
+  assert.equal(free['omniroute/nvidia/moonshotai/kimi-k3'], true);
+  assert.equal(free['omniroute/openrouter/anthropic/claude-x'], false);
+  assert.ok(ids.indexOf('openrouter/qwen/qwen3-coder:free') < ids.indexOf('openrouter/anthropic/claude-x'), ids.join());
 });
 
 test('OmniRoute 接 OpenRouter：開授權頁（PKCE＋state），回呼帶對的 state 才換金鑰並交給 OmniRoute；錯的 state 不換', async () => {
@@ -287,4 +293,28 @@ test('OmniRoute 接 OpenRouter：開授權頁（PKCE＋state），回呼帶對�
     globalThis.fetch = realFetch;
     s.orAuth?.stop?.();
   }
+});
+
+test('OmniRoute 連線測試：新連線一開始停用、沒有模型，OmniRoute 自己的測試通過後才列出模型；Aivenue 重讀清單再用免費模型跑 agent 測試', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnitest-'));
+  const cfg = {};
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
+  let active = false;
+  const asked = [];
+  // What a real OmniRoute does: the connection is inactive until /test passes, and only active connections list models.
+  s.omniFetch = async (p, init = {}) => {
+    if (p === '/api/providers') return { connections: [{ id: 'c1', provider: 'openrouter', isActive: active }] };
+    if (p.startsWith('/v1/models')) return { data: active ? [{ id: 'openrouter/auto', owned_by: 'openrouter' }, { id: 'openrouter/qwen/qwen3-coder:free', owned_by: 'openrouter' }] : [] };
+    if (p === '/api/providers/c1/test') return ((active = true), { valid: true });
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+    return { candidates: [] };
+  };
+  s.syncOmniProvider = () => undefined;
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  await s.refreshOmni(true);
+  await s.omniTest('c1');
+  assert.deepEqual(asked, ['openrouter/qwen/qwen3-coder:free']);
+  const row = s.list().find((x) => x.id === 'omniroute').omniroute.connected.find((c) => c.id === 'c1');
+  assert.equal(row.test.state, 'ok', JSON.stringify(row.test));
 });

@@ -10,11 +10,13 @@ import { Fold } from './Kit';
 
 const CUSTOM = '__custom__';
 
-/** "Claude Opus (claude-opus-5-5) · 1M，免費": the name, then what to know about it in one run (one 「·」). */
+/** "【免費】Big Pickle (opencode/big-pickle) · 200K": free marked first, the name, then what to know about it in one run (one 「·」). */
 export function modelOptionLabel(t: T, m: ModelInfo): string {
   const name = m.label && m.label !== m.id ? `${m.label} (${m.id})` : m.id;
-  const facts = [m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('不能呼叫工具', 'no tool calling'), m.free && t('免費', 'free')].filter(Boolean).join(t('，', ', '));
-  return facts ? `${name} · ${facts}` : name;
+  const facts = [m.context && fmtContext(m.context), inputsLabel(t, m), m.reasoning === false && t('不思考', 'no thinking'), m.tools === false && t('不能呼叫工具', 'no tool calling')].filter(Boolean).join(t('，', ', '));
+  // Free models marked up front, where a long list is scanned (a menu option cannot carry a styled tag).
+  const head = m.free ? `${t('【免費】', '[Free] ')}${name}` : name;
+  return facts ? `${head} · ${facts}` : head;
 }
 
 /** What a model reads besides text ("圖片、影片"), or "只有文字"; empty when unknown. */

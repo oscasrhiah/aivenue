@@ -139,6 +139,8 @@ interface Estimate {
 /** npm install of OmniRoute: about four minutes on a fresh machine (its output line count varies too much to use). */
 const NPM_EST: Estimate = { from: 0, to: 90, ms: 240000 };
 const FREE_POOLS = ['auto/best-free', 'auto/coding:free'];
+/** Providers whose free key or account runs every model they list (NVIDIA NIM, Groq, Cerebras, Mistral's Experiment plan, Antigravity). */
+const OMNI_FREE_PROVIDERS = new Set(['nvidia', 'groq', 'cerebras', 'mistral', 'antigravity', 'agy']);
 const MAX_OMNI_MODELS = 120;
 
 interface OmniModel {
@@ -1005,9 +1007,6 @@ export class ExtensionService {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
-    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
-    // A free model first: that is what the user connected it for.
-    const model = models.find((m) => this.omniFree(m)) ?? models[0];
     this.omniTests.set(id, { state: 'testing', at: Date.now() });
     this.changed();
     // OmniRoute's own check first: it tells a wrong key apart from everything else.
@@ -1018,6 +1017,12 @@ export class ExtensionService {
       this.changed();
       return this.list();
     }
+    // OmniRoute creates a connection inactive and lists its models only once its own check has turned it on: read
+    // the models again now, or a just-connected provider looks like it has none.
+    await this.refreshOmni(true);
+    const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
+    // A free model first: that is what the user connected it for.
+    const model = models.find((m) => this.omniFree(m)) ?? models[0];
     if (!model) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), message: L('OmniRoute 沒有列出這家可以呼叫工具的模型', 'OmniRoute lists no tool-calling model for this provider') });
       this.changed();
@@ -1083,8 +1088,9 @@ export class ExtensionService {
     const connected = new Set(omni.connections.filter((c) => c.isActive !== false).flatMap((c) => [c.provider, c.providerId, c.providerSpecificData?.prefix].filter((x): x is string => typeof x === 'string')));
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
     const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
-    // Routing aliases first (auto/best-free on top), then models picked from a pool, then the rest by name.
-    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : 4);
+    // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
+    // name: with a cap on the list, the free ones are never the ones cut.
+    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
     // The list rides in an environment variable (OpenCode's config): keep it well under Windows' 32K limit.
     return ok.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id)).slice(0, MAX_OMNI_MODELS);
   }
@@ -1123,7 +1129,11 @@ export class ExtensionService {
   }
 
   private omniFree(m: OmniModel): boolean {
-    return /free/i.test(m.id) || m.pricing?.prompt === '0' || m.pricing?.input === 0;
+    if (/free/i.test(m.id) || m.pricing?.prompt === '0' || m.pricing?.input === 0) return true;
+    // OmniRoute gives no prices for these: providers whose free key (or free account) covers every model, and
+    // Gemini's free tier, which covers the Flash and Gemma models only.
+    const p = m.owned_by ?? '';
+    return OMNI_FREE_PROVIDERS.has(p) || (p === 'gemini' && /flash|gemma/i.test(m.id));
   }
 
   private async omniModels(): Promise<ModelInfo[]> {
