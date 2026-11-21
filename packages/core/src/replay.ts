@@ -33,6 +33,7 @@ export const NOT_REPLAYED = new Set([
   'extensions.omniOpenRouter',
   'extensions.omniTest',
   'extensions.omniCheckModels',
+  'extensions.omniSetTestModel',
   'extensions.omniOnlyChecked',
   'extensions.retry',
   'capabilities.testServer',

@@ -371,9 +371,9 @@ export interface ExtensionStatus {
     /** OpenRouter's sign-in in progress: waiting for the browser, turning the key into a connection, or what failed. */
     /** The last refresh of OmniRoute's lists failed in part; the menus keep the last lists that worked. */
     refresh?: { at: number; message: string };
-    /** What each model's last check found (model id without the omniroute/ prefix). */
-    checks?: Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string }>;
-    /** The menus list only free models a check passed. */
+    /** Each connection's last check of each model (connection id → model id without the omniroute/ prefix). */
+    checks?: Record<string, Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string; authorized?: boolean }>>;
+    /** The menus list only models a check passed on a connection still here: free ones, or ones the user okayed. */
     onlyChecked?: boolean;
     openrouter?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string };
     /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */

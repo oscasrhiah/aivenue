@@ -760,7 +760,7 @@ test('OmniRoute 連線測試：模型等不到回應（免費模型排隊）時�
   assert.equal(s.omniGone.get('n1'), undefined);
 });
 
-test('OmniRoute 連線測試：使用者選了測試用的模型（NVIDIA 的金鑰可能只能用某些模型），就只測那個模型並記住；選回自動就照免費規則', async () => {
+test('OmniRoute 連線測試：選測試模型只存設定、不送請求；選的不是免費的，一般測試送 0 筆，確認後才送 1 筆；選回自動照免費規則', async () => {
   const asked = [];
   const cfg = { omniroute: { enabled: true } };
   const s = await fakeOmni((p, init) => {
@@ -772,15 +772,25 @@ test('OmniRoute 連線測試：使用者選了測試用的模型（NVIDIA 的金
   }, cfg);
   const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
   assert.deepEqual(row().models, ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro']);
-  await s.omniTest('n1', { model: 'nvidia/moonshotai/kimi-k3.1-pro' });
-  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  // Picking the model only saves it.
+  s.omniSetTestModel('n1', 'nvidia/moonshotai/kimi-k3.1-pro');
   assert.equal(row().testModel, 'nvidia/moonshotai/kimi-k3.1-pro');
-  assert.equal(row().test.state, 'ok');
-  // Remembered: a plain re-check uses it again.
+  assert.deepEqual(asked, []);
+  // Kimi is not known to be free: a plain check sends nothing and asks for the okay.
   await s.omniTest('n1');
-  assert.deepEqual(asked.slice(1), ['nvidia/moonshotai/kimi-k3.1-pro']);
-  // Back to automatic: the free one.
-  await s.omniTest('n1', { model: null });
+  assert.deepEqual(asked, []);
+  assert.equal(row().test.noFree, true);
+  // Okayed: one request, to it alone, remembered as okayed.
+  await s.omniTest('n1', { paid: true });
+  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  assert.equal(row().test.state, 'ok');
+  assert.equal(s.checks().n1['nvidia/moonshotai/kimi-k3.1-pro'].authorized, true);
+  // The okay was for that once: the next plain check sends nothing again.
+  await s.omniTest('n1');
+  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  // Back to automatic: the free one, without asking.
+  s.omniSetTestModel('n1', null);
+  await s.omniTest('n1');
   assert.equal(asked.at(-1), 'nvidia/google/gemma-4-31b-it');
   assert.equal(row().testModel, undefined);
 });
@@ -824,7 +834,7 @@ test('OmniRoute 選單：每個模型標出來源（Gemini AI Studio、OpenRoute
   assert.equal(ids.at(-1), 'omniroute/auto/claude-opus');
 });
 
-test('OmniRoute 模型逐一測試：只測這家的免費模型（NVIDIA 的都算），記住結果；選單預設只列免費且測試通過的，關掉篩選就全列', async () => {
+test('OmniRoute 模型逐一測試：只測這家能確認免費的模型（NVIDIA 只認免費目錄），記住結果；選單預設只列免費且測試通過的，關掉篩選就全列', async () => {
   const asked = [];
   const cfg = { omniroute: { enabled: true } };
   const s = await fakeOmni((p, init) => {
@@ -836,9 +846,11 @@ test('OmniRoute 模型逐一測試：只測這家的免費模型（NVIDIA 的都
           { id: 'auto/claude-opus', owned_by: 'combo' },
           { id: 'nvidia/z-ai/glm-5.3-flash', owned_by: 'nvidia' },
           { id: 'nvidia/google/gemma-4-31b-it', owned_by: 'nvidia' },
+          { id: 'nvidia/x/unknown-price', owned_by: 'nvidia' },
           { id: 'openrouter/anthropic/claude-opus-5', owned_by: 'openrouter' },
         ],
       };
+    if (p === '/api/free-models') return { models: ['z-ai/glm-5.3-flash', 'google/gemma-4-31b-it'].map((modelId) => ({ provider: 'nvidia', modelId, freeType: 'one-time-initial' })) };
     if (p.startsWith('/v1/auto-combo/best-free')) return { candidates: [{ provider: 'nvidia', connectionId: 'n1', model: 'nvidia/z-ai/glm-5.3-flash', modelStr: 'nvidia/z-ai/glm-5.3-flash', reachable: true, breakerState: 'CLOSED' }] };
     if (p === '/v1/chat/completions') {
       asked.push(init.body.model);
@@ -847,20 +859,44 @@ test('OmniRoute 模型逐一測試：只測這家的免費模型（NVIDIA 的都
     }
   }, cfg);
   const row = () => s.list().find((x) => x.id === 'omniroute').omniroute;
-  // Every NVIDIA model is a free endpoint; OpenRouter's paid one is not checked.
+  // NVIDIA's models in OmniRoute's free list only: one with an unknown price is left out, so is OpenRouter's paid one.
   assert.deepEqual(row().connected.find((c) => c.id === 'n1').freeModels, ['nvidia/z-ai/glm-5.3-flash', 'nvidia/google/gemma-4-31b-it']);
   // Nothing checked yet: only the free pool is in the menu.
   assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['auto/best-free']);
   await s.omniCheckModels('n1');
   assert.deepEqual(asked.sort(), ['nvidia/google/gemma-4-31b-it', 'nvidia/z-ai/glm-5.3-flash']);
-  assert.equal(row().checks['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
-  assert.equal(row().checks['nvidia/google/gemma-4-31b-it'].state, 'fail');
+  assert.equal(row().checks.n1['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
+  assert.equal(row().checks.n1['nvidia/google/gemma-4-31b-it'].state, 'fail');
   assert.deepEqual(s.usableOmniModels().map((m) => m.id), ['auto/best-free', 'nvidia/z-ai/glm-5.3-flash']);
   // Kept on disk for the next start.
   const again = new ExtensionService({ dataDir: s.o.dataDir, bundledDir: BUNDLED, capabilities: s.o.capabilities, registry: s.o.registry, secrets: {}, onChange() {} });
-  assert.equal(again.checks()['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
+  assert.equal(again.checks().n1['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
   // The filter off: every model again.
   await s.omniOnlyChecked(false);
   assert.equal(row().onlyChecked, false);
   assert.ok(s.usableOmniModels().some((m) => m.id === 'openrouter/anthropic/claude-opus-5'));
+});
+
+test('OmniRoute 測試結果依連線保存：兩把金鑰共用模型、一條成功一條失敗時仍列出；移除成功的那條就不再算測試過', async () => {
+  let conns = [{ id: 'n1', provider: 'nvidia', isActive: true }, { id: 'n2', provider: 'nvidia', isActive: true }];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: conns };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/z-ai/glm-5.3-flash', owned_by: 'nvidia' }] };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'z-ai/glm-5.3-flash', freeType: 'one-time-initial' }] };
+    if (p === '/v1/chat/completions') return init.headers['x-omniroute-connection'] === 'n1' ? { choices: [{ message: { tool_calls: [{}] } }] } : { choices: [{ message: { content: 'no tool' } }] };
+  }, { omniroute: { enabled: true } });
+  const listed = () => s.usableOmniModels().some((m) => m.id === 'nvidia/z-ai/glm-5.3-flash');
+  await s.omniCheckModels('n1');
+  // n2's failure does not cover n1's success.
+  await s.omniCheckModels('n2');
+  assert.equal(s.checks().n1['nvidia/z-ai/glm-5.3-flash'].state, 'ok');
+  assert.equal(s.checks().n2['nvidia/z-ai/glm-5.3-flash'].state, 'fail');
+  assert.ok(listed());
+  assert.match((await s.omniModels()).find((m) => m.id === 'omniroute/nvidia/z-ai/glm-5.3-flash').label, /已測試可用/);
+  // n1 removed: n2's untested-ok key does not inherit n1's result.
+  conns = [{ id: 'n2', provider: 'nvidia', isActive: true }];
+  await s.refreshOmni(true);
+  assert.ok(!listed());
+  s.o.capabilities.get().extensions.omniroute.onlyChecked = false;
+  assert.doesNotMatch((await s.omniModels()).find((m) => m.id === 'omniroute/nvidia/z-ai/glm-5.3-flash').label, /已測試可用/);
 });

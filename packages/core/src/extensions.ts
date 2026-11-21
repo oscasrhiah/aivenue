@@ -147,6 +147,9 @@ export const omniModelGone = (msg: string) => /\[(404|410)\]|\b410\b|model[^.]{0
 /** The names people know OmniRoute's providers by, for the menus ("which service is this model from?"). */
 const OMNI_SOURCES: Record<string, string> = { gemini: 'Gemini AI Studio', openrouter: 'OpenRouter', nvidia: 'NVIDIA NIM', groq: 'Groq', cerebras: 'Cerebras', mistral: 'Mistral', antigravity: 'Antigravity', github: 'GitHub Models', cloudflare: 'Cloudflare' };
 
+/** Where each connection's model checks are kept. */
+const OMNI_CHECKS_FILE = 'omniroute-model-checks.json';
+
 /**
  * How long a connection check waits for one model's answer. NVIDIA's free endpoints queue: its Kimi took 74-113 s to
  * send its first word even for "hi", so a shorter wait calls a working key broken.
@@ -227,7 +230,7 @@ export class ExtensionService {
   /** The last model-list sync of each connection: a failed one keeps the list OmniRoute had. */
   private omniSyncs = new Map<string, { ok: boolean; at: number; message?: string }>();
   /** Each model's last check (kept on disk: a check of NVIDIA's queued models takes minutes). */
-  private modelChecks?: Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string }>;
+  private modelChecks?: Record<string, Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string; authorized?: boolean }>>;
   private omniChecking = new Map<string, { done: number; total: number }>();
   /** Each OpenRouter sign-in's number: a sign-in that is no longer the current one (or OmniRoute was turned off) connects nothing. */
   private orGen = 0;
@@ -950,9 +953,16 @@ export class ExtensionService {
     return (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
   }
 
-  /** A connection check got a tool call from this model. */
-  private omniTested(model: string): boolean {
-    return [...this.omniTests.values()].some((t) => t.state === 'ok' && t.model === model);
+  /**
+   * A check got a tool call from this model on a connection that still serves it: one key's result never stands in for
+   * another's. `free`: and it is free, or the user okayed that check.
+   */
+  private omniTested(m: OmniModel, free = false): boolean {
+    const all = this.checks();
+    return this.offering(m).some((c) => {
+      const r = c.id ? all[c.id]?.[m.id] : undefined;
+      return r?.state === 'ok' && (!free || r.authorized || this.omniFree(m));
+    });
   }
 
   /** The active connections that serve this model. */
@@ -1090,15 +1100,19 @@ export class ExtensionService {
    * Can this connection run an agent? One request the size of an agent's opening prompt (about 24,000 characters)
    * that must come back as a tool call: catches bad keys, short context, low per-minute token caps and no tool support.
    */
-  /** `model`: check with this model from now on (a key may serve only some models, as NVIDIA's can); null goes back to automatic. */
-  async omniTest(id: string, opts: { paid?: boolean; model?: string | null } = {}): Promise<ExtensionStatus[]> {
-    if (opts.model !== undefined) {
-      const c = this.cfg();
-      const testModels = { ...c.omniroute?.testModels };
-      if (opts.model) testModels[id] = opts.model;
-      else delete testModels[id];
-      this.save({ ...c, omniroute: { enabled: !!c.omniroute?.enabled, ...c.omniroute, testModels } });
-    }
+  /** Check this connection with this model from now on (a key may serve only some models); null: automatic. Sends nothing. */
+  omniSetTestModel(id: string, model: string | null): ExtensionStatus[] {
+    const c = this.cfg();
+    const testModels = { ...c.omniroute?.testModels };
+    if (model) testModels[id] = model;
+    else delete testModels[id];
+    this.save({ ...c, omniroute: { enabled: !!c.omniroute?.enabled, ...c.omniroute, testModels } });
+    this.changed();
+    return this.list();
+  }
+
+  /** `paid`: the user okayed, this once, a request to a model not known to be free. */
+  async omniTest(id: string, opts: { paid?: boolean } = {}): Promise<ExtensionStatus[]> {
     try {
       return await this.omniTestRun(id, opts);
     } catch (e) {
@@ -1108,7 +1122,7 @@ export class ExtensionService {
     }
   }
 
-  private async omniTestRun(id: string, opts: { paid?: boolean; model?: string | null }): Promise<ExtensionStatus[]> {
+  private async omniTestRun(id: string, opts: { paid?: boolean }): Promise<ExtensionStatus[]> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
@@ -1130,9 +1144,15 @@ export class ExtensionService {
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
     const free = models.filter((m) => this.omniFree(m));
-    // The model the user picked for this connection is the one checked, and only it: picking it is the go-ahead.
+    // The model the user picked for this connection is the one checked, and only it. Picking it is not an okay to
+    // spend: one not known to be free waits for the paid-check button, every time.
     const picked = this.cfg().omniroute?.testModels?.[id];
     const chosen = picked ? models.filter((m) => m.id === picked) : [];
+    if (chosen.length && !this.omniFree(chosen[0]) && !opts.paid) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, noFree: true, message: L(`測試模型 ${picked} 無法確認是免費的，Aivenue 不會自己送出。要測試的話，按「用付費模型測試」並確認（可能被收費一次）。`, `${picked} is not known to be free, and Aivenue does not send to it on its own. Press "Check with a paid model" and confirm (it may be charged once).`) });
+      this.changed();
+      return this.list();
+    }
     // The user confirmed one paid request: at most one paid model is asked, and it is the last one tried.
     const order = chosen.length ? chosen : opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !this.omniFree(m)).slice(0, 1)] : free;
     if (picked && !chosen.length) {
@@ -1155,7 +1175,7 @@ export class ExtensionService {
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     for (const model of order.slice(0, 5)) {
-      const p = await this.omniProbe(id, model.id);
+      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model));
       this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.message });
       if (p.ok || (p.answered && !p.gone)) break;
       if (p.gone) {
@@ -1167,11 +1187,11 @@ export class ExtensionService {
     return this.list();
   }
 
-  /** Each model's last check, read from disk the first time. */
-  private checks(): Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string }> {
+  /** Each connection's last check of each model, read from disk the first time. */
+  private checks(): Record<string, Record<string, { state: 'ok' | 'fail' | 'testing'; at: number; message?: string; authorized?: boolean }>> {
     if (!this.modelChecks) {
       try {
-        this.modelChecks = JSON.parse(fs.readFileSync(path.join(this.o.dataDir, 'omniroute-checks.json'), 'utf8'));
+        this.modelChecks = JSON.parse(fs.readFileSync(path.join(this.o.dataDir, OMNI_CHECKS_FILE), 'utf8'));
       } catch {
         this.modelChecks = {};
       }
@@ -1179,12 +1199,13 @@ export class ExtensionService {
     return this.modelChecks!;
   }
 
-  private setCheck(model: string, c: { state: 'ok' | 'fail' | 'testing'; at: number; message?: string }) {
+  private setCheck(conn: string, model: string, c: { state: 'ok' | 'fail' | 'testing'; at: number; message?: string; authorized?: boolean }) {
     const all = this.checks();
-    all[model] = c;
+    (all[conn] ??= {})[model] = c;
     if (c.state !== 'testing') {
       try {
-        fs.writeFileSync(path.join(this.o.dataDir, 'omniroute-checks.json'), JSON.stringify(Object.fromEntries(Object.entries(all).filter(([, v]) => v.state !== 'testing'))));
+        const kept = Object.fromEntries(Object.entries(all).map(([k, v]) => [k, Object.fromEntries(Object.entries(v).filter(([, r]) => r.state !== 'testing'))]));
+        fs.writeFileSync(path.join(this.o.dataDir, OMNI_CHECKS_FILE), JSON.stringify(kept));
       } catch {
         // shortcut: not kept across restarts when the data folder cannot be written; the next check sets it again.
       }
@@ -1219,10 +1240,10 @@ export class ExtensionService {
       const queue = [...todo];
       const worker = async () => {
         for (let m = queue.shift(); m; m = queue.shift()) {
-          this.setCheck(m.id, { state: 'testing', at: Date.now() });
+          this.setCheck(id, m.id, { state: 'testing', at: Date.now() });
           const p = await this.omniProbe(id, m.id).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
           if (p.gone) this.omniGone.set(id, gone.add(m.id));
-          this.setCheck(m.id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), message: p.message });
+          this.setCheck(id, m.id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), message: p.message });
           prog.done++;
           this.changed();
         }
@@ -1239,7 +1260,8 @@ export class ExtensionService {
    * One agent-sized request to a model through this connection: a 24k-character system prompt and a required tool call.
    * It passes only when the model calls the tool and OmniRoute says this connection answered.
    */
-  private async omniProbe(id: string, modelId: string): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string }> {
+  /** `authorized`: the user okayed this request though the model is not known to be free. */
+  private async omniProbe(id: string, modelId: string, authorized = false): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string }> {
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
     const model = { id: modelId };
     {
@@ -1275,7 +1297,7 @@ export class ExtensionService {
         if (other) return { ok: false, answered: true, gone: false, message: other };
         const called = !!r?.choices?.[0]?.message?.tool_calls?.length;
         // A connection check records what it learned about the model too.
-        this.setCheck(model.id, called ? { state: 'ok', at: Date.now() } : { state: 'fail', at: Date.now(), message: L('有回答但沒有呼叫工具', 'answered without calling the tool') });
+        this.setCheck(id, model.id, called ? { state: 'ok', at: Date.now(), authorized } : { state: 'fail', at: Date.now(), message: L('有回答但沒有呼叫工具', 'answered without calling the tool') });
         return called ? { ok: true, answered: true, gone: false } : { ok: false, answered: true, gone: false, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') };
       } catch (e) {
         const msg = (e as Error).message;
@@ -1347,12 +1369,11 @@ export class ExtensionService {
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
     // Only free models a check got a tool call from (and the free pools), unless the user turned that off.
     const only = this.cfg().omniroute?.onlyChecked !== false;
-    const checks = this.checks();
-    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.goneEverywhere(m) && (!only || pinned.has(m.id) || (m.id.startsWith('auto/') ? /free/.test(m.id) : this.omniFree(m) && checks[m.id]?.state === 'ok')) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
+    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && !this.goneEverywhere(m) && (!only || pinned.has(m.id) || (m.id.startsWith('auto/') ? /free/.test(m.id) : this.omniTested(m, true))) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then free models, then the rest by
     // name: with a cap on the list, the free ones are never the ones cut.
     // Pools that are not free can route to anything connected (or nothing): they go last.
-    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 7) : this.omniTested(m.id) ? 2 : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
+    const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 7) : this.omniTested(m) ? 2 : pinned.has(m.id) ? 3 : this.omniFree(m) ? 4 : 5);
     // The list rides in an environment variable (OpenCode's config): keep it well under Windows' 32K limit.
     return ok.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id)).slice(0, MAX_OMNI_MODELS);
   }
@@ -1398,9 +1419,6 @@ export class ExtensionService {
     // OpenRouter's ":free" variants and OmniRoute's free routing pools (auto/best-free); not any id containing "free".
     if (/:free$/i.test(m.id) || /^auto\/[\w-]*free\b/i.test(m.id)) return true;
     if ((m.pricing?.prompt === '0' && m.pricing?.completion === '0') || (m.pricing?.input === 0 && m.pricing?.output === 0)) return true;
-    // NVIDIA's API catalog (integrate.api.nvidia.com) hosts only its free endpoints for build.nvidia.com keys; OmniRoute's
-    // free list names just 3 of them.
-    if (m.owned_by === 'nvidia') return true;
     return !!this.omni?.freeIds?.has(m.id);
   }
 
@@ -1409,7 +1427,7 @@ export class ExtensionService {
     return this.usableOmniModels().map((m) => ({
       id: `${OMNI_PROVIDER}/${m.id}`,
       // Where it comes from, and whether a connection check got an answer from it: the menu says so up front.
-      label: `${this.omniTested(m.id) ? L('✓ 已測試可用 · ', '✓ checked · ') : ''}${m.owned_by === 'combo' ? L('OmniRoute 自動組合', 'OmniRoute pool') : (OMNI_SOURCES[m.owned_by ?? ''] ?? m.owned_by ?? '')} · ${m.owned_by && m.owned_by !== 'combo' && m.id.startsWith(`${m.owned_by}/`) ? m.id.slice(m.owned_by.length + 1) : m.id}`,
+      label: `${this.omniTested(m) ? L('✓ 已測試可用 · ', '✓ checked · ') : ''}${m.owned_by === 'combo' ? L('OmniRoute 自動組合', 'OmniRoute pool') : (OMNI_SOURCES[m.owned_by ?? ''] ?? m.owned_by ?? '')} · ${m.owned_by && m.owned_by !== 'combo' && m.id.startsWith(`${m.owned_by}/`) ? m.id.slice(m.owned_by.length + 1) : m.id}`,
       description: m.owned_by === 'combo' ? L('OmniRoute 自動挑選的模型組合', 'A model pool OmniRoute picks from') : m.owned_by,
       context: m.context_length || undefined,
       contextSource: m.context_length ? 'cli' : undefined,

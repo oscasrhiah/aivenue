@@ -47,7 +47,7 @@ const PROVIDERS: FreeProvider[] = [
     name: 'NVIDIA NIM',
     keyUrl: 'https://build.nvidia.com/settings/api-keys',
     free: ['30 多個免費端點模型，每分鐘約 40 次；能呼叫工具（跑 agent）的只有少數，例如 Kimi', '30+ free-endpoint models, about 40 requests a minute; only a few call tools (run agents), Kimi among them'],
-    note: ['官方定位是開發與試用，不是正式上線用。免費端點要排隊，一次回答常要等一兩分鐘。', 'Meant for development and evaluation, not production. Free endpoints queue: an answer often takes a minute or two.'],
+    note: ['官方定位是開發與試用，不是正式上線用。免費端點要排隊，一次回答常要等一兩分鐘。NVIDIA 沒有提供能查出哪些是免費端點的 API，Aivenue 只能自動確認 OmniRoute 免費目錄收錄的幾個；其他模型（例如 Kimi）請在「測試模型」選好，再按「用付費模型測試」確認後測試。', 'Meant for development and evaluation, not production. Free endpoints queue: an answer often takes a minute or two. NVIDIA offers no API that tells which models are free endpoints, so Aivenue can confirm only the few in OmniRoute’s free list; for others (Kimi, say) pick it under the check model, then press "Check with a paid model" and confirm.'],
     recommended: true,
   },
   {
@@ -95,6 +95,8 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
   const [more, setMore] = useState(false);
   const connected = s.omniroute?.connected ?? [];
   const checks = s.omniroute?.checks ?? {};
+  // Models a check passed on a connection still here.
+  const working = new Set(connected.filter((c) => c.active).flatMap((c) => Object.entries(checks[c.id] ?? {}).filter(([, r]) => r.state === 'ok').map(([m]) => m)));
   const shown = PROVIDERS.filter((p) => p.recommended || more);
   return (
     <div className="omni-providers">
@@ -107,8 +109,8 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
       <label className="row gap tiny">
         <input type="checkbox" checked={s.omniroute?.onlyChecked !== false} onChange={(e) => hub.call('extensions.omniOnlyChecked', { on: e.target.checked })} />
         {t(
-          `模型選單只列免費、而且測試過可用的（目前 ${Object.values(checks).filter((c) => c.state === 'ok').length} 個，另有免費模型池）`,
-          `Model menus list only free models that passed a check (${Object.values(checks).filter((c) => c.state === 'ok').length} now, plus the free pools)`,
+          `模型選單只列免費、而且測試過可用的（目前 ${working.size} 個，另有免費模型池）`,
+          `Model menus list only free models that passed a check (${working.size} now, plus the free pools)`,
         )}
       </label>
       {shown.map((p) => (
@@ -162,7 +164,9 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
           <Ico i={TriangleAlert} size={14} /> {tl(p.warn)}
         </div>
       )}
-      {conns.map((c) => (
+      {conns.map((c) => {
+        const mine = checks[c.id] ?? {};
+        return (
         <div key={c.id} className="omni-conn">
           <StateWord
             className="tiny"
@@ -187,7 +191,7 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
               aria-label={t(`${p.name} 測試用的模型`, `Model to check ${p.name} with`)}
               disabled={busy || c.test?.state === 'testing'}
               value={c.testModel ?? ''}
-              onChange={(e) => run(() => hub.call('extensions.omniTest', { id: c.id, model: e.target.value || null }))}
+              onChange={(e) => run(() => hub.call('extensions.omniSetTestModel', { id: c.id, model: e.target.value || null }))}
             >
               <option value="">{t('測試模型：自動（免費的）', 'Check with: automatic (free)')}</option>
               {(c.testModel && !c.models.includes(c.testModel) ? [c.testModel, ...c.models] : c.models).map((m) => (
@@ -209,7 +213,13 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
             <button
               className="btn small ghost omni-conn-msg"
               disabled={busy}
-              onClick={async () => (await ask(t(`用 ${p.name} 的付費模型測試一次？會產生一次少量的費用。`, `Check ${p.name} with a paid model? It costs one small request.`))) && run(() => hub.call('extensions.omniTest', { id: c.id, paid: true }))}
+              onClick={async () =>
+                (await ask(
+                  c.testModel
+                    ? t(`用 ${c.testModel} 測試一次？Aivenue 無法確認它是免費的，這一次可能會被收費。`, `Check with ${c.testModel} once? Aivenue cannot tell it is free; this one request may be charged.`)
+                    : t(`用 ${p.name} 的付費模型測試一次？會產生一次少量的費用。`, `Check ${p.name} with a paid model? It costs one small request.`),
+                )) && run(() => hub.call('extensions.omniTest', { id: c.id, paid: true }))
+              }
             >
               {t('用付費模型測試', 'Check with a paid model')}
             </button>
@@ -228,20 +238,20 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
               </button>{' '}
               <span className="muted">
                 {t(
-                  `可用 ${c.freeModels.filter((m) => checks[m]?.state === 'ok').length} 個，沒通過 ${c.freeModels.filter((m) => checks[m]?.state === 'fail').length} 個，還沒測 ${c.freeModels.filter((m) => !checks[m]).length} 個`,
-                  `${c.freeModels.filter((m) => checks[m]?.state === 'ok').length} work, ${c.freeModels.filter((m) => checks[m]?.state === 'fail').length} failed, ${c.freeModels.filter((m) => !checks[m]).length} not checked`,
+                  `可用 ${c.freeModels.filter((m) => mine[m]?.state === 'ok').length} 個，沒通過 ${c.freeModels.filter((m) => mine[m]?.state === 'fail').length} 個，還沒測 ${c.freeModels.filter((m) => !mine[m]).length} 個`,
+                  `${c.freeModels.filter((m) => mine[m]?.state === 'ok').length} work, ${c.freeModels.filter((m) => mine[m]?.state === 'fail').length} failed, ${c.freeModels.filter((m) => !mine[m]).length} not checked`,
                 )}
               </span>
-              {c.freeModels.some((m) => checks[m]) && (
+              {c.freeModels.some((m) => mine[m]) && (
                 <details>
                   <summary className="muted">{t('每個模型的結果', 'Each model')}</summary>
                   <ul className="omni-checks">
                     {c.freeModels
-                      .filter((m) => checks[m])
+                      .filter((m) => mine[m])
                       .map((m) => (
-                        <li key={m} className={checks[m].state === 'ok' ? 'ok-text' : checks[m].state === 'fail' ? 'err-text' : 'muted'}>
-                          {checks[m].state === 'ok' ? '✓' : checks[m].state === 'fail' ? '✗' : '…'} {m}
-                          {checks[m].state === 'fail' && checks[m].message ? `：${checks[m].message}` : ''}
+                        <li key={m} className={mine[m].state === 'ok' ? 'ok-text' : mine[m].state === 'fail' ? 'err-text' : 'muted'}>
+                          {mine[m].state === 'ok' ? '✓' : mine[m].state === 'fail' ? '✗' : '…'} {m}
+                          {mine[m].state === 'fail' && mine[m].message ? `：${mine[m].message}` : ''}
                         </li>
                       ))}
                   </ul>
@@ -256,7 +266,8 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
       {p.id === 'openrouter' && (
         <>
           <div className="row gap wrap">
