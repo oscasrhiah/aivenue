@@ -322,6 +322,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.omniCheckModels': (p: { id: string }) => (void extensions.omniCheckModels(p.id), extensions.list()),
     'extensions.omniOnlyChecked': (p: { on: boolean }) => extensions.omniOnlyChecked(p.on),
     'extensions.omniTest': (p: { id: string; paid?: boolean; confirmed?: string | null }) => (void extensions.omniTest(p.id, { paid: !!p.paid, confirmed: p.confirmed ?? null }), extensions.list()),
+    'extensions.omniVouch': (p: { id: string; on: boolean }) => extensions.omniVouch(p.id, !!p.on),
     'extensions.omniSetTestModel': (p: { id: string; model?: string | null }) => extensions.omniSetTestModel(p.id, p.model ?? null),
     'capabilities.presets': () => MCP_PRESETS.map(({ id, name, zh, en, docsUrl }) => ({ id, name, zh, en, docsUrl })),
     'capabilities.addPreset': async (p: { id: string; headed?: boolean }) => {

@@ -333,7 +333,7 @@ export class ExtensionService {
               checks: this.checks(),
               onlyChecked: c.omniroute?.onlyChecked !== false,
               openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
-            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined, models: this.connModels(c).map((m) => m.id), freeModels: this.connModels(c).filter((m) => this.omniFree(m)).map((m) => m.id), checking: c.id ? this.omniChecking.get(c.id) : undefined, testModel: c.id ? this.cfg().omniroute?.testModels?.[c.id] : undefined })),
+            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined, models: this.connModels(c).map((m) => m.id), freeModels: this.checkable(c).map((m) => m.id), vouched: !!(c.id && this.cfg().omniroute?.vouched?.[c.id]), checking: c.id ? this.omniChecking.get(c.id) : undefined, testModel: c.id ? this.cfg().omniroute?.testModels?.[c.id] : undefined })),
             }
           : undefined,
       }),
@@ -1146,7 +1146,10 @@ export class ExtensionService {
     const gone = this.omniGone.get(id) ?? new Set<string>();
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
-    const free = models.filter((m) => this.omniFree(m));
+    // Free, or unpriced in a connection the user vouched is free.
+    const vouched = !!this.cfg().omniroute?.vouched?.[id];
+    const okayed = (m: OmniModel) => this.omniFree(m) || (vouched && !this.omniPriced(m));
+    const free = models.filter(okayed);
     // The model the user picked for this connection is the one checked, and only it. Picking it is not an okay to
     // spend: one not known to be free waits for the paid-check button, every time.
     const picked = this.cfg().omniroute?.testModels?.[id];
@@ -1157,13 +1160,13 @@ export class ExtensionService {
       this.changed();
       return this.list();
     }
-    if (chosen.length && !this.omniFree(chosen[0]) && !opts.paid) {
+    if (chosen.length && !okayed(chosen[0]) && !opts.paid) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, noFree: true, message: L(`測試模型 ${picked} 無法確認是免費的，Aivenue 不會自己送出。要測試的話，按「用付費模型測試」並確認（可能被收費一次）。`, `${picked} is not known to be free, and Aivenue does not send to it on its own. Press "Check with a paid model" and confirm (it may be charged once).`) });
       this.changed();
       return this.list();
     }
     // The user confirmed one paid request: at most one paid model is asked, and it is the last one tried.
-    const order = chosen.length ? chosen : opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !this.omniFree(m)).slice(0, 1)] : free;
+    const order = chosen.length ? chosen : opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !okayed(m)).slice(0, 1)] : free;
     if (picked && !chosen.length) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, message: L(`OmniRoute 目前沒有列出 ${picked}（可能改名或下架了）：請重新選擇測試用的模型`, `OmniRoute does not list ${picked} now (renamed or retired?): pick the model to check with again`) });
       this.changed();
@@ -1184,7 +1187,7 @@ export class ExtensionService {
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     for (const model of order.slice(0, 5)) {
-      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model));
+      const p = await this.omniProbe(id, model.id, (!!opts.paid || vouched) && !this.omniFree(model));
       this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.message });
       if (p.ok || (p.answered && !p.gone)) break;
       if (p.gone) {
@@ -1223,6 +1226,26 @@ export class ExtensionService {
     this.changed();
   }
 
+  /**
+   * The models a check run asks: free ones, plus (when the user vouched this connection is free) the ones with no stated
+   * price. A stated non-zero price is never asked.
+   */
+  private checkable(c: OmniConnection): OmniModel[] {
+    const vouched = !!(c.id && this.cfg().omniroute?.vouched?.[c.id]);
+    return this.connModels(c).filter((m) => this.omniFree(m) || (vouched && !this.omniPriced(m)));
+  }
+
+  /** The user says this connection's unpriced models are free (NVIDIA's free endpoints): a check run may ask them. */
+  omniVouch(id: string, on: boolean): ExtensionStatus[] {
+    const c = this.cfg();
+    const vouched = { ...c.omniroute?.vouched };
+    if (on) vouched[id] = true;
+    else delete vouched[id];
+    this.save({ ...c, omniroute: { enabled: !!c.omniroute?.enabled, ...c.omniroute, vouched } });
+    this.changed();
+    return this.list();
+  }
+
   /** Menus: only free models a check passed (on), or every model (off). */
   async omniOnlyChecked(on: boolean): Promise<ExtensionStatus[]> {
     const c = this.cfg();
@@ -1241,7 +1264,7 @@ export class ExtensionService {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn || this.omniChecking.has(id)) return;
     const gone = this.omniGone.get(id) ?? new Set<string>();
-    const todo = this.connModels(conn).filter((m) => this.omniFree(m) && !gone.has(m.id));
+    const todo = this.checkable(conn).filter((m) => !gone.has(m.id));
     const prog = { done: 0, total: todo.length };
     this.omniChecking.set(id, prog);
     this.changed();
@@ -1250,9 +1273,10 @@ export class ExtensionService {
       const worker = async () => {
         for (let m = queue.shift(); m; m = queue.shift()) {
           this.setCheck(id, m.id, { state: 'testing', at: Date.now() });
-          const p = await this.omniProbe(id, m.id).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
+          // An unpriced model in a vouched connection goes with the user's okay, and its result says so.
+          const p = await this.omniProbe(id, m.id, !this.omniFree(m)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
           if (p.gone) this.omniGone.set(id, gone.add(m.id));
-          this.setCheck(id, m.id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), message: p.message });
+          this.setCheck(id, m.id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), message: p.message, authorized: p.ok && !this.omniFree(m) ? true : undefined });
           prog.done++;
           this.changed();
         }
@@ -1421,10 +1445,15 @@ export class ExtensionService {
   }
 
   /** Free as far as can be known: a free id (":free"), a zero price for input and output, or OmniRoute's free-tier catalog. */
+  /** The model states a price that is not zero. */
+  private omniPriced(m: OmniModel): boolean {
+    const prices = [m.pricing?.prompt, m.pricing?.completion, m.pricing?.input, m.pricing?.output].filter((p) => p !== undefined && p !== null && p !== '');
+    return prices.some((p) => Number(p) !== 0);
+  }
+
   private omniFree(m: OmniModel): boolean {
     // A stated non-zero price outranks any name or catalog entry.
-    const prices = [m.pricing?.prompt, m.pricing?.completion, m.pricing?.input, m.pricing?.output].filter((p) => p !== undefined && p !== null && p !== '');
-    if (prices.some((p) => Number(p) !== 0)) return false;
+    if (this.omniPriced(m)) return false;
     // OpenRouter's ":free" variants and OmniRoute's free routing pools (auto/best-free); not any id containing "free".
     if (/:free$/i.test(m.id) || /^auto\/[\w-]*free\b/i.test(m.id)) return true;
     if ((m.pricing?.prompt === '0' && m.pricing?.completion === '0') || (m.pricing?.input === 0 && m.pricing?.output === 0)) return true;

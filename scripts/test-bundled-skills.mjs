@@ -919,3 +919,41 @@ test('OmniRoute 付費確認綁定模型：確認 A 之後、送出之前測試�
   assert.equal(t.noFree, true);
   assert.match(t.message, /nvidia\/b/);
 });
+
+test('OmniRoute 使用者確認連線免費：沒確認時只測免費目錄的；確認後價格不明的也測（記成使用者確認），有標價格的仍不測；選的價格不明模型不用再按付費確認', async () => {
+  const asked = [];
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return {
+        data: [
+          { id: 'nvidia/google/gemma-4-31b-it', owned_by: 'nvidia' },
+          { id: 'nvidia/moonshotai/kimi-k3.1-pro', owned_by: 'nvidia' },
+          { id: 'nvidia/z-ai/glm-5.3-flash', owned_by: 'nvidia' },
+          { id: 'nvidia/x/priced', owned_by: 'nvidia', pricing: { prompt: '0.000001', completion: '0.000002' } },
+        ],
+      };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'google/gemma-4-31b-it', freeType: 'one-time-initial' }] };
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  }, { omniroute: { enabled: true } });
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  assert.deepEqual(row().freeModels, ['nvidia/google/gemma-4-31b-it']);
+  s.omniVouch('n1', true);
+  assert.equal(row().vouched, true);
+  assert.deepEqual(row().freeModels, ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro', 'nvidia/z-ai/glm-5.3-flash']);
+  await s.omniCheckModels('n1');
+  assert.deepEqual(asked.sort(), ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro', 'nvidia/z-ai/glm-5.3-flash']);
+  assert.equal(s.checks().n1['nvidia/moonshotai/kimi-k3.1-pro'].authorized, true);
+  // Vouched ones that passed are in the filtered menu (not marked free).
+  const ids = s.usableOmniModels().map((m) => m.id);
+  assert.ok(ids.includes('nvidia/moonshotai/kimi-k3.1-pro') && !ids.includes('nvidia/x/priced'), ids.join());
+  // The check model needs no paid okay in a vouched connection.
+  s.omniSetTestModel('n1', 'nvidia/moonshotai/kimi-k3.1-pro');
+  asked.length = 0;
+  await s.omniTest('n1');
+  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  // Taken back: unpriced ones are out of the next run again.
+  s.omniVouch('n1', false);
+  assert.deepEqual(row().freeModels, ['nvidia/google/gemma-4-31b-it']);
+});

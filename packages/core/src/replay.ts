@@ -34,6 +34,7 @@ export const NOT_REPLAYED = new Set([
   'extensions.omniTest',
   'extensions.omniCheckModels',
   'extensions.omniSetTestModel',
+  'extensions.omniVouch',
   'extensions.omniOnlyChecked',
   'extensions.retry',
   'capabilities.testServer',
