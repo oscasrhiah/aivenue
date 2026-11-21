@@ -1201,3 +1201,82 @@ test('OmniRoute 單次付費測試綁定開始時的服務：確認後讀金鑰�
     globalThis.fetch = realFetch;
   }
 });
+
+test('OmniRoute 單次測試整條流程綁定開始時的服務：重啟後新服務收到的舊流程金鑰測試、模型同步、模型探測都是 0 筆', async () => {
+  // Every request goes through the real omniFetch; fetch answers like OmniRoute and counts by port and kind.
+  const count = {};
+  const held = { test: [], sync: [] };
+  const hold = { test: false, sync: false };
+  const keys = [];
+  let holdKey = 0;
+  const kind = (p) => (p.endsWith('/test') ? 'test' : p.endsWith('/sync-models') ? 'sync' : p === '/v1/chat/completions' ? 'probe' : 'read');
+  const s = await fakeOmni(() => undefined, { omniroute: { enabled: true } });
+  s.omniFetch = ExtensionService.prototype.omniFetch;
+  s.omniSecret = () => (holdKey > 0 ? (holdKey--, new Promise((r) => keys.push(() => r('k')))) : Promise.resolve('k'));
+  const realFetch = globalThis.fetch;
+  const json = (body, headers = {}) => new Response(JSON.stringify(body), { headers });
+  globalThis.fetch = async (url) => {
+    const u = new URL(url);
+    const k = kind(u.pathname);
+    const key = `${u.port} ${k}`;
+    count[key] = (count[key] ?? 0) + 1;
+    if (k === 'test' || k === 'sync') {
+      if (hold[k]) await new Promise((r) => held[k].push(r));
+      return json(k === 'test' ? { valid: true } : {});
+    }
+    if (k === 'probe') return json({ choices: [{ message: { tool_calls: [{}] } }] }, { 'x-omniroute-selected-connection-id': 'n1' });
+    if (u.pathname === '/api/providers') return json({ connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] });
+    if (u.pathname.startsWith('/v1/models')) return json({ data: [{ id: 'nvidia/kimi', owned_by: 'nvidia' }] });
+    if (u.pathname === '/api/free-models') return json({ models: [] });
+    return json({ candidates: [] });
+  };
+  const restart = async (port) => {
+    s.omni = { url: `http://127.0.0.1:${port}`, ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+    await s.refreshOmni(true);
+  };
+  const wait = async (f) => {
+    while (!f()) await new Promise((r) => setTimeout(r, 5));
+  };
+  const onNew = (port) => ['test', 'sync', 'probe'].map((k) => count[`${port} ${k}`] ?? 0);
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  try {
+    await restart(2);
+    s.omniSetTestModel('n1', 'nvidia/kimi');
+    const paid = { paid: true, confirmed: 'nvidia/kimi' };
+    // 1. Restarted while the key for OmniRoute's own key check is read.
+    holdKey = 1;
+    const a = s.omniTest('n1', paid);
+    await wait(() => keys.length === 1);
+    await restart(3);
+    keys.splice(0).forEach((go) => go());
+    await a;
+    assert.deepEqual(onNew(3), [0, 0, 0]);
+    assert.match(row().test.message, /重新啟動/);
+    // 2. The key check went to the old one and answers after the restart: no model sync (or anything) on the new one.
+    hold.test = true;
+    const b = s.omniTest('n1', paid);
+    await wait(() => held.test.length === 1);
+    hold.test = false;
+    await restart(4);
+    held.test.splice(0).forEach((go) => go());
+    await b;
+    assert.equal(count['3 test'], 1);
+    assert.deepEqual(onNew(4), [0, 0, 0]);
+    // 3. The model sync went to the old one and answers after the restart: no probe on the new one.
+    hold.sync = true;
+    const c = s.omniTest('n1', paid);
+    await wait(() => held.sync.length === 1);
+    hold.sync = false;
+    await restart(5);
+    held.sync.splice(0).forEach((go) => go());
+    await c;
+    assert.deepEqual([count['4 test'], count['4 sync']], [1, 1]);
+    assert.deepEqual(onNew(5), [0, 0, 0]);
+    // A check started on the new one runs all three there, once each.
+    await s.omniTest('n1', paid);
+    assert.deepEqual(onNew(5), [1, 1, 1]);
+    assert.equal(row().test.state, 'ok');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

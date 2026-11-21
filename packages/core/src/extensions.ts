@@ -936,9 +936,9 @@ export class ExtensionService {
   }
 
   /** Ask OmniRoute to fetch a connection's current model list from the provider (new names in, retired ones out). */
-  private async omniSyncModels(id: string): Promise<boolean> {
+  private async omniSyncModels(id: string, beforeSend?: () => boolean): Promise<boolean> {
     try {
-      await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000 });
+      await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000, beforeSend });
       this.omniSyncs.set(id, { ok: true, at: Date.now() });
       // A fresh list from the provider: models it called gone get another chance.
       this.omniGone.delete(id);
@@ -1136,11 +1136,17 @@ export class ExtensionService {
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     // The run (and a paid okay) belongs to this OmniRoute: after a stop or restart nothing more is sent.
     const inst = this.omni;
+    // Every request of the run checks this right before it leaves (after the key is read), and every answer is checked
+    // against it before the run goes on.
+    const same = () => this.omni === inst;
+    const restarted = L('OmniRoute 在測試途中重新啟動，這次沒有送出或結果不採用，請重新測試', 'OmniRoute restarted during the check; nothing was sent or the result is not used, check again');
+    const stop = () => (this.omniTests.set(id, { state: 'fail', at: Date.now(), message: restarted }), this.changed(), this.list());
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
     this.omniTests.set(id, { state: 'testing', at: Date.now() });
     this.changed();
     // OmniRoute's own check first: it tells a wrong key apart from everything else.
-    const own = await this.omniFetch<{ valid?: boolean; error?: string }>(`/api/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: {}, timeoutMs: 60000 }).catch((e) => ({ valid: false, error: (e as Error).message }));
+    const own = await this.omniFetch<{ valid?: boolean; error?: string }>(`/api/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: {}, timeoutMs: 60000, beforeSend: same }).catch((e) => ({ valid: false, error: (e as Error).message }));
+    if (!same()) return stop();
     if (own?.valid === false) {
       const why = /invalid api key|unauthor|401/i.test(own.error ?? '') ? L('金鑰無效：請確認貼上的是完整的 API 金鑰', 'The key was rejected: check you pasted the whole API key') : (own.error ?? L('連線失敗', 'Connection failed'));
       this.omniTests.set(id, { state: 'fail', at: Date.now(), message: why });
@@ -1149,8 +1155,10 @@ export class ExtensionService {
     }
     // OmniRoute creates a connection inactive and lists its models only once its own check has turned it on: fetch the
     // provider's current model list, then read the models again, or a just-connected provider looks like it has none.
-    await this.omniSyncModels(id);
+    await this.omniSyncModels(id, same);
+    if (!same()) return stop();
     await this.refreshOmni(true);
+    if (!same()) return stop();
     const gone = this.omniGone.get(id) ?? new Set<string>();
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
@@ -1194,8 +1202,7 @@ export class ExtensionService {
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     for (const model of order.slice(0, 5)) {
-      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model), () => this.omni === inst);
-      const restarted = L('OmniRoute 在測試途中重新啟動，這次沒有送出或結果不採用，請重新測試', 'OmniRoute restarted during the check; nothing was sent or the result is not used, check again');
+      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model), same);
       this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.notSent || p.stale ? restarted : p.message });
       if (p.ok || p.notSent || p.stale || (p.answered && !p.gone)) break;
       if (p.gone) {
