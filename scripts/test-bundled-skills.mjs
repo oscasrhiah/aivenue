@@ -219,3 +219,26 @@ test('Linux 套件的檔案權限：程式本體與內建 Skill 的 scripts/ 裡
   for (const want of ['impeccable/skills/impeccable/scripts/impeccable', 'agent-skills/skills/accessibility-engineering/scripts/audit-a11y.sh', 'agent-skills/skills/constraint-driven-development/scripts/quality-gate.mjs']) assert.ok(shebang.includes(want), want);
   assert.equal(fileMode('resources/app.asar.unpacked/dist/bundled/impeccable/skills/impeccable/scripts/impeccable.cmd', Buffer.from('@e')), 0o644);
 });
+
+test('OmniRoute：免費池的候選全是免登入來源時，選單不列這個池；有一個能用的候選就列', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omni-'));
+  const cfg = {};
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
+  const noauth = (model) => ({ provider: 'cloudflare-playground', connectionId: 'noauth', model, modelStr: model, excluded: false, reachable: true, breakerState: 'CLOSED' });
+  // What the user's OmniRoute answered: only Antigravity connected, both free pools made of no-sign-in sources.
+  const pools = { 'best-free': [noauth('cfp/zai-org/glm-5.2'), { ...noauth('unc/qwen'), provider: 'uncloseai' }], 'coding:free': [noauth('cfp/openai/gpt-oss-20b'), { provider: 'groq', connectionId: 'c1', model: 'groq/llama', modelStr: 'groq/llama', reachable: true, breakerState: 'CLOSED' }] };
+  s.omniFetch = async (p) =>
+    p.startsWith('/v1/models')
+      ? { data: [{ id: 'auto/best-free', owned_by: 'combo' }, { id: 'auto/coding:free', owned_by: 'combo' }, { id: 'antigravity/gemini', owned_by: 'antigravity' }] }
+      : p === '/api/providers'
+        ? { connections: [{ provider: 'antigravity', isActive: true }] }
+        : { candidates: pools[p.split('/')[3]] ?? [] };
+  s.syncOmniProvider = () => undefined;
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  await s.refreshOmni(true);
+  const ids = s.usableOmniModels().map((m) => m.id);
+  assert.ok(!ids.includes('auto/best-free'), ids.join());
+  assert.ok(ids.includes('auto/coding:free'), ids.join());
+  assert.ok(ids.includes('antigravity/gemini'), ids.join());
+});

@@ -8,6 +8,9 @@ import type { FailureKind } from './types';
 export function classifyFailure(text: string | undefined): FailureKind {
   const t = (text ?? '').toLowerCase();
   if (!t.trim()) return 'unknown';
+  // OmniRoute's own report of the upstreams it tried ("<model>: auth — [401]: …"): a source behind the gateway failed,
+  // not the user's sign-in, so it is the model service whatever the status code says.
+  if (/: (auth|provider|upstream|network|rate_limit|quota) — \[\d{3}\]/.test(t)) return /: quota — |\[402\]/.test(t) ? 'quota' : /: rate_limit — |\[429\]/.test(t) ? 'rate_limit' : 'model_service';
   if (/quota|insufficient[_ ]?(balance|credit|funds)|billing|credit balance|exceeded your (current )?plan|usage limit|out of credits|payment required|\b402\b/.test(t)) return 'quota';
   if (/rate[ _-]?limit|too many requests|\b429\b|throttl|slow down|requests per (minute|min|hour)|tpm|rpm limit|try again in \d/.test(t)) return 'rate_limit';
   if (/unauthori[sz]ed|\b401\b|\b403\b|forbidden|not logged in|log ?in required|please (log|sign) ?in|invalid api key|api key.*(invalid|missing)|authentication|expired token|token expired/.test(t)) return 'auth';

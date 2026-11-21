@@ -199,7 +199,7 @@ export class ExtensionService {
   private codegraphVersion?: string;
   /** The installed impeccable's version (Aivenue's npm copy in its tools folder, whose engine answered). */
   private impeccableVersion?: string;
-  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string> };
+  private omni?: { child?: ChildProcess; url: string; ready: boolean; connections: OmniConnection[]; models: OmniModel[]; at: number; candidates: Set<string>; deadPools?: Set<string> };
   private omniStarting?: Promise<void>;
   /** Result of the agent check per OmniRoute connection. */
   private omniTests = new Map<string, OmniTest>();
@@ -988,6 +988,9 @@ export class ExtensionService {
     // What the free pools can route to right now: those models go in the menus too.
     const pools = await Promise.all(FREE_POOLS.map((p) => this.fetchCandidates(p)));
     this.omni.candidates = new Set(pools.flat().filter((c) => c.state === 'ok' || c.state === 'cooldown').map((c) => c.id.slice(OMNI_PROVIDER.length + 1)));
+    // A free pool whose every candidate is a no-sign-in source (or excluded) has nothing an agent can work with:
+    // OmniRoute still calls those reachable because it has not tried them, so the pool stays out of the menus.
+    this.omni.deadPools = new Set(FREE_POOLS.filter((_, i) => !pools[i].some((c) => c.state === 'ok' || c.state === 'cooldown')));
     this.omni.at = Date.now();
     this.o.registry.forgetModels(OMNI_PROVIDER);
     this.syncOmniProvider();
@@ -1003,7 +1006,7 @@ export class ExtensionService {
     // Models name their provider by id ("groq") or, for custom endpoints, by the prefix the user gave it.
     const connected = new Set(omni.connections.filter((c) => c.isActive !== false).flatMap((c) => [c.provider, c.providerId, c.providerSpecificData?.prefix].filter((x): x is string => typeof x === 'string')));
     const pinned = new Set(this.cfg().omniroute?.pinned ?? []);
-    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
+    const ok = omni.models.filter((m) => m.capabilities?.tool_calling !== false && !omni.deadPools?.has(m.id) && (m.owned_by === 'combo' || connected.has(m.owned_by ?? '') || omni.candidates.has(m.id) || pinned.has(m.id)));
     // Routing aliases first (auto/best-free on top), then models picked from a pool, then the rest by name.
     const rank = (m: OmniModel) => (m.id === 'auto/best-free' ? 0 : m.id.startsWith('auto/') ? (/free/.test(m.id) ? 1 : 2) : pinned.has(m.id) ? 3 : 4);
     // The list rides in an environment variable (OpenCode's config): keep it well under Windows' 32K limit.
@@ -1094,7 +1097,8 @@ export class ExtensionService {
       },
       modelSource: { type: 'extension' },
       models: usable.map((m) => `${OMNI_PROVIDER}/${m.id}`),
-      defaultModel: `${OMNI_PROVIDER}/auto/best-free`,
+      // The first model the menus offer (best-free when it has something to route to).
+      defaultModel: `${OMNI_PROVIDER}/${usable[0]?.id ?? 'auto/best-free'}`,
       efforts: OMNI_EFFORTS,
       catalog: undefined,
       quota: undefined,

@@ -149,6 +149,10 @@ test('錯誤分類：服務問題與邏輯錯誤分開', () => {
   assert.equal(W.classifyFailure('529 Overloaded'), 'model_service');
   assert.equal(W.classifyFailure('401 Unauthorized: invalid api key'), 'auth');
   assert.equal(W.classifyFailure('TypeError: cannot read properties of undefined'), 'logic');
+  // OmniRoute reporting the sources behind it: their 401/503 is not the user's sign-in.
+  const omni = 'cfp/deepseek-ai/deepseek-r1-distill-qwen-32b: provider — [503]: Cloudflare Playground needs Playwright (HTTP 503); unc/turboderp/Qwen3.8-27B-exl3: auth — [401]: The public beta is closed for now. This endpoint needs an API key (HTTP 401)';
+  assert.equal(W.classifyFailure(omni), 'model_service');
+  assert.equal(W.classifyFailure('x/y: rate_limit — [429]: slow down'), 'rate_limit');
 });
 
 test('恢復策略：限流退避重試、額度直接換人、邏輯錯誤不重試', () => {

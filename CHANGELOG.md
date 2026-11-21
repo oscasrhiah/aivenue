@@ -2,6 +2,14 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 未發布
+
+- **OmniRoute 不再列出實際用不了的免費池，上游錯誤也不再叫你重新登入**：
+  - **原本的問題**：`auto/best-free`、`auto/coding:free` 一直列在選單裡。但只連了需要登入的供應商（例如 Antigravity）時，這兩個池裡只剩免登入來源：Cloudflare Playground 要在 OmniRoute 那台電腦裝 Playwright 和 Chromium，uncloseai 的公開測試已經關閉。OmniRoute 沒試過它們，所以照樣回報「可以連線」，選了之後兩個都失敗，agent 沒有任何產出。失敗訊息裡有上游回的 401，Aivenue 又把它當成你的登入過期，叫你到「供應商」重新登入，其實重新登入也沒用。
+  - **現在**：
+    - 免費池裡沒有任何一個能用的候選時，選單不列這個池；有一個以上能用就照常列出。OmniRoute 預設用的模型，也改成選單裡的第一個。
+    - OmniRoute 回報的上游錯誤（`<模型>: auth — [401]` 這種格式）歸為「模型服務故障」，不再當成登入失效。
+
 ## 0.4.3 - 2026-11-21
 
 - **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都從提交 `9432555`（標籤 `v0.4.3`）建置。這段發布日期是發布之後才補上的，所以標籤所在的提交裡，這個標題仍寫「未發布（候選 0.4.3）」，下面最後兩項也是發布後才補寫的（它們的程式已在 `9432555` 裡）。檔案的 SHA-256 與驗收結果寫在 v0.4.3 的 Release 說明。
