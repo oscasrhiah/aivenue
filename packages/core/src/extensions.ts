@@ -333,7 +333,7 @@ export class ExtensionService {
               checks: this.checks(),
               onlyChecked: c.omniroute?.onlyChecked !== false,
               openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
-            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined, models: this.connModels(c).map((m) => m.id), freeModels: this.checkable(c).map((m) => m.id), vouched: !!(c.id && this.cfg().omniroute?.vouched?.[c.id]), checking: c.id ? this.omniChecking.get(c.id) : undefined, testModel: c.id ? this.cfg().omniroute?.testModels?.[c.id] : undefined })),
+            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined, models: this.connModels(c).map((m) => m.id), freeModels: this.checkable(c).map((m) => m.id), unpricedModels: this.checkable(c).filter((m) => !this.omniFree(m)).map((m) => m.id), vouched: !!(c.id && this.cfg().omniroute?.vouched?.[c.id]), checking: c.id ? this.omniChecking.get(c.id) : undefined, testModel: c.id ? this.cfg().omniroute?.testModels?.[c.id] : undefined })),
             }
           : undefined,
       }),
@@ -1147,8 +1147,7 @@ export class ExtensionService {
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
     // Free, or unpriced in a connection the user vouched is free.
-    const vouched = !!this.cfg().omniroute?.vouched?.[id];
-    const okayed = (m: OmniModel) => this.omniFree(m) || (vouched && !this.omniPriced(m));
+    const okayed = (m: OmniModel) => this.omniFree(m);
     const free = models.filter(okayed);
     // The model the user picked for this connection is the one checked, and only it. Picking it is not an okay to
     // spend: one not known to be free waits for the paid-check button, every time.
@@ -1187,7 +1186,7 @@ export class ExtensionService {
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     for (const model of order.slice(0, 5)) {
-      const p = await this.omniProbe(id, model.id, (!!opts.paid || vouched) && !this.omniFree(model));
+      const p = await this.omniProbe(id, model.id, !!opts.paid && !this.omniFree(model));
       this.omniTests.set(id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), model: model.id, message: p.message });
       if (p.ok || (p.answered && !p.gone)) break;
       if (p.gone) {
@@ -1260,18 +1259,33 @@ export class ExtensionService {
    * when they show only checked models. Free models only: a check never spends money. Each model is one request against
    * the provider's free quota (OpenRouter: 50 a day without credit).
    */
-  async omniCheckModels(id: string): Promise<void> {
+  async omniCheckModels(id: string, opts: { confirmed?: string[] } = {}): Promise<void> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn || this.omniChecking.has(id)) return;
     const gone = this.omniGone.get(id) ?? new Set<string>();
-    const todo = this.checkable(conn).filter((m) => !gone.has(m.id));
+    // Unpriced models go only when the user confirmed this run with them named: the vouch sets the scope, each run is
+    // okayed on its own.
+    const confirmed = new Set(opts.confirmed ?? []);
+    const eligible = (mid: string) => {
+      const c = this.omni?.connections.find((x) => x.id === id && x.isActive !== false);
+      const m = c && this.checkable(c).find((x) => x.id === mid);
+      return m && !gone.has(m.id) && (this.omniFree(m) || confirmed.has(m.id)) ? m : undefined;
+    };
+    const todo = this.checkable(conn).filter((m) => eligible(m.id));
     const prog = { done: 0, total: todo.length };
     this.omniChecking.set(id, prog);
     this.changed();
     try {
       const queue = [...todo];
       const worker = async () => {
-        for (let m = queue.shift(); m; m = queue.shift()) {
+        for (let next = queue.shift(); next; next = queue.shift()) {
+          // Checked again right before sending: the vouch may have been taken back or a price shown up since the run began.
+          const m = eligible(next.id);
+          if (!m) {
+            prog.done++;
+            this.changed();
+            continue;
+          }
           this.setCheck(id, m.id, { state: 'testing', at: Date.now() });
           // An unpriced model in a vouched connection goes with the user's okay, and its result says so.
           const p = await this.omniProbe(id, m.id, !this.omniFree(m)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));

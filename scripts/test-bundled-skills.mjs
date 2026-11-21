@@ -920,7 +920,7 @@ test('OmniRoute 付費確認綁定模型：確認 A 之後、送出之前測試�
   assert.match(t.message, /nvidia\/b/);
 });
 
-test('OmniRoute 使用者確認連線免費：沒確認時只測免費目錄的；確認後價格不明的也測（記成使用者確認），有標價格的仍不測；選的價格不明模型不用再按付費確認', async () => {
+test('OmniRoute 使用者確認連線免費：勾選只擴大範圍；價格不明的要這次確認（帶清單）才測，記成使用者確認；有標價格的不測；單次測試仍要付費確認', async () => {
   const asked = [];
   const s = await fakeOmni((p, init) => {
     if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
@@ -942,18 +942,70 @@ test('OmniRoute 使用者確認連線免費：沒確認時只測免費目錄的�
   s.omniVouch('n1', true);
   assert.equal(row().vouched, true);
   assert.deepEqual(row().freeModels, ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro', 'nvidia/z-ai/glm-5.3-flash']);
+  assert.deepEqual(row().unpricedModels, ['nvidia/moonshotai/kimi-k3.1-pro', 'nvidia/z-ai/glm-5.3-flash']);
+  // A run not confirmed with them asks only the free one.
   await s.omniCheckModels('n1');
+  assert.deepEqual(asked, ['nvidia/google/gemma-4-31b-it']);
+  asked.length = 0;
+  // Confirmed for Kimi only: GLM stays out.
+  await s.omniCheckModels('n1', { confirmed: ['nvidia/moonshotai/kimi-k3.1-pro'] });
+  assert.deepEqual(asked.sort(), ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro']);
+  asked.length = 0;
+  await s.omniCheckModels('n1', { confirmed: row().unpricedModels });
   assert.deepEqual(asked.sort(), ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro', 'nvidia/z-ai/glm-5.3-flash']);
   assert.equal(s.checks().n1['nvidia/moonshotai/kimi-k3.1-pro'].authorized, true);
   // Vouched ones that passed are in the filtered menu (not marked free).
   const ids = s.usableOmniModels().map((m) => m.id);
   assert.ok(ids.includes('nvidia/moonshotai/kimi-k3.1-pro') && !ids.includes('nvidia/x/priced'), ids.join());
-  // The check model needs no paid okay in a vouched connection.
+  // A single check of an unpriced model still waits for the paid okay, vouched or not.
   s.omniSetTestModel('n1', 'nvidia/moonshotai/kimi-k3.1-pro');
   asked.length = 0;
   await s.omniTest('n1');
-  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  assert.deepEqual(asked, []);
+  assert.equal(row().test.noFree, true);
   // Taken back: unpriced ones are out of the next run again.
   s.omniVouch('n1', false);
   assert.deepEqual(row().freeModels, ['nvidia/google/gemma-4-31b-it']);
+});
+
+test('OmniRoute 批次測試途中取消勾選或出現價格：已排隊的價格不明模型收到 0 筆新請求', async () => {
+  const asked = [];
+  const held = [];
+  let priced = false;
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return { data: ['a', 'b', 'c', 'd'].map((n) => ({ id: `nvidia/${n}`, owned_by: 'nvidia', ...(priced && n === 'd' ? { pricing: { prompt: '0.000001', completion: '0.000002' } } : {}) })) };
+    if (p === '/api/free-models') return { models: [] };
+    if (p === '/v1/chat/completions') {
+      asked.push(init.body.model);
+      // The first two wait, so the rest are still in the queue.
+      return new Promise((resolve) => held.push(() => resolve({ choices: [{ message: { tool_calls: [{}] } }] })));
+    }
+  }, { omniroute: { enabled: true } });
+  s.omniVouch('n1', true);
+  const all = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].unpricedModels;
+  assert.equal(all.length, 4);
+  const run = s.omniCheckModels('n1', { confirmed: all });
+  while (asked.length < 2) await new Promise((r) => setTimeout(r, 10));
+  // Taken back in another window while the first two wait.
+  s.omniVouch('n1', false);
+  held.splice(0).forEach((go) => go());
+  await run;
+  assert.deepEqual(asked.sort(), ['nvidia/a', 'nvidia/b']);
+  // A price showing up mid-run does the same.
+  asked.length = 0;
+  s.omniVouch('n1', true);
+  const again = s.omniCheckModels('n1', { confirmed: all });
+  while (asked.length < 2) await new Promise((r) => setTimeout(r, 10));
+  priced = true;
+  await s.refreshOmni(true);
+  held.splice(0).forEach((go) => go());
+  while (held.length || asked.length < 3) {
+    if (held.length) held.splice(0).forEach((go) => go());
+    await new Promise((r) => setTimeout(r, 10));
+    if (asked.length >= 3 && !held.length) break;
+  }
+  await again;
+  assert.ok(!asked.includes('nvidia/d'), asked.join());
 });

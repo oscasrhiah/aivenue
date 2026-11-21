@@ -377,7 +377,7 @@ export interface ExtensionStatus {
     onlyChecked?: boolean;
     openrouter?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string };
     /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */
-    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** The tool-calling models this connection serves, and the one picked to check it with. */ models?: string[]; testModel?: string; /** How many of its free models a check run has done, while it runs. */ checking?: { done: number; total: number }; /** The tool-calling models a check run asks: free ones, and unpriced ones when the user vouched for this connection. */ freeModels?: string[]; vouched?: boolean; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
+    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** The tool-calling models this connection serves, and the one picked to check it with. */ models?: string[]; testModel?: string; /** How many of its free models a check run has done, while it runs. */ checking?: { done: number; total: number }; /** The tool-calling models a check run asks: free ones, and unpriced ones when the user vouched for this connection. */ freeModels?: string[]; vouched?: boolean; /** Of those, the ones with no stated price (a run asks them only after the user confirms that run). */ unpricedModels?: string[]; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
   };
 }
 

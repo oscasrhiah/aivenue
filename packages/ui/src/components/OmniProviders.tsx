@@ -235,7 +235,7 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
                   on &&
                   !(await ask(
                     t(
-                      `確認 ${p.name} 這把金鑰的模型都是免費的？Aivenue 無法自己查證（例如 NVIDIA 沒有提供查詢免費端點的 API）。勾選後，「測試這家的模型」會連價格不明的模型一起測；有標價格的仍然不測。如果其中有要收費的模型，測試可能會被收費。`,
+                      `確認 ${p.name} 這把金鑰的模型都是免費的？Aivenue 無法自己查證（例如 NVIDIA 沒有提供查詢免費端點的 API）。勾選後，「測試這家的模型」的範圍會包含價格不明的模型（之後同步進來的也算），每次開始前會再請你確認數量；有標價格的仍然不測。如果其中有要收費的模型，測試可能會被收費。`,
                       `Confirm every model of this ${p.name} key is free? Aivenue cannot check (NVIDIA, for one, has no API for its free endpoints). Once on, checking this provider includes models with no stated price; priced ones are still left out. If one of them does charge, a check may be charged.`,
                     ),
                   ))
@@ -244,17 +244,26 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
                 run(() => hub.call('extensions.omniVouch', { id: c.id, on }));
               }}
             />
-            {t('我確認這把金鑰的模型都是免費的（例如 NVIDIA 的免費端點），價格不明的也一起測試', 'I confirm this key’s models are free (NVIDIA’s free endpoints, say): check unpriced ones too')}
+            {t('我確認這把金鑰的模型都是免費的（例如 NVIDIA 的免費端點），批次測試時價格不明的也列入（每次開始前會再確認）', 'I confirm this key’s models are free (NVIDIA’s free endpoints, say): include unpriced ones in a check run (each run asks first)')}
           </label>
           {!!c.freeModels?.length && (
             <div className="omni-conn-msg tiny">
               <button
                 className="btn small ghost"
                 disabled={busy || !!c.checking}
-                onClick={async () =>
-                  (p.id !== 'openrouter' || (await ask(t(`逐一測試 ${c.freeModels!.length} 個免費模型？每個模型算一次請求，OpenRouter 沒儲值的帳號每天只有 50 次。`, `Check ${c.freeModels!.length} free models one by one? Each is one request; OpenRouter allows 50 a day without credit.`)))) &&
-                  run(() => hub.call('extensions.omniCheckModels', { id: c.id }))
-                }
+                onClick={async () => {
+                  // Unpriced models (a vouched connection) need this run's okay, with how many: the list is sent along.
+                  const unpriced = c.unpricedModels ?? [];
+                  const ok = unpriced.length
+                    ? await ask(
+                        t(
+                          `本次會測 ${unpriced.length} 個價格不明的模型（另有 ${c.freeModels!.length - unpriced.length} 個能確認免費的），共 ${c.freeModels!.length} 筆請求。價格不明的模型如果其實要收費，可能會產生費用。要開始嗎？`,
+                          `This run checks ${unpriced.length} models with no stated price (and ${c.freeModels!.length - unpriced.length} known to be free), ${c.freeModels!.length} requests in all. An unpriced model that does charge may be charged. Start?`,
+                        ),
+                      )
+                    : p.id !== 'openrouter' || (await ask(t(`逐一測試 ${c.freeModels!.length} 個免費模型？每個模型算一次請求，OpenRouter 沒儲值的帳號每天只有 50 次。`, `Check ${c.freeModels!.length} free models one by one? Each is one request; OpenRouter allows 50 a day without credit.`)));
+                  if (ok) run(() => hub.call('extensions.omniCheckModels', { id: c.id, confirmed: unpriced }));
+                }}
               >
                 {c.checking ? t(`測試中 ${c.checking.done}/${c.checking.total}…`, `Checking ${c.checking.done}/${c.checking.total}…`) : c.vouched ? t(`測試這家的模型（${c.freeModels.length} 個）`, `Check this provider's models (${c.freeModels.length})`) : t(`測試這家的免費模型（${c.freeModels.length} 個）`, `Check this provider's free models (${c.freeModels.length})`)}
               </button>{' '}
