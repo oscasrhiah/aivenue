@@ -318,7 +318,8 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.omniConnect': (p: { provider: string; apiKey: string }) => extensions.omniConnect(p),
     'extensions.omniOpenRouter': () => extensions.omniOpenRouter(),
     'extensions.omniDisconnect': (p: { id: string }) => extensions.omniDisconnect(p.id),
-    'extensions.omniTest': (p: { id: string; paid?: boolean }) => extensions.omniTest(p.id, { paid: !!p.paid }),
+    // A check can outlast the UI's 2-minute call limit (a free model may queue): it runs on and the status shows it.
+    'extensions.omniTest': (p: { id: string; paid?: boolean; model?: string | null }) => (void extensions.omniTest(p.id, { paid: !!p.paid, model: p.model }), extensions.list()),
     'capabilities.presets': () => MCP_PRESETS.map(({ id, name, zh, en, docsUrl }) => ({ id, name, zh, en, docsUrl })),
     'capabilities.addPreset': async (p: { id: string; headed?: boolean }) => {
       const preset = MCP_PRESETS.find((x) => x.id === p.id);

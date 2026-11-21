@@ -144,6 +144,9 @@ const MAX_OMNI_MODELS = 120;
 /** The model itself is gone (retired or unknown to the provider), not the key or the service. */
 export const omniModelGone = (msg: string) => /\[(404|410)\]|\b410\b|model[^.]{0,40}(not found|does not exist|no longer|deprecated|retired|decommissioned)|\bgone\b/i.test(msg);
 
+/** How long a connection check waits for one model's answer. */
+const OMNI_PROBE_MS = 90_000;
+
 /** Free-tier kinds in OmniRoute's catalog that mean no charge; anything else (discontinued, missing, unknown) does not count. */
 const OMNI_FREE_TYPES = new Set(['keyless', 'recurring-daily', 'recurring-monthly', 'recurring-uncapped', 'recurring-credit', 'one-time-initial']);
 
@@ -316,7 +319,7 @@ export class ExtensionService {
               free: this.usableOmniModels().filter((m) => this.omniFree(m)).length,
               refresh: omni.refreshError,
               openrouter: this.orAuth ? { state: this.orAuth.state, url: this.orAuth.url, message: this.orAuth.message } : undefined,
-            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined })),
+            connected: omni.connections.map((c) => ({ id: c.id ?? '', provider: c.provider ?? '', name: c.providerSpecificData?.nodeName ?? c.name, active: c.isActive !== false, test: c.id ? this.omniTests.get(c.id) : undefined, sync: c.id ? this.omniSyncs.get(c.id) : undefined, models: this.connModels(c).map((m) => m.id), testModel: c.id ? this.cfg().omniroute?.testModels?.[c.id] : undefined })),
             }
           : undefined,
       }),
@@ -930,6 +933,12 @@ export class ExtensionService {
     }
   }
 
+  /** The tool-calling models a connection serves (routing aliases excluded). */
+  private connModels(c: OmniConnection): OmniModel[] {
+    const names = new Set([c.provider, c.providerSpecificData?.prefix].filter(Boolean));
+    return (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/'));
+  }
+
   /** The active connections that serve this model. */
   private offering(m: OmniModel): OmniConnection[] {
     return (this.omni?.connections ?? []).filter((c) => c.isActive !== false && [c.provider, c.providerId, c.providerSpecificData?.prefix].includes(m.owned_by));
@@ -981,7 +990,8 @@ export class ExtensionService {
     const r = await this.omniFetch<{ connection?: { id: string } }>('/api/providers', { method: 'POST', body: { provider: p.provider, apiKey: key, name: `${p.provider} (Aivenue)` } });
     await this.refreshOmni(true);
     const id = r?.connection?.id ?? this.omni?.connections.find((c) => c.provider === p.provider)?.id;
-    if (id) await this.omniTest(id);
+    // The check can take minutes (a free model may queue): it runs on, and the connection row shows it.
+    if (id) void this.omniTest(id);
     return this.list();
   }
 
@@ -1064,7 +1074,25 @@ export class ExtensionService {
    * Can this connection run an agent? One request the size of an agent's opening prompt (about 24,000 characters)
    * that must come back as a tool call: catches bad keys, short context, low per-minute token caps and no tool support.
    */
-  async omniTest(id: string, opts: { paid?: boolean } = {}): Promise<ExtensionStatus[]> {
+  /** `model`: check with this model from now on (a key may serve only some models, as NVIDIA's can); null goes back to automatic. */
+  async omniTest(id: string, opts: { paid?: boolean; model?: string | null } = {}): Promise<ExtensionStatus[]> {
+    if (opts.model !== undefined) {
+      const c = this.cfg();
+      const testModels = { ...c.omniroute?.testModels };
+      if (opts.model) testModels[id] = opts.model;
+      else delete testModels[id];
+      this.save({ ...c, omniroute: { enabled: !!c.omniroute?.enabled, ...c.omniroute, testModels } });
+    }
+    try {
+      return await this.omniTestRun(id, opts);
+    } catch (e) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), message: (e as Error).message.slice(0, 400) });
+      this.changed();
+      return this.list();
+    }
+  }
+
+  private async omniTestRun(id: string, opts: { paid?: boolean; model?: string | null }): Promise<ExtensionStatus[]> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
@@ -1086,8 +1114,16 @@ export class ExtensionService {
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !gone.has(m.id));
     // Only models known to be free, unless the user asked for a paid check: a check must not spend money on its own.
     const free = models.filter((m) => this.omniFree(m));
+    // The model the user picked for this connection is the one checked, and only it: picking it is the go-ahead.
+    const picked = this.cfg().omniroute?.testModels?.[id];
+    const chosen = picked ? models.filter((m) => m.id === picked) : [];
     // The user confirmed one paid request: at most one paid model is asked, and it is the last one tried.
-    const order = opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !this.omniFree(m)).slice(0, 1)] : free;
+    const order = chosen.length ? chosen : opts.paid ? [...free.slice(0, 4), ...models.filter((m) => !this.omniFree(m)).slice(0, 1)] : free;
+    if (picked && !chosen.length) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, message: L(`OmniRoute 目前沒有列出 ${picked}（可能改名或下架了）：請重新選擇測試用的模型`, `OmniRoute does not list ${picked} now (renamed or retired?): pick the model to check with again`) });
+      this.changed();
+      return this.list();
+    }
     if (!order.length && models.length) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), noFree: true, message: L('這家沒有能確認免費的模型，Aivenue 不會自動用付費模型測試。要測試的話，按「用付費模型測試」（會產生一次少量費用）。', 'No model of this provider is known to be free, and Aivenue does not test with a paid one on its own. Press "Check with a paid model" to test (one small charge).') });
       this.changed();
@@ -1100,14 +1136,15 @@ export class ExtensionService {
     }
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
     // A provider's catalog can list models it has since retired (NVIDIA answers 410 Gone): such a model is taken out
-    // of the menus and the next one is tried, up to 5.
+    // of the menus and the next one is tried, up to 5. So is a model that does not answer in time.
     // OmniRoute is asked to use this connection (x-omniroute-connection) and says which one answered: a result counts for
     // this key only when OmniRoute says it was this key. Without that, nothing is marked gone, even with one connection.
     let model = order[0];
     for (const next of order.slice(0, 5)) {
       model = next;
       let served = null as string | null;
-      const onHeaders = (h: Headers) => (served = h.get('x-omniroute-selected-connection-id'));
+      let answered = false;
+      const onHeaders = (h: Headers) => ((answered = true), (served = h.get('x-omniroute-selected-connection-id')));
       const elsewhere = () =>
         served
           ? served !== id
@@ -1117,7 +1154,7 @@ export class ExtensionService {
       try {
         const r = await this.omniFetch<{ choices?: { message?: { tool_calls?: unknown[]; content?: string } }[] }>('/v1/chat/completions', {
           method: 'POST',
-          timeoutMs: 120000,
+          timeoutMs: OMNI_PROBE_MS,
           headers: { 'x-omniroute-connection': id },
           onHeaders,
           body: {
@@ -1141,6 +1178,13 @@ export class ExtensionService {
         break;
       } catch (e) {
         const msg = (e as Error).message;
+        if (!answered) {
+          // No answer at all (NVIDIA's free models can queue for minutes): it says nothing about the key or the model's
+          // existence, so the next model is tried.
+          const s = OMNI_PROBE_MS / 1000;
+          this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: L(`${model.id} 在 ${s} 秒內沒有回應（免費模型可能在排隊），沒有能回應的模型：${msg}`, `${model.id} did not answer within ${s} s (free models can queue), and no model answered: ${msg}`).slice(0, 400) });
+          continue;
+        }
         // Another key's failure says nothing about this one: not marked gone for it.
         const other = elsewhere();
         this.omniTests.set(id, { state: 'fail', at: Date.now(), model: model.id, message: (other ? `${other}：${msg}` : msg).slice(0, 400) });

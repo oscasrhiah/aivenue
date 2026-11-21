@@ -296,7 +296,8 @@ export interface ExtensionsConfig {
   codegraph?: { enabled: boolean };
   impeccable?: { enabled: boolean };
   /** port: where OmniRoute listens (picked once, kept). pinned: models picked from an auto pool, kept in the menus. */
-  omniroute?: { enabled: boolean; port?: number; pinned?: string[] };
+  /** testModels: the model each connection is checked with, when the user picked one (a key may serve only some models). */
+  omniroute?: { enabled: boolean; port?: number; pinned?: string[]; testModels?: Record<string, string> };
   /** Bundled third-party skills turned on one by one (all off until the user turns one on). */
   packSkills?: Partial<Record<PackSkillId, boolean>>;
 }
@@ -371,7 +372,7 @@ export interface ExtensionStatus {
     refresh?: { at: number; message: string };
     openrouter?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string };
     /** Upstream providers connected in OmniRoute, with the result of Aivenue's agent check. */
-    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
+    connected?: { id: string; provider: string; name?: string; active: boolean; test?: OmniTest; /** The tool-calling models this connection serves, and the one picked to check it with. */ models?: string[]; testModel?: string; /** Its last model-list sync with the provider. */ sync?: { ok: boolean; at: number; message?: string } }[];
   };
 }
 

@@ -172,6 +172,24 @@ function ProviderRow({ p, conns, oauth }: { p: FreeProvider; conns: NonNullable<
             {c.test?.model ? ` · ${c.test.model}` : ''}
           </StateWord>
           <span className="grow" />
+          {!!c.models?.length && (
+            // Some keys serve only the models they were made for (NVIDIA): the user says which one to check with.
+            <select
+              className="small"
+              aria-label={t(`${p.name} 測試用的模型`, `Model to check ${p.name} with`)}
+              disabled={busy || c.test?.state === 'testing'}
+              value={c.testModel ?? ''}
+              onChange={(e) => run(() => hub.call('extensions.omniTest', { id: c.id, model: e.target.value || null }))}
+            >
+              <option value="">{t('測試模型：自動（免費的）', 'Check with: automatic (free)')}</option>
+              {(c.testModel && !c.models.includes(c.testModel) ? [c.testModel, ...c.models] : c.models).map((m) => (
+                <option key={m} value={m}>
+                  {t('測試模型：', 'Check with: ')}
+                  {m}
+                </option>
+              ))}
+            </select>
+          )}
           <button className="btn small ghost" disabled={busy || c.test?.state === 'testing'} onClick={() => run(() => hub.call('extensions.omniTest', { id: c.id }))}>
             {t('重新測試', 'Check again')}
           </button>

@@ -734,3 +734,53 @@ test('OmniRoute 刷新：免費目錄逾時時，候選清單成功變成空的�
   assert.ok(!ids().includes('auto/coding:free'), ids().join());
   assert.match(s.list().find((x) => x.id === 'omniroute').omniroute.refresh.message, /free-models/);
 });
+
+test('OmniRoute 連線測試：模型等不到回應（免費模型排隊）時換下一個模型，不判定下架，也不算這把金鑰的錯', async () => {
+  const asked = [];
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/google/gemma-4-31b-it', owned_by: 'nvidia' }, { id: 'nvidia/openai/gpt-oss-120b', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: ['google/gemma-4-31b-it', 'openai/gpt-oss-120b'].map((modelId) => ({ provider: 'nvidia', modelId, freeType: 'one-time-initial' })) };
+  });
+  const answer = s.omniFetch;
+  s.omniFetch = async (p, init = {}) => {
+    if (p !== '/v1/chat/completions') return answer(p, init);
+    asked.push(init.body.model);
+    // The first model never answers: the wait runs out before any response (no headers).
+    if (init.body.model.includes('gemma')) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    init.onHeaders(new Headers({ 'x-omniroute-selected-connection-id': 'n1' }));
+    return { choices: [{ message: { tool_calls: [{}] } }] };
+  };
+  await s.omniTest('n1');
+  assert.deepEqual(asked, ['nvidia/google/gemma-4-31b-it', 'nvidia/openai/gpt-oss-120b']);
+  const t = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test;
+  assert.equal(t.state, 'ok');
+  assert.equal(t.model, 'nvidia/openai/gpt-oss-120b');
+  assert.equal(s.omniGone.get('n1'), undefined);
+});
+
+test('OmniRoute 連線測試：使用者選了測試用的模型（NVIDIA 的金鑰可能只能用某些模型），就只測那個模型並記住；選回自動就照免費規則', async () => {
+  const asked = [];
+  const cfg = { omniroute: { enabled: true } };
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/google/gemma-4-31b-it', owned_by: 'nvidia' }, { id: 'nvidia/moonshotai/kimi-k3.1-pro', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/free-models') return { models: [{ provider: 'nvidia', modelId: 'google/gemma-4-31b-it', freeType: 'one-time-initial' }] };
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  }, cfg);
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  assert.deepEqual(row().models, ['nvidia/google/gemma-4-31b-it', 'nvidia/moonshotai/kimi-k3.1-pro']);
+  await s.omniTest('n1', { model: 'nvidia/moonshotai/kimi-k3.1-pro' });
+  assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
+  assert.equal(row().testModel, 'nvidia/moonshotai/kimi-k3.1-pro');
+  assert.equal(row().test.state, 'ok');
+  // Remembered: a plain re-check uses it again.
+  await s.omniTest('n1');
+  assert.deepEqual(asked.slice(1), ['nvidia/moonshotai/kimi-k3.1-pro']);
+  // Back to automatic: the free one.
+  await s.omniTest('n1', { model: null });
+  assert.equal(asked.at(-1), 'nvidia/google/gemma-4-31b-it');
+  assert.equal(row().testModel, undefined);
+});
