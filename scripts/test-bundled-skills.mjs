@@ -781,7 +781,7 @@ test('OmniRoute 連線測試：選測試模型只存設定、不送請求；選�
   assert.deepEqual(asked, []);
   assert.equal(row().test.noFree, true);
   // Okayed: one request, to it alone, remembered as okayed.
-  await s.omniTest('n1', { paid: true });
+  await s.omniTest('n1', { paid: true, confirmed: 'nvidia/moonshotai/kimi-k3.1-pro' });
   assert.deepEqual(asked, ['nvidia/moonshotai/kimi-k3.1-pro']);
   assert.equal(row().test.state, 'ok');
   assert.equal(s.checks().n1['nvidia/moonshotai/kimi-k3.1-pro'].authorized, true);
@@ -899,4 +899,23 @@ test('OmniRoute 測試結果依連線保存：兩把金鑰共用模型、一條�
   assert.ok(!listed());
   s.o.capabilities.get().extensions.omniroute.onlyChecked = false;
   assert.doesNotMatch((await s.omniModels()).find((m) => m.id === 'omniroute/nvidia/z-ai/glm-5.3-flash').label, /已測試可用/);
+});
+
+test('OmniRoute 付費確認綁定模型：確認 A 之後、送出之前測試模型被改成 B，B 收到 0 筆請求並提示重新確認', async () => {
+  const asked = [];
+  let s;
+  s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: 'nvidia/a', owned_by: 'nvidia' }, { id: 'nvidia/b', owned_by: 'nvidia' }] };
+    // Another window changes the check model while OmniRoute's own check runs.
+    if (p === '/api/providers/n1/test') return (s.omniSetTestModel('n1', 'nvidia/b'), { valid: true });
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  }, { omniroute: { enabled: true } });
+  s.omniSetTestModel('n1', 'nvidia/a');
+  await s.omniTest('n1', { paid: true, confirmed: 'nvidia/a' });
+  assert.deepEqual(asked, []);
+  const t = s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test;
+  assert.equal(t.state, 'fail');
+  assert.equal(t.noFree, true);
+  assert.match(t.message, /nvidia\/b/);
 });

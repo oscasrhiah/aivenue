@@ -1111,8 +1111,11 @@ export class ExtensionService {
     return this.list();
   }
 
-  /** `paid`: the user okayed, this once, a request to a model not known to be free. */
-  async omniTest(id: string, opts: { paid?: boolean } = {}): Promise<ExtensionStatus[]> {
+  /**
+   * `paid`: the user okayed, this once, a request to a model not known to be free; `confirmed`: the check model the
+   * okay was given for (null: automatic). The okay holds only if that is still the check model when the request goes.
+   */
+  async omniTest(id: string, opts: { paid?: boolean; confirmed?: string | null } = {}): Promise<ExtensionStatus[]> {
     try {
       return await this.omniTestRun(id, opts);
     } catch (e) {
@@ -1122,7 +1125,7 @@ export class ExtensionService {
     }
   }
 
-  private async omniTestRun(id: string, opts: { paid?: boolean }): Promise<ExtensionStatus[]> {
+  private async omniTestRun(id: string, opts: { paid?: boolean; confirmed?: string | null }): Promise<ExtensionStatus[]> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn) throw new Error(L('找不到這個連線', 'Connection not found'));
     const names = new Set([conn.provider, conn.providerSpecificData?.prefix].filter(Boolean));
@@ -1148,6 +1151,12 @@ export class ExtensionService {
     // spend: one not known to be free waits for the paid-check button, every time.
     const picked = this.cfg().omniroute?.testModels?.[id];
     const chosen = picked ? models.filter((m) => m.id === picked) : [];
+    // Read after the sync and refresh, right before sending: another window may have changed the check model meanwhile.
+    if (opts.paid && (picked ?? null) !== (opts.confirmed ?? null)) {
+      this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, noFree: true, message: L(`測試模型已經改成 ${picked ?? '自動'}，和你確認的 ${opts.confirmed ?? '自動'} 不同，這次沒有送出。請再確認一次。`, `The check model is now ${picked ?? 'automatic'}, not the ${opts.confirmed ?? 'automatic'} you okayed; nothing was sent. Confirm again.`) });
+      this.changed();
+      return this.list();
+    }
     if (chosen.length && !this.omniFree(chosen[0]) && !opts.paid) {
       this.omniTests.set(id, { state: 'fail', at: Date.now(), model: picked, noFree: true, message: L(`測試模型 ${picked} 無法確認是免費的，Aivenue 不會自己送出。要測試的話，按「用付費模型測試」並確認（可能被收費一次）。`, `${picked} is not known to be free, and Aivenue does not send to it on its own. Press "Check with a paid model" and confirm (it may be charged once).`) });
       this.changed();

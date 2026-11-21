@@ -109,8 +109,8 @@ export function OmniProviders({ s }: { s: ExtensionStatus }) {
       <label className="row gap tiny">
         <input type="checkbox" checked={s.omniroute?.onlyChecked !== false} onChange={(e) => hub.call('extensions.omniOnlyChecked', { on: e.target.checked })} />
         {t(
-          `模型選單只列免費、而且測試過可用的（目前 ${working.size} 個，另有免費模型池）`,
-          `Model menus list only free models that passed a check (${working.size} now, plus the free pools)`,
+          `模型選單只列測試過可用的：免費的，或你確認過才測試的（目前 ${working.size} 個，另有免費模型池）`,
+          `Model menus list only models that passed a check: free ones, or ones you okayed before checking (${working.size} now, plus the free pools)`,
         )}
       </label>
       {shown.map((p) => (
@@ -218,7 +218,7 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
                   c.testModel
                     ? t(`用 ${c.testModel} 測試一次？Aivenue 無法確認它是免費的，這一次可能會被收費。`, `Check with ${c.testModel} once? Aivenue cannot tell it is free; this one request may be charged.`)
                     : t(`用 ${p.name} 的付費模型測試一次？會產生一次少量的費用。`, `Check ${p.name} with a paid model? It costs one small request.`),
-                )) && run(() => hub.call('extensions.omniTest', { id: c.id, paid: true }))
+                )) && run(() => hub.call('extensions.omniTest', { id: c.id, paid: true, confirmed: c.testModel ?? null }))
               }
             >
               {t('用付費模型測試', 'Check with a paid model')}
