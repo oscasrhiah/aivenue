@@ -149,6 +149,8 @@ const OMNI_SOURCES: Record<string, string> = { gemini: 'Gemini AI Studio', openr
 
 /** Where each connection's model checks are kept. */
 const OMNI_CHECKS_FILE = 'omniroute-model-checks.json';
+/** A request a last check stopped before it left. */
+class OmniNotSent extends Error {}
 
 /**
  * How long a connection check waits for one model's answer. NVIDIA's free endpoints queue: its Kimi took 74-113 s to
@@ -992,11 +994,15 @@ export class ExtensionService {
     if (remove && this.o.registry.get(OMNI_PROVIDER)) this.o.registry.remove(OMNI_PROVIDER);
   }
 
-  private async omniFetch<T>(p: string, init: { method?: string; body?: unknown; timeoutMs?: number; headers?: Record<string, string>; onHeaders?: (h: Headers) => void } = {}): Promise<T> {
+  private async omniFetch<T>(p: string, init: { method?: string; body?: unknown; timeoutMs?: number; headers?: Record<string, string>; onHeaders?: (h: Headers) => void; beforeSend?: () => boolean } = {}): Promise<T> {
+    if (!this.omni) throw new Error('OmniRoute is not running');
+    const auth = `Bearer ${await this.omniSecret('apiKey')}`;
+    // Nothing awaits between this and fetch(): what it checks still holds when the request leaves.
+    if (init.beforeSend && !init.beforeSend()) throw new OmniNotSent();
     if (!this.omni) throw new Error('OmniRoute is not running');
     const res = await fetch(this.omni.url + p, {
       method: init.method ?? 'GET',
-      headers: { Authorization: `Bearer ${await this.omniSecret('apiKey')}`, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+      headers: { Authorization: auth, ...(init.body ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
       body: init.body ? JSON.stringify(init.body) : undefined,
       signal: AbortSignal.timeout(init.timeoutMs ?? 15000),
     });
@@ -1259,17 +1265,19 @@ export class ExtensionService {
    * when they show only checked models. Free models only: a check never spends money. Each model is one request against
    * the provider's free quota (OpenRouter: 50 a day without credit).
    */
-  async omniCheckModels(id: string, opts: { confirmed?: string[] } = {}): Promise<void> {
+  async omniCheckModels(id: string, opts: { confirmed?: string[]; models?: string[] } = {}): Promise<void> {
     const conn = this.omni?.connections.find((c) => c.id === id);
     if (!conn || this.omniChecking.has(id)) return;
     const gone = this.omniGone.get(id) ?? new Set<string>();
     // Unpriced models go only when the user confirmed this run with them named: the vouch sets the scope, each run is
     // okayed on its own.
     const confirmed = new Set(opts.confirmed ?? []);
+    // The list the user saw when starting: models synced in later (free ones too) wait for the next run.
+    const listed = opts.models ? new Set(opts.models) : undefined;
     const eligible = (mid: string) => {
       const c = this.omni?.connections.find((x) => x.id === id && x.isActive !== false);
       const m = c && this.checkable(c).find((x) => x.id === mid);
-      return m && !gone.has(m.id) && (this.omniFree(m) || confirmed.has(m.id)) ? m : undefined;
+      return m && !gone.has(m.id) && (!listed || listed.has(m.id)) && (this.omniFree(m) || confirmed.has(m.id)) ? m : undefined;
     };
     const todo = this.checkable(conn).filter((m) => eligible(m.id));
     const prog = { done: 0, total: todo.length };
@@ -1286,9 +1294,18 @@ export class ExtensionService {
             this.changed();
             continue;
           }
+          const prev = this.checks()[id]?.[m.id];
           this.setCheck(id, m.id, { state: 'testing', at: Date.now() });
           // An unpriced model in a vouched connection goes with the user's okay, and its result says so.
-          const p = await this.omniProbe(id, m.id, !this.omniFree(m)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
+          const p: { ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean } = await this.omniProbe(id, m.id, !this.omniFree(m), () => !!eligible(m.id)).catch((e) => ({ ok: false, answered: false, gone: false, message: (e as Error).message }));
+          if (p.notSent) {
+            // Became ineligible while the key was read: nothing was sent, the earlier result stands.
+            if (prev) this.setCheck(id, m.id, prev);
+            else delete this.checks()[id]?.[m.id];
+            prog.done++;
+            this.changed();
+            continue;
+          }
           if (p.gone) this.omniGone.set(id, gone.add(m.id));
           this.setCheck(id, m.id, { state: p.ok ? 'ok' : 'fail', at: Date.now(), message: p.message, authorized: p.ok && !this.omniFree(m) ? true : undefined });
           prog.done++;
@@ -1308,7 +1325,8 @@ export class ExtensionService {
    * It passes only when the model calls the tool and OmniRoute says this connection answered.
    */
   /** `authorized`: the user okayed this request though the model is not known to be free. */
-  private async omniProbe(id: string, modelId: string, authorized = false): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string }> {
+  /** `stillOk`: checked once more right before the request leaves; false sends nothing (`notSent`). */
+  private async omniProbe(id: string, modelId: string, authorized = false, stillOk?: () => boolean): Promise<{ ok: boolean; answered: boolean; gone: boolean; message?: string; notSent?: boolean }> {
     const filler = 'This line stands in for the instructions and tool descriptions a coding agent receives. '.repeat(270);
     const model = { id: modelId };
     {
@@ -1327,6 +1345,7 @@ export class ExtensionService {
           timeoutMs: OMNI_PROBE_MS,
           headers: { 'x-omniroute-connection': id },
           onHeaders,
+          beforeSend: stillOk,
           body: {
             model: model.id,
             // Reasoning models (Kimi) think before calling the tool: little thinking, and room for it.
@@ -1347,6 +1366,7 @@ export class ExtensionService {
         this.setCheck(id, model.id, called ? { state: 'ok', at: Date.now(), authorized } : { state: 'fail', at: Date.now(), message: L('有回答但沒有呼叫工具', 'answered without calling the tool') });
         return called ? { ok: true, answered: true, gone: false } : { ok: false, answered: true, gone: false, message: L('模型有回答，但沒有呼叫工具：可能不適合當 agent', 'The model answered but did not call the tool; it may not suit an agent') };
       } catch (e) {
+        if (e instanceof OmniNotSent) return { ok: false, answered: false, gone: false, notSent: true };
         const msg = (e as Error).message;
         if (!answered) {
           // No answer at all (NVIDIA's free models can queue for minutes): it says nothing about the key or the model's

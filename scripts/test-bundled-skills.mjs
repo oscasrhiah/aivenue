@@ -1009,3 +1009,77 @@ test('OmniRoute 批次測試途中取消勾選或出現價格：已排隊的價�
   await again;
   assert.ok(!asked.includes('nvidia/d'), asked.join());
 });
+
+test('OmniRoute 批次測試只測確認時列出的模型：確認框開著時同步進來的免費模型留到下一批', async () => {
+  const asked = [];
+  let later = false;
+  const s = await fakeOmni((p, init) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return { data: [{ id: 'nvidia/a', owned_by: 'nvidia', pricing: { prompt: '0', completion: '0' } }, { id: 'nvidia/b', owned_by: 'nvidia' }, ...(later ? [{ id: 'nvidia/c', owned_by: 'nvidia', pricing: { prompt: '0', completion: '0' } }] : [])] };
+    if (p === '/api/free-models') return { models: [] };
+    if (p === '/v1/chat/completions') return (asked.push(init.body.model), { choices: [{ message: { tool_calls: [{}] } }] });
+  }, { omniroute: { enabled: true } });
+  s.omniVouch('n1', true);
+  const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+  // What the dialog shows.
+  const models = [...row().freeModels];
+  const unpriced = [...row().unpricedModels];
+  assert.deepEqual(models.sort(), ['nvidia/a', 'nvidia/b']);
+  // A free model syncs in while it is open.
+  later = true;
+  await s.refreshOmni(true);
+  assert.equal(row().freeModels.length, 3);
+  await s.omniCheckModels('n1', { confirmed: unpriced, models });
+  assert.deepEqual(asked.sort(), ['nvidia/a', 'nvidia/b']);
+  // The next run, confirmed with it listed, asks it.
+  asked.length = 0;
+  await s.omniCheckModels('n1', { confirmed: row().unpricedModels, models: row().freeModels });
+  assert.deepEqual(asked.sort(), ['nvidia/a', 'nvidia/b', 'nvidia/c']);
+});
+
+test('OmniRoute 批次測試在金鑰讀完、送出前最後核對：讀金鑰期間取消勾選或出現價格，請求不會送出', async () => {
+  const sent = [];
+  const keys = [];
+  let priced = false;
+  const s = await fakeOmni((p) => {
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models'))
+      return { data: ['a', 'b'].map((n) => ({ id: `nvidia/${n}`, owned_by: 'nvidia', ...(priced && n === 'b' ? { pricing: { prompt: '0.000001', completion: '0.000002' } } : {}) })) };
+    if (p === '/api/free-models') return { models: [] };
+  }, { omniroute: { enabled: true } });
+  // The real request path for the probe: the key read waits, fetch records what leaves.
+  const fake = s.omniFetch;
+  s.omniFetch = (p, init) => (p === '/v1/chat/completions' ? ExtensionService.prototype.omniFetch.call(s, p, init) : fake(p, init));
+  s.omniSecret = () => new Promise((r) => keys.push(() => r('k')));
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    sent.push(JSON.parse(init.body).model);
+    return new Response(JSON.stringify({ choices: [{ message: { tool_calls: [{}] } }] }), { headers: { 'x-omniroute-selected-connection-id': 'n1' } });
+  };
+  try {
+    const row = () => s.list().find((x) => x.id === 'omniroute').omniroute.connected[0];
+    s.omniVouch('n1', true);
+    const all = [...row().unpricedModels];
+    const run = s.omniCheckModels('n1', { confirmed: all, models: all });
+    while (keys.length < 2) await new Promise((r) => setTimeout(r, 10));
+    // Both checks have passed and wait on the key: taken back now.
+    s.omniVouch('n1', false);
+    keys.splice(0).forEach((go) => go());
+    await run;
+    assert.deepEqual(sent, []);
+    // Nothing is left marked as testing, and no result is made up.
+    assert.deepEqual(s.list().find((x) => x.id === 'omniroute').omniroute.checks.n1 ?? {}, {});
+    // A price showing up while the key is read: that one is not sent, the other is.
+    s.omniVouch('n1', true);
+    const again = s.omniCheckModels('n1', { confirmed: all, models: all });
+    while (keys.length < 2) await new Promise((r) => setTimeout(r, 10));
+    priced = true;
+    await s.refreshOmni(true);
+    keys.splice(0).forEach((go) => go());
+    await again;
+    assert.deepEqual(sent, ['nvidia/a']);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});

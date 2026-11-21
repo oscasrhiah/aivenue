@@ -319,7 +319,7 @@ export async function startHub(opts: HubOptions): Promise<Hub> {
     'extensions.omniOpenRouter': () => extensions.omniOpenRouter(),
     'extensions.omniDisconnect': (p: { id: string }) => extensions.omniDisconnect(p.id),
     // A check can outlast the UI's 2-minute call limit (a free model may queue): it runs on and the status shows it.
-    'extensions.omniCheckModels': (p: { id: string; confirmed?: string[] }) => (void extensions.omniCheckModels(p.id, { confirmed: Array.isArray(p.confirmed) ? p.confirmed : [] }), extensions.list()),
+    'extensions.omniCheckModels': (p: { id: string; confirmed?: string[]; models?: string[] }) => (void extensions.omniCheckModels(p.id, { confirmed: Array.isArray(p.confirmed) ? p.confirmed : [], models: Array.isArray(p.models) ? p.models : undefined }), extensions.list()),
     'extensions.omniOnlyChecked': (p: { on: boolean }) => extensions.omniOnlyChecked(p.on),
     'extensions.omniTest': (p: { id: string; paid?: boolean; confirmed?: string | null }) => (void extensions.omniTest(p.id, { paid: !!p.paid, confirmed: p.confirmed ?? null }), extensions.list()),
     'extensions.omniVouch': (p: { id: string; on: boolean }) => extensions.omniVouch(p.id, !!p.on),

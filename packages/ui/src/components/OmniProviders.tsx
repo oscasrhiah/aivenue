@@ -254,6 +254,8 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
                 onClick={async () => {
                   // Unpriced models (a vouched connection) need this run's okay, with how many: the list is sent along.
                   const unpriced = c.unpricedModels ?? [];
+                  // The run is the list shown now: models synced in while the dialog is open wait for the next run.
+                  const models = [...c.freeModels!];
                   const ok = unpriced.length
                     ? await ask(
                         t(
@@ -262,7 +264,7 @@ function ProviderRow({ p, conns, oauth, checks }: { p: FreeProvider; conns: NonN
                         ),
                       )
                     : p.id !== 'openrouter' || (await ask(t(`逐一測試 ${c.freeModels!.length} 個免費模型？每個模型算一次請求，OpenRouter 沒儲值的帳號每天只有 50 次。`, `Check ${c.freeModels!.length} free models one by one? Each is one request; OpenRouter allows 50 a day without credit.`)));
-                  if (ok) run(() => hub.call('extensions.omniCheckModels', { id: c.id, confirmed: unpriced }));
+                  if (ok) run(() => hub.call('extensions.omniCheckModels', { id: c.id, confirmed: unpriced, models }));
                 }}
               >
                 {c.checking ? t(`測試中 ${c.checking.done}/${c.checking.total}…`, `Checking ${c.checking.done}/${c.checking.total}…`) : c.vouched ? t(`測試這家的模型（${c.freeModels.length} 個）`, `Check this provider's models (${c.freeModels.length})`) : t(`測試這家的免費模型（${c.freeModels.length} 個）`, `Check this provider's free models (${c.freeModels.length})`)}
