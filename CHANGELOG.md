@@ -2,16 +2,14 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
-## 未發布
+## 0.4.3 - 2026-11-21
+
+- **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都由 GitHub Actions 從標籤 `v0.4.3` 所在的提交重新建置，取代 2026-11-21 最初從 `9432555` 建置、發布的四份檔案。重建是為了加入下面 OmniRoute 的各項改進、「重新送出」和 PDF 匯出（這些項目列在本段最前面），以及 VS Code 窄側欄的兩處排版修正。版號仍是 0.4.3。
 
 - **VS Code 窄側欄的兩處排版**（Ubuntu 快驗發現）：
   - **原本的問題**：能力頁 OmniRoute 卡片的「網址」被擠成「網／址」兩行，網址最後的 `1` 掉到下一行；「連接免費供應商」視窗裡，篩選勾選框縮成一個小點，貼金鑰的輸入框只剩「貼上 API」幾個字。
   - **現在**：標籤固定一行，放不下的網址整段移到標籤下方；勾選框不會再被壓縮；金鑰輸入框寬度不夠時換到下一行。
 - **NVIDIA 的說明改正**：原本寫「能呼叫工具（跑 agent）的只有少數，例如 Kimi」。實際上 NVIDIA 只替 Kimi 標了能不能呼叫工具，其他模型都沒寫；GLM-5.3-flash 實測也能呼叫。現在改成「不是每個都能呼叫工具，要實際測試才知道」。
-
-## 0.4.3 - 2026-11-21
-
-- **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都由 GitHub Actions 從標籤 `v0.4.3` 所在的提交重新建置，取代 2026-11-21 最初從 `9432555` 建置、發布的四份檔案。重建是為了加入下面 OmniRoute 的各項改進、「重新送出」和 PDF 匯出（這些項目列在本段最前面）。版號仍是 0.4.3。
 
 - **OmniRoute 不再列出實際用不了的免費池，上游錯誤也不再叫你重新登入**：
   - **原本的問題**：`auto/best-free`、`auto/coding:free` 一直列在選單裡。但只連了需要登入的供應商（例如 Antigravity）時，這兩個池裡只剩免登入來源：Cloudflare Playground 要在 OmniRoute 那台電腦裝 Playwright 和 Chromium，uncloseai 的公開測試已經關閉。OmniRoute 沒試過它們，所以照樣回報「可以連線」，選了之後兩個都失敗，agent 沒有任何產出。失敗訊息裡有上游回的 401，Aivenue 又把它當成你的登入過期，叫你到「供應商」重新登入，其實重新登入也沒用。
