@@ -351,3 +351,28 @@ test('OmniRoute 連線測試：第一個模型回 410（已不提供），換下
   assert.equal(omniModelGone('Invalid API key [401]'), false);
   assert.equal(omniModelGone('[404]: model not found'), true);
 });
+
+test('OmniRoute 連線測試：先請 OmniRoute 向供應商同步模型清單，再挑模型（改名後的新模型會被用到）', async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'aivenue-omnisync-'));
+  const cfg = {};
+  const caps = { skillsDir: path.join(data, 'skills'), get: () => ({ extensions: cfg }), setExtensions: (next) => Object.assign(cfg, next) };
+  const s = new ExtensionService({ dataDir: data, bundledDir: BUNDLED, capabilities: caps, registry: { forgetModels() {}, checkAuth: async () => undefined }, secrets: {}, onChange() {} });
+  let synced = false;
+  const calls = [];
+  // Before the sync OmniRoute still lists the old name; the provider's own list has the new one.
+  s.omniFetch = async (p, init = {}) => {
+    calls.push(p);
+    if (p === '/api/providers') return { connections: [{ id: 'n1', provider: 'nvidia', isActive: true }] };
+    if (p.startsWith('/v1/models')) return { data: [{ id: synced ? 'nvidia/moonshotai/kimi-k3.1-pro' : 'nvidia/moonshotai/kimi-k3', owned_by: 'nvidia' }] };
+    if (p === '/api/providers/n1/test') return { valid: true };
+    if (p === '/api/providers/n1/sync-models') return ((synced = true), { ok: true });
+    if (p === '/v1/chat/completions') return { model: init.body.model, choices: [{ message: { tool_calls: [{}] } }] };
+    return { candidates: [] };
+  };
+  s.syncOmniProvider = () => undefined;
+  s.omni = { url: 'http://127.0.0.1:1', ready: true, connections: [], models: [], at: 0, candidates: new Set() };
+  await s.refreshOmni(true);
+  await s.omniTest('n1');
+  assert.ok(calls.indexOf('/api/providers/n1/sync-models') < calls.indexOf('/v1/chat/completions'), calls.join());
+  assert.equal(s.list().find((x) => x.id === 'omniroute').omniroute.connected[0].test.model, 'nvidia/moonshotai/kimi-k3.1-pro');
+});

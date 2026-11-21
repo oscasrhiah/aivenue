@@ -211,6 +211,7 @@ export class ExtensionService {
   private omniTests = new Map<string, OmniTest>();
   /** Models a provider answered as retired or unknown (410, 404): out of the menus until the app restarts. */
   private omniGone = new Set<string>();
+  private omniSyncTimer?: NodeJS.Timeout;
   /** OpenRouter's sign-in in progress (OAuth PKCE): its page, and how to stop waiting for it. */
   private orAuth?: { state: 'waiting' | 'connecting' | 'error'; url?: string; message?: string; stop?: () => void };
 
@@ -889,6 +890,13 @@ export class ExtensionService {
       this.omni.ready = true;
       await this.refreshOmni(true);
       this.work.delete('omniroute');
+      // Providers rename and retire models (NVIDIA's kimi-k3 became kimi-k3.1-pro) while OmniRoute's built-in lists
+      // stay as they were: fetch every connected provider's own list now and every 12 hours while it runs.
+      const omni = this.omni;
+      void this.omniSyncAll();
+      clearInterval(this.omniSyncTimer);
+      this.omniSyncTimer = setInterval(() => (this.omni === omni ? void this.omniSyncAll() : clearInterval(this.omniSyncTimer)), 12 * 3600000);
+      this.omniSyncTimer.unref?.();
     } catch (e) {
       this.work.set('omniroute', { error: (e as Error).message });
       throw e;
@@ -898,8 +906,21 @@ export class ExtensionService {
     }
   }
 
+  /** Ask OmniRoute to fetch a connection's current model list from the provider (new names in, retired ones out). */
+  private async omniSyncModels(id: string): Promise<void> {
+    await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000 }).catch(() => undefined);
+  }
+
+  /** Every active connection's model list, then the menus. */
+  private async omniSyncAll(): Promise<void> {
+    const ids = (this.omni?.connections ?? []).filter((c) => c.isActive !== false && c.id).map((c) => c.id!);
+    for (const id of ids) await this.omniSyncModels(id);
+    if (ids.length) await this.refreshOmni(true).catch(() => undefined);
+  }
+
   /** Stop OmniRoute if this app started it; `remove` also takes it out of the provider list. */
   stopOmni(remove = false) {
+    clearInterval(this.omniSyncTimer);
     if (this.omni?.child) killTree(this.omni.child);
     this.omni = undefined;
     this.work.delete('omniroute');
@@ -1022,8 +1043,9 @@ export class ExtensionService {
       this.changed();
       return this.list();
     }
-    // OmniRoute creates a connection inactive and lists its models only once its own check has turned it on: read
-    // the models again now, or a just-connected provider looks like it has none.
+    // OmniRoute creates a connection inactive and lists its models only once its own check has turned it on: fetch the
+    // provider's current model list, then read the models again, or a just-connected provider looks like it has none.
+    await this.omniSyncModels(id);
     await this.refreshOmni(true);
     const models = (this.omni?.models ?? []).filter((m) => names.has(m.owned_by ?? '') && m.capabilities?.tool_calling !== false && !m.id.startsWith('auto/') && !this.omniGone.has(m.id));
     // Free models first: that is what the user connected it for.
