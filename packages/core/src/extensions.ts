@@ -937,13 +937,17 @@ export class ExtensionService {
 
   /** Ask OmniRoute to fetch a connection's current model list from the provider (new names in, retired ones out). */
   private async omniSyncModels(id: string, beforeSend?: () => boolean): Promise<boolean> {
+    // An answer from an OmniRoute that has since stopped or restarted (it may reuse this connection id) writes nothing.
+    const inst = this.omni;
     try {
       await this.omniFetch(`/api/providers/${encodeURIComponent(id)}/sync-models`, { method: 'POST', body: {}, timeoutMs: 60000, beforeSend });
+      if (this.omni !== inst) return false;
       this.omniSyncs.set(id, { ok: true, at: Date.now() });
       // A fresh list from the provider: models it called gone get another chance.
       this.omniGone.delete(id);
       return true;
     } catch (e) {
+      if (this.omni !== inst) return false;
       this.omniSyncs.set(id, { ok: false, at: Date.now(), message: (e as Error).message.slice(0, 300) });
       return false;
     }

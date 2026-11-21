@@ -1202,13 +1202,14 @@ test('OmniRoute 單次付費測試綁定開始時的服務：確認後讀金鑰�
   }
 });
 
-test('OmniRoute 單次測試整條流程綁定開始時的服務：重啟後新服務收到的舊流程金鑰測試、模型同步、模型探測都是 0 筆', async () => {
+test('OmniRoute 單次測試整條流程綁定開始時的服務：重啟後新服務收到的舊流程金鑰測試、模型同步、模型探測都是 0 筆；舊的同步回覆不改新服務的同步與下架紀錄', async () => {
   // Every request goes through the real omniFetch; fetch answers like OmniRoute and counts by port and kind.
   const count = {};
   const held = { test: [], sync: [] };
   const hold = { test: false, sync: false };
   const keys = [];
   let holdKey = 0;
+  let failSync = false;
   const kind = (p) => (p.endsWith('/test') ? 'test' : p.endsWith('/sync-models') ? 'sync' : p === '/v1/chat/completions' ? 'probe' : 'read');
   const s = await fakeOmni(() => undefined, { omniroute: { enabled: true } });
   s.omniFetch = ExtensionService.prototype.omniFetch;
@@ -1222,6 +1223,7 @@ test('OmniRoute 單次測試整條流程綁定開始時的服務：重啟後新�
     count[key] = (count[key] ?? 0) + 1;
     if (k === 'test' || k === 'sync') {
       if (hold[k]) await new Promise((r) => held[k].push(r));
+      if (k === 'sync' && failSync) return new Response('{"error":"sync failed"}', { status: 500 });
       return json(k === 'test' ? { valid: true } : {});
     }
     if (k === 'probe') return json({ choices: [{ message: { tool_calls: [{}] } }] }, { 'x-omniroute-selected-connection-id': 'n1' });
@@ -1268,13 +1270,33 @@ test('OmniRoute 單次測試整條流程綁定開始時的服務：重啟後新�
     await wait(() => held.sync.length === 1);
     hold.sync = false;
     await restart(5);
+    // The new one has its own sync result and a model it found gone, under the same connection id.
+    const mine = { ok: false, at: 1, message: 'new instance' };
+    s.omniSyncs.set('n1', mine);
+    s.omniGone.set('n1', new Set(['nvidia/kimi-old']));
     held.sync.splice(0).forEach((go) => go());
     await c;
     assert.deepEqual([count['4 test'], count['4 sync']], [1, 1]);
     assert.deepEqual(onNew(5), [0, 0, 0]);
+    // The old answer (a success) changed neither.
+    assert.equal(s.omniSyncs.get('n1'), mine);
+    assert.deepEqual([...(s.omniGone.get('n1') ?? [])], ['nvidia/kimi-old']);
+    // Nor does an old answer that fails.
+    hold.sync = true;
+    failSync = true;
+    const d = s.omniTest('n1', paid);
+    await wait(() => held.sync.length === 1);
+    hold.sync = false;
+    await restart(6);
+    held.sync.splice(0).forEach((go) => go());
+    await d;
+    failSync = false;
+    assert.equal(s.omniSyncs.get('n1'), mine);
+    assert.deepEqual([...(s.omniGone.get('n1') ?? [])], ['nvidia/kimi-old']);
+    assert.deepEqual(onNew(6), [0, 0, 0]);
     // A check started on the new one runs all three there, once each.
     await s.omniTest('n1', paid);
-    assert.deepEqual(onNew(5), [1, 1, 1]);
+    assert.deepEqual(onNew(6), [1, 1, 1]);
     assert.equal(row().test.state, 'ok');
   } finally {
     globalThis.fetch = realFetch;
