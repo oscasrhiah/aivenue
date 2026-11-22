@@ -7,7 +7,8 @@ import { build } from 'esbuild';
 const bundled = await build({
   stdin: {
     contents: `export { ExtensionService } from './packages/core/src/extensions';
-      export { setCapture } from './packages/core/src/proc';`,
+      export { setCapture } from './packages/core/src/proc';
+      export { skillsReminder } from './packages/core/src/capabilities';`,
     resolveDir: process.cwd(),
   },
   bundle: true, platform: 'node', format: 'cjs', write: false,
@@ -44,7 +45,7 @@ const bundled = await build({
 });
 const mod = { exports: {} };
 new Function('require', 'module', 'exports', bundled.outputFiles[0].text)(createRequire(import.meta.url), mod, mod.exports);
-const { ExtensionService, setCapture } = mod.exports;
+const { ExtensionService, setCapture, skillsReminder } = mod.exports;
 const ok = (stdout = '') => ({ code: 0, stdout, stderr: '' });
 const fail = (stderr) => ({ code: 1, stdout: '', stderr });
 
@@ -224,4 +225,20 @@ test('Elephant-Goldfish Model：計畫者拿 egm-draft／egm-resolve，審查計
   assert.match(doc, /spawn_subagent/);
   assert.match(doc, /Never stop because there is no subagent tool/);
   fs.rmSync(skillsDir, { recursive: true, force: true });
+});
+
+test('接續的對話每一輪都附圖譜提醒（只是建議，不強制）；沒有圖時不附', () => {
+  const skills = '\nSKILLS: …\n- ponytail: lazy senior developer — /x/SKILL.md\n';
+  const withGraphify = `${skills}\nGRAPHIFY (knowledge graph of this folder):\nLook things up in the graph FIRST…`;
+  const withCodegraph = `\nCODEGRAPH (precise code index of this folder: symbols, calls, imports): Use the Aivenue tools…`;
+  const noGraph = `${skills}\nGRAPHIFY: the \`graphify\` command is installed. Before exploring…`;
+  for (const block of [withGraphify, withCodegraph]) {
+    const r = skillsReminder(block);
+    assert.match(r, /GRAPH \(reminder\): this folder has a code graph/);
+    // A nudge, not a rule: grepping stays allowed.
+    assert.match(r, /grepping or reading files yourself is fine too/);
+  }
+  assert.match(skillsReminder(withGraphify), /SKILLS \(listed in full earlier in this conversation\) are still available: ponytail\./);
+  assert.doesNotMatch(skillsReminder(noGraph), /GRAPH \(reminder\)/);
+  assert.equal(skillsReminder(''), '');
 });

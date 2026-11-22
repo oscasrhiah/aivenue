@@ -2,6 +2,12 @@
 
 本檔記錄 Aivenue 每個版本的主要變更。格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。
 
+## 未發布
+
+- **接續的對話每一輪都提醒可以查圖譜**：
+  - **原本的問題**：「先查圖再 grep」的規則只在 agent 對話的第一輪給一次。同一個對話接著做下一輪時，agent 常常忘了有圖可查，直接 grep、讀檔。
+  - **現在**：資料夾有 Graphify 圖或 CodeGraph 索引時，接續的每一輪都會附一行提醒：找東西在哪、誰用到、改了會影響什麼，先查圖通常比 grep 快。這只是提醒，agent 想自己 grep 或讀檔也可以。沒有圖時不附。
+
 ## 0.4.3 - 2026-11-21
 
 - **發布的套件**：四份發布套件（Windows 安裝版、Windows 免安裝版、VS Code 插件、Linux x64）都由 GitHub Actions 從標籤 `v0.4.3` 所在的提交重新建置，取代 2026-11-21 最初從 `9432555` 建置、發布的四份檔案。重建是為了加入下面 OmniRoute 的各項改進、「重新送出」和 PDF 匯出（這些項目列在本段最前面），以及 VS Code 窄側欄的兩處排版修正。版號仍是 0.4.3。

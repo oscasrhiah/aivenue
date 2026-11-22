@@ -557,9 +557,16 @@ export class CapabilityStore {
   }
 }
 
-/** One line for a resumed conversation: the skills are still there (the full index came in its first turn). */
+/**
+ * For a resumed conversation: the skills are still there (the full index came in its first turn), and, when the folder
+ * has a graph, a nudge to look there first. A reminder only: an agent that would rather grep or read files may.
+ */
 export function skillsReminder(block: string): string {
   const names = [...block.matchAll(/^- ([\w.-]+): /gm)].map((m) => m[1]);
-  return names.length ? `\nSKILLS (listed in full earlier in this conversation) are still available: ${names.join(', ')}. Open one's SKILL.md if it fits what you are doing now.` : '';
+  const skills = names.length ? `\nSKILLS (listed in full earlier in this conversation) are still available: ${names.join(', ')}. Open one's SKILL.md if it fits what you are doing now.` : '';
+  const graph = /^(GRAPHIFY \(knowledge graph|CODEGRAPH \(precise code index)/m.test(block)
+    ? '\nGRAPH (reminder): this folder has a code graph (see the rules earlier in this conversation). To find where something is, what uses it or what a change affects, looking it up there first is usually quicker than grep; grepping or reading files yourself is fine too.'
+    : '';
+  return skills + graph;
 }
 
